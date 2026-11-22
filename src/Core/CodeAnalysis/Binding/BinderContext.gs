@@ -133,9 +133,7 @@ internal class BinderContext {
             if !isOperator ||
                 (
                 !sourceNullableAnnotationErrors.Contains(parameter) &&
-                    !Services
-                    .SourceNullableAnnotationErrors
-                    .Contains(parameter)
+                    !Services.SourceNullableAnnotationErrors.Contains(parameter)
             ) {
                 Diagnostics.ReportNullableTypeParameterRequiresKind(location, parameter.Name)
             }
@@ -660,12 +658,10 @@ internal class BinderContext {
     }
 
     func HasValueName($scope BoundScope, name string) bool -> $scope.TryLookupSymbol(name) != nil ||
-        !$scope
-        .TryLookupFunctions(name).IsDefaultOrEmpty || GetStaticImportTypes().Any(
+        !$scope.TryLookupFunctions(name).IsDefaultOrEmpty || GetStaticImportTypes().Any(
         (type StructSymbol) -> ImportedTypeExposesStaticMember(type, name)
     ) ||
-        $scope
-        .EnumerateStaticImportClrTypes().Any((type Type) -> ClrTypeExposesStaticMember(type, name)) ||
+        $scope.EnumerateStaticImportClrTypes().Any((type Type) -> ClrTypeExposesStaticMember(type, name)) ||
         SubmissionBinding.HasMember($scope, name)
 
     /// Resolves a source type at the current binding site. Lexically visible
@@ -998,9 +994,7 @@ internal class BinderContext {
         let structs = RootScope.GetDeclaredStructs()
         let services = Services
         if services.HasCachedStaticImportTypes && services.CachedStaticImportImports.SequenceEqual(imports) &&
-            services
-            .CachedStaticImportStructs
-            .Equals(structs) && object.ReferenceEquals(
+            services.CachedStaticImportStructs.Equals(structs) && object.ReferenceEquals(
             services.CachedStaticImportSyntaxTree,
             RootScope.GetCurrentReferencingSyntaxTreeForCache()
         ) {
@@ -1377,12 +1371,10 @@ internal class BinderContext {
             return ClrTypeUtilities.SafeGetMethods(type, flags).Any(
                 (member MethodInfo) -> ClrTypeUtilities.EmittedMemberNameMatches(member, name)
             ) ||
-                ClrTypeUtilities
-                .SafeGetProperties(type, flags).Any(
+                ClrTypeUtilities.SafeGetProperties(type, flags).Any(
                 (member PropertyInfo) -> ClrTypeUtilities.EmittedMemberNameMatches(member, name)
             ) ||
-                ClrTypeUtilities
-                .SafeGetFields(type, flags).Any(
+                ClrTypeUtilities.SafeGetFields(type, flags).Any(
                 (member FieldInfo) -> ClrTypeUtilities.EmittedMemberNameMatches(member, name)
             )
         }
@@ -1392,8 +1384,7 @@ internal class BinderContext {
             name string
         ) bool -> TypeMemberModel.TryGetStaticFieldIncludingInherited(type, name, out _, out _) ||
             TypeMemberModel.TryGetStaticPropertyIncludingInherited(type, name, out _, out _) ||
-            !TypeMemberModel
-            .GetMethods(type, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty
+            !TypeMemberModel.GetMethods(type, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty
 
         func NarrowedReadChangesRuntimeType(declaredType TypeSymbol, narrowedType TypeSymbol?) bool {
             if narrowedType == nil || declaredType == narrowedType {

@@ -132,9 +132,7 @@ class BoundStructLiteralExpression : BoundExpression {
                 )
                     ?.FieldIdentifier
                     .Location ??
-                    literal
-                    .TypeIdentifier
-                    .Location
+                    literal.TypeIdentifier.Location
             } else {
                 syntax?.Location ?? default(TextLocation)
             }
@@ -172,9 +170,7 @@ class BoundStructLiteralExpression : BoundExpression {
             let storage = field
             let initializer BoundFieldInitializer? = Initializers.FirstOrDefault(
                 (candidate BoundFieldInitializer) -> candidate.Field == storage ||
-                    candidate
-                    .Property
-                    ?.BackingField == storage
+                    candidate.Property?.BackingField == storage
             )
             arguments.Add(
                 (storage, initializer?.Value ?? BoundDefaultExpression(Syntax, storage.Type), initializer != nil)
@@ -216,8 +212,7 @@ class BoundStructLiteralExpression : BoundExpression {
                 } else {
                     !ImportedAssemblySemantics.TryGetTypeSemantics(imported, out _) &&
                         !type.HasDataConstructionPrimary &&
-                        !ClrTypeUtilities
-                        .SafeGetConstructors(
+                        !ClrTypeUtilities.SafeGetConstructors(
                         imported,
                         System.Reflection.BindingFlags.Instance |
                         System.Reflection.BindingFlags.Public |
@@ -259,13 +254,8 @@ class BoundStructLiteralExpression : BoundExpression {
                         out var missingDeclarationShape
                     )
                     if missingDeclarationShape ||
-                        parameter
-                        .Type
-                        .ReferenceNullability == ReferenceNullabilityKind.NotNull &&
-                        parameter
-                        .Type
-                        .ClrType
-                        ?.IsArray == true &&
+                        parameter.Type.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
+                        parameter.Type.ClrType?.IsArray == true &&
                         zero == nil {
                         valid = false
                         break

@@ -318,12 +318,8 @@ internal shared class BackwardJumpSpans {
         let spanLabels = List[string]()
         for label in labels {
             if label.Path.Length > level && object.ReferenceEquals(label.Path[level].Owner, owner) &&
-                label
-                .Path[level]
-                .Index >= first &&
-                label
-                .Path[level]
-                .Index <= last {
+                label.Path[level].Index >= first &&
+                label.Path[level].Index <= last {
                 spanLabels.Add(label.Name)
             }
         }
@@ -353,9 +349,7 @@ internal shared class BackwardJumpSpans {
             }
             case SyntaxKind.BlockStatement {
                 let block = cast[BlockStatementSyntax](node)
-                return block
-                    .Statements
-                    .Length > 0 &&
+                return block.Statements.Length > 0 &&
                     !ContainsUserLabel(block) &&
                     IsUnconditionalExit(block.Statements[block.Statements.Length - 1])
             }
@@ -668,13 +662,8 @@ internal shared class BackwardJumpSpans {
                 let beforeBody = labels.Count
                 Collect(arm.Body, path, tries, bodyDead, labels, gotos, visitCounter)
                 let bodyReached = !bodyDead || labels.Count > beforeBody
-                let endsInFallthrough = arm
-                    .Body
-                    .Statements
-                    .Length > 0 &&
-                    arm
-                    .Body
-                    .Statements[arm.Body.Statements.Length - 1] is FallthroughStatementSyntax
+                let endsInFallthrough = arm.Body.Statements.Length > 0 &&
+                    arm.Body.Statements[arm.Body.Statements.Length - 1] is FallthroughStatementSyntax
                 priorFallthroughReachable = bodyReached && endsInFallthrough
             }
             return

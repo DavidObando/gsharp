@@ -444,8 +444,7 @@ shared class MoveNextBodyRewriter {
                 if rewrittenTargetExpression != node.TargetExpression || !rewrittenIndices.SequenceEqual(
                     node.Indices
                 ) ||
-                    rewrittenValue != node
-                    .Value {
+                    rewrittenValue != node.Value {
                     // Preserve the node's form (see #3333): the expression-target
                     // form carries no Target.
                     return if node.TargetExpression != nil {

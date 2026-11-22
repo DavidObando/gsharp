@@ -153,8 +153,7 @@ internal partial class ExpressionBinder {
         if typeSymbol == nil &&
             typeClause.Identifier is {} typeClauseIdentifier &&
             !typeClause.IsArray &&
-            !typeClause
-            .IsNullable {
+            !typeClause.IsNullable {
             if !typeClause.HasQualifier && !typeClause.HasTypeArguments {
                 if !TryResolveOpenGenericImportedType(typeClauseIdentifier.ValueText, out typeSymbol) {
                     TryResolveBareOpenGenericDeclaredType(
@@ -469,20 +468,16 @@ internal partial class ExpressionBinder {
             return true
         }
         return switch type {
-            case structSymbol is StructSymbol when structSymbol
-                .TypeArguments
-                .IsDefaultOrEmpty &&
+            case structSymbol is StructSymbol when structSymbol.TypeArguments.IsDefaultOrEmpty &&
+                structSymbol.EnclosingTypeArguments.IsDefaultOrEmpty: !StructSymbol.CollectEnclosingTypeParameters(
                 structSymbol
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty: !StructSymbol
-                .CollectEnclosingTypeParameters(structSymbol).IsDefaultOrEmpty
-            case interfaceSymbol is InterfaceSymbol when interfaceSymbol
-                .TypeArguments
-                .IsDefaultOrEmpty &&
+            )
+                .IsDefaultOrEmpty
+            case interfaceSymbol is InterfaceSymbol when interfaceSymbol.TypeArguments.IsDefaultOrEmpty &&
+                interfaceSymbol.EnclosingTypeArguments.IsDefaultOrEmpty: !StructSymbol.CollectEnclosingTypeParameters(
                 interfaceSymbol
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty: !StructSymbol
-                .CollectEnclosingTypeParameters(interfaceSymbol).IsDefaultOrEmpty
+            )
+                .IsDefaultOrEmpty
             case enumSymbol is EnumSymbol when enumSymbol
                 .EnclosingTypeArguments
                 .IsDefaultOrEmpty: !StructSymbol
@@ -630,9 +625,7 @@ internal partial class ExpressionBinder {
                 continue
             }
             if args.Count == 0 || args.Any(
-                (arg TypeClauseSyntax) -> arg
-                    .Identifier
-                    ?.Text != "_" ||
+                (arg TypeClauseSyntax) -> arg.Identifier?.Text != "_" ||
                     arg.HasQualifier ||
                     arg.HasTypeArguments ||
                     arg.IsArray ||
@@ -746,9 +739,7 @@ internal partial class ExpressionBinder {
             return false
         }
         for arg in args {
-            if arg
-                .Identifier
-                ?.Text != "_" ||
+            if arg.Identifier?.Text != "_" ||
                 arg.HasQualifier ||
                 arg.HasTypeArguments ||
                 arg.IsArray ||
@@ -1575,8 +1566,7 @@ internal partial class ExpressionBinder {
                 targetType = elementType
             }
             if argSyntax is InterpolatedStringExpressionSyntax interpolated &&
-                ClrOverloadResolution
-                .IsFormattableStringTarget(targetType) {
+                ClrOverloadResolution.IsFormattableStringTarget(targetType) {
                 builder ??= arguments.ToBuilder()
                 builder[i] = BindInterpolatedStringAsFormattable(interpolated, targetType: nil)
             }
@@ -1979,8 +1969,7 @@ internal partial class ExpressionBinder {
                 resolvedStruct != nil &&
                 hasImportedCandidate &&
                 importedCandidate != nil &&
-                binderCtx
-                .ImportedTypeOverridesSourceType(
+                binderCtx.ImportedTypeOverridesSourceType(
                 $scope,
                 typeName,
                 resolvedStruct,
@@ -2031,9 +2020,7 @@ internal partial class ExpressionBinder {
                 } else if syntax.TypeArgumentList != nil &&
                     hasImportedCandidate &&
                     importedCandidate != nil &&
-                    importedCandidate
-                    .ClassType
-                    .IsGenericTypeDefinition &&
+                    importedCandidate.ClassType.IsGenericTypeDefinition &&
                     TryResolveClrConstructionTypeArgs(
                     syntax.TypeArgumentList!!,
                     out var clrTypeArguments,
@@ -2510,8 +2497,7 @@ internal partial class ExpressionBinder {
         // Validate type arguments above first, so that every spelling gets the same arity check.
         if structSymbol!!.IsClass &&
             structSymbol!!.ClrType is {} importedClass &&
-            ImportedAssemblySemantics
-            .TryGetTypeSemantics(importedClass, out _) {
+            ImportedAssemblySemantics.TryGetTypeSemantics(importedClass, out _) {
             return BindImportedTypeLiteralExpression(syntax, importedClass, resolveTypeOnly: resolveTypeOnly)
         }
         if resolveTypeOnly {
@@ -2630,8 +2616,7 @@ internal partial class ExpressionBinder {
                     out property,
                     out propertyDeclaringType
                 ) &&
-                    !TypeMemberModel
-                    .TryGetInheritedDataPositionalProperty(
+                    !TypeMemberModel.TryGetInheritedDataPositionalProperty(
                     structSymbol!!,
                     fieldName,
                     out property,
@@ -2687,8 +2672,7 @@ internal partial class ExpressionBinder {
                 memberType
             }
             if (!((callsDataConstructor || callsPrimary) && consumesPrimaryArgument) || usesGetter) &&
-                !AccessibilityChecker
-                .IsAccessible(
+                !AccessibilityChecker.IsAccessible(
                 memberAccessibility,
                 Invariant.Required(
                     memberDeclaringType,
@@ -2942,8 +2926,7 @@ internal partial class ExpressionBinder {
                         binderCtx.EnsureStructFieldInitializerBound?.Invoke(structSymbol, nil)
                     }
                     if hasContentElement &&
-                        !(structSymbol!!.Definition ?? structSymbol)!!
-                        .NeedsSynthesizedValueStructDefaultCtor {
+                        !(structSymbol!!.Definition ?? structSymbol)!!.NeedsSynthesizedValueStructDefaultCtor {
                         let zeroValue BoundExpression? = GetStructFieldZeroValue(syntax, structSymbol!!, field)
                         if zeroValue != nil {
                             inits.Add(BoundFieldInitializer(field, zeroValue))
@@ -3589,8 +3572,7 @@ internal partial class ExpressionBinder {
         let argumentStatements = ImmutableArray.CreateBuilder[BoundStatement]()
         let constructorMembers = HashSet[string](StringComparer.Ordinal)
         if binderCtx.TryCreateSemanticAggregate(clrType, out var aggregate) &&
-            aggregate
-            .UsesConstructorOwnedDataConstruction {
+            aggregate.UsesConstructorOwnedDataConstruction {
             if !BoundStructLiteralExpression.ValidateDataConstructor(
                 aggregate,
                 Diagnostics,
@@ -4092,8 +4074,7 @@ internal partial class ExpressionBinder {
             }
             if tp.ClrInterfaceConstraint is TypeSymbol clrInterfaceConstraint &&
                 clrInterfaceConstraint.ClrType is Type clrInterface &&
-                clrInterface
-                .IsInterface {
+                clrInterface.IsInterface {
                 let clrProperty PropertyInfo? = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
                     clrInterface,
                     memberName,
@@ -4204,8 +4185,7 @@ internal partial class ExpressionBinder {
             if !targetElementLambda &&
                 be is BoundFunctionLiteralExpression targetedRefLiteral &&
                 elementTargetType != nil &&
-                MemberLookup
-                .TryGetLambdaTargetFunctionTypeFromSymbol(elementTargetType, out _) {
+                MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(elementTargetType, out _) {
                 be = conversions.BindConversion(e.Location, targetedRefLiteral, elementTargetType)
             } else if be is BoundFunctionLiteralExpression refLiteral && TypeSymbol.MaterializeNeverFunctionReturns(
                 refLiteral.FunctionType
@@ -4357,8 +4337,7 @@ internal partial class ExpressionBinder {
                     StringComparison.Ordinal
                 )
             ) &&
-                parameterType
-                .IsArray {
+                parameterType.IsArray {
                 parameterType = Invariant.Required(
                     parameterType.GetElementType(),
                     "a params array has an element type",
@@ -4543,11 +4522,7 @@ internal partial class ExpressionBinder {
             return BindSpreadArrayCreationExpression(syntax, elementType)
         }
         let elementSyntaxes = syntax.Elements ??
-            GSharp
-            .Core
-            .CodeAnalysis
-            .Syntax
-            .SeparatedSyntaxList[ExpressionSyntax](ImmutableArray[SyntaxNode].Empty)
+            GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax](ImmutableArray[SyntaxNode].Empty)
         let elements = ImmutableArray.CreateBuilder[BoundExpression](elementSyntaxes.Count)
         if syntax.Dimensions is {Count: > 1} dimensions {
             if dimensions.Count > 32 {
@@ -4654,11 +4629,7 @@ internal partial class ExpressionBinder {
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         statements.Add(BoundVariableDeclaration(syntax, temp, construction))
         for element in syntax.Elements ??
-            GSharp
-            .Core
-            .CodeAnalysis
-            .Syntax
-            .SeparatedSyntaxList[ExpressionSyntax](ImmutableArray[SyntaxNode].Empty) {
+            GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax](ImmutableArray[SyntaxNode].Empty) {
             if element is SpreadElementExpressionSyntax spread {
                 statements.AddRange(BindCollectionSpreadStatements(temp, spread))
                 continue

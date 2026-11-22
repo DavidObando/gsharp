@@ -54,15 +54,11 @@ partial class SemanticModel {
             }
             // An initializer without a declared type expects nothing; the outer context does not reach it.
             if current is VariableDeclarationSyntax{TypeClause: nil, EqualsToken: {} untypedEquals} &&
-                position >= untypedEquals
-                .Span
-                .End {
+                position >= untypedEquals.Span.End {
                 return nil
             }
             if current is VariableDeclarationSyntax{TypeClause: not nil, EqualsToken: {} equals} declaration &&
-                position >= equals
-                .Span
-                .End {
+                position >= equals.Span.End {
                 return if GetDeclaredSymbol(declaration, cancellationToken) is VariableSymbol variable {
                     Usable(variable.Type)
                 } else {
@@ -80,10 +76,7 @@ partial class SemanticModel {
                 }
             }
             if current is CallExpressionSyntax call &&
-                position >= call
-                .OpenParenthesisToken
-                .Span
-                .End &&
+                position >= call.OpenParenthesisToken.Span.End &&
                 (call.CloseParenthesisToken.IsMissing || position <= call.CloseParenthesisToken.Span.Start) {
                 return Usable(ArgumentType(call, position, cancellationToken))
             }
@@ -158,9 +151,7 @@ partial class SemanticModel {
         var slot = 0
         for item in call.Arguments.GetWithSeparators() {
             if item is SyntaxToken{Kind: SyntaxKind.CommaToken, IsMissing: false} separator &&
-                separator
-                .Span
-                .End <= position {
+                separator.Span.End <= position {
                 slot++
             }
         }

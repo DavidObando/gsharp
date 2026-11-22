@@ -64,15 +64,9 @@ internal class FunctionEmitter {
     ]()
 
     internal func PrepareIndependentBodies(budget CompilationWorkBudget) {
-        if this
-            .emitCtx
-            .MetadataOnly ||
+        if this.emitCtx.MetadataOnly ||
             budget.MaxWorkers <= 1 ||
-            this
-            .emitCtx
-            .Program
-            .NativeProtocolOperations
-            .Count > 0 {
+            this.emitCtx.Program.NativeProtocolOperations.Count > 0 {
             return
         }
         using let planning = CompilationMeasurements.BeginPhase("emit.method-bodies.planning")
@@ -85,16 +79,8 @@ internal class FunctionEmitter {
             (pair KeyValuePair[FunctionSymbol, BoundBlockStatement]) ->
             !this.independentBodies.ContainsKey(pair.Key) &&
                 (this.cache.MethodHandles.ContainsKey(pair.Key) || this.cache.FunctionHandles.ContainsKey(pair.Key)) &&
-                !this
-                .outer
-                .stateMachines
-                .IteratorKickoffBodies
-                .ContainsKey(pair.Key) &&
-                !this
-                .outer
-                .closures
-                .ClosureInvokeToInfo
-                .ContainsKey(pair.Key) &&
+                !this.outer.stateMachines.IteratorKickoffBodies.ContainsKey(pair.Key) &&
+                !this.outer.closures.ClosureInvokeToInfo.ContainsKey(pair.Key) &&
                 IndependentMethodBody.CanPrepare(pair.Key, pair.Value)
         )
             .OrderBy(
@@ -463,8 +449,7 @@ internal class FunctionEmitter {
                 var structThis ParameterSymbol? = nil
                 if function.IsInstanceMethod &&
                     function.ReceiverType is StructSymbol recvStruct &&
-                    !recvStruct
-                    .IsClass {
+                    !recvStruct.IsClass {
                     structThis = Invariant.Required(
                         function.ThisParameter,
                         "a struct instance method has an instance receiver",

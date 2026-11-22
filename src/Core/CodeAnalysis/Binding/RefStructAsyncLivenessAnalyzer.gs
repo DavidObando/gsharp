@@ -332,9 +332,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 }
                 for killed in resultCollector.PatternKills {
                     if !discrCollector.Reads.Contains(killed) && !patternCollector.Reads.Contains(killed) &&
-                        !guardCollector
-                        .Reads
-                        .Contains(killed) {
+                        !guardCollector.Reads.Contains(killed) {
                         PatternKills.Add(killed)
                     }
                 }
@@ -994,8 +992,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             return
         }
         // Synthetic statements stay hidden to stepping; their await retains the diagnostic source.
-        let suspensionLocation = AsyncBoundTreeQueries.FindFirstAwaitSyntax(owningStatement)
-            ?.Location ??
+        let suspensionLocation = AsyncBoundTreeQueries.FindFirstAwaitSyntax(owningStatement)?.Location ??
             default(TextLocation)
         let fallbackLocation = if suspensionLocation.Text != nil {
             suspensionLocation

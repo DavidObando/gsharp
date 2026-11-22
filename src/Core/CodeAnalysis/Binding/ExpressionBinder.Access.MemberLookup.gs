@@ -133,24 +133,16 @@ internal partial class ExpressionBinder {
         if structType.Fields.Any((field FieldSymbol) -> field.Name == name) || structType.StaticFields.Any(
             (field FieldSymbol) -> field.Name == name
         ) ||
-            structType
-            .ConstFields
-            .Any((field FieldSymbol) -> field.Name == name) || structType.Properties.Any(
+            structType.ConstFields.Any((field FieldSymbol) -> field.Name == name) || structType.Properties.Any(
             (property PropertySymbol) -> property.Name == name
         ) ||
-            structType
-            .StaticProperties
-            .Any((property PropertySymbol) -> property.Name == name) || structType.Methods.Any(
+            structType.StaticProperties.Any((property PropertySymbol) -> property.Name == name) ||
+            structType.Methods.Any((method FunctionSymbol) -> method.Name == name) || structType.StaticMethods.Any(
             (method FunctionSymbol) -> method.Name == name
         ) ||
-            structType
-            .StaticMethods
-            .Any((method FunctionSymbol) -> method.Name == name) || structType.Events.Any(
+            structType.Events.Any((event_ EventSymbol) -> event_.Name == name) || structType.StaticEvents.Any(
             (event_ EventSymbol) -> event_.Name == name
-        ) ||
-            structType
-            .StaticEvents
-            .Any((event_ EventSymbol) -> event_.Name == name) {
+        ) {
             return true
         }
         for interfaceType in structType.Interfaces {
@@ -171,11 +163,8 @@ internal partial class ExpressionBinder {
         if interfaceType.Methods.Any((method FunctionSymbol) -> method.Name == name) || interfaceType.StaticMethods.Any(
             (method FunctionSymbol) -> method.Name == name
         ) ||
-            interfaceType
-            .Properties
-            .Any((property PropertySymbol) -> property.Name == name) || interfaceType.Events.Any(
-            (event_ EventSymbol) -> event_.Name == name
-        ) {
+            interfaceType.Properties.Any((property PropertySymbol) -> property.Name == name) ||
+            interfaceType.Events.Any((event_ EventSymbol) -> event_.Name == name) {
             return true
         }
         for baseInterface in interfaceType.BaseInterfaces {
@@ -309,8 +298,13 @@ internal partial class ExpressionBinder {
             argumentNames,
             out _
         ) &&
-            !ClrOverloadResolution
-            .TryBuildNamedArgumentReordering(candidate, argumentNames.Count, argumentNames, isExpanded: true, out _) {
+            !ClrOverloadResolution.TryBuildNamedArgumentReordering(
+            candidate,
+            argumentNames.Count,
+            argumentNames,
+            isExpanded: true,
+            out _
+        ) {
             return false
         }
         var parameterType = parameters[0].ParameterType
@@ -477,8 +471,7 @@ internal partial class ExpressionBinder {
             // result would widen it (fail-safe: keep the original binding).
             if !(declaredResult is BoundErrorExpression) &&
                 RefersToSameMemberSlot(result, declaredResult, receiver.Type) &&
-                object
-                .Equals(
+                object.Equals(
                 UnwrapTransparentMemberResult(result).Type,
                 UnwrapTransparentMemberResult(declaredResult).Type
             ) {
@@ -639,16 +632,14 @@ internal partial class ExpressionBinder {
             }
             if receiver is {} checkedReceiver &&
                 checkedReceiver.Type != TypeSymbol.Never &&
-                TypeSymbol
-                .ContainsNeverType(checkedReceiver.Type) {
+                TypeSymbol.ContainsNeverType(checkedReceiver.Type) {
                 Diagnostics.ReportExpressionMustHaveValue(receiverSyntax?.Location ?? rightPart.Location)
                 return BoundErrorExpression(nil)
             }
         }
         return if receiver != nil &&
             ((receiver is BoundMethodGroupExpression or BoundClrMethodGroupExpression)) &&
-            !MethodGroupDiagnostics
-            .HasDelegateTarget(receiver) {
+            !MethodGroupDiagnostics.HasDelegateTarget(receiver) {
             cast[BoundExpression](
                 MethodGroupDiagnostics.ReportRequiresTarget(
                     Diagnostics,
@@ -764,8 +755,7 @@ internal partial class ExpressionBinder {
                     (
                     RequiresSymbolicTupleElementInvocation(tupleType, tupleIndex) ||
                         RequiresDeclaredNameTupleElementInvocation(ce.Identifier.ValueText, tupleType, tupleIndex) ||
-                        !StatementBinder
-                        .GetTupleElementCallableParameterNames(receiver, tupleIndex).IsDefaultOrEmpty
+                        !StatementBinder.GetTupleElementCallableParameterNames(receiver, tupleIndex).IsDefaultOrEmpty
                 ) {
                     let resolvedTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(tupleType))
                     let resolvedReceiver = if object.ReferenceEquals(resolvedTuple, tupleType) {
@@ -848,9 +838,7 @@ internal partial class ExpressionBinder {
                 let previousAllowedFixedBuffer = binderCtx.AllowedMovableFixedBufferSyntax
                 if binderCtx.SuppressedMovableFixedBufferIndexSyntaxes?.Contains(ix) != true &&
                     !ix.IsNullConditional &&
-                    ix
-                    .Indices
-                    .Count == 1 &&
+                    ix.Indices.Count == 1 &&
                     !(ix.Index is RangeExpressionSyntax) {
                     binderCtx.AllowedMovableFixedBufferSyntax = GetRightmostMemberNameSyntax(ix.Target)
                 }
@@ -937,8 +925,10 @@ internal partial class ExpressionBinder {
                         }
                         staticType = NormalizeImportedSemanticAggregate(staticType, staticMember)
                         if staticMember is FieldInfo symbolicLiteral &&
-                            ConstantExpressionEvaluator
-                            .TryGetClrFieldConstantValue(symbolicLiteral, out var symbolicConstant) {
+                            ConstantExpressionEvaluator.TryGetClrFieldConstantValue(
+                            symbolicLiteral,
+                            out var symbolicConstant
+                        ) {
                             let literalType = if classSymbol.ClassType.IsEnum {
                                 cast[TypeSymbol](classSymbol.SymbolicReceiver!!)
                             } else {
@@ -1093,9 +1083,7 @@ internal partial class ExpressionBinder {
                     if IsWithinType(structSym) {
                         for evtDeclType in structSym.GetHierarchy() {
                             let evt EventSymbol? = evtDeclType.Events.FirstOrDefault(
-                                (e EventSymbol) -> e.Name == ne
-                                    .IdentifierToken
-                                    .ValueText &&
+                                (e EventSymbol) -> e.Name == ne.IdentifierToken.ValueText &&
                                     e.IsFieldLike &&
                                     e.BackingField != nil
                             )
@@ -1439,9 +1427,7 @@ internal partial class ExpressionBinder {
                     return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 } else if receiver != nil &&
                     (receiver.Type is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol) &&
-                    receiver
-                    .Type
-                    .ClrType == nil {
+                    receiver.Type.ClrType == nil {
                     // Issue #1162: a slice/array whose element is a
                     // same-compilation user type has a null backing
                     // ClrType during binding, so the CLR-property arm
@@ -1523,10 +1509,8 @@ internal partial class ExpressionBinder {
                 memberName,
                 BindingFlags.Public | BindingFlags.Instance
             )
-            if nullableProperty != nil && nullableProperty.GetIndexParameters()
-                .Length == 0 &&
-                nullableProperty
-                .CanRead {
+            if nullableProperty != nil && nullableProperty.GetIndexParameters().Length == 0 &&
+                nullableProperty.CanRead {
                 member = BoundClrPropertyAccessExpression(
                     nil,
                     receiver,
@@ -1594,9 +1578,7 @@ internal partial class ExpressionBinder {
             if !userCandidates.IsDefaultOrEmpty {
                 if userCandidates.Length == 1 &&
                     userCandidates[0] is {IsExtension: true, TypeParameters: {IsDefaultOrEmpty: true}} single &&
-                    single
-                    .Parameters
-                    .Length > 0 {
+                    single.Parameters.Length > 0 {
                     let parameterTypes = ImmutableArray.CreateBuilder[TypeSymbol](single.Parameters.Length - 1)
                     for var i = 1; i < single.Parameters.Length; i++ {
                         parameterTypes.Add(single.Parameters[i].Type)
@@ -1748,9 +1730,7 @@ internal partial class ExpressionBinder {
             return false
         }
         let parameterType = targetStruct.SubstituteMemberType(op.Parameters[parameterOffset].Type) ??
-            op
-            .Parameters[parameterOffset]
-            .Type
+            op.Parameters[parameterOffset].Type
         let boundRhs = BindExpression(compoundSyntax.Value)
         return boundRhs.Type != TypeSymbol.Error && Conversion.Classify(boundRhs.Type, parameterType).Exists
     }
@@ -1859,8 +1839,7 @@ internal partial class ExpressionBinder {
                         return true
                     }
                 }
-                return !$scope.TryLookupExtensionFunctions(tpRecv, memberName)
-                    .IsDefaultOrEmpty ||
+                return !$scope.TryLookupExtensionFunctions(tpRecv, memberName).IsDefaultOrEmpty ||
                     ImportedExtensionMayApply(tpRecv, memberName, callSyntax: nil)
             }
             let probed = BindAccessorStepCore(narrowedReceiver, classSymbol: nil, memberNameSyntax)
@@ -1915,8 +1894,7 @@ internal partial class ExpressionBinder {
         if underlyingType is StructSymbol structSym {
             if allowEvents &&
                 !SourceValueMemberPrecedesInheritedEvent(structSym, memberName) &&
-                TypeMemberModel
-                .TryGetEvent(structSym, memberName, out var ev, out var evOwner) {
+                TypeMemberModel.TryGetEvent(structSym, memberName, out var ev, out var evOwner) {
                 return IsSourceInstanceMemberAccessible(ev.Accessibility, evOwner, underlyingType)
             }
             let hasProperty = TypeMemberModel.TryGetProperty(
@@ -2050,9 +2028,7 @@ internal partial class ExpressionBinder {
         }
         if TryGetClrInstanceMemberReceiverType(narrowedReceiver, out var clrInstanceReceiverType) &&
             clrInstanceReceiverType?.ClrType is Type declaredClr &&
-            $scope
-            .References
-            ?.TryGetMemberLookupType(declaredClr, out var lookupClr) == true {
+            $scope.References?.TryGetMemberLookupType(declaredClr, out var lookupClr) == true {
             if allowEvents && MemberLookup.SafeGetEventIncludingSelfAndInterfaces(
                 lookupClr,
                 memberName,
@@ -2121,8 +2097,7 @@ internal partial class ExpressionBinder {
             let genericName = genericIdentifier.ValueText
             if classSymbol.TryLookupMember(genericName, nil, out _) || !classSymbol.GetStaticMethodGroup(genericName)
                 .IsEmpty ||
-                !$scope.References!!
-                .TryResolveNestedType(
+                !$scope.References!!.TryResolveNestedType(
                 classSymbol.ClassType,
                 genericName + "`" + genericArity.ToString(),
                 out var nestedGenericType
@@ -2147,12 +2122,8 @@ internal partial class ExpressionBinder {
             for var i = 0; i < outerClrArgs.Length; i++ {
                 combinedArgs.Add(
                     if outerReceiver != nil &&
-                        !outerReceiver
-                        .TypeArguments
-                        .IsDefaultOrEmpty &&
-                        i < outerReceiver
-                        .TypeArguments
-                        .Length {
+                        !outerReceiver.TypeArguments.IsDefaultOrEmpty &&
+                        i < outerReceiver.TypeArguments.Length {
                         outerReceiver.TypeArguments[i]
                     } else {
                         TypeSymbol.FromClrTypeWithoutNullability(outerClrArgs[i], NullabilityFreeReason.TypeStructure)
@@ -2198,9 +2169,7 @@ internal partial class ExpressionBinder {
         }
         let previousAllowedFixedBuffer = binderCtx.AllowedMovableFixedBufferSyntax
         if binderCtx.SuppressedMovableFixedBufferIndexSyntaxes?.Contains(syntax) != true &&
-            syntax
-            .Indices
-            .Count == 1 &&
+            syntax.Indices.Count == 1 &&
             !(syntax.Index is RangeExpressionSyntax) {
             binderCtx.AllowedMovableFixedBufferSyntax = GetRightmostMemberNameSyntax(syntax.Target)
         }
@@ -2287,9 +2256,7 @@ internal partial class ExpressionBinder {
             }
             preBoundMultiArguments = multiArguments
         }
-        let multiClrTarget Type? = target
-            .Type
-            .ClrType ??
+        let multiClrTarget Type? = target.Type.ClrType ??
             (
             if target.Type is StructSymbol multiStruct {
                 GetInheritedClrBaseType(multiStruct)
@@ -2781,9 +2748,7 @@ internal partial class ExpressionBinder {
                 return BoundErrorExpression(nil)
             }
         }
-        let clrTarget Type? = target
-            .Type
-            .ClrType ??
+        let clrTarget Type? = target.Type.ClrType ??
             (
             if target.Type is StructSymbol structTarget {
                 GetInheritedClrBaseType(structTarget)
@@ -2926,11 +2891,7 @@ internal partial class ExpressionBinder {
         selected PropertySymbol,
         substitution Dictionary[TypeParameterSymbol, TypeSymbol]?
     ) bool {
-        if candidate
-            .Parameters
-            .Length != selected
-            .Parameters
-            .Length ||
+        if candidate.Parameters.Length != selected.Parameters.Length ||
             candidate.ReturnRefKind != selected.ReturnRefKind ||
             !object.Equals(SubstituteIndexerType(candidate.Type, substitution), selected.Type) {
             return false
@@ -3029,9 +2990,7 @@ internal partial class ExpressionBinder {
                     }
                     var resultSlot LocalVariableSymbol? = nil
                     if resultType is NullableTypeSymbol nullableResult &&
-                        nullableResult
-                        .UnderlyingType
-                        ?.ClrType is {IsValueType: true} {
+                        nullableResult.UnderlyingType?.ClrType is {IsValueType: true} {
                         let resultSlotName = "$$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(
                             CultureInfo.InvariantCulture
                         )
@@ -3905,9 +3864,7 @@ internal partial class ExpressionBinder {
                 let paramType = SubstituteIndexerType(selectedIndexer.Parameters[0].Type, writeSubstitution)
                 let ConvertWriteIndex = func () BoundExpression {
                     if boundIndexOverride != nil &&
-                        selectedIndexer
-                        .Parameters[0]
-                        .RefKind == RefKind.In &&
+                        selectedIndexer.Parameters[0].RefKind == RefKind.In &&
                         (boundIndexOverride is BoundAddressOfExpression || boundIndexOverride.Type is ByRefTypeSymbol) {
                         return boundIndexOverride
                     }
@@ -4226,8 +4183,13 @@ internal partial class ExpressionBinder {
                     )
                     if storageType == TypeSymbol.Error ||
                         inPointee == TypeSymbol.Error ||
-                        conversions
-                        .CheckByRefArgumentStorage(location, parameter, storageType, inPointee, arguments[i]) {
+                        conversions.CheckByRefArgumentStorage(
+                        location,
+                        parameter,
+                        storageType,
+                        inPointee,
+                        arguments[i]
+                    ) {
                         converted.Add(arguments[i])
                     } else {
                         conversions.ReportByRefStorageMismatch(location, parameter.Name, inPointee, storageType)
@@ -4384,9 +4346,7 @@ internal partial class ExpressionBinder {
                 targetLocation
             )
         }
-        let clrType Type? = target
-            .Type
-            .ClrType ??
+        let clrType Type? = target.Type.ClrType ??
             (
             if target.Type is StructSymbol structIndexTarget {
                 GetInheritedClrBaseType(structIndexTarget)
@@ -4778,8 +4738,7 @@ internal partial class ExpressionBinder {
             }
             for name in names {
                 if TryFindInstanceCountProperty(structReceiver, name, out var prop, out var propOwner) &&
-                    SubstituteIndexerType(prop.Type, LevelSubstitution(propOwner, outer: nil)) == TypeSymbol
-                    .Int32 {
+                    SubstituteIndexerType(prop.Type, LevelSubstitution(propOwner, outer: nil)) == TypeSymbol.Int32 {
                     if !prop.HasGetter {
                         Diagnostics.ReportCannotAssign(location, name)
                         lengthExpr = nil
@@ -4889,9 +4848,7 @@ internal partial class ExpressionBinder {
                 targetLocation
             )
         }
-        let clrType Type? = target
-            .Type
-            .ClrType ??
+        let clrType Type? = target.Type.ClrType ??
             (
             if target.Type is StructSymbol structSliceTarget {
                 GetInheritedClrBaseType(structSliceTarget)
@@ -5227,9 +5184,7 @@ internal partial class ExpressionBinder {
                 targetLocation
             )
         }
-        let clrType Type? = target
-            .Type
-            .ClrType ??
+        let clrType Type? = target.Type.ClrType ??
             (
             if target.Type is StructSymbol structRangeValueTarget {
                 GetInheritedClrBaseType(structRangeValueTarget)
@@ -5559,8 +5514,7 @@ internal partial class ExpressionBinder {
         }
         if tpRecv.ClrInterfaceConstraint is TypeSymbol clrInterfaceConstraint &&
             clrInterfaceConstraint.ClrType is Type clrInterface &&
-            clrInterface
-            .IsInterface {
+            clrInterface.IsInterface {
             let clrProperty PropertyInfo? = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
                 clrInterface,
                 memberName,
@@ -5792,8 +5746,7 @@ internal partial class ExpressionBinder {
                     var slotProp PropertySymbol? = nil
                     var slotIface InterfaceSymbol? = nil
                     for iface in tpSym.InterfaceConstraint?.SelfAndAllBaseInterfaces() ??
-                        Enumerable
-                        .Empty[InterfaceSymbol]() {
+                        Enumerable.Empty[InterfaceSymbol]() {
                         // Issue #1268: a constructed generic interface
                         // constraint (e.g. `T : IData[int32]` or the
                         // self-referential `T : IData[T]`) does not surface
@@ -6161,8 +6114,7 @@ internal partial class ExpressionBinder {
         )
         if requiresFixed &&
             TryGetFixedBufferFieldAccess(pointer, out var bufferAccess) &&
-            !StatementBinder
-            .IsFixedVariable(bufferAccess) {
+            !StatementBinder.IsFixedVariable(bufferAccess) {
             Diagnostics.ReportMovableFixedBufferRequiresFixed(syntax?.Location ?? default(TextLocation), field.Name)
         }
         return pointer
@@ -6324,9 +6276,7 @@ internal partial class ExpressionBinder {
                     .Length == right
                     .Candidates
                     .Length &&
-                    left
-                    .Candidates
-                    .All(
+                    left.Candidates.All(
                     (candidate FunctionSymbol) -> right.Candidates.Any(
                         (other FunctionSymbol) -> SameMethodSlot(candidate, other)
                     )
@@ -6336,9 +6286,7 @@ internal partial class ExpressionBinder {
                     .Length == right
                     .Candidates
                     .Length &&
-                    left
-                    .Candidates
-                    .All(
+                    left.Candidates.All(
                     (candidate MethodInfo) -> right.Candidates.Any(
                         (other MethodInfo) -> SameClrMethodSlot(candidate, other)
                     )
@@ -6370,9 +6318,9 @@ internal partial class ExpressionBinder {
                 } else {
                     for candidate in receiver.GetHierarchy() {
                         if candidate.Fields.Any((field FieldSymbol) -> object.ReferenceEquals(field, backingField)) ||
-                            (candidate.Definition ?? candidate)
-                            .Fields
-                            .Any((field FieldSymbol) -> object.ReferenceEquals(field, backingField)) {
+                            (candidate.Definition ?? candidate).Fields.Any(
+                            (field FieldSymbol) -> object.ReferenceEquals(field, backingField)
+                        ) {
                             propertyOwner = candidate
                             break
                         }
@@ -6462,20 +6410,12 @@ internal partial class ExpressionBinder {
                 declaredOwner?.SubstituteMemberType(declared.Type) ?? declared.Type
             ) &&
                 selected.ReturnRefKind == declared.ReturnRefKind &&
-                selected
-                .Parameters
-                .Length == declared
-                .Parameters
-                .Length &&
+                selected.Parameters.Length == declared.Parameters.Length &&
                 selected
                 .Parameters
                 .Zip(declared.Parameters)
                 .All(
-                (pair(First ParameterSymbol, Second ParameterSymbol)) -> pair
-                    .First
-                    .RefKind == pair
-                    .Second
-                    .RefKind &&
+                (pair(First ParameterSymbol, Second ParameterSymbol)) -> pair.First.RefKind == pair.Second.RefKind &&
                     object.Equals(
                     pair.First.Type,
                     declaredOwner?.SubstituteMemberType(pair.Second.Type) ?? pair.Second.Type
@@ -6829,9 +6769,7 @@ internal partial class ExpressionBinder {
                 !ClrTypeUtilities.IsAssignableByName(interfaceType, receiverClrType) ||
                 HasExplicitClrInterfaceImplementation(receiverClrType, selected, interfaceMethod) ||
                 selected.Name != interfaceMethod.Name ||
-                selected
-                .GetGenericArguments().Length != interfaceMethod.GetGenericArguments()
-                .Length ||
+                selected.GetGenericArguments().Length != interfaceMethod.GetGenericArguments().Length ||
                 !SameClrSignatureType(selected.ReturnType, interfaceMethod.ReturnType) {
                 return false
             }
@@ -6863,17 +6801,13 @@ internal partial class ExpressionBinder {
                             candidate.IsPrivate &&
                             candidate.IsVirtual &&
                             candidate.IsFinal &&
-                            candidate
-                            .Name
-                            .EndsWith(suffix, StringComparison.Ordinal) && candidate.GetGenericArguments()
+                            candidate.Name.EndsWith(suffix, StringComparison.Ordinal) && candidate.GetGenericArguments()
                             .Length == interfaceMethod
-                            .GetGenericArguments()
-                            .Length &&
+                            .GetGenericArguments().Length &&
                             SameClrSignatureType(candidate.ReturnType, interfaceMethod.ReturnType) &&
                             candidate.GetParameters() is {} parameters &&
                             parameters.Length == interfaceParameters.Length &&
-                            parameters
-                            .Zip(interfaceParameters).All(
+                            parameters.Zip(interfaceParameters).All(
                             (pair(First ParameterInfo, Second ParameterInfo)) -> SameClrSignatureType(
                                 pair.First.ParameterType,
                                 pair.Second.ParameterType
@@ -6934,17 +6868,10 @@ internal partial class ExpressionBinder {
                         (
                         leftDefinition.FullName != nil &&
                             leftDefinition.FullName == rightDefinition.FullName &&
-                            leftDefinition
-                            .Assembly
-                            .GetName()
-                            .Name == rightDefinition
-                            .Assembly
-                            .GetName()
-                            .Name
+                            leftDefinition.Assembly.GetName().Name == rightDefinition.Assembly.GetName().Name
                     )
                 ) &&
-                    leftArguments
-                    .Zip(rightArguments).All(
+                    leftArguments.Zip(rightArguments).All(
                     (pair(First Type, Second Type)) -> SameClrSignatureType(pair.First, pair.Second)
                 )
             }
@@ -6982,16 +6909,8 @@ internal partial class ExpressionBinder {
         }
 
         private func HasSameCallableSignature(candidate FunctionSymbol, selected FunctionSymbol) bool {
-            if candidate
-                .Parameters
-                .Length != selected
-                .Parameters
-                .Length ||
-                candidate
-                .TypeParameters
-                .Length != selected
-                .TypeParameters
-                .Length ||
+            if candidate.Parameters.Length != selected.Parameters.Length ||
+                candidate.TypeParameters.Length != selected.TypeParameters.Length ||
                 candidate.ReturnRefKind != selected.ReturnRefKind {
                 return false
             }
@@ -7315,9 +7234,7 @@ internal partial class ExpressionBinder {
             closedMember MemberInfo?
         ) TypeSymbol? {
             if symbolicReceiver?.OpenDefinition == nil ||
-                symbolicReceiver
-                .TypeArguments
-                .IsDefaultOrEmpty ||
+                symbolicReceiver.TypeArguments.IsDefaultOrEmpty ||
                 closedMember == nil {
                 return nil
             }
@@ -7553,9 +7470,7 @@ internal partial class ExpressionBinder {
                 }
                 let sliceParams = candidate.GetParameters()
                 if sliceParams.Length == 2 && sliceParams[0].ParameterType.IsSameAs(typeof(int32)) &&
-                    sliceParams[1]
-                    .ParameterType
-                    .IsSameAs(typeof(int32)) {
+                    sliceParams[1].ParameterType.IsSameAs(typeof(int32)) {
                     slice = candidate
                     break
                 }
@@ -7584,12 +7499,8 @@ internal partial class ExpressionBinder {
             return switch type {
                 case arr is ArrayTypeSymbol: arr.ElementType
                 case slice is SliceTypeSymbol: slice.ElementType
-                case imp is ImportedTypeSymbol when imp
-                    .ClrType
-                    ?.IsArray == true &&
-                    imp
-                    .ClrType
-                    .GetArrayRank() == 1: if imp.TypeArguments.Length == 1 {
+                case imp is ImportedTypeSymbol when imp.ClrType?.IsArray == true &&
+                    imp.ClrType.GetArrayRank() == 1: if imp.TypeArguments.Length == 1 {
                     imp.TypeArguments[0]
                 } else {
                     ByRefStorageMatching.PreserveReferenceTupleIdentity(
@@ -7600,12 +7511,8 @@ internal partial class ExpressionBinder {
                         )
                     )
                 }
-                case annot is NullabilityAnnotatedTypeSymbol when annot
-                    .ClrType
-                    ?.IsArray == true &&
-                    annot
-                    .ClrType
-                    .GetArrayRank() == 1: ByRefStorageMatching.PreserveReferenceTupleIdentity(
+                case annot is NullabilityAnnotatedTypeSymbol when annot.ClrType?.IsArray == true &&
+                    annot.ClrType.GetArrayRank() == 1: ByRefStorageMatching.PreserveReferenceTupleIdentity(
                     annot.ClrType!!.GetElementType(),
                     annot.GetTypeArgumentSymbolForClrType(annot.ClrType!!.GetElementType())
                 )
@@ -7626,13 +7533,8 @@ internal partial class ExpressionBinder {
         ) TypeSymbol {
             if type is TypeParameterSymbol tp &&
                 constructedIface?.Definition != nil &&
-                !constructedIface
-                .Definition
-                .TypeParameters
-                .IsDefaultOrEmpty &&
-                !constructedIface
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !constructedIface.Definition.TypeParameters.IsDefaultOrEmpty &&
+                !constructedIface.TypeArguments.IsDefaultOrEmpty {
                 for var i = 0; i < constructedIface.Definition!!.TypeParameters.Length; i++ {
                     if object.ReferenceEquals(constructedIface.Definition!!.TypeParameters[i], tp) {
                         return constructedIface.TypeArguments[i]

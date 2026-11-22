@@ -119,9 +119,7 @@ public class Local {}`
             if argument.Value is IReadOnlyCollection[CustomAttributeTypedArgument]elements {
                 return argument.ArgumentType.FullName + "[" + string.Join(",", elements.Select(Describe)) + "]"
             }
-            return argument
-                .ArgumentType
-                .FullName +
+            return argument.ArgumentType.FullName +
                 ":" +
                 (
                 if argument.Value is Type type {

@@ -84,9 +84,7 @@ class Adr0179NewlineSiteCoverageTests {
                     outer = outer!!.Parent
                 }
                 let negated = outer!!.Parent is PrefixUnaryExpressionSyntax prefix &&
-                    prefix
-                    .OperatorToken
-                    .ValueText == "!"
+                    prefix.OperatorToken.ValueText == "!"
                 let arguments = string.Join(
                     ", ",
                     invocation
@@ -130,11 +128,7 @@ class Adr0179NewlineSiteCoverageTests {
                 // call; `!(F())` puts parentheses in between.
                 var outer GSharp.Core.CodeAnalysis.Syntax.SyntaxNode? = call
                 while (outer!!.Parent is AccessorExpressionSyntax access && access.RightPart == outer) ||
-                    outer!!.Parent is GSharp
-                    .Core
-                    .CodeAnalysis
-                    .Syntax
-                    .ParenthesizedExpressionSyntax {
+                    outer!!.Parent is GSharp.Core.CodeAnalysis.Syntax.ParenthesizedExpressionSyntax {
                     outer = outer!!.Parent
                 }
                 let negated = outer!!.Parent is UnaryExpressionSyntax unary && unary.OperatorToken.Text == "!"

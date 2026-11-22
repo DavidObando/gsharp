@@ -60,13 +60,9 @@ internal sealed class PrefixDiagnosticClassifier {
         // text after the cut can extend the word. With kept text, that happens only when the word goes on.
         if inPrefixText &&
             diagnostic.PrefixFinality == DiagnosticFinality.Final &&
-            location
-            .Span
-            .End == prefixCut.Cut &&
+            location.Span.End == prefixCut.Cut &&
             prefixCut.LastTokenIsWord &&
-            prefixCut
-            .LastToken
-            .End == prefixCut.Cut &&
+            prefixCut.LastToken.End == prefixCut.Cut &&
             WordContinuesAfterCut() {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.FutureDependent, "rest-of-statement")
         }
@@ -75,12 +71,8 @@ internal sealed class PrefixDiagnosticClassifier {
         // text, that happens only when the host's text continues the expression after the cut.
         if inPrefixText &&
             diagnostic.PrefixFinality == DiagnosticFinality.Final &&
-            location
-            .Span
-            .Length > 0 &&
-            location
-            .Span
-            .End == prefixCut.Cut &&
+            location.Span.Length > 0 &&
+            location.Span.End == prefixCut.Cut &&
             !prefixParse.Contains(diagnostic) && ExpressionContinuesAfterCut() {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.FutureDependent, "rest-of-statement")
         }
@@ -98,23 +90,16 @@ internal sealed class PrefixDiagnosticClassifier {
         // closed) depends on the rest of the construct.
         if inPrefixText &&
             diagnostic.PrefixFinality == DiagnosticFinality.Final &&
-            location
-            .Span
-            .Start < prefixCut.Cut &&
-            location
-            .Span
-            .End == prefixCut.Cut &&
+            location.Span.Start < prefixCut.Cut &&
+            location.Span.End == prefixCut.Cut &&
             IsOnOpenConstruct(location.Span) {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.FutureDependent, "rest-of-statement")
         }
         // Kept text after the cut can depend on the text that the bind removed. The source compilation
         // is a completion of the prefix, so a diagnostic that it does not report is not final.
         if inPrefixText &&
-            location
-            .Span
-            .Start >= prefixCut.KeptStart &&
-            diagnostic.PrefixFinality == DiagnosticFinality
-            .Final {
+            location.Span.Start >= prefixCut.KeptStart &&
+            diagnostic.PrefixFinality == DiagnosticFinality.Final {
             if sourceDiagnostics == nil {
                 sourceDiagnostics = Keys(source.GetDiagnostics(cancellationToken))
             }
@@ -183,15 +168,7 @@ internal sealed class PrefixDiagnosticClassifier {
 
     private func Key(diagnostic Diagnostic) string -> diagnostic.Id +
         "@" +
-        diagnostic
-        .Location
-        .Span
-        .Start
-        .ToString() +
+        diagnostic.Location.Span.Start.ToString() +
         ":" +
-        diagnostic
-        .Location
-        .Span
-        .Length
-        .ToString()
+        diagnostic.Location.Span.Length.ToString()
 }

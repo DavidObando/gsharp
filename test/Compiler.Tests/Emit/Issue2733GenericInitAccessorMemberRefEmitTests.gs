@@ -133,9 +133,7 @@ list.CursorIndex = 1`))
                 .MemberReferences
                 .Select(reader.GetMemberReference)
                 .Single(
-                (reference MemberReference) -> reference
-                    .Parent
-                    .Kind == HandleKind.TypeSpecification &&
+                (reference MemberReference) -> reference.Parent.Kind == HandleKind.TypeSpecification &&
                     reader.GetString(reference.Name) == accessorName
             )
             Assert.Equal(reader.GetBlobBytes(definition.Signature), reader.GetBlobBytes(memberRef.Signature))

@@ -236,10 +236,7 @@ func Use() int32 {
             private func Analyze(context BoundNodeAnalysisContext) {
                 let operation = cast[BoundBinaryOperationExpression](context.BoundNode)
                 if operation.BinaryOperatorKind != BoundBinaryOperatorKind.Equals ||
-                    operation
-                    .Left
-                    .Type
-                    ?.ToDisplayString(DisplayFormat.FullyQualified) != "global::System.Type" {
+                    operation.Left.Type?.ToDisplayString(DisplayFormat.FullyQualified) != "global::System.Type" {
                     return
                 }
                 context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax!!.Location))
@@ -366,12 +363,8 @@ func Use() int32 {
 
             private func Analyze(context BoundNodeAnalysisContext) {
                 let operation = cast[BoundCallOperationExpression](context.BoundNode)
-                if operation
-                    .CalledFunction
-                    .Name != "ReferenceEquals" ||
-                    operation
-                    .Arguments
-                    .Length != 2 ||
+                if operation.CalledFunction.Name != "ReferenceEquals" ||
+                    operation.Arguments.Length != 2 ||
                     operation
                     .CalledFunction
                     .ContainingType

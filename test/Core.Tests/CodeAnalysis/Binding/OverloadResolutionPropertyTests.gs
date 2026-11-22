@@ -22,9 +22,7 @@ open class OverloadResolutionPropertyTests {
         let first = ClrOverloadResolution.Resolve(candidates, argTypes)
         let second = ClrOverloadResolution.Resolve(candidates, argTypes)
         return first.Outcome == second.Outcome && MethodIdentityComparer.Instance.Equals(first.Best, second.Best) &&
-            first
-            .Ambiguous
-            .SequenceEqual(second.Ambiguous, MethodIdentityComparer.Instance)
+            first.Ambiguous.SequenceEqual(second.Ambiguous, MethodIdentityComparer.Instance)
     }
 
     /// Resolution results maintain their public shape invariants.
@@ -70,12 +68,8 @@ open class OverloadResolutionPropertyTests {
             .Distinct(MethodIdentityComparer.Instance)
             .ToArray()
         let result = ClrOverloadResolution.Resolve(candidates, []Type? {argumentType})
-        return result.Outcome == ClrOverloadResolution
-            .ResolutionOutcome
-            .Resolved &&
-            MethodIdentityComparer
-            .Instance
-            .Equals(exact, result.Best)
+        return result.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved &&
+            MethodIdentityComparer.Instance.Equals(exact, result.Best)
     }
 
     /// Numeric better-conversion ordering is antisymmetric and drives overload choice.
@@ -102,12 +96,8 @@ open class OverloadResolutionPropertyTests {
         let secondTarget = second.GetParameters()[0].ParameterType
         let firstClassification = ClrOverloadResolution.ClassifyImplicit(firstTarget, source)
         let secondClassification = ClrOverloadResolution.ClassifyImplicit(secondTarget, source)
-        if firstClassification == ClrOverloadResolution
-            .ImplicitConversionKind
-            .None ||
-            secondClassification == ClrOverloadResolution
-            .ImplicitConversionKind
-            .None {
+        if firstClassification == ClrOverloadResolution.ImplicitConversionKind.None ||
+            secondClassification == ClrOverloadResolution.ImplicitConversionKind.None {
             return true
         }
         let comparison = OverloadResolutionGenerators.CompareExpected(
@@ -131,12 +121,8 @@ open class OverloadResolutionPropertyTests {
             return false
         }
         let result = ClrOverloadResolution.Resolve([]MethodInfo{first, second}, []Type? {source})
-        return result.Outcome == ClrOverloadResolution
-            .ResolutionOutcome
-            .Resolved &&
-            MethodIdentityComparer
-            .Instance
-            .Equals(expected, result.Best)
+        return result.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved &&
+            MethodIdentityComparer.Instance.Equals(expected, result.Best)
     }
 
     shared {

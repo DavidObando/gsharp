@@ -63,9 +63,7 @@ class DownloadSettings : SettingsBase, IDownloadSettings {
         Assert.All(
             map_.TargetMethods.Where(
                 (method MethodInfo) -> method.Name.StartsWith("add_", StringComparison.Ordinal) ||
-                    method
-                    .Name
-                    .StartsWith("remove_", StringComparison.Ordinal)
+                    method.Name.StartsWith("remove_", StringComparison.Ordinal)
             ),
             (method MethodInfo) -> Assert.Equal("DownloadSettings", method.DeclaringType!!.Name)
         )

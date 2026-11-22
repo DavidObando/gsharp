@@ -37,9 +37,7 @@ class Issue4802RecursiveHelperActivationTests {
         try {
             this.output.WriteLine(
                 "Active translator: " +
-                    typeof(CSharpToGSharpTranslator)
-                    .Assembly
-                    .Location +
+                    typeof(CSharpToGSharpTranslator).Assembly.Location +
                     " SHA256=" +
                     Convert.ToHexString(
                     SHA256.HashData(File.ReadAllBytes(typeof(CSharpToGSharpTranslator).Assembly.Location))

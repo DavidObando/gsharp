@@ -170,12 +170,8 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 if initializer != nil &&
-                    declarator
-                    .Initializer
-                    ?.Value is {} initializerSyntax &&
-                    this
-                    .context
-                    .GetDeclaredSymbol(declarator) is ILocalSymbol localTarget {
+                    declarator.Initializer?.Value is {} initializerSyntax &&
+                    this.context.GetDeclaredSymbol(declarator) is ILocalSymbol localTarget {
                     var targetType ITypeSymbol? = localTarget.Type
                     localAcceptsNil = this.LocalInitializerMakesStorageNullable(localTarget, initializerSyntax)
                     if localAcceptsNil {
@@ -258,10 +254,7 @@ partial class CSharpToGSharpTranslator {
                     // be rendered non-nullable and later `= nil`/`== nil` fail.
                     let declaredLocal ILocalSymbol? = this.context.GetDeclaredSymbol(declarator) as ILocalSymbol
                     var declaredType ITypeSymbol? = declaredLocal?.Type ??
-                        this
-                        .context
-                        .GetTypeInfo(declaration!!.Type)
-                        .Type
+                        this.context.GetTypeInfo(declaration!!.Type).Type
                     if declaredLocal != nil &&
                         this
                         .state
@@ -319,13 +312,9 @@ partial class CSharpToGSharpTranslator {
                             type = this.PromoteIfUsedAsNullable(type, localSymbol)
                             if localAcceptsNil ||
                                 (
-                                declarator
-                                    .Initializer
-                                    ?.Value is {} localInitializer &&
+                                declarator.Initializer?.Value is {} localInitializer &&
                                     IsNullOrSuppressedNull(localInitializer) &&
-                                    localSymbol
-                                    .Type
-                                    .IsReferenceType
+                                    localSymbol.Type.IsReferenceType
                             ) {
                                 type = MakeNullable(type)
                             }
@@ -334,17 +323,13 @@ partial class CSharpToGSharpTranslator {
                 } else if initializer != nil && this.context.GetDeclaredSymbol(
                     declarator
                 ) is ILocalSymbol containerLocal &&
-                    this
-                    .StoresObliviousContainerElements(containerLocal) {
+                    this.StoresObliviousContainerElements(containerLocal) {
                     // Issue #5537: an inferred local that is also assigned an imported
                     // oblivious container states the nullable positions of its storage.
-                    let storedType ITypeSymbol = this
-                        .context
-                        .GetTypeInfo(declarator.Initializer!!.Value)
-                        .Type ??
-                        containerLocal
-                        .Type
-                        .WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+                    let storedType ITypeSymbol = this.context.GetTypeInfo(declarator.Initializer!!.Value).Type ??
+                        containerLocal.Type.WithNullableAnnotation(
+                        Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                    )
                     type = this.PromoteObliviousContainerStorage(
                         this.typeMapper.MapExplicitType(storedType, this.context, declaration!!.Type.GetLocation()),
                         containerLocal
@@ -356,8 +341,7 @@ partial class CSharpToGSharpTranslator {
                 } else if initializer != nil && this.context.GetDeclaredSymbol(
                     declarator
                 ) is ILocalSymbol storedLocal &&
-                    this
-                    .StoredValueContractRequiresType(storedLocal) {
+                    this.StoredValueContractRequiresType(storedLocal) {
                     type = this.PromoteIfUsedAsNullable(
                         this.MapInferredLocalDeclarationType(storedLocal, declaration!!.Type.GetLocation()),
                         storedLocal
@@ -365,8 +349,7 @@ partial class CSharpToGSharpTranslator {
                 } else if initializer != nil && this.context.GetDeclaredSymbol(
                     declarator
                 ) is ILocalSymbol inferredLocal &&
-                    this
-                    .InferredLocalDeclarationIsNullable(inferredLocal) {
+                    this.InferredLocalDeclarationIsNullable(inferredLocal) {
                     // Issue #1072/#2305 (inferred-type form): a `var x = e` local
                     // whose uses prove it nullable needs an explicit `T?`.
                     // Otherwise G# may re-infer a non-null type from `e`, making a
@@ -400,12 +383,9 @@ partial class CSharpToGSharpTranslator {
                         .GetMemberGroup(Unparenthesize(declarator.Initializer!!.Value)!!)
                         .Length > 0
                 ) &&
-                    this
-                    .context
-                    .GetDeclaredSymbol(declarator) is ILocalSymbol delegateInferredLocal &&
+                    this.context.GetDeclaredSymbol(declarator) is ILocalSymbol delegateInferredLocal &&
                     delegateInferredLocal.Type is INamedTypeSymbol namedDelegateLocalType &&
-                    namedDelegateLocalType.TypeKind == TypeKind
-                    .Delegate {
+                    namedDelegateLocalType.TypeKind == TypeKind.Delegate {
                     // Issue #4127/#4129 (self-hosting regression, #3501):
                     // decomposed into a designation (`is ILocalSymbol
                     // delegateInferredLocal`) plus a separate, PLAIN enum
@@ -470,15 +450,8 @@ partial class CSharpToGSharpTranslator {
                     )
                     if type is ArrowTypeReference inferredArrow &&
                         Unparenthesize(declarator.Initializer!!.Value) is {} unwrappedMethodGroup &&
-                        this
-                        .context
-                        .SemanticModel
-                        .GetMemberGroup(unwrappedMethodGroup)
-                        .Length > 0 &&
-                        this
-                        .context
-                        .GetSymbolInfo(unwrappedMethodGroup)
-                        .Symbol is IMethodSymbol methodGroupTarget {
+                        this.context.SemanticModel.GetMemberGroup(unwrappedMethodGroup).Length > 0 &&
+                        this.context.GetSymbolInfo(unwrappedMethodGroup).Symbol is IMethodSymbol methodGroupTarget {
                         let parameterList = inferredArrow.ParameterTypes.ToList()
                         var parameterTypes IReadOnlyList[GTypeReference] = parameterList
                         var parametersChanged = false
@@ -526,9 +499,7 @@ partial class CSharpToGSharpTranslator {
                 if (binding == BindingKind.Var || hasExplicitType) && this.context.GetDeclaredSymbol(
                     declarator
                 ) is ILocalSymbol tupleStorage &&
-                    tupleStorage
-                    .Type
-                    .TypeKind != TypeKind.Delegate &&
+                    tupleStorage.Type.TypeKind != TypeKind.Delegate &&
                     (
                     tupleStorage.Type is INamedTypeSymbol{IsTupleType: true} ||
                         ObliviousNullabilityAnalyzer.HasNestedTupleSlots(tupleStorage.Type)
@@ -546,9 +517,7 @@ partial class CSharpToGSharpTranslator {
                     }
                     let promoted = this.PromoteTupleDeclarationIfTainted(mapped, tupleStorage.Type, tupleStorage)
                     if type != nil || !object.ReferenceEquals(mapped, promoted) ||
-                        !SymbolEqualityComparer
-                        .IncludeNullability
-                        .Equals(
+                        !SymbolEqualityComparer.IncludeNullability.Equals(
                         tupleStorage.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.None),
                         this
                             .context
@@ -641,8 +610,7 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated ||
-                ObliviousNullabilityAnalyzer
-                .IsImportedStatedNullablePosition(
+                ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(
                 this.context.GetSymbolInfo(initializer).Symbol,
                 this.context.Compilation
             ) ||
@@ -711,8 +679,7 @@ partial class CSharpToGSharpTranslator {
             }
             if local.Type is IArrayTypeSymbol array &&
                 mapped is ArrayTypeReference mappedArray &&
-                this
-                .TryResolveLocalWidenedImplicitArrayInitializer(
+                this.TryResolveLocalWidenedImplicitArrayInitializer(
                 local,
                 out var depth,
                 HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
@@ -1045,12 +1012,10 @@ partial class CSharpToGSharpTranslator {
                 case assignment is AssignmentExpressionSyntax when assignment.IsKind(
                     SyntaxKind.SimpleAssignmentExpression
                 ) ||
-                    assignment
-                    .IsKind(SyntaxKind.CoalesceAssignmentExpression) {
+                    assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) {
                     let right = this.GetDefaultOriginQuery(assignment.Right)
                     if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
-                        this
-                        .CoalesceAssignmentResultIsStaticallyNonNull(assignment) {
+                        this.CoalesceAssignmentResultIsStaticallyNonNull(assignment) {
                         this.defaultOriginGuards.Add((query, right))
                         for index in this.defaultOriginIndices.OrderBy((index int32) -> index).ToArray() {
                             this.AddDefaultOriginGuard(query, right, index)
@@ -1092,24 +1057,14 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .SemanticModel
                     .SyntaxTree &&
-                    this
-                    .TryGetTupleElementAccess(member, out var receiver, out var projection) {
+                    this.TryGetTupleElementAccess(member, out var receiver, out var projection) {
                     this.AddDefaultOriginProjection(query, receiver!!, projection!!)
                     return
                 }
             }
-            if source.SyntaxTree != this
-                .context
-                .SemanticModel
-                .SyntaxTree ||
-                this
-                .context
-                .GetSymbolInfo(source)
-                .Symbol is not ILocalSymbol local ||
-                local
-                .DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax() is not{} declaration {
+            if source.SyntaxTree != this.context.SemanticModel.SyntaxTree ||
+                this.context.GetSymbolInfo(source).Symbol is not ILocalSymbol local ||
+                local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not{} declaration {
                 return
             }
             let key = (declaration, source.SpanStart)
@@ -1145,10 +1100,7 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetSymbolInfo(access.Name)
                 .Symbol is IFieldSymbol{ContainingType: {IsTupleType: true}} field &&
-                this
-                .context
-                .GetTypeInfo(access.Expression)
-                .Type is INamedTypeSymbol{IsTupleType: true} tupleType {
+                this.context.GetTypeInfo(access.Expression).Type is INamedTypeSymbol{IsTupleType: true} tupleType {
                 let index = TupleElementIndex(tupleType, field)
                 if index < 0 {
                     receiver = nil
@@ -1296,11 +1248,7 @@ partial class CSharpToGSharpTranslator {
             var initialValues = entryValues ?? Array.Empty[ExpressionSyntax]()
             if executableOverride == nil &&
                 declarationExecutable != nil &&
-                declaration!!
-                .SyntaxTree
-                .GetRoot()
-                .FindToken(usePosition)
-                .Parent is {} useNode {
+                declaration!!.SyntaxTree.GetRoot().FindToken(usePosition).Parent is {} useNode {
                 let nestedExecutables = useNode
                     .AncestorsAndSelf()
                     .TakeWhile((node SyntaxNode) -> node.Span != declarationExecutable!!.Span)
@@ -1573,17 +1521,13 @@ partial class CSharpToGSharpTranslator {
                 if target is MemberAccessExpressionSyntax invoke && invoke.Name.Identifier.ValueText == "Invoke" {
                     target = invoke.Expression
                 } else if target is MemberBindingExpressionSyntax binding &&
-                    binding
-                    .Name
-                    .Identifier
-                    .ValueText == "Invoke" &&
+                    binding.Name.Identifier.ValueText == "Invoke" &&
                     invocation.Parent is ConditionalAccessExpressionSyntax conditional {
                     target = conditional.Expression
                 }
                 if anonymousFunction == nil {
                     if callable is not IMethodSymbol callableLocalFunction ||
-                        !this
-                        .DelegateExpressionReachesLocalFunction(
+                        !this.DelegateExpressionReachesLocalFunction(
                         target,
                         invocation.SpanStart,
                         callableLocalFunction,
@@ -1632,14 +1576,8 @@ partial class CSharpToGSharpTranslator {
                     }
                     case argument is ArgumentSyntax when !argument.RefOrOutKeyword.IsKind(SyntaxKind.OutKeyword) &&
                         (
-                        this
-                            .context
-                            .GetTypeInfo(argument.Expression)
-                            .ConvertedType ??
-                            this
-                            .context
-                            .GetTypeInfo(argument.Expression)
-                            .Type
+                        this.context.GetTypeInfo(argument.Expression).ConvertedType ??
+                            this.context.GetTypeInfo(argument.Expression).Type
                     )?.TypeKind == TypeKind
                         .Delegate {
                         let behavior = this.GetDelegateArgumentBehavior(argument)
@@ -1730,9 +1668,7 @@ partial class CSharpToGSharpTranslator {
                 let isDirectEagerAssignment = eagerAssignments.Contains(assignment.SpanStart)
                 for later in EagerExecutionNodes(executionBody).OfType[StatementSyntax]().Where(
                     (statement StatementSyntax) -> !isDirectEagerAssignment ||
-                        statement.SpanStart >= assignment
-                        .Span
-                        .End
+                        statement.SpanStart >= assignment.Span.End
                 ) {
                     let position = later.Span.End - 1
                     if this.NonLocalDelegateMayReferenceAnonymousFunction(
@@ -1817,9 +1753,7 @@ partial class CSharpToGSharpTranslator {
                     .OfType[IdentifierNameSyntax]()
                     .Any(
                     (identifier IdentifierNameSyntax) -> !eagerUseStarts.Contains(identifier.SpanStart) &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(model.GetSymbolInfo(identifier).Symbol, parameter)
+                        SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(identifier).Symbol, parameter)
                 )
                 if capturedByNestedExecutable {
                     return DelegateArgumentBehavior.Escapes
@@ -1853,11 +1787,8 @@ partial class CSharpToGSharpTranslator {
                     return true
                 }
                 if symbol is ILocalSymbol delegateLocal &&
-                    delegateLocal
-                    .Type
-                    .TypeKind == TypeKind.Delegate &&
-                    this
-                    .DelegateLocalReachesLocalFunction(
+                    delegateLocal.Type.TypeKind == TypeKind.Delegate &&
+                    this.DelegateLocalReachesLocalFunction(
                     delegateLocal,
                     usePosition,
                     localFunction,
@@ -1875,8 +1806,7 @@ partial class CSharpToGSharpTranslator {
                         symbol is IEventSymbol ||
                         (candidate is ElementAccessExpressionSyntax && this.IsNonLocalDelegateStorage(candidate))
                 ) &&
-                    this
-                    .NonLocalDelegateMayReferenceAnonymousFunction(
+                    this.NonLocalDelegateMayReferenceAnonymousFunction(
                     candidate,
                     usePosition,
                     anonymousFunction: nil,
@@ -1892,8 +1822,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 if symbol is IPropertySymbol{GetMethod: {} getter} property &&
                     IsDelegateLikeStorageType(getter.ReturnType) &&
-                    visited
-                    .Add(property.OriginalDefinition) {
+                    visited.Add(property.OriginalDefinition) {
                     let nextCallerChain = AppendDelegateCaller(
                         callerChain,
                         enclosingExecutable ?? FindEnclosingExecutable(candidate),
@@ -1919,8 +1848,7 @@ partial class CSharpToGSharpTranslator {
                 if candidate is InvocationExpressionSyntax candidateInvocation &&
                     symbol is IMethodSymbol factory &&
                     IsDelegateLikeStorageType(factory.ReturnType) &&
-                    visited
-                    .Add(factory.OriginalDefinition) {
+                    visited.Add(factory.OriginalDefinition) {
                     let nextCallerChain = AppendDelegateCaller(
                         callerChain,
                         enclosingExecutable ?? FindEnclosingExecutable(candidate),
@@ -1992,11 +1920,8 @@ partial class CSharpToGSharpTranslator {
                         return true
                     }
                     if symbol is ILocalSymbol alias &&
-                        alias
-                        .Type
-                        .TypeKind == TypeKind.Delegate &&
-                        this
-                        .DelegateLocalReachesLocalFunction(
+                        alias.Type.TypeKind == TypeKind.Delegate &&
+                        this.DelegateLocalReachesLocalFunction(
                         alias,
                         expression.SpanStart,
                         localFunction,
@@ -2014,8 +1939,7 @@ partial class CSharpToGSharpTranslator {
                             symbol is IEventSymbol ||
                             (expression is ElementAccessExpressionSyntax && this.IsNonLocalDelegateStorage(expression))
                     ) &&
-                        this
-                        .NonLocalDelegateMayReferenceAnonymousFunction(
+                        this.NonLocalDelegateMayReferenceAnonymousFunction(
                         expression,
                         expression.SpanStart,
                         anonymousFunction: nil,
@@ -2031,8 +1955,7 @@ partial class CSharpToGSharpTranslator {
                     }
                     if symbol is IPropertySymbol{GetMethod: {} getter} property &&
                         IsDelegateLikeStorageType(getter.ReturnType) &&
-                        visited
-                        .Add(property.OriginalDefinition) {
+                        visited.Add(property.OriginalDefinition) {
                         let nextCallerChain = AppendDelegateCaller(
                             callerChain,
                             FindEnclosingExecutable(expression),
@@ -2058,8 +1981,7 @@ partial class CSharpToGSharpTranslator {
                     if expression is InvocationExpressionSyntax expressionInvocation &&
                         symbol is IMethodSymbol factory &&
                         IsDelegateLikeStorageType(factory.ReturnType) &&
-                        visited
-                        .Add(factory.OriginalDefinition) {
+                        visited.Add(factory.OriginalDefinition) {
                         let nextCallerChain = AppendDelegateCaller(
                             callerChain,
                             FindEnclosingExecutable(expression),
@@ -2111,11 +2033,8 @@ partial class CSharpToGSharpTranslator {
                 }
                 let symbol ISymbol? = this.context.GetSymbolInfo(candidate).Symbol
                 if symbol is ILocalSymbol local &&
-                    local
-                    .Type
-                    .TypeKind == TypeKind.Delegate &&
-                    this
-                    .DelegateLocalReachesAnonymousFunction(
+                    local.Type.TypeKind == TypeKind.Delegate &&
+                    this.DelegateLocalReachesAnonymousFunction(
                     local,
                     usePosition,
                     anonymousFunction,
@@ -2124,8 +2043,7 @@ partial class CSharpToGSharpTranslator {
                     return true
                 }
                 if (symbol is IFieldSymbol || symbol is IPropertySymbol || symbol is IEventSymbol) &&
-                    this
-                    .NonLocalDelegateMayReferenceAnonymousFunction(
+                    this.NonLocalDelegateMayReferenceAnonymousFunction(
                     candidate,
                     usePosition,
                     anonymousFunction,
@@ -2141,8 +2059,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 if symbol is IPropertySymbol{GetMethod: {} getter} property &&
                     IsDelegateLikeStorageType(getter.ReturnType) &&
-                    visited
-                    .Add(property.OriginalDefinition) {
+                    visited.Add(property.OriginalDefinition) {
                     let nextCallerChain = AppendDelegateCaller(
                         callerChain,
                         enclosingExecutable ?? FindEnclosingExecutable(candidate),
@@ -2168,8 +2085,7 @@ partial class CSharpToGSharpTranslator {
                 if candidate is InvocationExpressionSyntax candidateInvocation &&
                     symbol is IMethodSymbol factory &&
                     IsDelegateLikeStorageType(factory.ReturnType) &&
-                    visited
-                    .Add(factory.OriginalDefinition) {
+                    visited.Add(factory.OriginalDefinition) {
                     let nextCallerChain = AppendDelegateCaller(
                         callerChain,
                         enclosingExecutable ?? FindEnclosingExecutable(candidate),
@@ -2430,8 +2346,7 @@ partial class CSharpToGSharpTranslator {
                     let remainingChain = callerChain.Take(callerChain.Count - 1).ToArray()
                     if lastCaller.Executable != nil &&
                         lastCaller.Executable != enclosingExecutable &&
-                        this
-                        .TryMapStorageReceiverToCallSite(
+                        this.TryMapStorageReceiverToCallSite(
                         storage,
                         receiverOverride,
                         enclosingExecutable,
@@ -2519,8 +2434,7 @@ partial class CSharpToGSharpTranslator {
                     let remainingChain = callerChain.Take(callerChain.Count - 1).ToArray()
                     if lastCaller.Executable != nil &&
                         lastCaller.Executable != enclosingExecutable &&
-                        this
-                        .TryMapStorageReceiverToCallSite(
+                        this.TryMapStorageReceiverToCallSite(
                         storage,
                         receiverOverride,
                         enclosingExecutable,
@@ -2671,9 +2585,7 @@ partial class CSharpToGSharpTranslator {
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
                 ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {} singleInitializer} singleDeclarator &&
-                singleDeclarator
-                .Span
-                .End <= usePosition &&
+                singleDeclarator.Span.End <= usePosition &&
                 enclosingExecutable != nil &&
                 !this.LocalHasNonDirectWrite(local, enclosingExecutable) &&
                 !enclosingExecutable
@@ -2927,12 +2839,8 @@ partial class CSharpToGSharpTranslator {
             if block.Kind == BasicBlockKind.Entry {
                 states.UnionWith(entryStates)
             }
-            if block
-                .EnclosingRegion
-                .Kind == ControlFlowRegionKind.Finally &&
-                block.Ordinal == block
-                .EnclosingRegion
-                .FirstBlockOrdinal {
+            if block.EnclosingRegion.Kind == ControlFlowRegionKind.Finally &&
+                block.Ordinal == block.EnclosingRegion.FirstBlockOrdinal {
                 let finallyRegion = block.EnclosingRegion
                 for sourceBlock in graph.Blocks {
                     if !sourceBlock.IsReachable {
@@ -2981,12 +2889,8 @@ partial class CSharpToGSharpTranslator {
             closure HashSet[BasicBlock],
             worklist Queue[BasicBlock]
         ) {
-            if block
-                .EnclosingRegion
-                .Kind == ControlFlowRegionKind.Finally &&
-                block.Ordinal == block
-                .EnclosingRegion
-                .FirstBlockOrdinal {
+            if block.EnclosingRegion.Kind == ControlFlowRegionKind.Finally &&
+                block.Ordinal == block.EnclosingRegion.FirstBlockOrdinal {
                 let finallyRegion = block.EnclosingRegion
                 for sourceBlock in graph.Blocks {
                     if !sourceBlock.IsReachable {
@@ -3120,20 +3024,16 @@ partial class CSharpToGSharpTranslator {
                         candidate is AssignmentExpressionSyntax ||
                         candidate is InvocationExpressionSyntax
                 ) &&
-                    candidate
-                    .Span
-                    .End <= beforePosition
+                    candidate.Span.End <= beforePosition
             )
                 .OrderBy((candidate SyntaxNode) -> candidate.Span.End)
                 .ThenByDescending((candidate SyntaxNode) -> candidate.SpanStart) {
                 if node is VariableDeclaratorSyntax declarator &&
-                    declarator.SyntaxTree == this
-                    .context
-                    .SemanticModel
-                    .SyntaxTree &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(this.context.SemanticModel.GetDeclaredSymbol(declarator), local) {
+                    declarator.SyntaxTree == this.context.SemanticModel.SyntaxTree &&
+                    SymbolEqualityComparer.Default.Equals(
+                    this.context.SemanticModel.GetDeclaredSymbol(declarator),
+                    local
+                ) {
                     activeCallerContextFlags.Add(true)
                     states = if declarator.Initializer is not{} initializer {
                         HashSet[int32]{0}
@@ -3277,10 +3177,7 @@ partial class CSharpToGSharpTranslator {
                     if subNode is AnonymousFunctionExpressionSyntax subAnon {
                         resolvedDeclarations.Add(subAnon)
                     } else if subNode is ExpressionSyntax subExpr &&
-                        this
-                        .context
-                        .Compilation
-                        .ContainsSyntaxTree(subExpr.SyntaxTree) {
+                        this.context.Compilation.ContainsSyntaxTree(subExpr.SyntaxTree) {
                         using let _ = this.context.UseSemanticModelFor(subExpr.SyntaxTree)
                         let subSymbol = this.context.GetSymbolInfo(subExpr).Symbol
                         if subSymbol is IMethodSymbol subMethod {
@@ -3342,10 +3239,7 @@ partial class CSharpToGSharpTranslator {
             if target is MemberAccessExpressionSyntax invoke && invoke.Name.Identifier.ValueText == "Invoke" {
                 target = invoke.Expression
             } else if target is MemberBindingExpressionSyntax binding &&
-                binding
-                .Name
-                .Identifier
-                .ValueText == "Invoke" &&
+                binding.Name.Identifier.ValueText == "Invoke" &&
                 invocation.Parent is ConditionalAccessExpressionSyntax conditional {
                 target = conditional.Expression
             }
@@ -3447,10 +3341,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                if this
-                    .context
-                    .SemanticModel
-                    .GetDeclaredSymbol(declaration) is IMethodSymbol declaredMethod &&
+                if this.context.SemanticModel.GetDeclaredSymbol(declaration) is IMethodSymbol declaredMethod &&
                     !nextVisited.Add(declaredMethod.OriginalDefinition) {
                     cycleFlags.Add(true)
                     continue
@@ -3654,9 +3545,7 @@ partial class CSharpToGSharpTranslator {
                 (candidate SyntaxNode) -> (
                     candidate is AssignmentExpressionSyntax || candidate is InvocationExpressionSyntax
                 ) &&
-                    candidate
-                    .Span
-                    .End <= beforePosition
+                    candidate.Span.End <= beforePosition
             )
                 .OrderBy((candidate SyntaxNode) -> candidate.Span.End)
                 .ThenByDescending((candidate SyntaxNode) -> candidate.SpanStart) {
@@ -3674,8 +3563,7 @@ partial class CSharpToGSharpTranslator {
                             activeCallee.CallSite,
                             out leftReceiverOverride
                         ) &&
-                            this
-                            .DelegateStorageMatches(
+                            this.DelegateStorageMatches(
                             assignment.Left,
                             storage,
                             storageUsePosition,
@@ -3837,10 +3725,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                if this
-                    .context
-                    .SemanticModel
-                    .GetDeclaredSymbol(declaration) is IMethodSymbol declaredMethod &&
+                if this.context.SemanticModel.GetDeclaredSymbol(declaration) is IMethodSymbol declaredMethod &&
                     !nextVisited.Add(declaredMethod.OriginalDefinition) {
                     cycleFlags.Add(true)
                     continue
@@ -4004,15 +3889,8 @@ partial class CSharpToGSharpTranslator {
                 if expression is BaseObjectCreationExpressionSyntax{
                     ArgumentList: {Arguments: {Count: 1} creationArguments}
                 } &&
-                    expression.SyntaxTree == this
-                    .context
-                    .SemanticModel
-                    .SyntaxTree &&
-                    this
-                    .context
-                    .GetTypeInfo(expression)
-                    .Type
-                    ?.TypeKind == TypeKind.Delegate {
+                    expression.SyntaxTree == this.context.SemanticModel.SyntaxTree &&
+                    this.context.GetTypeInfo(expression).Type?.TypeKind == TypeKind.Delegate {
                     expression = creationArguments[0].Expression
                     continue
                 }
@@ -4034,13 +3912,8 @@ partial class CSharpToGSharpTranslator {
                 return HashSet[int32]{currentState}
             }
             if trackedLocal != nil &&
-                expression.SyntaxTree == this
-                .context
-                .SemanticModel
-                .SyntaxTree &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(this.context.GetSymbolInfo(expression).Symbol, trackedLocal) {
+                expression.SyntaxTree == this.context.SemanticModel.SyntaxTree &&
+                SymbolEqualityComparer.Default.Equals(this.context.GetSymbolInfo(expression).Symbol, trackedLocal) {
                 return HashSet[int32]{currentState}
             }
             if anonymousFunction != nil &&
@@ -4049,10 +3922,7 @@ partial class CSharpToGSharpTranslator {
                 return HashSet[int32]{1}
             }
             if localFunction != nil &&
-                expression.SyntaxTree == this
-                .context
-                .SemanticModel
-                .SyntaxTree &&
+                expression.SyntaxTree == this.context.SemanticModel.SyntaxTree &&
                 ExactLocalFunctionMatches(this.context.GetSymbolInfo(expression).Symbol, localFunction) {
                 return HashSet[int32]{1}
             }
@@ -4228,10 +4098,7 @@ partial class CSharpToGSharpTranslator {
                     completedQueries: completedQueries,
                     cycleFlags: cycleFlags
                 )
-                if expression.SyntaxTree == this
-                    .context
-                    .SemanticModel
-                    .SyntaxTree &&
+                if expression.SyntaxTree == this.context.SemanticModel.SyntaxTree &&
                     this
                     .context
                     .GetSymbolInfo(Unwrap(expression))
@@ -4272,18 +4139,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 return counts
             }
-            if expression.SyntaxTree == this
-                .context
-                .SemanticModel
-                .SyntaxTree &&
-                this
-                .context
-                .GetSymbolInfo(expression)
-                .Symbol is ILocalSymbol local &&
-                local
-                .Type
-                .TypeKind == TypeKind
-                .Delegate {
+            if expression.SyntaxTree == this.context.SemanticModel.SyntaxTree &&
+                this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local &&
+                local.Type.TypeKind == TypeKind.Delegate {
                 return this.DelegateLocalReachingStates(
                     local,
                     expression.SpanStart,
@@ -4298,15 +4156,9 @@ partial class CSharpToGSharpTranslator {
                     cycleFlags: cycleFlags
                 )
             }
-            if expression.SyntaxTree == this
-                .context
-                .SemanticModel
-                .SyntaxTree &&
+            if expression.SyntaxTree == this.context.SemanticModel.SyntaxTree &&
                 expression is InvocationExpressionSyntax invocationExpr &&
-                this
-                .context
-                .GetSymbolInfo(expression)
-                .Symbol is IMethodSymbol factory &&
+                this.context.GetSymbolInfo(expression).Symbol is IMethodSymbol factory &&
                 IsDelegateLikeStorageType(factory.ReturnType) {
                 if DelegateCalleeMayDispatchDynamically(invocationExpr, factory) {
                     return HashSet[int32]{0, 1, 2}
@@ -4429,10 +4281,7 @@ partial class CSharpToGSharpTranslator {
                 if node.SyntaxTree != this.context.SemanticModel.SyntaxTree {
                     continue
                 }
-                if this
-                    .context
-                    .GetSymbolInfo(node)
-                    .Symbol is IMethodSymbol candidate &&
+                if this.context.GetSymbolInfo(node).Symbol is IMethodSymbol candidate &&
                     LocalFunctionMatches(candidate, localFunction) &&
                     !targets.Any((existing IMethodSymbol) -> ExactLocalFunctionMatches(candidate, existing)) {
                     targets.Add(candidate)
@@ -4457,14 +4306,8 @@ partial class CSharpToGSharpTranslator {
             if receiver == nil || receiver is ThisExpressionSyntax {
                 return true
             }
-            if receiver.SyntaxTree == this
-                .context
-                .SemanticModel
-                .SyntaxTree &&
-                this
-                .context
-                .GetSymbolInfo(receiver)
-                .Symbol is ILocalSymbol receiverLocal {
+            if receiver.SyntaxTree == this.context.SemanticModel.SyntaxTree &&
+                this.context.GetSymbolInfo(receiver).Symbol is ILocalSymbol receiverLocal {
                 return !this.IsLocalReassigned(receiverLocal)
             }
             return false
@@ -4610,10 +4453,7 @@ partial class CSharpToGSharpTranslator {
             let receiverSymbol = this.context.GetSymbolInfo(effectiveReceiver).Symbol
             if receiverSymbol is IParameterSymbol parameter {
                 if callSite is not InvocationExpressionSyntax invocationCallSite ||
-                    !this
-                    .context
-                    .Compilation
-                    .ContainsSyntaxTree(invocationCallSite.SyntaxTree) {
+                    !this.context.Compilation.ContainsSyntaxTree(invocationCallSite.SyntaxTree) {
                     return false
                 }
                 using let _ = this.context.UseSemanticModelFor(invocationCallSite.SyntaxTree)
@@ -4726,8 +4566,7 @@ partial class CSharpToGSharpTranslator {
                 if symbol is ILocalSymbol local && local.Type.TypeKind == TypeKind.Delegate && visited.Add(local) {
                     for declRef in local.DeclaringSyntaxReferences {
                         if declRef.GetSyntax() is VariableDeclaratorSyntax{Initializer: {} initializer} &&
-                            this
-                            .ExpressionMayEverReachTarget(
+                            this.ExpressionMayEverReachTarget(
                             initializer.Value,
                             enclosingExecutable,
                             anonymousFunction,
@@ -4764,8 +4603,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 if symbol is IPropertySymbol{GetMethod: {} getter} property &&
                     IsDelegateLikeStorageType(getter.ReturnType) &&
-                    visited
-                    .Add(property.OriginalDefinition) {
+                    visited.Add(property.OriginalDefinition) {
                     for returned in this.GetSourceCallableReturnExpressions(getter) {
                         if this.ExpressionMayEverReachTarget(
                             returned,
@@ -4782,8 +4620,7 @@ partial class CSharpToGSharpTranslator {
                 if candidate is InvocationExpressionSyntax &&
                     symbol is IMethodSymbol factory &&
                     IsDelegateLikeStorageType(factory.ReturnType) &&
-                    visited
-                    .Add(factory.OriginalDefinition) {
+                    visited.Add(factory.OriginalDefinition) {
                     for returned in this.GetSourceCallableReturnExpressions(factory) {
                         if this.ExpressionMayEverReachTarget(
                             returned,
@@ -4908,18 +4745,12 @@ partial class CSharpToGSharpTranslator {
                 return eventSymbol.IsVirtual ||
                     eventSymbol.IsAbstract ||
                     eventSymbol.IsOverride ||
-                    eventSymbol
-                    .AddMethod
-                    ?.IsImplicitlyDeclared != true ||
-                    eventSymbol
-                    .RemoveMethod
-                    ?.IsImplicitlyDeclared != true ||
-                    eventSymbol
-                    .DeclaringSyntaxReferences
-                    .IsDefaultOrEmpty ||
-                    !eventSymbol
-                    .DeclaringSyntaxReferences
-                    .All((reference SyntaxReference) -> reference.GetSyntax() is VariableDeclaratorSyntax)
+                    eventSymbol.AddMethod?.IsImplicitlyDeclared != true ||
+                    eventSymbol.RemoveMethod?.IsImplicitlyDeclared != true ||
+                    eventSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty ||
+                    !eventSymbol.DeclaringSyntaxReferences.All(
+                    (reference SyntaxReference) -> reference.GetSyntax() is VariableDeclaratorSyntax
+                )
             }
             return false
         }
@@ -5151,8 +4982,7 @@ partial class CSharpToGSharpTranslator {
             }
             if usePosition is int32 observationPosition &&
                 (symbol is IParameterSymbol || symbol is IFieldSymbol) &&
-                this
-                .TryGetDefiniteAssignmentsBetween(symbol, expression, observationPosition, out var assignedValues) {
+                this.TryGetDefiniteAssignmentsBetween(symbol, expression, observationPosition, out var assignedValues) {
                 return assignedValues!!.SelectMany(
                     func (assignedValue ExpressionSyntax) IEnumerable[ExpressionSyntax] {
                         return this.GetIndexedDelegateReceiverOrigins(
@@ -5251,12 +5081,9 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if statement is IfStatementSyntax conditional &&
-                conditional
-                .Else
-                ?.Statement is {} whenFalse &&
+                conditional.Else?.Statement is {} whenFalse &&
                 this.TryGetDefinitelyAssignedValues(conditional.Statement, symbol, out var whenTrueValues) &&
-                this
-                .TryGetDefinitelyAssignedValues(whenFalse, symbol, out var whenFalseValues) {
+                this.TryGetDefinitelyAssignedValues(whenFalse, symbol, out var whenFalseValues) {
                 values = whenTrueValues!!.Concat(whenFalseValues!!).ToList()
                 return true
             }
@@ -5320,19 +5147,10 @@ partial class CSharpToGSharpTranslator {
                     return true
                 }
                 for expression in value.DescendantNodesAndSelf().OfType[ExpressionSyntax]() {
-                    if expression.SyntaxTree == this
-                        .context
-                        .SemanticModel
-                        .SyntaxTree &&
-                        this
-                        .context
-                        .GetSymbolInfo(expression)
-                        .Symbol is ILocalSymbol alias &&
-                        alias
-                        .Type
-                        .TypeKind == TypeKind.Delegate &&
-                        this
-                        .DelegateLocalReachesAnonymousFunction(
+                    if expression.SyntaxTree == this.context.SemanticModel.SyntaxTree &&
+                        this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol alias &&
+                        alias.Type.TypeKind == TypeKind.Delegate &&
+                        this.DelegateLocalReachesAnonymousFunction(
                         alias,
                         expression.SpanStart,
                         anonymousFunction,
@@ -5340,18 +5158,11 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         return true
                     }
-                    if expression.SyntaxTree == this
-                        .context
-                        .SemanticModel
-                        .SyntaxTree &&
+                    if expression.SyntaxTree == this.context.SemanticModel.SyntaxTree &&
                         expression is InvocationExpressionSyntax &&
-                        this
-                        .context
-                        .GetSymbolInfo(expression)
-                        .Symbol is IMethodSymbol factory &&
+                        this.context.GetSymbolInfo(expression).Symbol is IMethodSymbol factory &&
                         IsDelegateLikeStorageType(factory.ReturnType) &&
-                        visited
-                        .Add(factory.OriginalDefinition) {
+                        visited.Add(factory.OriginalDefinition) {
                         for returned in this.GetSourceCallableReturnExpressions(factory) {
                             if this.DelegateExpressionReachesAnonymousFunction(
                                 returned,
@@ -5417,9 +5228,7 @@ partial class CSharpToGSharpTranslator {
                     (candidate IFlowAnonymousFunctionOperation) -> candidate
                         .Syntax
                         .SyntaxTree == anonymousFunction.SyntaxTree &&
-                        candidate
-                        .Syntax
-                        .Span == anonymousFunction.Span
+                        candidate.Syntax.Span == anonymousFunction.Span
                 )
                 return ControlFlowGraphExtensions.GetAnonymousFunctionControlFlowGraphInScope(parent!!, operation)
             }
@@ -5723,14 +5532,8 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if expression is MemberAccessExpressionSyntax member &&
-                this
-                .context
-                .GetTypeInfo(member.Expression)
-                .Type is INamedTypeSymbol{IsTupleType: true} tupleType &&
-                this
-                .context
-                .GetSymbolInfo(member.Name)
-                .Symbol is IFieldSymbol field {
+                this.context.GetTypeInfo(member.Expression).Type is INamedTypeSymbol{IsTupleType: true} tupleType &&
+                this.context.GetSymbolInfo(member.Name).Symbol is IFieldSymbol field {
                 let index = TupleElementIndex(tupleType, field)
                 if index >= 0 {
                     path.Insert(0, index)
@@ -5802,10 +5605,7 @@ partial class CSharpToGSharpTranslator {
             }
             let data = origin!!.SpanStart.ToString(CultureInfo.InvariantCulture) +
                 ":" +
-                origin!!
-                .Span
-                .Length
-                .ToString(CultureInfo.InvariantCulture) +
+                origin!!.Span.Length.ToString(CultureInfo.InvariantCulture) +
                 ":" +
                 string.Join(".", path)
             this.reachingTupleProjections.TryAdd(data, (origin, path))
@@ -5882,14 +5682,8 @@ partial class CSharpToGSharpTranslator {
         private func GetRefAliasTargets(expression ExpressionSyntax?, visited HashSet[ISymbol]? = nil) IEnumerable[
             ExpressionSyntax
         ] {
-            if expression!!.SyntaxTree != this
-                .context
-                .SemanticModel
-                .SyntaxTree ||
-                this
-                .context
-                .GetSymbolInfo(expression)
-                .Symbol is not ILocalSymbol alias ||
+            if expression!!.SyntaxTree != this.context.SemanticModel.SyntaxTree ||
+                this.context.GetSymbolInfo(expression).Symbol is not ILocalSymbol alias ||
                 alias.RefKind == RefKind.None ||
                 (visited != nil && !visited.Add(alias)) {
                 return Array.Empty[ExpressionSyntax]()
@@ -6064,12 +5858,7 @@ partial class CSharpToGSharpTranslator {
             // natively. Other non-string operands still need an explicit
             // `ToString()` because G# does not expose C#'s string + object arms.
             if binary.IsKind(SyntaxKind.AddExpression) &&
-                this
-                .context
-                .GetTypeInfo(binary)
-                .Type
-                ?.SpecialType == SpecialType
-                .System_String {
+                this.context.GetTypeInfo(binary).Type?.SpecialType == SpecialType.System_String {
                 left = this.CoerceConcatOperand(binary.Left, left)
                 right = this.CoerceConcatOperand(binary.Right, right)
                 return BinaryExpression(left, op, right)
@@ -6105,8 +5894,7 @@ partial class CSharpToGSharpTranslator {
             // says C# actually promoted it to; the right operand is handled by
             // #1232 above and must not be coerced to the (unrelated) left type.
             if binary.IsKind(SyntaxKind.LeftShiftExpression) || binary.IsKind(SyntaxKind.RightShiftExpression) ||
-                binary
-                .IsKind(SyntaxKind.UnsignedRightShiftExpression) {
+                binary.IsKind(SyntaxKind.UnsignedRightShiftExpression) {
                 let shiftLeftType ITypeSymbol? = this.context.GetTypeInfo(binary.Left).Type
                 let shiftLeftConverted ITypeSymbol? = this.context.GetTypeInfo(binary.Left).ConvertedType
                 if TryGetNumericKind(shiftLeftType, out var shiftLeftUnderlying) &&
@@ -6172,8 +5960,7 @@ partial class CSharpToGSharpTranslator {
                 leftIsIntegral &&
                 rightIsIntegral &&
                 (isComparison || !this.OperandWidenedToConstantType(binary.Left, rightUnderlying)) &&
-                this
-                .IntegralConstantFits(binary.Right, leftUnderlying) {
+                this.IntegralConstantFits(binary.Right, leftUnderlying) {
                 right = this.CoerceOperandTo(right, leftType, binary.Right.GetLocation())
                 return BinaryExpression(left, op, right)
             }
@@ -6183,8 +5970,7 @@ partial class CSharpToGSharpTranslator {
                 leftIsIntegral &&
                 rightIsIntegral &&
                 (isComparison || !this.OperandWidenedToConstantType(binary.Right, leftUnderlying)) &&
-                this
-                .IntegralConstantFits(binary.Left, rightUnderlying) {
+                this.IntegralConstantFits(binary.Left, rightUnderlying) {
                 left = this.CoerceOperandTo(left, rightType, binary.Left.GetLocation())
                 return BinaryExpression(left, op, right)
             }
@@ -6294,10 +6080,7 @@ partial class CSharpToGSharpTranslator {
                     (
                     UnwrapParenthesesAndSuppressions(expression) is IdentifierNameSyntax identifier &&
                         this.IsByReferenceVariable(this.context.GetSymbolInfo(identifier).Symbol) &&
-                        decision
-                        .Pattern
-                        .DescendantNodesAndSelf()
-                        .Any(this.PatternNodeRunsUserCode)
+                        decision.Pattern.DescendantNodesAndSelf().Any(this.PatternNodeRunsUserCode)
                 )
             ) {
                 return false
@@ -6385,10 +6168,7 @@ partial class CSharpToGSharpTranslator {
         ) bool -> (
             operandType != nil &&
                 operandType.IsReferenceType &&
-                operandType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated
+                operandType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
         ) ||
             this.IsGSharpNullableAnalyzerExpression(operandSyntax) || this.NullableReferenceValueMayBeNull(
             operandSyntax
@@ -6448,10 +6228,7 @@ partial class CSharpToGSharpTranslator {
                 return translatedRhs
             }
             // An array element write has no symbol; the array is the target.
-            let storeTarget ISymbol? = this
-                .context
-                .GetSymbolInfo(assignment.Left)
-                .Symbol ??
+            let storeTarget ISymbol? = this.context.GetSymbolInfo(assignment.Left).Symbol ??
                 (
                 if assignment.Left is ElementAccessExpressionSyntax elementAccess {
                     this.context.GetTypeInfo(elementAccess.Expression).Type as IArrayTypeSymbol
@@ -6496,10 +6273,7 @@ partial class CSharpToGSharpTranslator {
             )
             let leftType ITypeSymbol? = this.GetAssignmentTargetType(target, leftSymbol)
             if !(leftType != nil && leftType.IsReferenceType == true) ||
-                leftType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                leftType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return false
             }
             // An `[AllowNull]` indexer, also one that another project of the run
@@ -6628,15 +6402,9 @@ partial class CSharpToGSharpTranslator {
 
         // The array that a loop variable without a type clause iterates.
         private func InferredForEachArray(local ILocalSymbol) ExpressionSyntax? {
-            return if local
-                .DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax() is ForEachStatementSyntax forEach &&
+            return if local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is ForEachStatementSyntax forEach &&
                 !this.ForEachHasTypeClause(forEach) &&
-                this
-                .context
-                .GetTypeInfo(forEach.Expression)
-                .Type is IArrayTypeSymbol {
+                this.context.GetTypeInfo(forEach.Expression).Type is IArrayTypeSymbol {
                 forEach.Expression
             } else {
                 nil
@@ -6703,10 +6471,7 @@ partial class CSharpToGSharpTranslator {
             )
             let leftType ITypeSymbol? = this.GetAssignmentTargetType(assignment.Left, leftSymbol)
             if !(leftType != nil && leftType.IsReferenceType == true) ||
-                leftType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                leftType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return translatedRhs
             }
             if leftSymbol != nil && this.ShouldPromoteToNullableReference(leftSymbol) {
@@ -6760,8 +6525,7 @@ partial class CSharpToGSharpTranslator {
             if lengthType != nil &&
                 IsNonNullableValueType(lengthType) &&
                 TryGetNumericKind(lengthType, out var underlying) &&
-                underlying != SpecialType
-                .System_Int32 {
+                underlying != SpecialType.System_Int32 {
                 let int32Type ITypeSymbol = this.context.Compilation.GetSpecialType(SpecialType.System_Int32)
                 return this.CoerceOperandTo(length, int32Type, lengthSyntax.GetLocation())
             }
@@ -6814,8 +6578,7 @@ partial class CSharpToGSharpTranslator {
         private func TranslateOutVarDesignation(single SingleVariableDesignationSyntax) GExpression {
             let name = this.EmittedName(single, single.Identifier)!!
             if this.context.GetDeclaredSymbol(single) is ILocalSymbol local &&
-                this
-                .OutDeclarationRequiresNullablePredeclaration(single, local) {
+                this.OutDeclarationRequiresNullablePredeclaration(single, local) {
                 let ctorInit = single.Ancestors().OfType[ConstructorInitializerSyntax]().FirstOrDefault()
                 let escapesCtorInit = ctorInit?.Parent is ConstructorDeclarationSyntax ctor &&
                     (
@@ -6881,9 +6644,7 @@ partial class CSharpToGSharpTranslator {
             local ILocalSymbol
         ) bool {
             if single.Parent is DeclarationExpressionSyntax{Parent: ArgumentSyntax argument} &&
-                argument
-                .RefKindKeyword
-                .IsKind(SyntaxKind.OutKeyword) {
+                argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) {
                 if argument.Parent is ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation} &&
                     this.RequiresFunctionArgumentSpillSeam(invocation) {
                     return true
@@ -6902,14 +6663,9 @@ partial class CSharpToGSharpTranslator {
             local ILocalSymbol
         ) bool {
             if single.Parent is DeclarationExpressionSyntax{Parent: ArgumentSyntax argument} &&
-                argument
-                .RefKindKeyword
-                .IsKind(SyntaxKind.OutKeyword) && this.ShouldPromoteToNullableReference(local) {
+                argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) && this.ShouldPromoteToNullableReference(local) {
                 return !(
-                    this
-                        .context
-                        .SemanticModel
-                        .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
+                    this.context.SemanticModel.GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
                         parameter
                         .OriginalDefinition
                         .DeclaringSyntaxReferences
@@ -6929,12 +6685,8 @@ partial class CSharpToGSharpTranslator {
                 ancestor is LocalFunctionStatementSyntax ||
                 ancestor is AnonymousFunctionExpressionSyntax
         ) ??
-            this
-            .state
-            .CurrentBodyScope ??
-            node
-            .SyntaxTree
-            .GetRoot()
+            this.state.CurrentBodyScope ??
+            node.SyntaxTree.GetRoot()
 
         private func GetPredeclaredOutLocalName(
             single SingleVariableDesignationSyntax,
@@ -6962,8 +6714,7 @@ partial class CSharpToGSharpTranslator {
                     candidate,
                     isOriginalStem: candidate == stem
                 ) ||
-                    (candidate != stem && !this.TryClaimSynthesizedLocalName(candidate, single));
-                    suffix++ {
+                    (candidate != stem && !this.TryClaimSynthesizedLocalName(candidate, single)); suffix++ {
                     candidate = "${stem}_$suffix"
                 }
                 if candidate == stem {
@@ -7000,10 +6751,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 let symbol ISymbol? = this.context.GetDeclaredSymbol(token.Parent) ??
-                    this
-                    .context
-                    .GetSymbolInfo(token.Parent)
-                    .Symbol
+                    this.context.GetSymbolInfo(token.Parent).Symbol
                 if symbol == nil || SymbolEqualityComparer.Default.Equals(symbol, local) {
                     continue
                 }
@@ -7024,12 +6772,9 @@ partial class CSharpToGSharpTranslator {
                     .DeclaringSyntaxReferences
                     .FirstOrDefault()
                     ?.GetSyntax() is SingleVariableDesignationSyntax otherSingle &&
-                    this
-                    .OutDeclarationRequiresPredeclaration(otherSingle, otherLocal) {
+                    this.OutDeclarationRequiresPredeclaration(otherSingle, otherLocal) {
                     if !object.ReferenceEquals(this.GetPredeclaredOutBodyScope(otherSingle), body) &&
-                        !body
-                        .Span
-                        .Contains(otherSingle.Span) && this.GetPredeclaredOutLocalName(
+                        !body.Span.Contains(otherSingle.Span) && this.GetPredeclaredOutLocalName(
                         otherSingle,
                         otherLocal,
                         GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.General
@@ -7229,16 +6974,12 @@ partial class CSharpToGSharpTranslator {
             if resultType?.IsReferenceType == true && resultType.TypeKind != TypeKind.Error {
                 if trueType?.IsReferenceType == true &&
                     trueType.TypeKind != TypeKind.Error &&
-                    !SymbolEqualityComparer
-                    .Default
-                    .Equals(trueType, resultType) {
+                    !SymbolEqualityComparer.Default.Equals(trueType, resultType) {
                     whenTrue = this.CoerceReferenceValueTo(conditional.WhenTrue, whenTrue, resultType)
                 }
                 if falseType?.IsReferenceType == true &&
                     falseType.TypeKind != TypeKind.Error &&
-                    !SymbolEqualityComparer
-                    .Default
-                    .Equals(falseType, resultType) {
+                    !SymbolEqualityComparer.Default.Equals(falseType, resultType) {
                     whenFalse = this.CoerceReferenceValueTo(conditional.WhenFalse, whenFalse, resultType)
                 }
             }
@@ -7299,9 +7040,7 @@ partial class CSharpToGSharpTranslator {
             let info = this.context.GetTypeInfo(expression)
             if info.Type is IPointerTypeSymbol source &&
                 info.ConvertedType is IPointerTypeSymbol target &&
-                !SymbolEqualityComparer
-                .Default
-                .Equals(source.PointedAtType, target.PointedAtType) {
+                !SymbolEqualityComparer.Default.Equals(source.PointedAtType, target.PointedAtType) {
                 let targetRef GTypeReference? = this.typeMapper.Map(target, this.context, expression.GetLocation())
                 return ConversionExpression(targetRef, translated)
             }
@@ -7351,14 +7090,8 @@ partial class CSharpToGSharpTranslator {
                 target.ElementType is {IsReferenceType: true} targetElement &&
                 sourceElement.TypeKind != TypeKind.Error &&
                 targetElement.TypeKind != TypeKind.Error &&
-                !SymbolEqualityComparer
-                .Default
-                .Equals(sourceElement, targetElement) &&
-                this
-                .context
-                .Compilation
-                .ClassifyConversion(source, target)
-                .IsImplicit {
+                !SymbolEqualityComparer.Default.Equals(sourceElement, targetElement) &&
+                this.context.Compilation.ClassifyConversion(source, target).IsImplicit {
                 let targetRef GTypeReference? = this.typeMapper.Map(target, this.context, expression.GetLocation())
                 return ConversionExpression(targetRef, translated, isCheckedReferenceCast: true)
             }
@@ -7591,10 +7324,7 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             if section.Parent is not SwitchStatementSyntax switchStatement ||
-                gotoStatement
-                .Ancestors()
-                .OfType[SwitchStatementSyntax]()
-                .FirstOrDefault() != switchStatement {
+                gotoStatement.Ancestors().OfType[SwitchStatementSyntax]().FirstOrDefault() != switchStatement {
                 return false
             }
             let sectionIndex = switchStatement.Sections.IndexOf(section)
@@ -7723,22 +7453,15 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             if target is not InvocationExpressionSyntax invocation ||
-                this
-                .context
-                .GetSymbolInfo(invocation)
-                .Symbol is not IMethodSymbol method {
+                this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method {
                 return false
             }
             let conditions = List[string]()
             for var current IMethodSymbol? = method; current != nil; current = current?.OverriddenMethod {
                 for attribute in current.GetAttributes() {
                     if attribute.AttributeClass?.ToDisplayString() == "System.Diagnostics.ConditionalAttribute" &&
-                        attribute
-                        .ConstructorArguments
-                        .Length == 1 &&
-                        attribute
-                        .ConstructorArguments[0]
-                        .Value is string name {
+                        attribute.ConstructorArguments.Length == 1 &&
+                        attribute.ConstructorArguments[0].Value is string name {
                         conditions.Add(name)
                     }
                 }
@@ -7772,19 +7495,14 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             if expression is ConditionalAccessExpressionSyntax conditionalAccess &&
-                this
-                .TryTranslateNullConditionalStaticExtensionHelperStatement(
+                this.TryTranslateNullConditionalStaticExtensionHelperStatement(
                 conditionalAccess,
                 out var conditionalHelperStatement
             ) {
                 return conditionalHelperStatement
             }
             if expression is ConditionalAccessExpressionSyntax voidConditionalAccess &&
-                this
-                .context
-                .GetTypeInfo(voidConditionalAccess)
-                .Type
-                ?.SpecialType == SpecialType.System_Void &&
+                this.context.GetTypeInfo(voidConditionalAccess).Type?.SpecialType == SpecialType.System_Void &&
                 (
                 this.RequiresLocalAssignmentSeam(voidConditionalAccess.WhenNotNull) ||
                     this.ContainsFunctionArgumentSpillSeam(voidConditionalAccess.WhenNotNull) ||
@@ -7821,10 +7539,7 @@ partial class CSharpToGSharpTranslator {
                             SyntaxKind.SubtractAssignmentExpression
                         )
                     ) &&
-                        this
-                        .context
-                        .GetSymbolInfo(assignment.Left)
-                        .Symbol is IEventSymbol
+                        this.context.GetSymbolInfo(assignment.Left).Symbol is IEventSymbol
                     let isVoidAssignment = this.context.GetTypeInfo(assignment).Type?.SpecialType ==
                     SpecialType.System_Void || isEventSubscription
                     return AssignmentStatement(
@@ -7835,16 +7550,14 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case postfix is PostfixUnaryExpressionSyntax when postfix.IsKind(SyntaxKind.PostIncrementExpression) ||
-                    postfix
-                    .IsKind(SyntaxKind.PostDecrementExpression) {
+                    postfix.IsKind(SyntaxKind.PostDecrementExpression) {
                     return IncrementDecrementStatement(
                         this.TranslateExpression(postfix.Operand),
                         postfix.OperatorToken.Text
                     )
                 }
                 case prefix is PrefixUnaryExpressionSyntax when prefix.IsKind(SyntaxKind.PreIncrementExpression) ||
-                    prefix
-                    .IsKind(SyntaxKind.PreDecrementExpression) {
+                    prefix.IsKind(SyntaxKind.PreDecrementExpression) {
                     // G# has no prefix ++/--; both forms are statements with the
                     // same effect, so emit the canonical postfix increment.
                     return IncrementDecrementStatement(
@@ -7869,11 +7582,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 default {
                     let isVoid = expression != nil &&
-                        this
-                        .context
-                        .GetTypeInfo(expression)
-                        .Type
-                        ?.SpecialType == SpecialType.System_Void
+                        this.context.GetTypeInfo(expression).Type?.SpecialType == SpecialType.System_Void
                     return ExpressionStatement(this.TranslateExpression(expression), isVoid: isVoid)
                 }
             }
@@ -7990,24 +7699,15 @@ partial class CSharpToGSharpTranslator {
             // member's fixed receiver type can never adopt the projection.
             if (
                 assignmentTarget is IFieldSymbol &&
-                    assignmentTarget
-                    .ContainingType
-                    .IsGenericType == true ||
+                    assignmentTarget.ContainingType.IsGenericType == true ||
                     assignmentTarget is IPropertySymbol &&
-                    assignmentTarget
-                    .ContainingType
-                    .IsGenericType == true
+                    assignmentTarget.ContainingType.IsGenericType == true
             ) &&
                 assignmentTargetType != nil &&
                 projectedValue != nil &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(assignmentTargetType, projectedValue) && !SymbolEqualityComparer.IncludeNullability.Equals(
-                assignmentTargetType,
-                projectedValue
-            ) &&
-                this
-                .IsRejectableManagedReferenceProjection(assignment.Right, projectedValue, nil) {
+                SymbolEqualityComparer.Default.Equals(assignmentTargetType, projectedValue) &&
+                !SymbolEqualityComparer.IncludeNullability.Equals(assignmentTargetType, projectedValue) &&
+                this.IsRejectableManagedReferenceProjection(assignment.Right, projectedValue, nil) {
                 this.context.ReportUnsupported(
                     assignment,
                     "managed-reference array widening cannot change a generic member's fixed receiver type; no exact G# translation exists."
@@ -8027,12 +7727,7 @@ partial class CSharpToGSharpTranslator {
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
                 ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} declarator &&
-                declarator
-                .Ancestors()
-                .OfType[VariableDeclarationSyntax]()
-                .FirstOrDefault()
-                ?.Type
-                .IsVar == true {
+                declarator.Ancestors().OfType[VariableDeclarationSyntax]().FirstOrDefault()?.Type.IsVar == true {
                 // Issue #3771: substituting the INITIALIZER's type for the
                 // target's and dropping `promotionTarget` also drops the #1072
                 // promotion check, so a `var` local whose emitted G# declaration
@@ -8070,10 +7765,7 @@ partial class CSharpToGSharpTranslator {
                 case field is IFieldSymbol: field.Type
                 case property is IPropertySymbol: property.Type
                 case _ when left is ElementAccessExpressionSyntax element &&
-                    this
-                    .context
-                    .GetTypeInfo(element.Expression)
-                    .Type is IArrayTypeSymbol array: array.ElementType
+                    this.context.GetTypeInfo(element.Expression).Type is IArrayTypeSymbol array: array.ElementType
                 default: this.context.GetTypeInfo(left).Type
             }
             return if type?.IsReferenceType == true && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
@@ -8146,10 +7838,7 @@ partial class CSharpToGSharpTranslator {
         private func TranslateAssignmentTarget(left ExpressionSyntax) GExpression? {
             if left is MemberAccessExpressionSyntax member {
                 if member.Expression is IdentifierNameSyntax receiverId &&
-                    this
-                    .context
-                    .GetSymbolInfo(receiverId)
-                    .Symbol is {IsStatic: false} receiverSymbol &&
+                    this.context.GetSymbolInfo(receiverId).Symbol is {IsStatic: false} receiverSymbol &&
                     (receiverSymbol.Kind == SymbolKind.Property || receiverSymbol.Kind == SymbolKind.Field) {
                     var qualifiedReceiver GExpression? = MemberAccessExpression(
                         ThisExpression(),
@@ -8174,14 +7863,8 @@ partial class CSharpToGSharpTranslator {
                         this.ReceiverIsNullableReferenceFieldOrProperty(member.Expression) ||
                         (
                         member.Expression is IdentifierNameSyntax hoistedId &&
-                            this
-                            .context
-                            .GetSymbolInfo(hoistedId)
-                            .Symbol is {} hoistedSymbol &&
-                            this
-                            .state
-                            .HoistedNullableGuardLocals
-                            .Contains(hoistedSymbol)
+                            this.context.GetSymbolInfo(hoistedId).Symbol is {} hoistedSymbol &&
+                            this.state.HoistedNullableGuardLocals.Contains(hoistedSymbol)
                     )
                 ) {
                     return MemberAccessExpression(
@@ -8252,8 +7935,7 @@ partial class CSharpToGSharpTranslator {
                 SyntaxKind.SimpleAssignmentExpression
             ) {
                 if assignment.Left is IdentifierNameSyntax{Identifier: {ValueText: "_"}} discardCandidate &&
-                    this
-                    .IsTrueDiscard(discardCandidate) {
+                    this.IsTrueDiscard(discardCandidate) {
                     // C# statement-level discard `_ = e` (Roslyn parses the `_`
                     // target as an IdentifierNameSyntax). G# has no discard target
                     // (`_ = e` → GS0125). Drop only reads that cannot run code or
@@ -8298,8 +7980,7 @@ partial class CSharpToGSharpTranslator {
                     this.context.SemanticModel.GetDeconstructionInfo(assignment).Method,
                     this.context.GetTypeInfo(assignment.Right).Type
                 ) &&
-                    this
-                    .TryGetDeconstructionTargets(assignment.Left, out var binding, out var names) {
+                    this.TryGetDeconstructionTargets(assignment.Left, out var binding, out var names) {
                     this.RegisterProjectedDeconstructionBindings(assignment.Left, assignment.Right)
                     return []GStatement{
                         cast[GStatement](
@@ -8363,8 +8044,7 @@ partial class CSharpToGSharpTranslator {
                 () -> if expression is AssignmentExpressionSyntax coalesceStmt && coalesceStmt.IsKind(
                     SyntaxKind.CoalesceAssignmentExpression
                 ) &&
-                    this
-                    .CoalesceAssignmentTargetIsNonNullInGSharp(coalesceStmt) {
+                    this.CoalesceAssignmentTargetIsNonNullInGSharp(coalesceStmt) {
                     let statements = List[GStatement]()
                     let target GExpression? = this.MakeDuplicationSafeTarget(
                         this.TranslateAssignmentTarget(coalesceStmt.Left)!!,
@@ -8372,10 +8052,7 @@ partial class CSharpToGSharpTranslator {
                         coalesceStmt.Left
                     )
                     let isUnqualifiedProperty = target is IdentifierExpression &&
-                        this
-                        .context
-                        .GetSymbolInfo(Unparenthesize(coalesceStmt.Left))
-                        .Symbol is IPropertySymbol
+                        this.context.GetSymbolInfo(Unparenthesize(coalesceStmt.Left)).Symbol is IPropertySymbol
                     let current GExpression? = this.SpillOperand(
                         target!!,
                         statements,
@@ -8608,9 +8285,7 @@ partial class CSharpToGSharpTranslator {
                     .Ancestors()
                     .OfType[VariableDeclaratorSyntax]()
                     .FirstOrDefault() is {Initializer: {Value: {} initializer}} declarator &&
-                    initializer
-                    .Span
-                    .Contains(use.Span) {
+                    initializer.Span.Contains(use.Span) {
                     alias = model.GetDeclaredSymbol(declarator) as ILocalSymbol
                 } else if use
                     .Ancestors()
@@ -8684,9 +8359,7 @@ partial class CSharpToGSharpTranslator {
                     method.IsStatic ||
                     method.MethodKind == MethodKind.LocalFunction ||
                     method.IsSealed ||
-                    method
-                    .ContainingType
-                    ?.IsSealed == true ||
+                    method.ContainingType?.IsSealed == true ||
                     (method.IsAbstract == false && method.IsVirtual == false && method.IsOverride == false) {
                     return false
                 }
@@ -8708,10 +8381,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 if use.Parent is MemberAccessExpressionSyntax member &&
                     member.Expression == use &&
-                    member
-                    .Name
-                    .Identifier
-                    .ValueText == "Invoke" &&
+                    member.Name.Identifier.ValueText == "Invoke" &&
                     member.Parent is InvocationExpressionSyntax {
                     return true
                 }
@@ -8719,10 +8389,7 @@ partial class CSharpToGSharpTranslator {
                     conditional.Expression == use &&
                     conditional.WhenNotNull is InvocationExpressionSyntax invocation &&
                     invocation.Expression is MemberBindingExpressionSyntax binding &&
-                    binding
-                    .Name
-                    .Identifier
-                    .ValueText == "Invoke"
+                    binding.Name.Identifier.ValueText == "Invoke"
             }
 
             private func DelegateParameterUseIsNonEscapingObservation(
@@ -8756,9 +8423,7 @@ partial class CSharpToGSharpTranslator {
                 symbol ISymbol?,
                 localFunction IMethodSymbol
             ) bool -> symbol is IMethodSymbol method &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(method.OriginalDefinition, localFunction.OriginalDefinition)
+                SymbolEqualityComparer.Default.Equals(method.OriginalDefinition, localFunction.OriginalDefinition)
 
             private func AddDelegateCounts(left int32, right int32) int32 -> Math.Min(2, left + right)
 
@@ -8794,10 +8459,7 @@ partial class CSharpToGSharpTranslator {
                     node is EqualsValueClauseSyntax initializer &&
                         (
                         initializer.Parent is PropertyDeclarationSyntax ||
-                            initializer
-                            .Parent
-                            ?.Parent
-                            ?.Parent is FieldDeclarationSyntax
+                            initializer.Parent?.Parent?.Parent is FieldDeclarationSyntax
                     )
                 )
             )
@@ -8805,9 +8467,7 @@ partial class CSharpToGSharpTranslator {
             // Constructor writes precede initializers. Reference arguments write only when their call completes.
             private func EvaluationEffectEnd(node SyntaxNode) int32 {
                 if node is ArgumentSyntax{RefOrOutKeyword: {RawKind: not int32(SyntaxKind.None)}} argument &&
-                    argument
-                    .Parent
-                    ?.Parent is {} call {
+                    argument.Parent?.Parent is {} call {
                     return EvaluationEffectEnd(call)
                 }
                 if node is BaseObjectCreationExpressionSyntax creation && creation.Initializer is {} initializer {
@@ -8834,9 +8494,7 @@ partial class CSharpToGSharpTranslator {
                 for var i = 0; i < tupleType.TupleElements.Length; i++ {
                     let candidate = tupleType.TupleElements[i].CorrespondingTupleField ?? tupleType.TupleElements[i]
                     if SymbolEqualityComparer.Default.Equals(candidate, canonical) ||
-                        tupleType
-                        .TupleElements[i]
-                        .Name == field.Name {
+                        tupleType.TupleElements[i].Name == field.Name {
                         return i
                     }
                 }
@@ -8867,10 +8525,7 @@ partial class CSharpToGSharpTranslator {
                             CultureInfo.InvariantCulture
                         ) +
                             ":" +
-                            node
-                            .Span
-                            .Length
-                            .ToString(CultureInfo.InvariantCulture)
+                            node.Span.Length.ToString(CultureInfo.InvariantCulture)
                     )
                 )
                 return expression.ToString() + "|" + string.Join(";", sourceNodes) + "|" + string.Join(";", projections)
@@ -8911,12 +8566,8 @@ partial class CSharpToGSharpTranslator {
             // through unchanged.
             private func UnwrapNullable(type ITypeSymbol?) ITypeSymbol? {
                 if type is INamedTypeSymbol named &&
-                    named
-                    .OriginalDefinition
-                    .SpecialType == SpecialType.System_Nullable_T &&
-                    named
-                    .TypeArguments
-                    .Length == 1 {
+                    named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+                    named.TypeArguments.Length == 1 {
                     return named.TypeArguments[0]
                 }
                 return type
@@ -8930,9 +8581,7 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
                 if type is INamedTypeSymbol named &&
-                    named
-                    .OriginalDefinition
-                    .SpecialType == SpecialType.System_Nullable_T {
+                    named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T {
                     return false
                 }
                 return true
@@ -8960,12 +8609,8 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
                 if type is INamedTypeSymbol named &&
-                    named
-                    .OriginalDefinition
-                    .SpecialType == SpecialType.System_Nullable_T &&
-                    named
-                    .TypeArguments
-                    .Length == 1 {
+                    named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+                    named.TypeArguments.Length == 1 {
                     type = named.TypeArguments[0]
                 }
                 switch type.SpecialType {
@@ -9020,9 +8665,7 @@ partial class CSharpToGSharpTranslator {
                 target SwitchLabelSyntax?
             ) bool -> target!!.Parent is SwitchSectionSyntax section &&
                 (
-                section
-                    .Statements
-                    .Count == 0 ||
+                section.Statements.Count == 0 ||
                     (section.Statements.Count == 1 && section.Statements[0] is BreakStatementSyntax)
             )
 

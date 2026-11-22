@@ -76,8 +76,7 @@ internal shared class AssignmentTargetSyntaxFacts {
         }
         if target is BaseInterfaceCallExpressionSyntax baseProperty &&
             baseProperty.IsPropertyAccess &&
-            !baseProperty
-            .IsPropertyWrite {
+            !baseProperty.IsPropertyWrite {
             assignment = BaseInterfaceCallExpressionSyntax(
                 target.SyntaxTree,
                 baseProperty.BaseKeyword,

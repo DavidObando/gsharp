@@ -404,8 +404,7 @@ B
             app.Stages.Select((stage StageResult) -> stage.Stage + "=" + stage.Status)
         ) +
             Environment.NewLine +
-            string
-            .Join(
+            string.Join(
             Environment.NewLine,
             app.Artifacts.Select((path string) -> ReadArtifact(Path.Combine(outputRoot, result.RunId, path)))
         )

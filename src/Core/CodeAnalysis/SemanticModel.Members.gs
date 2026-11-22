@@ -614,11 +614,7 @@ partial class SemanticModel {
             internal func SameDefinition(left MemberInfo, right MemberInfo) bool {
                 try {
                     return left.MetadataToken == right.MetadataToken &&
-                        left
-                        .Module
-                        .ModuleVersionId == right
-                        .Module
-                        .ModuleVersionId
+                        left.Module.ModuleVersionId == right.Module.ModuleVersionId
                 } catch (Exception) {
                     return false
                 }
@@ -678,8 +674,7 @@ partial class SemanticModel {
                     if member is FunctionSymbol method &&
                         method.Accessibility != Accessibility.Private &&
                         InterfaceSymbol.HasDefaultBody(method) && !seen.Contains(method) &&
-                        MemberLookup
-                        .CollectSourceInstanceMethods(structure, method.Name).IsEmpty {
+                        MemberLookup.CollectSourceInstanceMethods(structure, method.Name).IsEmpty {
                         seen.Add(method)
                         AddSourceMember(structure, method, name, access, result)
                     }
@@ -817,9 +812,7 @@ partial class SemanticModel {
         if referenced is BoundImportedInstanceCallExpression{AssociatedProperty: {} importedProperty} importedPropCall {
             let owner = importedPropCall.ConstrainedInterfaceType ??
                 importedPropCall.NonVirtualBaseTargetType ??
-                importedPropCall
-                .Receiver
-                .Type
+                importedPropCall.Receiver.Type
             let symbol = ImportedMemberSymbol(owner, importedProperty)
             if !SpellsName(symbol, token.ValueText) {
                 return ImmutableArray[Symbol].Empty
@@ -834,25 +827,15 @@ partial class SemanticModel {
             let receiverType TypeSymbol? = switch call {
                 case staticCall is BoundCallExpression: staticCall.StaticGenericOwnerType ??
                     cast[TypeSymbol?](staticCall.StaticGenericInterfaceOwnerType) ??
-                    staticCall
-                    .Function
-                    .StaticOwnerType
+                    staticCall.Function.StaticOwnerType
                 case instanceCall is BoundImportedInstanceCallExpression: instanceCall.ConstrainedInterfaceType ??
-                    instanceCall
-                    .Receiver
-                    .Type
+                    instanceCall.Receiver.Type
                 case importedCall is BoundImportedCallExpression: importedCall.StaticContainerType
                 case constrainedCall is BoundConstrainedStaticCallExpression: constrainedCall.ConstrainedInterfaceType ??
-                    constrainedCall
-                    .TypeParameter
-                    .ClrInterfaceConstraint ??
-                    constrainedCall
-                    .TypeParameter
-                    .InterfaceConstraint
+                    constrainedCall.TypeParameter.ClrInterfaceConstraint ??
+                    constrainedCall.TypeParameter.InterfaceConstraint
                 case userCall is BoundUserInstanceCallExpression: userCall.ConstrainedInterfaceType ??
-                    userCall
-                    .Receiver
-                    .Type
+                    userCall.Receiver.Type
                 case baseInterfaceCall is BoundBaseInterfaceCallExpression: baseInterfaceCall.Interface
                 default: default(TypeSymbol?)
             }
@@ -962,8 +945,7 @@ partial class SemanticModel {
                     candidateIface.Definition,
                     candidateIface
                 ) &&
-                    object
-                    .ReferenceEquals(
+                    object.ReferenceEquals(
                     candidateIface.Definition ?? candidateIface,
                     declaredInterface.Definition ?? declaredInterface
                 ) {
@@ -1226,8 +1208,7 @@ partial class SemanticModel {
         overridden ImportedOverrides? = nil
     ) {
         for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
-            if property.GetIndexParameters()
-                .Length == 0 &&
+            if property.GetIndexParameters().Length == 0 &&
                 (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(property, name)) &&
                 !(overridden?.Covers(property.GetMethod) ?? false) &&
                 !(overridden?.Covers(property.SetMethod) ?? false) {
@@ -1467,12 +1448,7 @@ partial class SemanticModel {
             }
             for location in declaration.PartialPartLocations {
                 if SourcePathIdentity.AreSame(location.FileName, declared.SyntaxTree.Text?.FileName) &&
-                    location
-                    .Span
-                    .Start == declared
-                    .Identifier
-                    .Span
-                    .Start {
+                    location.Span.Start == declared.Identifier.Span.Start {
                     return true
                 }
             }

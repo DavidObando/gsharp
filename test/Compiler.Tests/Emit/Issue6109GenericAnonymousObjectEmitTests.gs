@@ -147,9 +147,7 @@ func Main() {
         Assert.NotEmpty(anonTypes)
         Assert.Contains(
             anonTypes,
-            (entry AnonTypeInfo) -> entry
-                .Params
-                .Length == 3 &&
+            (entry AnonTypeInfo) -> entry.Params.Length == 3 &&
                 entry.Params[0] == "T" &&
                 entry.Params[1] == "V" &&
                 entry.Params[2] == "U"

@@ -440,8 +440,11 @@ internal class LambdaBinder {
         var asyncReturnsValueTask = false
         if syntax.IsAsync &&
             !isAsyncIteratorReturnType(returnType) &&
-            AsyncReturnTypeNormalizer
-            .TryUnwrapTaskReturnType(returnType, out var awaitedReturnType, out var declaredValueTask) {
+            AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(
+            returnType,
+            out var awaitedReturnType,
+            out var declaredValueTask
+        ) {
             returnType = awaitedReturnType
             asyncReturnsValueTask = declaredValueTask
         }
@@ -698,15 +701,11 @@ internal class LambdaBinder {
         literal BoundFunctionLiteralExpression
     ) {
         if literal?.Function is not{IsAsync: true, IsGeneric: false} function ||
-            literal
-            .CapturedVariables
-            .Length > 0 ||
+            literal.CapturedVariables.Length > 0 ||
             binderCtx.CurrentTypeParameters is not{Count: > 0} enclosingTypeParametersInScope ||
             (
             function.LexicalEnclosingType is StructSymbol enclosingStruct &&
-                enclosingStruct
-                .TypeParameters
-                .IsDefaultOrEmpty
+                enclosingStruct.TypeParameters.IsDefaultOrEmpty
         ) {
             return
         }
@@ -732,9 +731,7 @@ internal class LambdaBinder {
     /// @returns The body-binding continuation; preparation never binds a body.
     func PrepareGenericLocalFunctionDeclaration(syntax VariableDeclarationSyntax)() -> BoundStatement {
         let name = syntax.Identifier.ValueText
-        if syntax
-            .Keyword
-            ?.Kind != SyntaxKind.LetKeyword ||
+        if syntax.Keyword?.Kind != SyntaxKind.LetKeyword ||
             syntax.Initializer is not FunctionLiteralExpressionSyntax literalSyntax {
             Diagnostics.ReportGenericLocalFunctionMustBeLetBoundLiteral(syntax.Identifier.Location, name)
             return () -> BoundBlockStatement(syntax, ImmutableArray[BoundStatement].Empty)
@@ -869,8 +866,7 @@ internal class LambdaBinder {
                     } else if function.IsGeneric &&
                         function.LexicalEnclosingType is {} owner &&
                         requiresLexicalOwner &&
-                        !function
-                        .HasNonGenericLexicalOwner {
+                        !function.HasNonGenericLexicalOwner {
                         Diagnostics.ReportGenericLocalFunctionUnsupportedOwner(syntax.Identifier.Location, name, owner)
                     }
                     // Issue #4221/#4223 merge follow-up: this literal's
@@ -986,9 +982,7 @@ internal class LambdaBinder {
             }
             if literal.EnclosingTypeParameterOffender is {} offender &&
                 !literal.EnclosingTypeParameterDiagnosticReported &&
-                literal
-                .CapturedVariables
-                .Length > 0 {
+                literal.CapturedVariables.Length > 0 {
                 Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(
                     literal.EnclosingTypeParameterOffenderLocation,
                     literal.Function.Name,
@@ -996,22 +990,12 @@ internal class LambdaBinder {
                 )
                 literal.EnclosingTypeParameterDiagnosticReported = true
             } else if !literal.EnclosingTypeParameterDiagnosticReported &&
-                !literal
-                .Function
-                .IsGeneric &&
-                literal
-                .Function
-                .LocalDeclaration != nil &&
-                literal
-                .CapturedVariables
-                .IsEmpty &&
+                !literal.Function.IsGeneric &&
+                literal.Function.LocalDeclaration != nil &&
+                literal.CapturedVariables.IsEmpty &&
                 literal.RequiresLexicalOwner &&
-                literal
-                .Function
-                .LexicalEnclosingType is {} owner &&
-                !literal
-                .Function
-                .HasNonGenericLexicalOwner {
+                literal.Function.LexicalEnclosingType is {} owner &&
+                !literal.Function.HasNonGenericLexicalOwner {
                 Diagnostics.ReportGenericLocalFunctionUnsupportedOwner(
                     literal.EnclosingTypeParameterOffenderLocation,
                     literal.Function.Name,
@@ -1261,8 +1245,7 @@ internal class LambdaBinder {
                     expression: "targetFunctionType"
                 )
                     .ParameterTypes[i] is TypeSymbol targetParameterTypeForPattern &&
-                    targetParameterTypeForPattern != TypeSymbol
-                    .Error {
+                    targetParameterTypeForPattern != TypeSymbol.Error {
                     let runtimeEquivalent = TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                         targetParameterTypeForPattern,
                         tupleParameterType
@@ -1420,8 +1403,7 @@ internal class LambdaBinder {
                 expression: "targetFunctionType"
             )
                 .ParameterTypes[i] is TypeSymbol targetParameterType &&
-                targetParameterType != TypeSymbol
-                .Error {
+                targetParameterType != TypeSymbol.Error {
                 let runtimeEquivalent = TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                     targetParameterType,
                     parameterType
@@ -1433,8 +1415,7 @@ internal class LambdaBinder {
                     targetParameterType,
                     out var targetDelegateFunctionType
                 ) &&
-                    Conversion
-                    .ClassifyNonStructural(targetDelegateFunctionType, writtenFunctionType).IsImplicit
+                    Conversion.ClassifyNonStructural(targetDelegateFunctionType, writtenFunctionType).IsImplicit
                 let compatible = runtimeEquivalent ||
                     structurallyCompatibleDelegate ||
                     (
@@ -1539,9 +1520,7 @@ internal class LambdaBinder {
         let placeholderReturnType = if !inferReturnTypeFromBody &&
             contextualReturnType != nil &&
             !binderCtx.ContainsOutOfScopeTypeParameter(contextualReturnType, outerFunction) &&
-            contextualReturnType
-            .ClrType
-            ?.ContainsGenericParameters != true {
+            contextualReturnType.ClrType?.ContainsGenericParameters != true {
             contextualReturnType
         } else {
             TypeSymbol.Error
@@ -1830,9 +1809,8 @@ internal class LambdaBinder {
                 boundBody is BoundBlockExpression{
                 Expression: BoundVariableExpression{Variable: LocalVariableSymbol cleanupResultLocal}
             } cleanupBlock &&
-                cleanupResultLocal
-                .Name
-                .StartsWith("<blockResult", StringComparison.Ordinal) && cleanupBlock.Type != returnType {
+                cleanupResultLocal.Name.StartsWith("<blockResult", StringComparison.Ordinal) &&
+                cleanupBlock.Type != returnType {
                 boundBody = conversions.BindConversion(syntax.Body.Location, cleanupBlock, returnType)
             }
             if boundBody is BoundBlockExpression blockExpr && syntax.Body is BlockExpressionSyntax {
@@ -2042,13 +2020,9 @@ internal class LambdaBinder {
         // delegate observable return keeps the target `Task`/`Task[T]` wrapper.
         var adapterResultType = adapterReturnType
         var adapterDelegateReturnType = adapterReturnType
-        if literal
-            .Function
-            .IsAsync &&
+        if literal.Function.IsAsync &&
             targetFunctionType.ReturnType != TypeSymbol.Void &&
-            literal
-            .Function
-            .Type != nil {
+            literal.Function.Type != nil {
             adapterResultType = literal.Function.Type
             adapterDelegateReturnType = targetFunctionType.ReturnType
         }
@@ -2342,9 +2316,7 @@ internal class LambdaBinder {
         }
         let adapterParameters = ImmutableArray.CreateBuilder[ParameterSymbol](functionType.ParameterTypes.Length)
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](
-            functionType
-                .ParameterTypes
-                .Length +
+            functionType.ParameterTypes.Length +
                 (
                 if function.IsExtension && adapterReceiver != nil {
                     1
@@ -2364,14 +2336,8 @@ internal class LambdaBinder {
                     function.Parameters[0].Type
                 }
                 if function.IsGeneric &&
-                    !group
-                    .MethodTypeArguments
-                    .IsDefaultOrEmpty &&
-                    group
-                    .MethodTypeArguments
-                    .Length == function
-                    .TypeParameters
-                    .Length {
+                    !group.MethodTypeArguments.IsDefaultOrEmpty &&
+                    group.MethodTypeArguments.Length == function.TypeParameters.Length {
                     let substitution = Dictionary[TypeParameterSymbol, TypeSymbol](function.TypeParameters.Length)
                     for var i = 0; i < function.TypeParameters.Length; i++ {
                         substitution[function.TypeParameters[i]] = group.MethodTypeArguments[i]
@@ -2507,9 +2473,7 @@ internal class LambdaBinder {
             }
             if current.ClassConstraint is {} classConstraint &&
                 classConstraint != TypeSymbol.Object &&
-                classConstraint
-                .ClrType
-                ?.FullName is not("System.Object" or "System.ValueType" or "System.Enum") {
+                classConstraint.ClrType?.FullName is not("System.Object" or "System.ValueType" or "System.Enum") {
                 return true
             }
             let next = current.TypeParameterBound
@@ -2617,8 +2581,7 @@ internal class LambdaBinder {
         if returnType != TypeSymbol.Void &&
             returnType != TypeSymbol.Error &&
             !isIteratorReturnType(returnType) &&
-            !ControlFlowGraph
-            .AllPathsReturn(Lowerer.Lower(body)) {
+            !ControlFlowGraph.AllPathsReturn(Lowerer.Lower(body)) {
             // ADR-0225: a body that is open at the cut can still end in a return.
             let pushed = Diagnostics.PushPremiseIf(PrefixBindingContext.IsOpen(body.Syntax), PrefixPremise.RestOfBody)
             Diagnostics.ReportAllPathsMustReturn(location)
@@ -2693,8 +2656,7 @@ internal class LambdaBinder {
         }
         for branch in binderCtx.UserGotoBlockRegions {
             if binderCtx.UserLabelBlockRegions.TryGetValue(branch.LabelName, out var targetRegions) &&
-                !StatementBinder
-                .IsHandlerRegionPrefix(targetRegions, branch.SourceRegions) {
+                !StatementBinder.IsHandlerRegionPrefix(targetRegions, branch.SourceRegions) {
                 Diagnostics.ReportGotoIntoNestedBlock(branch.Location, branch.LabelName)
                 hasInvalidGoto = true
             }
@@ -2852,8 +2814,7 @@ internal class LambdaBinder {
             trailing.Type is TupleTypeSymbol || trailing.Type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol}
         ) &&
             (returnType is TupleTypeSymbol || returnType is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol}) &&
-            ConversionClassifier
-            .HasReferenceNullabilityReturnMismatch(trailing.Type, returnType) {
+            ConversionClassifier.HasReferenceNullabilityReturnMismatch(trailing.Type, returnType) {
             conversions.BindLambdaReturnTupleConversion(trailingLocation, trailing, returnType)
         } else {
             conversions.BindConversion(trailingLocation, trailing, returnType)
@@ -3049,16 +3010,8 @@ internal class LambdaBinder {
             existing.IsAsyncVoid != candidate.IsAsyncVoid ||
             existing.AsyncReturnsValueTask != candidate.AsyncReturnsValueTask ||
             existing.ReturnRefKind != candidate.ReturnRefKind ||
-            existing
-            .TypeParameters
-            .Length != candidate
-            .TypeParameters
-            .Length ||
-            existing
-            .Parameters
-            .Length != candidate
-            .Parameters
-            .Length {
+            existing.TypeParameters.Length != candidate.TypeParameters.Length ||
+            existing.Parameters.Length != candidate.Parameters.Length {
             return false
         }
         for var i = 0; i < existing.TypeParameters.Length; i++ {
@@ -3104,8 +3057,7 @@ internal class LambdaBinder {
             }
         }
         if localFunctionReferencedFunctions.TryGetValue(literal.Function, out var referencedFunctions) &&
-            !referencedFunctions
-            .IsDefaultOrEmpty {
+            !referencedFunctions.IsDefaultOrEmpty {
             let visited = HashSet[FunctionSymbol](ReferenceEqualityComparer.Instance)
             let worklist = Stack[FunctionSymbol]()
             for var i = referencedFunctions.Length - 1; i >= 0; i-- {
@@ -3127,8 +3079,7 @@ internal class LambdaBinder {
                     }
                 }
                 if localFunctionReferencedFunctions.TryGetValue(referenced, out var nestedReferenced) &&
-                    !nestedReferenced
-                    .IsDefaultOrEmpty {
+                    !nestedReferenced.IsDefaultOrEmpty {
                     let referencedScope = if localFunctionLexicalScopes.TryGetValue(referenced, out var recordedScope) {
                         recordedScope
                     } else {
@@ -3957,9 +3908,7 @@ internal class LambdaBinder {
             let rewritten = base.RewriteFieldAssignmentExpression(node)
             if rewritten is not BoundFieldAssignmentExpression fieldAssignment ||
                 fieldAssignment.Receiver == nil ||
-                !this
-                .substitution
-                .TryGetValue(fieldAssignment.Receiver, out var replacement) {
+                !this.substitution.TryGetValue(fieldAssignment.Receiver, out var replacement) {
                 return rewritten
             }
             return BoundFieldAssignmentExpression(
@@ -3987,9 +3936,7 @@ internal class LambdaBinder {
             let rewritten = base.RewriteIndexAssignmentExpression(node)
             if rewritten is not BoundIndexAssignmentExpression indexAssignment ||
                 indexAssignment.Target == nil ||
-                !this
-                .substitution
-                .TryGetValue(indexAssignment.Target, out var replacement) {
+                !this.substitution.TryGetValue(indexAssignment.Target, out var replacement) {
                 return rewritten
             }
             return BoundIndexAssignmentExpression(
@@ -4014,9 +3961,7 @@ internal class LambdaBinder {
             let rewritten = base.RewriteClrIndexAssignmentExpression(node)
             if rewritten is not BoundClrIndexAssignmentExpression indexAssignment ||
                 indexAssignment.Target == nil ||
-                !this
-                .substitution
-                .TryGetValue(indexAssignment.Target, out var replacement) {
+                !this.substitution.TryGetValue(indexAssignment.Target, out var replacement) {
                 return rewritten
             }
             return BoundClrIndexAssignmentExpression(
@@ -4077,8 +4022,7 @@ internal class LambdaBinder {
                 unpackedLocal
             ) &&
                 rewritten.Initializer is {} initializer &&
-                TypeSymbol
-                .ContainsNeverType(unpackedLocal.Type) {
+                TypeSymbol.ContainsNeverType(unpackedLocal.Type) {
                 let targetLocalType = if this.adapterReturnType == TypeSymbol.Void {
                     TypeSymbol.MaterializeNeverFunctionReturns(unpackedLocal.Type)
                 } else if this.adapterReturnType is NullableTypeSymbol nullableAdapterReturn &&
@@ -4132,9 +4076,7 @@ internal class LambdaBinder {
             let rewritten = base.RewriteFieldAssignmentExpression(node)
             if rewritten is not BoundFieldAssignmentExpression fieldAssignment ||
                 fieldAssignment.Receiver == nil ||
-                !this
-                .replacementMap
-                .TryGetValue(fieldAssignment.Receiver, out var replacement) ||
+                !this.replacementMap.TryGetValue(fieldAssignment.Receiver, out var replacement) ||
                 !(replacement is BoundVariableExpression{Variable: {} replacedReceiver}) {
                 return rewritten
             }
@@ -4330,9 +4272,7 @@ internal class LambdaBinder {
                 return
             }
             if callee.LocalDeclaration != nil && this.declaredFunctions?.Contains(callee) != true &&
-                this
-                .seenFunctions
-                .Add(callee) {
+                this.seenFunctions.Add(callee) {
                 referencedFunctions.Add(callee)
             }
         }
@@ -4402,9 +4342,7 @@ internal class LambdaBinder {
                         continue
                     }
                     if !this.parameters.Contains(calleeVariable) && !this.declared.Contains(calleeVariable) &&
-                        this
-                        .seen
-                        .Add(calleeVariable) {
+                        this.seen.Add(calleeVariable) {
                         this.captured.Add(calleeVariable)
                     }
                 }
@@ -4420,9 +4358,7 @@ internal class LambdaBinder {
                 this.RecordDirectFunctionReference(candidate)
                 if candidate.LocalFunctionValue is {} value &&
                     this.calleeCapturedVariables != nil &&
-                    this
-                    .calleeCapturedVariables
-                    .TryGetValue(candidate, out var captures) && !captures.IsEmpty {
+                    this.calleeCapturedVariables.TryGetValue(candidate, out var captures) && !captures.IsEmpty {
                     this.RecordReference(value)
                 }
             }
@@ -4737,9 +4673,7 @@ internal class LambdaBinder {
                         CheckType(
                             cast[TypeSymbol?](call.StaticGenericOwnerType) ??
                                 call.StaticGenericInterfaceOwnerType ??
-                                call
-                                .Function
-                                .StaticOwnerType
+                                call.Function.StaticOwnerType
                         )
                         RequiresLexicalOwner |= NeedsAccessDomain(call.Function.Accessibility)
                     }
@@ -4774,12 +4708,8 @@ internal class LambdaBinder {
                         CheckType(cast[TypeSymbol?](property.StructType) ?? property.InterfaceType)
                         RequiresLexicalOwner |= NeedsAccessDomain(property.Property.SetterAccessibility)
                     }
-                    case literal is BoundFunctionLiteralExpression when literal
-                        .Function
-                        .LocalDeclaration == nil ||
-                        !literal
-                        .CapturedVariables
-                        .IsEmpty {
+                    case literal is BoundFunctionLiteralExpression when literal.Function.LocalDeclaration == nil ||
+                        !literal.CapturedVariables.IsEmpty {
                         RequiresLexicalOwner |= literal.Function.LexicalEnclosingType != nil
                     }
                 }
@@ -5114,9 +5044,7 @@ internal class LambdaBinder {
             let bodyNeverCompletesNormally = !hasExplicitReturn &&
                 trailingIsVoidPlaceholder &&
                 boundBody is BoundBlockExpression neverBlock &&
-                neverBlock
-                .Statements
-                .Length > 0 &&
+                neverBlock.Statements.Length > 0 &&
                 ControlFlowGraph.AllPathsReturn(Lowerer.Lower(BoundBlockStatement(syntax.Body, neverBlock.Statements)))
             // ADR-0076 §3: the candidate set.
             let candidates = List[TypeSymbol]()
@@ -5167,8 +5095,7 @@ internal class LambdaBinder {
                             (
                             ConversionClassifier.HasReferenceNullabilityReturnMismatch(candidate, targetReturn) ||
                                 (
-                                !Conversion.Classify(candidate, targetReturn)
-                                    .IsImplicit &&
+                                !Conversion.Classify(candidate, targetReturn).IsImplicit &&
                                     !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(
                                     candidate,
                                     targetReturn
@@ -5223,8 +5150,7 @@ internal class LambdaBinder {
             }
             if targetReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol} &&
                 finalResult is TupleTypeSymbol &&
-                Conversion
-                .Classify(finalResult, targetReturn).IsImplicit {
+                Conversion.Classify(finalResult, targetReturn).IsImplicit {
                 finalResult = NullableTypeSymbol.Get(finalResult)
             }
             return MaterializeRefReturn(finalResult)
@@ -5397,9 +5323,7 @@ internal class LambdaBinder {
                 UnwrapConversions(returnExpression) is BoundVariableExpression{
                 Variable: LocalVariableSymbol returnLocal
             } &&
-                returnLocal
-                .Name
-                .StartsWith("<blockResult", StringComparison.Ordinal) {
+                returnLocal.Name.StartsWith("<blockResult", StringComparison.Ordinal) {
                 return returnLocal
             }
             if statements.Length >= 2 &&
@@ -5408,9 +5332,7 @@ internal class LambdaBinder {
                 UnwrapConversions(discardedExpression) is BoundVariableExpression{
                 Variable: LocalVariableSymbol discardedLocal
             } &&
-                discardedLocal
-                .Name
-                .StartsWith("<blockResult", StringComparison.Ordinal) {
+                discardedLocal.Name.StartsWith("<blockResult", StringComparison.Ordinal) {
                 return discardedLocal
             }
             return nil

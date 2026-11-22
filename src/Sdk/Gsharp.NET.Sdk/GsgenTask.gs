@@ -163,8 +163,7 @@ open class GsgenTask : Task, ICancelableTask {
         if string.IsNullOrEmpty(gsgenToolFullPath) || string.IsNullOrEmpty(outputDir) || string.IsNullOrEmpty(
             manifestPath
         ) ||
-            string
-            .IsNullOrEmpty(responseFilePath) {
+            string.IsNullOrEmpty(responseFilePath) {
             this.Log.LogError("GsgenTask requires GsgenToolFullPath, OutputDir, ManifestPath, and ResponseFilePath.")
             return false
         }

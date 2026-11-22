@@ -69,7 +69,8 @@ public static class DiagnosticDescriptors
         using let peStream = MemoryStream()
         let emitResult = project.Compilation.Emit(peStream)
         Assert.True(emitResult.Success, (`Roslyn control analyzer ` + "$analyzerTypeName" + ` should compile:
-`) + string.Join(
+`) + string
+                .Join(
                 "\n",
                 emitResult.Diagnostics.Where(
                     (d Microsoft.CodeAnalysis.Diagnostic) -> d.Severity == Microsoft
@@ -157,7 +158,8 @@ public static class DiagnosticDescriptors
             using let peStream = File.Create(dllPath)
             let result = compilation.Emit(peStream, pdbStream: nil, refStream: nil, assemblyName: assemblyName)
             Assert.True(result.Success, (`Translated ` + "$assemblyName" + ` should compile:
-`) + string.Join(
+`) + string
+                    .Join(
                     "\n",
                     result
                         .Diagnostics

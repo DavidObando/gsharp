@@ -164,9 +164,7 @@ partial class CSharpToGSharpTranslator {
                     if !nativePost &&
                         step.Statement is ForStatementSyntax forLoop &&
                         child is ExpressionSyntax clause &&
-                        forLoop
-                        .Incrementors
-                        .Contains(clause) {
+                        forLoop.Incrementors.Contains(clause) {
                         if !forLoop.Incrementors.Any(
                             (incrementor ExpressionSyntax) -> incrementor.Span.Contains(effectiveTarget.Span)
                         ) {
@@ -236,11 +234,7 @@ partial class CSharpToGSharpTranslator {
                                 )
                             ) ||
                                 (
-                                conditional
-                                    .Else
-                                    ?.Statement
-                                    .Span
-                                    .Contains(effectiveTarget.Span) == true &&
+                                conditional.Else?.Statement.Span.Contains(effectiveTarget.Span) == true &&
                                     this.IsNullCheckOf(condition, symbol)
                             )
                         ) {
@@ -573,8 +567,7 @@ partial class CSharpToGSharpTranslator {
                         assignment.Left,
                         $scope
                     ) &&
-                        !this
-                        .AssignmentRegionInvalidatesNarrowing(
+                        !this.AssignmentRegionInvalidatesNarrowing(
                         symbol,
                         assignment.Right,
                         assignment.Right.SpanStart,
@@ -644,8 +637,7 @@ partial class CSharpToGSharpTranslator {
                 statement.SpanStart,
                 statement.Span.End
             ) &&
-                this
-                .AssignmentNarrowingSurvivesToRead(
+                this.AssignmentNarrowingSurvivesToRead(
                 symbol,
                 inherited,
                 use,
@@ -671,8 +663,7 @@ partial class CSharpToGSharpTranslator {
         !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && !assignment.IsKind(
             SyntaxKind.CoalesceAssignmentExpression
         ) &&
-            this
-            .GetDeclaredValueType(assignment.Left)?.TypeKind != TypeKind.Delegate
+            this.GetDeclaredValueType(assignment.Left)?.TypeKind != TypeKind.Delegate
 
         private func GetGSharpInitializerMutationProof(
             node SyntaxNode,
@@ -699,15 +690,10 @@ partial class CSharpToGSharpTranslator {
                 return proof
             }
             if node is ExpressionSyntax expression &&
-                this
-                .context
-                .SemanticModel
-                .GetConversion(expression)
-                .IsUserDefined {
+                this.context.SemanticModel.GetConversion(expression).IsUserDefined {
                 // gsc exports no inner assignment facts through conversion calls. Keep only unaffected incoming provenance.
                 return if proof != nil && !node.Span.Contains(proof.Span) &&
-                    !this
-                    .ExecutionEffectInvalidatesAssignmentNarrowing(
+                    !this.ExecutionEffectInvalidatesAssignmentNarrowing(
                     node,
                     this.IsClosureAssignedVariable(symbol),
                     this.IsByReferenceVariable(symbol)
@@ -1091,9 +1077,7 @@ partial class CSharpToGSharpTranslator {
                         (initializer ExpressionSyntax) -> initializer.Span.Contains(proof.Span)
                     )
                 ) ||
-                    !loop
-                    .Span
-                    .Contains(effectiveTarget.Span) {
+                    !loop.Span.Contains(effectiveTarget.Span) {
                     continue
                 }
                 // A for-initializer runs once. It cannot restore a fact removed at the loop's region entry.
@@ -1129,16 +1113,12 @@ partial class CSharpToGSharpTranslator {
             let index = this.GetScopeGotoIndex($scope)
             for entry in index.Jumps {
                 if entry.Target is {} target &&
-                    target.SpanStart >= proof
-                    .Span
-                    .End &&
+                    target.SpanStart >= proof.Span.End &&
                     target.SpanStart <= (readPosition ?? use.SpanStart) {
                     if entry.Jump.SpanStart < proof.SpanStart {
                         return true
                     }
-                    if entry
-                        .Jump
-                        .SpanStart > (readPosition ?? use.SpanStart) &&
+                    if entry.Jump.SpanStart > (readPosition ?? use.SpanStart) &&
                         index.BackwardSpan is {} span &&
                         this.AssignmentRegionInvalidatesNarrowing(symbol, $scope, span.Start, span.End) {
                         return true
@@ -1164,9 +1144,7 @@ partial class CSharpToGSharpTranslator {
             )
                 .Any(
                 (node SyntaxNode) -> node.SpanStart >= start &&
-                    node
-                    .Span
-                    .End <= end &&
+                    node.Span.End <= end &&
                     this.NodeInvalidatesAssignmentNarrowing(node, symbol, closureAssigned, byReference)
             )
         }
@@ -1202,9 +1180,7 @@ partial class CSharpToGSharpTranslator {
                     receiver
                 )
             ) ||
-                arguments
-                .Arguments
-                .Any(
+                arguments.Arguments.Any(
                 (argument ArgumentSyntax) -> this.WritableReferenceArgumentTarget(argument) is {} target &&
                     this.WritableReferenceMayInvalidateAnyRoot(target)
             )
@@ -1261,19 +1237,13 @@ partial class CSharpToGSharpTranslator {
         private func WritableReferenceMayInvalidateAnyRoot(target ExpressionSyntax) bool {
             let stripped = UnwrapParenthesesAndSuppressions(target)!!
             if stripped is MemberAccessExpressionSyntax member &&
-                this
-                .context
-                .GetSymbolInfo(member)
-                .Symbol is IFieldSymbol{ContainingType: {IsTupleType: true}} {
+                this.context.GetSymbolInfo(member).Symbol is IFieldSymbol{ContainingType: {IsTupleType: true}} {
                 return this.WritableReferenceMayInvalidateAnyRoot(member.Expression)
             }
             return this.WritesThroughStorage(stripped, isArgument: true) &&
                 !(
                 stripped is ElementAccessExpressionSyntax element &&
-                    this
-                    .context
-                    .GetTypeInfo(element.Expression)
-                    .Type is IArrayTypeSymbol
+                    this.context.GetTypeInfo(element.Expression).Type is IArrayTypeSymbol
             ) &&
                 !this.IsSameStableAccessPath(stripped, stripped)
         }
@@ -1285,20 +1255,10 @@ partial class CSharpToGSharpTranslator {
             includeReferenceStorageWrites bool = false
         ) bool ->
         node is AssignmentExpressionSyntax assignment &&
-            assignment
-            .Right
-            .Span
-            .Contains(proof.Span) &&
+            assignment.Right.Span.Contains(proof.Span) &&
             (
-            this
-                .context
-                .GetSymbolInfo(assignment.Left)
-                .Symbol is IPropertySymbol ||
-                this
-                .context
-                .SemanticModel
-                .GetConversion(assignment.Right)
-                .IsUserDefined ||
+            this.context.GetSymbolInfo(assignment.Left).Symbol is IPropertySymbol ||
+                this.context.SemanticModel.GetConversion(assignment.Right).IsUserDefined ||
                 this
                 .context
                 .SemanticModel
@@ -1317,17 +1277,12 @@ partial class CSharpToGSharpTranslator {
         ) bool ->
         EvaluationEffectEnd(node) <= (readPosition ?? use.SpanStart) &&
             (
-            node.SpanStart >= proof
-                .Span
-                .End ||
+            node.SpanStart >= proof.Span.End ||
                 (node.Span.Contains(proof.Span) && EvaluationEffectEnd(node) > proof.Span.End) ||
                 (
                 includeDirectStores &&
                     node is AssignmentExpressionSyntax assignment &&
-                    assignment
-                    .Right
-                    .Span
-                    .Contains(proof.Span)
+                    assignment.Right.Span.Contains(proof.Span)
             ) ||
                 this.AssignmentStoreCompletesAfterProof(node, proof, includeReferenceStorageWrites) ||
                 this.CleanupCompletesAfterProof(node, proof, use, readPosition)
@@ -1346,9 +1301,7 @@ partial class CSharpToGSharpTranslator {
                 default: default(SyntaxNode?)
             }
             return cleanupScope != nil && cleanupScope.Span.Contains(proof.Span) &&
-                cleanupScope
-                .Span
-                .End <= (readPosition ?? use.SpanStart)
+                cleanupScope.Span.End <= (readPosition ?? use.SpanStart)
         }
 
         private func AssignmentHasNullableTargetTypedRhs(assignment AssignmentExpressionSyntax) bool {
@@ -1435,8 +1388,7 @@ partial class CSharpToGSharpTranslator {
                 let (targetType, targetSymbol) = this.FindNullForgivingTarget(suppression)
                 // A nullable sink erases C#'s suppression. It does not emit the runtime check that could narrow G#.
                 return if this.NullForgivingTargetAcceptsNil(targetType, targetSymbol) ||
-                    this
-                    .GSharpExpressionIsStaticallyNonNull(suppression.Operand) {
+                    this.GSharpExpressionIsStaticallyNonNull(suppression.Operand) {
                     this.GSharpValueHasNonNullType(suppression.Operand, allowPlatform)
                 } else {
                     this.GSharpExpressionIsStaticallyNonNull(suppression)
@@ -1488,8 +1440,7 @@ partial class CSharpToGSharpTranslator {
             ) {
                 let (targetType, targetSymbol) = this.FindNullForgivingTarget(suppression)
                 return if this.NullForgivingTargetAcceptsNil(targetType, targetSymbol) ||
-                    this
-                    .GSharpExpressionIsStaticallyNonNull(suppression.Operand) {
+                    this.GSharpExpressionIsStaticallyNonNull(suppression.Operand) {
                     this.GSharpValueHasRuntimeNonNullProof(suppression.Operand)
                 } else {
                     !IsNullOrSuppressedNull(suppression.Operand)

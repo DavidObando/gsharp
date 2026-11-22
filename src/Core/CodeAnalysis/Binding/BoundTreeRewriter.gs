@@ -1576,9 +1576,7 @@ abstract class BoundTreeRewriter {
 
             let constructorOwnsValue = !ForceClone &&
                 init.IsDeclarationInitializer &&
-                node
-                .StructType
-                .NeedsSynthesizedValueStructDefaultCtor
+                node.StructType.NeedsSynthesizedValueStructDefaultCtor
             let newValue = if constructorOwnsValue {
                 init.Value
             } else {

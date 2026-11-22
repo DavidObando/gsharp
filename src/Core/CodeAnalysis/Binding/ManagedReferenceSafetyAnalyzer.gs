@@ -133,9 +133,9 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             }
             case array is BoundArrayCreationExpression {
                 if this.RequiredHandle(this.InitializerType(array.ElementType)) != nil &&
-                    !array
-                    .DimensionExpressions
-                    .Any((dimension BoundExpression) -> dimension.ConstantValue is {HasValue: true, Value: 0}) &&
+                    !array.DimensionExpressions.Any(
+                    (dimension BoundExpression) -> dimension.ConstantValue is {HasValue: true, Value: 0}
+                ) &&
                     (
                     array.LengthExpression != nil ||
                         (array.ContainerType is ArrayTypeSymbol fixedArray && fixedArray.Length > array.Elements.Length)
@@ -232,8 +232,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             this.CheckArguments(operation.Arguments, operation.CalledFunction as FunctionSymbol, receiver)
         }
         if node is BoundIndirectAssignmentExpression assignment && this.IsManagedLocation(assignment.Pointer) &&
-            AsyncBoundTreeQueries
-            .HasAwait(assignment.Value) {
+            AsyncBoundTreeQueries.HasAwait(assignment.Value) {
             this.Report(
                 assignment,
                 "a borrowed write cannot survive suspension; evaluate the value before selecting the borrow"
@@ -254,9 +253,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         }
         if node.Initializer != nil && this.IsManagedLocation(node.Initializer) &&
             (
-            node
-                .Variable
-                .Type is ByRefTypeSymbol ||
+            node.Variable.Type is ByRefTypeSymbol ||
                 (node.Variable is LocalVariableSymbol and {RefKind: not RefKind.None})
         ) {
             this.managedLocations.Add(node.Variable)
@@ -264,8 +261,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         if node.Initializer is BoundDefaultExpression &&
             node.Variable is LocalVariableSymbol &&
             (node.Syntax is VariableDeclarationSyntax and {Initializer: nil}) &&
-            ManagedReferenceTypes
-            .TryGetElement(node.Variable.Type, out _, out _) {
+            ManagedReferenceTypes.TryGetElement(node.Variable.Type, out _, out _) {
             // The existing definite-assignment pass checks every use.
             return
         }
@@ -506,9 +502,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                             "zero initialization would synthesize a null non-null managed-reference field '${storage.Key.Name}'; explicitly construct the aggregate"
                         )
                     }
-                } else if storage
-                    .Key
-                    .Accessibility != Accessibility.Public &&
+                } else if storage.Key.Accessibility != Accessibility.Public &&
                     MagicCollectionZeroValue.TrySynthesizeEmptyInstance(zeroValue.Syntax, storage.Value) != nil &&
                     zeroValue.Syntax is {} syntax {
                     // No in-type store exists, and an external private-field
@@ -556,8 +550,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             this.managedLocations,
             captureReferenceOwners
         ) &&
-            AsyncBoundTreeQueries
-            .HasAwait(value) {
+            AsyncBoundTreeQueries.HasAwait(value) {
             this.Report(
                 value,
                 "a borrowed receiver cannot survive a later suspension; evaluate the suspending value before selecting the location"
@@ -587,8 +580,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         let defaultedPrimaryFields = HashSet[FieldSymbol]()
         if node is BoundStructLiteralExpression literal &&
             !literal.CallsPrimaryConstructor &&
-            type
-            .HasDeclaredPrimaryConstructor {
+            type.HasDeclaredPrimaryConstructor {
             for argument in literal.GetPrimaryConstructorArguments() {
                 if !argument.IsSupplied {
                     this.VisitExpression(argument.Value)
@@ -623,11 +615,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             (
             node is BoundConstructorCallExpression{SelectedConstructor: nil} call &&
                 type.HasDeclaredPrimaryConstructor &&
-                call
-                .Arguments
-                .Length == type
-                .PrimaryConstructorParameters
-                .Length
+                call.Arguments.Length == type.PrimaryConstructorParameters.Length
         )
         let constructorStores = HashSet[FieldSymbol](defaultedPrimaryFields)
         let constructorStoreNames = defaultedPrimaryFields.Select((field FieldSymbol) -> field.Name).ToHashSet()
@@ -678,8 +666,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 declaredField
             ) &&
                 !suppliedNames.Contains(declaredField.Name) && !constructorStores.Contains(declaredField) &&
-                !constructorStoreNames
-                .Contains(declaredField.Name) {
+                !constructorStoreNames.Contains(declaredField.Name) {
                 this.ReportRequired(
                     node,
                     storage.Value,
@@ -882,14 +869,10 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         protected override func RewriteFieldAssignmentExpression(node BoundFieldAssignmentExpression) BoundExpression {
             if this.fields.TryGetValue(node.Field, out var variable) &&
                 (
-                node.Receiver == this
-                    .function
-                    .ThisParameter ||
+                node.Receiver == this.function.ThisParameter ||
                     (
                     node.ReceiverExpression is BoundVariableExpression receiver &&
-                        receiver.Variable == this
-                        .function
-                        .ThisParameter
+                        receiver.Variable == this.function.ThisParameter
                 )
             ) {
                 return BoundAssignmentExpression(node.Syntax, variable, this.RewriteExpression(node.Value))
@@ -1040,8 +1023,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 )
                 if type.BaseType is {} importedBase &&
                     importedBase.ClrType != nil &&
-                    NativeProtocolSafety
-                    .ContainsSavedProtocol(importedBase) {
+                    NativeProtocolSafety.ContainsSavedProtocol(importedBase) {
                     diagnostics.ReportNativeProtocol(
                         type.Declaration?.Location ?? default(TextLocation),
                         "native-bearing imported base initialization requires a separately admitted metadata-aware constructor contract"

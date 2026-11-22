@@ -409,10 +409,7 @@ Console.WriteLine(Probe.Describe(typeof(OpenNestedDefinitionTarget)))`
             let arguments = type!!.GetGenericArguments().Select(Describe)
             return (definition.FullName ?? definition.Name) +
                 "@" +
-                definition
-                .Assembly
-                .GetName()
-                .Name +
+                definition.Assembly.GetName().Name +
                 "[" +
                 string.Join(",", arguments) + "]"
         }

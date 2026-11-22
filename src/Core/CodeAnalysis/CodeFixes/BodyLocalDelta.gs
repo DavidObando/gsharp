@@ -134,8 +134,7 @@ internal shared class BodyLocalDelta {
         }
         if function.IsPInvoke ||
             function.NullableSequenceSpecialization != NullableSequenceSpecializationKind.None ||
-            function
-            .IsReturnTypeInferred {
+            function.IsReturnTypeInferred {
             return BodyLocalResult(
                 "the member is a P/Invoke stub, a nullable-sequence specialization or has an inferred return type"
             )
@@ -145,9 +144,7 @@ internal shared class BodyLocalDelta {
         }
         if !program.BodyDiagnostics!!.TryGetValue(function, out var recorded) ||
             recorded.IsDefault ||
-            !program
-            .Functions
-            .TryGetValue(function, out var oldBound) {
+            !program.Functions.TryGetValue(function, out var oldBound) {
             return BodyLocalResult("the compilation recorded no single body bind of the member")
         }
         // The suspension inference marks functions after every body is bound, and the speculative bind
@@ -293,20 +290,8 @@ internal shared class BodyLocalDelta {
             for var i = 0; i < right.Length; i++ {
                 let other = right[i]
                 if !used[i] && object.ReferenceEquals(d.Location.Text, other.Location.Text) &&
-                    d
-                    .Location
-                    .Span
-                    .Start == other
-                    .Location
-                    .Span
-                    .Start &&
-                    d
-                    .Location
-                    .Span
-                    .Length == other
-                    .Location
-                    .Span
-                    .Length &&
+                    d.Location.Span.Start == other.Location.Span.Start &&
+                    d.Location.Span.Length == other.Location.Span.Length &&
                     d.Id == other.Id &&
                     d.Severity == other.Severity &&
                     d.Message == other.Message {

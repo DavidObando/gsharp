@@ -462,8 +462,7 @@ class AsyncMethodBuilderInfo {
             for method in MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, name) {
                 if method.IsGenericMethodDefinition &&
                     (genericArgumentCount == nil || method.GetGenericArguments().Length == genericArgumentCount) &&
-                    method
-                    .GetParameters().Length == parameterCount {
+                    method.GetParameters().Length == parameterCount {
                     return method
                 }
             }

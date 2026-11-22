@@ -14,10 +14,7 @@ import System.Reflection
 internal shared class ByteStringTypes {
     internal func IsDefinition(@NotNullWhen(true) type Type?) bool -> type != nil &&
         type.FullName == "Gsharp.Values.ByteString" &&
-        type
-        .Assembly
-        .GetName()
-        .Name == NativeSliceTypes.AssemblyName &&
+        type.Assembly.GetName().Name == NativeSliceTypes.AssemblyName &&
         type.IsValueType &&
         !type.IsGenericType &&
         !type.IsByRefLike
@@ -35,9 +32,7 @@ internal shared class ByteStringTypes {
         let length = candidate.GetProperty("Length")
         let literal = GetLiteralFactory(candidate)
         if length == nil ||
-            length
-            .PropertyType
-            .FullName != "System.Int32" ||
+            length.PropertyType.FullName != "System.Int32" ||
             length.GetMethod == nil ||
             length.SetMethod != nil ||
             literal == nil {
@@ -97,7 +92,6 @@ internal shared class ByteStringTypes {
         (method MethodInfo) -> method.Name == "FromLiteral" &&
             !method.IsGenericMethod &&
             method.ReturnType == type &&
-            method
-            .GetParameters().Length == 1 && method.GetParameters()[0].ParameterType.FullName == "System.String"
+            method.GetParameters().Length == 1 && method.GetParameters()[0].ParameterType.FullName == "System.String"
     )
 }

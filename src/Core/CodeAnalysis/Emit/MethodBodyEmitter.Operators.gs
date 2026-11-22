@@ -66,12 +66,8 @@ internal partial class MethodBodyEmitter {
             // which returns the underlying T or throws
             // `InvalidOperationException` when `HasValue == false`. This
             // matches the BCL `Nullable<T>.Value` property's semantics.
-            if u
-                .Operand
-                .Type is NullableTypeSymbol operandNullable &&
-                operandNullable
-                .UnderlyingType
-                ?.ClrType is {IsValueType: true} innerClr {
+            if u.Operand.Type is NullableTypeSymbol operandNullable &&
+                operandNullable.UnderlyingType?.ClrType is {IsValueType: true} innerClr {
                 if !this.receiverSpillSlots.TryGetValue(u.Operand, out var unwrapSlot) {
                     throw InvalidOperationException(
                         "No scratch slot pre-allocated for value-type Nullable<T> '!!' operand — check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels."
@@ -160,12 +156,9 @@ internal partial class MethodBodyEmitter {
         }
         // Issue #2544: predefined unary operators over Nullable<T> are lifted.
         // Identity preserves the wrapper; other operators branch on HasValue.
-        if u
-            .Operand
-            .Type is NullableTypeSymbol liftedOperand &&
+        if u.Operand.Type is NullableTypeSymbol liftedOperand &&
             u.Type is NullableTypeSymbol liftedResult &&
-            NullableLifting
-            .IsValueTypeNullable(liftedOperand) {
+            NullableLifting.IsValueTypeNullable(liftedOperand) {
             if u.Op.Kind == BoundUnaryOperatorKind.Identity {
                 this.EmitExpression(u.Operand)
                 return
@@ -332,9 +325,7 @@ internal partial class MethodBodyEmitter {
             // matching the operator's declared result type.
             let leftNullable NullableTypeSymbol? = b.Left.Type as NullableTypeSymbol
             if leftNullable != nil && !NullableLifting.RequiresSymbolicNullableGetValue(leftNullable) &&
-                leftNullable
-                .UnderlyingType
-                ?.ClrType is {IsValueType: true} innerClr {
+                leftNullable.UnderlyingType?.ClrType is {IsValueType: true} innerClr {
                 if !this.nullableCoalesceSpillSlots.TryGetValue(b, out var slot) {
                     throw InvalidOperationException(
                         "No scratch slot pre-allocated for value-type Nullable<T> '??' LHS — check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels."
@@ -380,9 +371,7 @@ internal partial class MethodBodyEmitter {
                         if b.Type is NullableTypeSymbol resultNullable && ReflectionMetadataEmitter.IsValueTypeNullable(
                             resultNullable
                         ) &&
-                            resultNullable
-                            .UnderlyingType
-                            ?.ClrType is {IsValueType: true} resultInnerClr {
+                            resultNullable.UnderlyingType?.ClrType is {IsValueType: true} resultInnerClr {
                             this.TryEmitNumericConversion(leftNullable.UnderlyingType, resultNullable.UnderlyingType)
                             if !NullableLifting.TryConstructNullable(
                                 this.outer.emitCtx.References,
@@ -400,15 +389,10 @@ internal partial class MethodBodyEmitter {
                             )
                             this.il.OpCode(ILOpCode.Newobj)
                             this.il.Token(this.outer.memberRefs.GetCtorReference(resultCtor))
-                        } else if b
-                            .Type
-                            .ClrType
-                            ?.IsSameAs(typeof(object)) == true ||
+                        } else if b.Type.ClrType?.IsSameAs(typeof(object)) == true ||
                             IsInterfaceTargetType(b.Type) ||
                             (
-                            b
-                                .Type
-                                .ClrType is Type valueBoxTarget &&
+                            b.Type.ClrType is Type valueBoxTarget &&
                                 (valueBoxTarget.IsSameAs(typeof(ValueType)) || valueBoxTarget.IsSameAs(typeof(Enum)))
                         ) {
                             this.il.OpCode(ILOpCode.Box)
@@ -443,12 +427,9 @@ internal partial class MethodBodyEmitter {
             // The JIT elides the box at runtime when T resolves to a
             // reference type (ECMA-335 III.4.1), so the optimized native
             // code is no worse than the original `dup; brtrue` shape.
-            if b
-                .Left
-                .Type is NullableTypeSymbol tpNullable &&
+            if b.Left.Type is NullableTypeSymbol tpNullable &&
                 tpNullable.UnderlyingType is TypeParameterSymbol tpUnderlying &&
-                !tpUnderlying
-                .HasValueTypeConstraint {
+                !tpUnderlying.HasValueTypeConstraint {
                 if !this.nullableCoalesceSpillSlots.TryGetValue(b, out var tpSlot) {
                     throw InvalidOperationException(
                         "No scratch slot pre-allocated for class-constrained `T?` '??' LHS — check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels."
@@ -556,15 +537,10 @@ internal partial class MethodBodyEmitter {
                         userVtNullable.UnderlyingType
                     ) &&
                         (
-                        b
-                            .Type
-                            .ClrType
-                            ?.IsSameAs(typeof(object)) == true ||
+                        b.Type.ClrType?.IsSameAs(typeof(object)) == true ||
                             IsInterfaceTargetType(b.Type) ||
                             (
-                            b
-                                .Type
-                                .ClrType is Type symBoxTarget &&
+                            b.Type.ClrType is Type symBoxTarget &&
                                 (symBoxTarget.IsSameAs(typeof(ValueType)) || symBoxTarget.IsSameAs(typeof(Enum)))
                         )
                     ) {
@@ -696,13 +672,9 @@ internal partial class MethodBodyEmitter {
             }
         }
         // Phase 7.4 / ADR-0033: inline structs compare their single field directly.
-        if b
-            .Left
-            .Type is StructSymbol inlineStruct &&
+        if b.Left.Type is StructSymbol inlineStruct &&
             inlineStruct.IsInline &&
-            b
-            .Right
-            .Type == inlineStruct &&
+            b.Right.Type == inlineStruct &&
             (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals) {
             let field = inlineStruct.Fields[0]
             // Route through ResolveFieldToken so a generic inline struct
@@ -755,13 +727,9 @@ internal partial class MethodBodyEmitter {
         // operand is already a reference (no boxing needed/legal target —
         // `box` on a reference type is a verifier-legal no-op per ECMA-335,
         // but skip it outright since there is nothing to box).
-        if b
-            .Left
-            .Type is StructSymbol ds &&
+        if b.Left.Type is StructSymbol ds &&
             ds.IsData &&
-            b
-            .Right
-            .Type == ds &&
+            b.Right.Type == ds &&
             (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals) {
             // Issue #2866: an imported data class/struct has no row in
             // StructTypeDefs (it is only a semantic aggregate projected off
@@ -797,12 +765,8 @@ internal partial class MethodBodyEmitter {
         // `box T` each operand before invoking the static Object.Equals
         // overload that takes (object, object). The JIT elides the box
         // when T resolves to a reference type at runtime.
-        if b
-            .Left
-            .Type is TypeParameterSymbol leftTp &&
-            b
-            .Right
-            .Type is TypeParameterSymbol rightTp &&
+        if b.Left.Type is TypeParameterSymbol leftTp &&
+            b.Right.Type is TypeParameterSymbol rightTp &&
             (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals) {
             this.EmitExpression(b.Left)
             this.il.OpCode(ILOpCode.Box)
@@ -868,8 +832,7 @@ internal partial class MethodBodyEmitter {
         if (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals) &&
             (RefEqOperandNeedsBox(b.Left.Type) || RefEqOperandNeedsBox(b.Right.Type)) &&
             BoundBinaryOperator.IsReferenceEqualityOperand(b.Left.Type) &&
-            BoundBinaryOperator
-            .IsReferenceEqualityOperand(b.Right.Type) {
+            BoundBinaryOperator.IsReferenceEqualityOperand(b.Right.Type) {
             this.EmitReferenceEqualityOperand(b.Left)
             this.EmitReferenceEqualityOperand(b.Right)
             this.il.OpCode(ILOpCode.Ceq)
@@ -1110,12 +1073,8 @@ internal partial class MethodBodyEmitter {
     }
 
     private func TryEmitNullableUserStructEquality(b BoundBinaryExpression) bool {
-        if b
-            .Left
-            .Type is not NullableTypeSymbol leftNullable ||
-            b
-            .Right
-            .Type is not NullableTypeSymbol rightNullable ||
+        if b.Left.Type is not NullableTypeSymbol leftNullable ||
+            b.Right.Type is not NullableTypeSymbol rightNullable ||
             leftNullable.UnderlyingType is not StructSymbol structural ||
             structural.IsClass ||
             (!structural.IsData && !structural.IsInline) ||
@@ -1346,18 +1305,10 @@ internal partial class MethodBodyEmitter {
         this.EmitExpression(b.Right)
         this.il.StoreLocal(rhsSlot)
         let isEquality = b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals
-        let isOrdering = b
-            .Op
-            .Kind == BoundBinaryOperatorKind.Less ||
-            b
-            .Op
-            .Kind == BoundBinaryOperatorKind.LessOrEquals ||
-            b
-            .Op
-            .Kind == BoundBinaryOperatorKind.Greater ||
-            b
-            .Op
-            .Kind == BoundBinaryOperatorKind.GreaterOrEquals
+        let isOrdering = b.Op.Kind == BoundBinaryOperatorKind.Less ||
+            b.Op.Kind == BoundBinaryOperatorKind.LessOrEquals ||
+            b.Op.Kind == BoundBinaryOperatorKind.Greater ||
+            b.Op.Kind == BoundBinaryOperatorKind.GreaterOrEquals
         if isEquality {
             this.EmitLiftedEquality(b.Op.Kind, lhsSlot, rhsSlot, leftUnderlying, leftUnderlyingClr, rightUnderlyingClr)
             return
@@ -1968,9 +1919,7 @@ internal partial class MethodBodyEmitter {
         if nullable.UnderlyingType is TypeParameterSymbol typeParameter && typeParameter.HasValueTypeConstraint {
             return this.outer.memberRefs.GetNullableCtorMemberRefForOpenTypeParameter(nullable)
         }
-        let resultUnderlyingClr = nullable
-            .UnderlyingType
-            ?.ClrType ??
+        let resultUnderlyingClr = nullable.UnderlyingType?.ClrType ??
             throw InvalidOperationException(
             "Lifted operator result '${nullable.UnderlyingType?.Name}' has no runtime or symbolic value-type representation."
         )
@@ -2103,16 +2052,8 @@ internal partial class MethodBodyEmitter {
         if functionOwnerType != nil {
             functionHandle = this.outer.userTokens.ResolveUserStaticMethodToken(functionOwnerType, function)
         } else {
-            if !this
-                .outer
-                .cache
-                .FunctionHandles
-                .TryGetValue(function, out var definitionHandle) &&
-                !this
-                .outer
-                .cache
-                .MethodHandles
-                .TryGetValue(function, out definitionHandle) {
+            if !this.outer.cache.FunctionHandles.TryGetValue(function, out var definitionHandle) &&
+                !this.outer.cache.MethodHandles.TryGetValue(function, out definitionHandle) {
                 throw InvalidOperationException(
                     "Same-compilation function '${function.Name}' has no emitted MethodDef."
                 )

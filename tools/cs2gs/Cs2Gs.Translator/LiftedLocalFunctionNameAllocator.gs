@@ -308,11 +308,8 @@ internal class LiftedLocalFunctionNameAllocator {
             var candidate string? = localName
             for var suffix = 2; occupied.Contains(candidate!!) || used.Contains(candidate!!) ||
                 this.RelatedAssignedNameExists(owner!!, candidate!!, recordAdaptersOnly: true) ||
-                this
-                .aliasNames
-                .Contains(candidate!!) || localNames?.Contains(candidate!!) == true ||
-                unavailable(candidate!!);
-                suffix++ {
+                this.aliasNames.Contains(candidate!!) || localNames?.Contains(candidate!!) == true ||
+                unavailable(candidate!!); suffix++ {
                 candidate = "${localName}_$suffix"
             }
             used.Add(candidate!!)
@@ -375,9 +372,7 @@ internal class LiftedLocalFunctionNameAllocator {
                     candidateName,
                     recordAdaptersOnly: false
                 ) ||
-                    this
-                    .aliasNames
-                    .Contains(candidateName) ||
+                    this.aliasNames.Contains(candidateName) ||
                     (this.localNamesByType.TryGetValue(owner, out var locals) && locals.Contains(candidateName)) {
                     return false
                 }

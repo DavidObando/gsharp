@@ -239,8 +239,7 @@ internal partial class StatementBinder {
                     .IsDefaultOrEmpty {
                     return false
                 }
-                if TypeMemberModel.GetNearestImportedBase(match)
-                    ?.ClrType is {} baseClr &&
+                if TypeMemberModel.GetNearestImportedBase(match)?.ClrType is {} baseClr &&
                     TryResolveClrStaticMemberByBareName(
                     baseClr,
                     name,
@@ -559,15 +558,9 @@ internal partial class StatementBinder {
         }
         if resolved.ReadsRunUserCode == nil {
             resolved.ReadsRunUserCode = (
-                effects
-                    .MemberReads
-                    .Count == 0 &&
-                    effects
-                    .PatternReads
-                    .Count == 0 &&
-                    effects
-                    .NilCompareOperandPaths
-                    .Count == 0
+                effects.MemberReads.Count == 0 &&
+                    effects.PatternReads.Count == 0 &&
+                    effects.NilCompareOperandPaths.Count == 0
             ) ||
                 ReadsRunUserCode(effects, false)
         }
@@ -1241,9 +1234,7 @@ internal partial class StatementBinder {
                         out var position
                     ) &&
                         position >= 1 &&
-                        position <= tuple
-                        .ElementTypes
-                        .Length {
+                        position <= tuple.ElementTypes.Length {
                         return Outcome(AddSymbolType(tuple.ElementTypes[position - 1], next))
                     }
                 }
@@ -1501,8 +1492,9 @@ internal partial class StatementBinder {
 
     private func IsFamilyAccessibleClrBase(clrBase Type?) bool -> clrBase != nil &&
         Expressions != nil &&
-        Expressions!!
-        .WithFamilyAccess($scope.CreateImportedClassSymbol(clrBase, declaration: nil)).IsFamilyAccessible(clrBase)
+        Expressions!!.WithFamilyAccess($scope.CreateImportedClassSymbol(clrBase, declaration: nil)).IsFamilyAccessible(
+        clrBase
+    )
 
     // The CLR form of a step. [`definition`](paramref) is the open definition of an imported generic type whose
     // type arguments are [`arguments`](paramref); a member type that is one of its type parameters is the argument.
@@ -1661,9 +1653,7 @@ internal partial class StatementBinder {
     private func BareStaticOwnerInitializes(symbol Symbol?) bool {
         switch symbol {
             case field is ImplicitStaticFieldVariableSymbol {
-                return !field
-                    .Field
-                    .IsConst &&
+                return !field.Field.IsConst &&
                     field.StructType is {} owner &&
                     TypeInitializationRunsUserCode(owner, true)
             }
@@ -1998,9 +1988,7 @@ internal partial class StatementBinder {
         effects RegionEffects,
         operatorResultsKnown bool
     ) bool {
-        if call
-            .Arguments
-            .Count == 0 ||
+        if call.Arguments.Count == 0 ||
             (call.Kind != RegionCallKind.NamedInvocation && call.Kind != RegionCallKind.MemberInvocation) {
             return false
         }
@@ -2271,9 +2259,7 @@ internal partial class StatementBinder {
             if current is BlockStatementSyntax block {
                 for statement in block.Statements {
                     if statement is VariableDeclarationSyntax declaration &&
-                        declaration
-                        .Identifier
-                        .ValueText == name &&
+                        declaration.Identifier.ValueText == name &&
                         (!constOnly || declaration.Keyword?.Kind == SyntaxKind.ConstKeyword) {
                         return true
                     }
@@ -2306,9 +2292,7 @@ internal partial class StatementBinder {
                     return false
                 }
                 if argPath == nil ||
-                    argPath
-                    .Steps
-                    .Length > 0 ||
+                    argPath.Steps.Length > 0 ||
                     argPath.RootIsCall ||
                     argPath.RootType != nil ||
                     argPath.RootName != ident ||
@@ -2362,12 +2346,8 @@ internal partial class StatementBinder {
                 guard let path = argPath else {
                     return false
                 }
-                if path
-                    .Steps
-                    .Length == 1 &&
-                    path
-                    .Steps[0]
-                    .Kind == RegionReceiverStepKind.Member &&
+                if path.Steps.Length == 1 &&
+                    path.Steps[0].Kind == RegionReceiverStepKind.Member &&
                     !path.RootIsCall &&
                     path.RootType == nil &&
                     path.RootName is {} rootName {
@@ -2380,8 +2360,7 @@ internal partial class StatementBinder {
                             out _
                         ) &&
                             field is {} constField &&
-                            constField
-                            .IsConst {
+                            constField.IsConst {
                             if !constField.HasConstantValue || constField.ConstantValue == nil {
                                 return false
                             }
@@ -2438,9 +2417,7 @@ internal partial class StatementBinder {
             if symbol.ClrType is {} clr && binderCtx.References.MapClrTypeToReferences(clr) is {} mapped {
                 resolved[i] = mapped
             } else if symbol !is EnumSymbol && MemberLookup.TryProjectErasedClrType(symbol, out var erased) &&
-                binderCtx
-                .References
-                .MapClrTypeToReferences(erased) is {} mappedErased {
+                binderCtx.References.MapClrTypeToReferences(erased) is {} mappedErased {
                 resolved[i] = mappedErased
             } else {
                 resolved[i] = binderCtx.References.GetCoreType("System.Object")
@@ -2543,8 +2520,7 @@ internal partial class StatementBinder {
                 effects,
                 out var boundArgs
             ) ||
-                !Overloads!!
-                .TryResolveLoopCallParameters(
+                !Overloads!!.TryResolveLoopCallParameters(
                 methods,
                 boundArgs,
                 call.Syntax,
@@ -2981,18 +2957,14 @@ internal partial class StatementBinder {
                 explicitMethodTypeArguments: explicitTypeArgSymbols
             )
         )
-        if resolution.Outcome != ClrOverloadResolution
-            .ResolutionOutcome
-            .Resolved ||
+        if resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved ||
             resolution.Best is not{} resolvedMethod {
             return false
         }
         if !staticAccess && HasExtensionFunction(symbolic, resolvedMethod.Name) && boundArgs.Any(
             (a BoundExpression) -> a.Type is FunctionTypeSymbol or
                 DelegateTypeSymbol ||
-                a
-                .Type
-                ?.ClrType is {} clr &&
+                a.Type?.ClrType is {} clr &&
                 ClrTypeUtilities.IsDelegateType(clr)
         ) {
             return false
@@ -3097,9 +3069,7 @@ internal partial class StatementBinder {
                     paramType
                 }
                 if TypeSymbol.ContainsTypeParameter(pointee) ||
-                    pointee
-                    .ClrType
-                    ?.ContainsGenericParameters == true ||
+                    pointee.ClrType?.ContainsGenericParameters == true ||
                     !ByRefStorageMatching.AreSameStorageType(storageType, pointee, out _, out _, out _) {
                     return false
                 }
@@ -3310,21 +3280,13 @@ internal partial class StatementBinder {
         let sourceValue = StripNullableValue(source)
         let targetValue = StripNullableValue(target)
         if TypeSymbol.ContainsTypeParameter(sourceValue) || TypeSymbol.ContainsTypeParameter(targetValue) ||
-            sourceValue
-            .ClrType
-            ?.ContainsGenericParameters == true ||
-            targetValue
-            .ClrType
-            ?.ContainsGenericParameters == true {
+            sourceValue.ClrType?.ContainsGenericParameters == true ||
+            targetValue.ClrType?.ContainsGenericParameters == true {
             return true
         }
         if sourceValue is TupleTypeSymbol sourceTuple &&
             targetValue is TupleTypeSymbol targetTuple &&
-            sourceTuple
-            .ElementTypes
-            .Length == targetTuple
-            .ElementTypes
-            .Length {
+            sourceTuple.ElementTypes.Length == targetTuple.ElementTypes.Length {
             for var index = 0; index < sourceTuple.ElementTypes.Length; index++ {
                 let sourceElement = StripReferenceNullability(sourceTuple.ElementTypes[index]) ??
                     sourceTuple.ElementTypes[index]
@@ -3587,14 +3549,9 @@ internal partial class StatementBinder {
                 // The CLR resolver also takes a candidate in expanded form, which converts each argument to the
                 // element type at any arity, or with omitted optional parameters.
                 if methodParameters.Length > 0 &&
-                    methodParameters[methodParameters.Length - 1]
-                    .GetCustomAttributesData().Any(
-                    (data CustomAttributeData) -> data
-                        .AttributeType
-                        .FullName == "System.ParamArrayAttribute" ||
-                        data
-                        .AttributeType
-                        .FullName == "System.Runtime.CompilerServices.ParamCollectionAttribute"
+                    methodParameters[methodParameters.Length - 1].GetCustomAttributesData().Any(
+                    (data CustomAttributeData) -> data.AttributeType.FullName == "System.ParamArrayAttribute" ||
+                        data.AttributeType.FullName == "System.Runtime.CompilerServices.ParamCollectionAttribute"
                 ) {
                     return false
                 }
@@ -4160,9 +4117,7 @@ internal partial class StatementBinder {
     ) bool {
         if compared == nil ||
             (
-            compared
-                .Steps
-                .Length > 0 &&
+            compared.Steps.Length > 0 &&
                 (effects.ContainsMemberTypeTest || HasEntryMemberTypeTest() || HasTypeTestOnReceiver(compared, effects))
         ) ||
             ResolveReceiverPath(compared, effects, keepNullableValueAtEnd: true) is not{} types {
@@ -5348,8 +5303,7 @@ internal partial class StatementBinder {
             return nil
         }
         if (body is CompilationUnitSyntax || body.Parent is StaticInitializerBlockSyntax) &&
-            !topLevelStatementList
-            .IsDefaultOrEmpty {
+            !topLevelStatementList.IsDefaultOrEmpty {
             let rootKey = topLevelStatementList[0]
             if spansByBody.TryGetValue(rootKey, out var cachedTopLevel) {
                 return cachedTopLevel
@@ -6012,9 +5966,7 @@ internal partial class StatementBinder {
         for arg in arguments {
             var value = arg
             while value is BoundConversionExpression conversion &&
-                (StripAllNullability(value.Type) ?? value.Type)
-                .ClrType
-                ?.FullName == "System.Array" &&
+                (StripAllNullability(value.Type) ?? value.Type).ClrType?.FullName == "System.Array" &&
                 TryGetMutableBufferElementType(conversion.Expression.Type) != nil {
                 value = conversion.Expression
             }
@@ -6080,9 +6032,7 @@ internal partial class StatementBinder {
             current = parent.Expression
         }
         return current is CallExpressionSyntax call &&
-            call
-            .Arguments
-            .Count == 0 &&
+            call.Arguments.Count == 0 &&
             IsCalleeFreshAllocationSyntax(current)
     }
 
@@ -6890,9 +6840,8 @@ internal partial class StatementBinder {
         let services = binderCtx.Services
         if services.HasCachedMethodsByName &&
             services.CachedMethodsByName != nil &&
-            services
-            .CachedMethodsByNameStructs
-            .Equals(structs) && SameInterfacesSnapshot(services.CachedMethodsByNameInterfaces, interfaces) {
+            services.CachedMethodsByNameStructs.Equals(structs) &&
+            SameInterfacesSnapshot(services.CachedMethodsByNameInterfaces, interfaces) {
             return services.CachedMethodsByName!!
         }
         let builders = Dictionary[string, ImmutableArray[FunctionSymbol].Builder](StringComparer.Ordinal)
@@ -7014,8 +6963,7 @@ internal partial class StatementBinder {
             "System.ValueTuple`",
             StringComparison.Ordinal
         ) ||
-            clrName
-            .StartsWith("System.Tuple`", StringComparison.Ordinal) {
+            clrName.StartsWith("System.Tuple`", StringComparison.Ordinal) {
             for elem in stripped.GetElementPositions() {
                 AddComparedTypeWithTupleElements(list, elem, visited)
             }
@@ -7248,24 +7196,18 @@ internal partial class StatementBinder {
                         continue
                     }
                     if name == "GetFormat" &&
-                        m
-                        .Parameters
-                        .Length == 1 &&
+                        m.Parameters.Length == 1 &&
                         m.ReceiverType != nil &&
-                        Conversion
-                        .IsRepresentationPreservingImplicit(m.ReceiverType, formatProviderType) {
+                        Conversion.IsRepresentationPreservingImplicit(m.ReceiverType, formatProviderType) {
                         let s = GetFunctionEffectSummaryCore(m, includeOverrides: false, visiting, out _)
                         summary.MergeFrom(s)
                         if summary.WritesAnyStorage {
                             return
                         }
                     } else if name == "Format" &&
-                        m
-                        .Parameters
-                        .Length == 3 &&
+                        m.Parameters.Length == 3 &&
                         m.ReceiverType != nil &&
-                        Conversion
-                        .IsRepresentationPreservingImplicit(m.ReceiverType, customFormatterType) {
+                        Conversion.IsRepresentationPreservingImplicit(m.ReceiverType, customFormatterType) {
                         let s = GetFunctionEffectSummaryCore(m, includeOverrides: false, visiting, out _)
                         summary.MergeFrom(s)
                         if summary.WritesAnyStorage {
@@ -7361,9 +7303,7 @@ internal partial class StatementBinder {
                         name == "ToString" &&
                             (
                             !object.Equals(StripAllNullability(m.Type) ?? m.Type, TypeSymbol.String) ||
-                                m
-                                .Parameters
-                                .Length > 2
+                                m.Parameters.Length > 2
                         )
                     ) ||
                         (name == "TryFormat" && !object.Equals(m.Type, TypeSymbol.Bool)) {
@@ -7660,9 +7600,7 @@ internal partial class StatementBinder {
                         }
                     }
                 }
-                if level
-                    .ImportedBaseType
-                    ?.ClrType is {} baseClr &&
+                if level.ImportedBaseType?.ClrType is {} baseClr &&
                     ClrTypeMatchesOrImplementsInterface(baseClr, openDecl) {
                     return true
                 }
@@ -7846,8 +7784,7 @@ internal partial class StatementBinder {
             if declType != nil &&
                 ReflectionType(declType) is {} reflectedDecl &&
                 !reflectedDecl.IsPrimitive &&
-                !reflectedDecl
-                .IsEnum {
+                !reflectedDecl.IsEnum {
                 try {
                     for clrField in reflectedDecl.GetFields(
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
@@ -8261,15 +8198,15 @@ internal partial class StatementBinder {
                 call
             ) &&
                 parentAcc.LeftPart is NameExpressionSyntax leftName &&
-                leftName
-                .IdentifierToken
-                .ValueText == "Enumerable"
+                leftName.IdentifierToken.ValueText == "Enumerable"
             for var argIdx = 0; argIdx < call.Arguments.Count; argIdx++ {
                 let arg = call.Arguments[argIdx]
                 if arg is not NamedArgumentExpressionSyntax &&
-                    services
-                    .CachedDeferredLinqCallbackPositions
-                    ?.TryGetValue(mName, out var callbackPositions) == true && !callbackPositions.Contains(
+                    services.CachedDeferredLinqCallbackPositions?.TryGetValue(
+                    mName,
+                    out var callbackPositions
+                ) == true &&
+                    !callbackPositions.Contains(
                     argIdx +
                         (
                         if isStaticEnumerableCall {
@@ -8424,12 +8361,8 @@ internal partial class StatementBinder {
                 for node in tree.Root.DescendantNodesAndSelf() {
                     if node is AccessorExpressionSyntax acc &&
                         acc.RightPart is CallExpressionSyntax call &&
-                        call
-                        .Identifier
-                        .ValueText == "Create" &&
-                        call
-                        .Arguments
-                        .Count >= 1 {
+                        call.Identifier.ValueText == "Create" &&
+                        call.Arguments.Count >= 1 {
                         var leftName = ""
                         var createdElemType TypeSymbol? = nil
                         switch acc.LeftPart {
@@ -8699,13 +8632,8 @@ internal partial class StatementBinder {
                 }
                 for field in current.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) {
                     stored |= ComparerContractKind(field.FieldType)
-                    if !field
-                        .FieldType
-                        .IsArray &&
-                        field
-                        .FieldType
-                        .Namespace
-                        ?.StartsWith("System.Collections", StringComparison.Ordinal) == true {
+                    if !field.FieldType.IsArray &&
+                        field.FieldType.Namespace?.StartsWith("System.Collections", StringComparison.Ordinal) == true {
                         pending.Push(field.FieldType)
                     }
                 }
@@ -8784,9 +8712,7 @@ internal partial class StatementBinder {
         try {
             return reflected.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).All(
                 (field FieldInfo) -> HasIntrinsicFrameworkValueLayout(field.FieldType, visited) &&
-                    field
-                    .FieldType
-                    .IsValueType
+                    field.FieldType.IsValueType
             )
         } catch (error NotSupportedException) {
             return false
@@ -9519,11 +9445,7 @@ internal partial class StatementBinder {
                 sA.Definition ?? sA,
                 sB.Definition ?? sB
             ) &&
-                sA
-                .TypeArguments
-                .Length == sB
-                .TypeArguments
-                .Length {
+                sA.TypeArguments.Length == sB.TypeArguments.Length {
                 for var i = 0; i < sA.TypeArguments.Length; i++ {
                     if !WrittenLocationMayHoldRoot(
                         sA.TypeArguments[i],
@@ -9541,11 +9463,7 @@ internal partial class StatementBinder {
                 root is ImportedTypeSymbol impB &&
                 impA.OpenDefinition != nil &&
                 impA.OpenDefinition == impB.OpenDefinition &&
-                impA
-                .TypeArguments
-                .Length == impB
-                .TypeArguments
-                .Length {
+                impA.TypeArguments.Length == impB.TypeArguments.Length {
                 for var i = 0; i < impA.TypeArguments.Length; i++ {
                     if !WrittenLocationMayHoldRoot(
                         impA.TypeArguments[i],
@@ -9770,8 +9688,7 @@ internal partial class StatementBinder {
                 origProp.GetterSymbol,
                 orig
             ) ||
-                orig.MethodKind == MethodKind
-                .PropertyGet {
+                orig.MethodKind == MethodKind.PropertyGet {
                 if origProp.IsAutoProperty {
                     return summary
                 }
@@ -9780,8 +9697,7 @@ internal partial class StatementBinder {
                 origProp.SetterSymbol,
                 orig
             ) ||
-                orig.MethodKind == MethodKind
-                .PropertySet {
+                orig.MethodKind == MethodKind.PropertySet {
                 if (orig.ReceiverType ?? orig.StaticOwnerType) is not StructSymbol propOwner ||
                     CanPropertyBeAliasedByRef(propOwner, origProp) {
                     summary.AddFieldType(origProp.Type)
@@ -9816,12 +9732,7 @@ internal partial class StatementBinder {
             }
             for ctor in origOwner.EffectiveExplicitConstructors {
                 if object.ReferenceEquals(ctor.Function, orig) ||
-                    ctor
-                    .Function
-                    .Parameters
-                    .Length == orig
-                    .Parameters
-                    .Length {
+                    ctor.Function.Parameters.Length == orig.Parameters.Length {
                     if ctor.IsSynthesizedFromPrimaryConstructor || ctor.Declaration == nil {
                         return summary
                     }
@@ -9964,9 +9875,7 @@ internal partial class StatementBinder {
         var localCycle = false
         let calleePkgName = (enclosingType as StructSymbol)?.PackageName ??
             (enclosingType as InterfaceSymbol)?.PackageName ??
-            orig
-            .Package
-            ?.Name
+            orig.Package?.Name
         let savedPkg = $scope.SetCurrentDeclaringPackage(calleePkgName)
         let savedTree = $scope.SetCurrentReferencingSyntaxTree(body.SyntaxTree)
         try {
@@ -10098,10 +10007,7 @@ internal partial class StatementBinder {
         switch node {
             case ifExpr is IfExpressionSyntax {
                 if TryGetNilCheckTargetName(ifExpr.Condition, out var nilTarget) &&
-                    ifExpr
-                    .ThenBlock
-                    .Statements
-                    .IsEmpty &&
+                    ifExpr.ThenBlock.Statements.IsEmpty &&
                     TryGetSimpleAssignmentValueForTarget(ifExpr.ThenBlock.Expression, nilTarget, out var rhsExpr) {
                     ScanCalleeSyntaxNode(
                         ifExpr.Initializer,
@@ -10213,9 +10119,7 @@ internal partial class StatementBinder {
             case ifStmt is IfStatementSyntax {
                 if TryGetNilCheckTargetName(ifStmt.Condition, out var stmtNilTarget) &&
                     ifStmt.ThenStatement is BlockStatementSyntax thenBlock &&
-                    thenBlock
-                    .Statements
-                    .Length == 1 &&
+                    thenBlock.Statements.Length == 1 &&
                     thenBlock.Statements[0] is ExpressionStatementSyntax thenExprStmt &&
                     TryGetSimpleAssignmentValueForTarget(thenExprStmt.Expression, stmtNilTarget, out var stmtRhsExpr) {
                     ScanCalleeSyntaxNode(
@@ -10524,11 +10428,7 @@ internal partial class StatementBinder {
                 }
                 let elemType = GetElementOrIndexerTypeOf(collType)
                 if elemType is TupleTypeSymbol tupleElem &&
-                    tupleElem
-                    .ElementTypes
-                    .Length == forTuple
-                    .Identifiers
-                    .Count {
+                    tupleElem.ElementTypes.Length == forTuple.Identifiers.Count {
                     for var i = 0; i < forTuple.Identifiers.Count; i++ {
                         localTypes[forTuple.Identifiers[i].ValueText] = tupleElem.ElementTypes[i]
                     }
@@ -10694,11 +10594,7 @@ internal partial class StatementBinder {
                     )
                 )
                 if initType is TupleTypeSymbol tupleType &&
-                    tupleType
-                    .ElementTypes
-                    .Length == tupleDecon
-                    .Identifiers
-                    .Count {
+                    tupleType.ElementTypes.Length == tupleDecon.Identifiers.Count {
                     for var i = 0; i < tupleDecon.Identifiers.Count; i++ {
                         localTypes[tupleDecon.Identifiers[i].ValueText] = tupleType.ElementTypes[i]
                     }
@@ -11778,16 +11674,10 @@ internal partial class StatementBinder {
             }
             case acc is AccessorExpressionSyntax {
                 if acc.LeftPart is NameExpressionSyntax volRecv &&
-                    volRecv
-                    .IdentifierToken
-                    .ValueText == "Volatile" &&
+                    volRecv.IdentifierToken.ValueText == "Volatile" &&
                     acc.RightPart is CallExpressionSyntax volCall &&
-                    volCall
-                    .Identifier
-                    .ValueText == "Read" &&
-                    volCall
-                    .Arguments
-                    .Count == 1 {
+                    volCall.Identifier.ValueText == "Read" &&
+                    volCall.Arguments.Count == 1 {
                     let arg0 = volCall.Arguments[0]
                     if arg0 is UnaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.AmpersandToken}} volAmp {
                         ScanCalleeSyntaxNode(
@@ -11890,22 +11780,13 @@ internal partial class StatementBinder {
                     call.ConversionTypeClause == nil &&
                     (
                     (
-                        call
-                            .Identifier
-                            .ValueText == "cast" &&
-                            call
-                            .TypeArgumentList
-                            ?.Arguments
-                            .Count == 1 &&
-                            call
-                            .Arguments
-                            .Count == 1
+                        call.Identifier.ValueText == "cast" &&
+                            call.TypeArgumentList?.Arguments.Count == 1 &&
+                            call.Arguments.Count == 1
                     ) ||
                         (
                         (call.Identifier.ValueText == "checked" || call.Identifier.ValueText == "unchecked") &&
-                            call
-                            .Arguments
-                            .Count == 1
+                            call.Arguments.Count == 1
                     )
                 ) {
                     return
@@ -12077,13 +11958,9 @@ internal partial class StatementBinder {
                     return
                 }
                 if receiverExpr is NameExpressionSyntax arrRecv &&
-                    arrRecv
-                    .IdentifierToken
-                    .ValueText == "Array" &&
+                    arrRecv.IdentifierToken.ValueText == "Array" &&
                     (memberName is "Reverse" or "Clear" or "Fill") &&
-                    call
-                    .Arguments
-                    .Count >= 1 &&
+                    call.Arguments.Count >= 1 &&
                     IsCalleeFreshLocalExpression(call.Arguments[0], refLocalsFromParams) {
                     return
                 }
@@ -12134,9 +12011,9 @@ internal partial class StatementBinder {
                         )
                     ),
                     exactEnumeration: argTypes.All((type TypeSymbol?) -> HasClosedFrameworkEnumerationModel(type)) &&
-                        call
-                        .Arguments
-                        .All((argument ExpressionSyntax) -> IsCalleeFreshLocalExpression(argument, refLocalsFromParams))
+                        call.Arguments.All(
+                        (argument ExpressionSyntax) -> IsCalleeFreshLocalExpression(argument, refLocalsFromParams)
+                    )
                 )
                 ResolveCalleeSyntaxCallbackEffects(
                     memberCallSummary,
@@ -12455,13 +12332,8 @@ internal partial class StatementBinder {
                     let origStruct = s.Definition ?? s
                     for ctor in origStruct.EffectiveExplicitConstructors {
                         if !ctor.IsSynthesizedFromPrimaryConstructor &&
-                            ctor
-                            .Declaration
-                            ?.Body != nil &&
-                            ctor
-                            .Function
-                            .Parameters
-                            .Length == 0 {
+                            ctor.Declaration?.Body != nil &&
+                            ctor.Function.Parameters.Length == 0 {
                             let ctorSummary = GetFunctionEffectSummaryCore(
                                 ctor.Function,
                                 includeOverrides: false,
@@ -13229,9 +13101,7 @@ internal partial class StatementBinder {
                 DeclaredType: nil,
                 DeclarationIdentifier: {} declId
             } &&
-                declId
-                .ValueText
-                .Length > 0 {
+                declId.ValueText.Length > 0 {
                 if isPrivateOwnerReceiver {
                     refLocalsFromParams.Add(declId.ValueText)
                 }
@@ -13275,9 +13145,7 @@ internal partial class StatementBinder {
                         if m.Name == methodName && paramIndex < m.Parameters.Length {
                             let pt = s.SubstituteMemberType(m.Parameters[paramIndex].Type) ??
                                 level.SubstituteMemberType(m.Parameters[paramIndex].Type) ??
-                                m
-                                .Parameters[paramIndex]
-                                .Type
+                                m.Parameters[paramIndex].Type
                             return if pt is ByRefTypeSymbol br {
                                 br.PointeeType
                             } else {
@@ -13289,9 +13157,7 @@ internal partial class StatementBinder {
                         if m.Name == methodName && paramIndex < m.Parameters.Length {
                             let pt = s.SubstituteMemberType(m.Parameters[paramIndex].Type) ??
                                 level.SubstituteMemberType(m.Parameters[paramIndex].Type) ??
-                                m
-                                .Parameters[paramIndex]
-                                .Type
+                                m.Parameters[paramIndex].Type
                             return if pt is ByRefTypeSymbol br {
                                 br.PointeeType
                             } else {
@@ -13373,12 +13239,8 @@ internal partial class StatementBinder {
                 case refArg is RefArgumentExpressionSyntax {
                     cur = refArg.Expression
                 }
-                case unary is UnaryExpressionSyntax when unary
-                    .OperatorToken
-                    .Kind == SyntaxKind.BangBangToken ||
-                    unary
-                    .OperatorToken
-                    .Kind == SyntaxKind.AmpersandToken {
+                case unary is UnaryExpressionSyntax when unary.OperatorToken.Kind == SyntaxKind.BangBangToken ||
+                    unary.OperatorToken.Kind == SyntaxKind.AmpersandToken {
                     cur = unary.Operand
                 }
                 case name is NameExpressionSyntax {
@@ -13680,9 +13542,7 @@ internal partial class StatementBinder {
             (atomicRecv.IdentifierToken.ValueText is "Volatile" or "Interlocked" or "ImmutableInterlocked") &&
             atomicAcc.RightPart is CallExpressionSyntax atomicCall &&
             (
-            atomicCall
-                .Identifier
-                .ValueText is "Read" or
+            atomicCall.Identifier.ValueText is "Read" or
                 "Write" or
                 "CompareExchange" or
                 "Exchange" or
@@ -14346,9 +14206,7 @@ internal partial class StatementBinder {
                     out var position
                 ) &&
                     position >= 1 &&
-                    position <= tuple
-                    .ElementTypes
-                    .Length {
+                    position <= tuple.ElementTypes.Length {
                     summary.AddFieldType(tuple.ElementTypes[position - 1])
                     return
                 }
@@ -14700,8 +14558,7 @@ internal partial class StatementBinder {
         } else if !isFreshReceiver && stripped is ImportedTypeSymbol imp {
             let openName = (imp.OpenDefinition ?? imp.ClrType)?.FullName ?? ""
             if openName.StartsWith("System.Collections.Generic.Dictionary`", StringComparison.Ordinal) ||
-                openName
-                .StartsWith("System.Collections.Generic.IDictionary`", StringComparison.Ordinal) {
+                openName.StartsWith("System.Collections.Generic.IDictionary`", StringComparison.Ordinal) {
                 MergeEqualityOrComparerCallbackEffects(openName, "set_Item", imp, nil, visiting, summary)
             }
         }
@@ -15285,9 +15142,7 @@ internal partial class StatementBinder {
                             IsCalleeFreshAllocationSyntax(varDecl.Initializer)
                     ) {
                         candidates.Add(name)
-                        if varDecl
-                            .Keyword
-                            ?.Kind == SyntaxKind.LetKeyword &&
+                        if varDecl.Keyword?.Kind == SyntaxKind.LetKeyword &&
                             IsDefaultCallbackConstructionSyntax(varDecl.Initializer) {
                             candidates.Add("#default:" + name)
                         }
@@ -15374,8 +15229,7 @@ internal partial class StatementBinder {
                             "ConcurrentDictionary" or
                             "StringBuilder"
                     ) &&
-                        $scope
-                        .TryLookupFunctions(fnName).IsDefaultOrEmpty {
+                        $scope.TryLookupFunctions(fnName).IsDefaultOrEmpty {
                         return true
                     }
                     if LookupCompilationTypeByName(
@@ -15396,9 +15250,7 @@ internal partial class StatementBinder {
                     $scope.TryLookupSymbol(leftId.IdentifierToken.ValueText) == nil &&
                     LookupCompilationTypeByName(leftId.IdentifierToken.ValueText, 0) == nil &&
                     acc.RightPart is CallExpressionSyntax rightCall &&
-                    rightCall
-                    .Identifier
-                    .ValueText == "CreateBuilder" {
+                    rightCall.Identifier.ValueText == "CreateBuilder" {
                     return true
                 }
                 return false
@@ -15593,18 +15445,14 @@ internal partial class StatementBinder {
                             }
                             let hasClrParams = clrParams.Length > 0 &&
                                 (
-                                clrParams[clrParams.Length - 1]
-                                    .ParameterType
-                                    .IsArray ||
+                                clrParams[clrParams.Length - 1].ParameterType.IsArray ||
                                     ClrOverloadResolution.IsParamsArrayParameter(clrParams[clrParams.Length - 1])
                             )
                             if argTypes.Count < minClrParams || (!hasClrParams && argTypes.Count > clrParams.Length) {
                                 continue
                             }
                             if isStatic && object.Equals(stripped, TypeSymbol.String) &&
-                                clrMethod
-                                .DeclaringType
-                                ?.FullName == "System.Object" {
+                                clrMethod.DeclaringType?.FullName == "System.Object" {
                                 continue
                             }
                             matched = true
@@ -15653,9 +15501,7 @@ internal partial class StatementBinder {
                     }
                     let hasExtParams = extParams.Length > 0 &&
                         (
-                        extParams[extParams.Length - 1]
-                            .ParameterType
-                            .IsArray ||
+                        extParams[extParams.Length - 1].ParameterType.IsArray ||
                             ClrOverloadResolution.IsParamsArrayParameter(extParams[extParams.Length - 1])
                     )
                     if argTypes.Count + 1 < minExtParams || (!hasExtParams && argTypes.Count + 1 > extParams.Length) {
@@ -16578,13 +16424,8 @@ internal partial class StatementBinder {
             case call is CallExpressionSyntax {
                 if call.Callee == nil &&
                     call.ConversionTypeClause == nil &&
-                    call
-                    .Identifier
-                    .ValueText == "cast" &&
-                    call
-                    .TypeArgumentList
-                    ?.Arguments
-                    .Count == 1 {
+                    call.Identifier.ValueText == "cast" &&
+                    call.TypeArgumentList?.Arguments.Count == 1 {
                     return ResolveCalleeTypeClause(call.TypeArgumentList!!.Arguments[0], calleeTypeParams)
                 }
                 if call.ConversionTypeClause != nil {
@@ -16839,9 +16680,7 @@ internal partial class StatementBinder {
                     out var position
                 ) &&
                     position >= 1 &&
-                    position <= tuple
-                    .ElementTypes
-                    .Length {
+                    position <= tuple.ElementTypes.Length {
                     return tuple.ElementTypes[position - 1]
                 }
                 if int32.TryParse(memberName, out var zeroIdx) && zeroIdx >= 0 && zeroIdx < tuple.ElementTypes.Length {
@@ -17114,8 +16953,10 @@ internal partial class StatementBinder {
                     ) ||
                         openName.StartsWith("System.Collections.Generic.SortedDictionary`", StringComparison.Ordinal) ||
                         openName.StartsWith("System.Collections.Generic.SortedList`", StringComparison.Ordinal) ||
-                        openName
-                        .StartsWith("System.Collections.Concurrent.ConcurrentDictionary`", StringComparison.Ordinal) {
+                        openName.StartsWith(
+                        "System.Collections.Concurrent.ConcurrentDictionary`",
+                        StringComparison.Ordinal
+                    ) {
                         if imp.TypeArguments.Length >= 2 {
                             return imp.TypeArguments[1]
                         }

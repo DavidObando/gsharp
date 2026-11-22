@@ -1378,9 +1378,7 @@ stderr:
                 Path.ChangeExtension(dll, ".runtimeconfig.json"),
                 "{\"runtimeOptions\":{\"tfm\":\"net" + runtimeVersion.Major.ToString() +
                     ".0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"" +
-                    runtimeVersion
-                    .Major
-                    .ToString() + "." + runtimeVersion.Minor.ToString() + ".0\"}}}"
+                    runtimeVersion.Major.ToString() + "." + runtimeVersion.Minor.ToString() + ".0\"}}}"
             )
             let (exit, text) = RunDotnet(dll)
             Assert.True(exit == 0, (`C# reference program failed. Exit ` + "$exit" + `:

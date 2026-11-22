@@ -54,10 +54,8 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
         // The receiver's type decides (#6127). The model has no answer inside a function literal
         // (#6149) or in an argument of a call that fails too (#6150); there the syntax decides.
         let model = context.SemanticModel
-        let receiverType = model.GetReceiverTypeInfo(accessor.LeftPart, context.CancellationToken)
-            .Type ??
-            model
-            .GetTypeInfo(accessor.LeftPart, context.CancellationToken).Type
+        let receiverType = model.GetReceiverTypeInfo(accessor.LeftPart, context.CancellationToken).Type ??
+            model.GetTypeInfo(accessor.LeftPart, context.CancellationToken).Type
         let nullable = if receiverType != nil {
             receiverType is NullableTypeSymbol
         } else {
@@ -93,9 +91,7 @@ internal class NullConditionalAccessCodeFixProvider : GSharpCodeFixProvider {
             } else if parent is IndexExpressionSyntax indexed && object.ReferenceEquals(indexed.Target, current) {
                 current = indexed
             } else if parent is UnaryExpressionSyntax dereference &&
-                dereference
-                .OperatorToken
-                .Kind == SyntaxKind.StarToken {
+                dereference.OperatorToken.Kind == SyntaxKind.StarToken {
                 current = dereference
             } else {
                 break
@@ -316,9 +312,7 @@ internal shared class NullabilitySyntax {
         }
         for node in tree.Root.DescendantNodesAndSelf() {
             switch node {
-                case v is VariableDeclarationSyntax when v
-                    .Identifier
-                    ?.Text == name &&
+                case v is VariableDeclarationSyntax when v.Identifier?.Text == name &&
                     EndsWithQuestion(tree, v.TypeClause) {
                     return true
                 }

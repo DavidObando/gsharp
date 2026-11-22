@@ -528,7 +528,10 @@ Translated G#:
             File.WriteAllText(path, `{
   "runtimeOptions": {
     "tfm": "net10.0",
-` + "    \"framework\": { \"name\": \"Microsoft.NETCore.App\", \"version\": \"" + Environment.Version.Major.ToString() + `.0.0" }
+` + "    \"framework\": { \"name\": \"Microsoft.NETCore.App\", \"version\": \"" + Environment
+                    .Version
+                    .Major
+                    .ToString() + `.0.0" }
   }
 }
 `)

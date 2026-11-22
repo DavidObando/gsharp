@@ -191,8 +191,7 @@ internal shared class SmartCastStability {
         var targetType TypeSymbol? = nil
         if left is BoundVariableExpression lv &&
             IsAcceptableBareVariable(lv.Variable, restrictBareVariableToLocalsAndParams) &&
-            StatementBinder
-            .IsNilLiteral(right) {
+            StatementBinder.IsNilLiteral(right) {
             target = lv.Variable
             targetType = if lv.NarrowedType is NullableTypeSymbol {
                 lv.NarrowedType
@@ -201,8 +200,7 @@ internal shared class SmartCastStability {
             }
         } else if right is BoundVariableExpression rv &&
             IsAcceptableBareVariable(rv.Variable, restrictBareVariableToLocalsAndParams) &&
-            StatementBinder
-            .IsNilLiteral(left) {
+            StatementBinder.IsNilLiteral(left) {
             target = rv.Variable
             targetType = if rv.NarrowedType is NullableTypeSymbol {
                 rv.NarrowedType

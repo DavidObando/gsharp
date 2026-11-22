@@ -980,15 +980,11 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                 "<ncaGeneric",
                 StringComparison.Ordinal
             ) ||
-                snapshot
-                .Name
-                .StartsWith("$$go$$Generic$$", StringComparison.Ordinal) || snapshot.Name.StartsWith(
+                snapshot.Name.StartsWith("$$go$$Generic$$", StringComparison.Ordinal) || snapshot.Name.StartsWith(
                 "$$defer$$Generic$$",
                 StringComparison.Ordinal
             ) ||
-                snapshot
-                .Name
-                .StartsWith("$$postfix$$Generic$$", StringComparison.Ordinal)
+                snapshot.Name.StartsWith("$$postfix$$Generic$$", StringComparison.Ordinal)
         )
 
         internal func CaptureRuntimeGenericStorageReceiver(
@@ -1132,12 +1128,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             var receiver = receiver
             while true {
                 if receiver == nil ||
-                    GSharp
-                    .Core
-                    .CodeAnalysis
-                    .Binding
-                    .Binder
-                    .IsReferenceTypeForConstraint(receiver.Type) {
+                    GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(receiver.Type) {
                     return false
                 }
                 switch receiver {
@@ -1161,9 +1152,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                         dereference.Operand
                     ) ||
                         TypeSymbol.IsUnmanagedPointer(dereference.Operand.Type) ||
-                        dereference
-                        .Operand
-                        .Type is ByRefTypeSymbol {
+                        dereference.Operand.Type is ByRefTypeSymbol {
                         return true
                     }
                     case block is BoundBlockExpression {

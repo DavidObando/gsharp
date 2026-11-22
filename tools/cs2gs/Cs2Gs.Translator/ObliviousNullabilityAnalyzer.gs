@@ -131,19 +131,9 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if !domains[index].TryGetTarget(out var existing) {
                     domains.RemoveAt(index)
                 } else if object.ReferenceEquals(existing.Special, catalogScope.Special) &&
-                    existing
-                    .Sources
-                    .Names
-                    .SetEquals(sources.Names) &&
-                    existing
-                    .Sources
-                    .Compilations
-                    .Count == sources
-                    .Compilations
-                    .Count &&
-                    sources
-                    .Compilations
-                    .All(
+                    existing.Sources.Names.SetEquals(sources.Names) &&
+                    existing.Sources.Compilations.Count == sources.Compilations.Count &&
+                    sources.Compilations.All(
                     (item KeyValuePair[AssemblyIdentity, CSharpCompilation]) ->
                     existing.Sources.Compilations.TryGetValue(item.Key, out var owner) && object.ReferenceEquals(
                         owner,
@@ -458,9 +448,7 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     private class ScalarQueryComparer : IEqualityComparer[ScalarQuery] {
         func Equals(x ScalarQuery, y ScalarQuery) bool -> object.ReferenceEquals(x.Compilation, y.Compilation) &&
-            SymbolEqualityComparer
-            .Default
-            .Equals(x.Symbol, y.Symbol)
+            SymbolEqualityComparer.Default.Equals(x.Symbol, y.Symbol)
 
         func GetHashCode(obj ScalarQuery) int32 {
             let symbolHash = if obj.Symbol == nil {
@@ -493,9 +481,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             x.Compilation,
             y.Compilation
         ) &&
-            this
-            .keys
-            .Equals(x.Key, y.Key)
+            this.keys.Equals(x.Key, y.Key)
 
         func GetHashCode(obj TupleElementQuery) int32 -> HashCode.Combine(
             RuntimeHelpers.GetHashCode(obj.Compilation),
@@ -753,10 +739,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             for source in CurrentAnalysis.Value?.SourceCompilations ?? Array.Empty[CSharpCompilation]() {
                 if referenced.Contains(source.Assembly.Identity.GetDisplayName()) &&
-                    !source
-                    .Assembly
-                    .Identity
-                    .Equals(current.Assembly.Identity) {
+                    !source.Assembly.Identity.Equals(current.Assembly.Identity) {
                     this.Compilations.TryAdd(source.Assembly.Identity, source)
                 }
             }
@@ -928,9 +911,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     func IsTainted(compilation CSharpCompilation?, symbol ISymbol?) bool {
         if symbol == nil ||
             compilation == nil ||
-            compilation
-            .Options
-            .NullableContextOptions != NullableContextOptions.Disable {
+            compilation.Options.NullableContextOptions != NullableContextOptions.Disable {
             return false
         }
         using let catalogScope = UseCatalogScope(compilation, nil)
@@ -1009,9 +990,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) bool {
         if compilation == nil ||
             !IsEvidenceDecidedGeneratedDeclaration(symbol) ||
-            symbol!!
-            .OriginalDefinition
-            .GetDocumentationCommentId() is not{} id {
+            symbol!!.OriginalDefinition.GetDocumentationCommentId() is not{} id {
             return false
         }
         // A declaration must translate identically no matter which project is
@@ -1184,9 +1163,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             !((symbol is IFieldSymbol || symbol is IPropertySymbol)) ||
             !IsEvidenceDecidedGeneratedDeclaration(symbol) ||
             !HasPromotableArrayElement(symbol) ||
-            symbol!!
-            .OriginalDefinition
-            .GetDocumentationCommentId() is not{} id {
+            symbol!!.OriginalDefinition.GetDocumentationCommentId() is not{} id {
             return false
         }
         // The same existential union `IsGeneratedDeclarationAssignedNull` takes,
@@ -1449,10 +1426,7 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     internal func ValueFlowIsPromoted(compilation Compilation, symbol ISymbol) bool ->
     TryGetSourceMember(compilation, symbol, out var owner, out var source) &&
-        ReturnContracts
-        .GetValue(owner!!, ComputeReturnContracts)
-        .PromotedFlow
-        .Contains(source!!)
+        ReturnContracts.GetValue(owner!!, ComputeReturnContracts).PromotedFlow.Contains(source!!)
 
     internal func StoredAwaitedResultIsTainted(
         compilation CSharpCompilation,
@@ -1513,9 +1487,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         )
     }
 
-    internal func IsReferenceReturnEnvelope(method IMethodSymbol) bool -> method
-        .ReturnType
-        .IsReferenceType &&
+    internal func IsReferenceReturnEnvelope(method IMethodSymbol) bool -> method.ReturnType.IsReferenceType &&
         HasProjectedReturnResult(method)
 
     private func HasProjectedReturnResult(method IMethodSymbol) bool ->
@@ -1704,8 +1676,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     sourceDeclaration!!,
                     out var sourceNode
                 ) &&
-                    object
-                    .ReferenceEquals(targetNode.Owner, sourceNode.Owner) {
+                    object.ReferenceEquals(targetNode.Owner, sourceNode.Owner) {
                     targetNode.Sources.Add((sourceNode.Owner, sourceNode.Symbol, false, 0, false))
                     sourceContractEdges.Add((targetDeclaration, sourceDeclaration))
                 }
@@ -1751,9 +1722,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     !item.Guarded &&
                         ReturnSourceIsNullable(item.Owner, item.Symbol, graph, item.Narrowed, item.AwaitDepth)
                 ) ||
-                    node
-                    .TupleSources
-                    .Any(
+                    node.TupleSources.Any(
                     (item(Source TupleElementKey, Guarded bool)) ->
                     !item.Guarded && ReturnTupleSourceIsNullable(node.Owner, item.Source, graph)
                 )
@@ -1777,9 +1746,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         }
                     )
                 ) ||
-                    node
-                    .Sources
-                    .Any(
+                    node.Sources.Any(
                     (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)) ->
                     !item.Guarded &&
                         ReturnSourceIsNullable(
@@ -1790,9 +1757,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         awaitDepth: item.AwaitDepth
                     )
                 ) ||
-                    node
-                    .TupleSources
-                    .Any(
+                    node.TupleSources.Any(
                     (item(Source TupleElementKey, Guarded bool)) -> !item.Guarded &&
                         ReturnTupleSourceIsNullable(node.Owner, item.Source, graph, requirePromotion: true)
                 ) {
@@ -1910,10 +1875,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             return ReturnContractIsNullable(owner!!, method)
         }
         return IsDeclaredNullablePosition(SymbolDeclaredType(source)) ||
-            ReturnContracts
-            .GetValue(owner!!, ComputeReturnContracts)
-            .Nullable
-            .Contains(source!!)
+            ReturnContracts.GetValue(owner!!, ComputeReturnContracts).Nullable.Contains(source!!)
     }
 
     private func GetValueContractNode(
@@ -1981,9 +1943,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             .NullableFlowState
             .NotNull
         let guarded = IsNullGuardDominatedRead(expression, model) || IsNullGuardDominatedExpression(expression, model)
-        if node
-            .TuplePath
-            .Length == 0 &&
+        if node.TuplePath.Length == 0 &&
             node.Symbol is IMethodSymbol{IsAsync: true} method &&
             IsEligibleTupleLeaf(SymbolValueType(method)) &&
             !flowNotNull &&
@@ -2078,9 +2038,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             if awaitDepth == 1 && node.ResultSeed {
                 return true
             }
-            let atValueRoot = node
-                .TuplePath
-                .Length == 0 &&
+            let atValueRoot = node.TuplePath.Length == 0 &&
                 node.Symbol is IMethodSymbol{IsAsync: true} &&
                 awaitDepth == 1
             if atValueRoot && !IsEligibleTupleLeaf(SymbolValueType(node.Symbol)) {
@@ -2163,19 +2121,14 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     private func IsInferredStorage(symbol ISymbol?) bool -> symbol is ILocalSymbol &&
-        symbol
-        .DeclaringSyntaxReferences
-        .Any(
+        symbol.DeclaringSyntaxReferences.Any(
         (reference SyntaxReference) -> reference.GetSyntax() is VariableDeclaratorSyntax{
             Parent: VariableDeclarationSyntax{Type: {IsVar: true}}
         }
     )
 
-    private func CarriesMaybeNullReturn(method IMethodSymbol) bool -> method
-        .DeclaringSyntaxReferences
-        .Length > 0 &&
-        method
-        .GetReturnTypeAttributes().Any(
+    private func CarriesMaybeNullReturn(method IMethodSymbol) bool -> method.DeclaringSyntaxReferences.Length > 0 &&
+        method.GetReturnTypeAttributes().Any(
         (attribute AttributeData) ->
         attribute.AttributeClass?.ToDisplayString() == "System.Diagnostics.CodeAnalysis.MaybeNullAttribute"
     )
@@ -2207,10 +2160,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         // HasAllowNullWriteContract is: a metadata-only method keeps whatever
         // contract its assembly already carries.
         if !(symbol is IParameterSymbol{ContainingSymbol: IMethodSymbol method} parameter) ||
-            method
-            .OriginalDefinition
-            .DeclaringSyntaxReferences
-            .Length == 0 {
+            method.OriginalDefinition.DeclaringSyntaxReferences.Length == 0 {
             return false
         }
         // Issue #3804: not every IParameterSymbol hanging off a method occupies
@@ -2229,12 +2179,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         for attribute in method.GetAttributes() {
             if attribute.AttributeConstructor is not{Parameters: {Length: 1}} constructor ||
-                !constructor
-                .Parameters[0]
-                .IsParams ||
-                attribute
-                .ConstructorArguments
-                .Length != 1 {
+                !constructor.Parameters[0].IsParams ||
+                attribute.ConstructorArguments.Length != 1 {
                 continue
             }
             let row = attribute.ConstructorArguments[0]
@@ -2365,11 +2311,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         // passes as null. Only bail when NEITHER `compilation` NOR any
         // sibling is oblivious: an oblivious-only fixpoint has nothing to
         // find anywhere in that set.
-        let anyObliviousCompilation = compilation
-            ?.Options
-            .NullableContextOptions == NullableContextOptions.Disable ||
-            siblingCompilations
-            ?.Any(
+        let anyObliviousCompilation = compilation?.Options.NullableContextOptions == NullableContextOptions.Disable ||
+            siblingCompilations?.Any(
             (sibling CSharpCompilation) -> sibling?.Options.NullableContextOptions == NullableContextOptions.Disable
         ) == true
         if symbol == nil || compilation == nil || !anyObliviousCompilation {
@@ -2407,11 +2350,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         // further inner guard is needed; only this entry bail, which used to
         // fire purely on `compilation`'s own (enabled) setting before the
         // loop ran, needs widening.
-        let anyObliviousCompilation = compilation
-            ?.Options
-            .NullableContextOptions == NullableContextOptions.Disable ||
-            siblingCompilations
-            ?.Any(
+        let anyObliviousCompilation = compilation?.Options.NullableContextOptions == NullableContextOptions.Disable ||
+            siblingCompilations?.Any(
             (sibling CSharpCompilation) -> sibling?.Options.NullableContextOptions == NullableContextOptions.Disable
         ) == true
         if parameter == nil || compilation == nil || !anyObliviousCompilation {
@@ -2450,12 +2390,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         // .Constructors.cs`'s own explicit decomposition for the identical
         // hazard. Decomposed into a plain cast plus an ordinary `!=` check.
         if parameter.Type is not IArrayTypeSymbol elementArrayType ||
-            elementArrayType
-            .ElementType
-            .NullableAnnotation != Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .None {
+            elementArrayType.ElementType.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.None {
             return false
         }
         let parameterId string? = ParamsElementId(parameter)
@@ -2468,9 +2403,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         )
         for candidateCompilation in candidates.Distinct() {
             if candidateCompilation == nil ||
-                candidateCompilation
-                .Options
-                .NullableContextOptions != NullableContextOptions.Disable {
+                candidateCompilation.Options.NullableContextOptions != NullableContextOptions.Disable {
                 continue
             }
             let result = Cache.GetValue(candidateCompilation, Compute)
@@ -2537,21 +2470,15 @@ internal shared class ObliviousNullabilityAnalyzer {
             var current ITypeSymbol? = tupleType
             for index in elementPath {
                 while current is INamedTypeSymbol nullableNamed &&
-                    nullableNamed
-                    .OriginalDefinition
-                    .SpecialType == SpecialType.System_Nullable_T &&
-                    nullableNamed
-                    .TypeArguments
-                    .Length == 1 {
+                    nullableNamed.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+                    nullableNamed.TypeArguments.Length == 1 {
                     prefix = AppendTuplePath(prefix, 0)
                     current = nullableNamed.TypeArguments[0]
                 }
                 prefix = AppendTuplePath(prefix, index)
                 current = if current is INamedTypeSymbol{IsTupleType: true} tuple &&
                     index >= 0 &&
-                    index < tuple
-                    .TupleElements
-                    .Length {
+                    index < tuple.TupleElements.Length {
                     tuple.TupleElements[index].Type
                 } else {
                     default(ITypeSymbol?)
@@ -2627,9 +2554,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 let dbSet INamedTypeSymbol? = model.GetDeclaredSymbol(property)?.Type as INamedTypeSymbol
                 if dbSet?.Name != "DbSet" ||
                     dbSet!!.Arity != 1 ||
-                    dbSet!!
-                    .ContainingNamespace
-                    ?.ToDisplayString() != "Microsoft.EntityFrameworkCore" ||
+                    dbSet!!.ContainingNamespace?.ToDisplayString() != "Microsoft.EntityFrameworkCore" ||
                     dbSet!!.TypeArguments[0] is not INamedTypeSymbol entity {
                     continue
                 }
@@ -2714,9 +2639,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         if valueType is IArrayTypeSymbol array &&
             storageType is INamedTypeSymbol envelope &&
-            envelope
-            .TypeArguments
-            .Length == 1 &&
+            envelope.TypeArguments.Length == 1 &&
             (storagePath == "0" || storagePath.StartsWith("0.", StringComparison.Ordinal)) &&
             TryProjectTupleSlot(
             array.ElementType,
@@ -2919,13 +2842,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     internal func IsSemanticallyNullableInitializer(expression ExpressionSyntax?, model SemanticModel) bool {
-        if model
-            .GetTypeInfo(expression!!)
-            .Nullability
-            .FlowState == Microsoft
-            .CodeAnalysis
-            .NullableFlowState
-            .NotNull ||
+        if model.GetTypeInfo(expression!!).Nullability.FlowState == Microsoft.CodeAnalysis.NullableFlowState.NotNull ||
             IsNullGuardDominatedRead(expression, model) {
             return false
         }
@@ -2940,10 +2857,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     internal func IsObliviousConcreteReferencePosition(type ITypeSymbol?) bool -> type != nil &&
         type.IsReferenceType == true &&
         !(type is ITypeParameterSymbol) &&
-        type.NullableAnnotation == Microsoft
-        .CodeAnalysis
-        .NullableAnnotation
-        .None
+        type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.None
 
     // A disabled consumer reports every imported reference position as
     // Annotation.None, including metadata that explicitly says `T?`. Read the
@@ -2954,9 +2868,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             return false
         }
         if !((symbol is IMethodSymbol || symbol is IPropertySymbol || symbol is IFieldSymbol)) ||
-            SymbolEqualityComparer
-            .Default
-            .Equals(symbol!!.ContainingAssembly, compilation.Assembly) {
+            SymbolEqualityComparer.Default.Equals(symbol!!.ContainingAssembly, compilation.Assembly) {
             return false
         }
         if IsDeclaredNullablePosition(EffectiveImportedPositionType(symbol)) {
@@ -3010,9 +2922,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         if parameter.TypeParameterKind == TypeParameterKind.Method &&
             symbol is IMethodSymbol methodSymbol &&
-            parameter.Ordinal < methodSymbol
-            .TypeArguments
-            .Length {
+            parameter.Ordinal < methodSymbol.TypeArguments.Length {
             return methodSymbol.TypeArguments[parameter.Ordinal]
         }
         for var containingType INamedTypeSymbol? = symbol!!.ContainingType;
@@ -3023,9 +2933,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 containingType.OriginalDefinition,
                 parameter.ContainingSymbol
             ) &&
-                parameter.Ordinal < containingType
-                .TypeArguments
-                .Length {
+                parameter.Ordinal < containingType.TypeArguments.Length {
                 return containingType.TypeArguments[parameter.Ordinal]
             }
         }
@@ -3047,12 +2955,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             return scalar
         }
         return if argument.Kind == TypedConstantKind.Array &&
-            argument
-            .Values
-            .Length > 0 &&
-            argument
-            .Values[0]
-            .Value is uint8 first {
+            argument.Values.Length > 0 &&
+            argument.Values[0].Value is uint8 first {
             first
         } else {
             nil
@@ -3134,9 +3038,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if siblingCompilations != nil {
             for sibling in siblingCompilations {
                 if sibling == nil || object.ReferenceEquals(sibling, compilation) ||
-                    sibling
-                    .Options
-                    .NullableContextOptions != NullableContextOptions.Disable ||
+                    sibling.Options.NullableContextOptions != NullableContextOptions.Disable ||
                     !CanRemapToCompilation(sibling, query.Symbol) {
                     continue
                 }
@@ -3329,12 +3231,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         ) {
             return false
         }
-        let assembly = (symbol as ITypeSymbol)
-            ?.OriginalDefinition
-            .ContainingAssembly ??
-            symbol
-            .OriginalDefinition
-            .ContainingAssembly
+        let assembly = (symbol as ITypeSymbol)?.OriginalDefinition.ContainingAssembly ??
+            symbol.OriginalDefinition.ContainingAssembly
         if assembly == nil {
             return true
         }
@@ -3533,9 +3431,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         if remapped is IMethodSymbol remappedMethod &&
             symbol is IMethodSymbol method &&
-            !SymbolEqualityComparer
-            .Default
-            .Equals(method, method.ConstructedFrom) {
+            !SymbolEqualityComparer.Default.Equals(method, method.ConstructedFrom) {
             let arguments = [method.TypeArguments.Length]ITypeSymbol?
             for var index = 0; index < arguments.Length; index++ {
                 let argument = method.TypeArguments[index]
@@ -3812,9 +3708,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if symbol is IPropertySymbol property {
                     readsIndexers = readsIndexers || property.IsIndexer
                     // A setter's or init accessor's `value` is the property itself.
-                    for reference in property
-                        .SetMethod
-                        ?.DeclaringSyntaxReferences ??
+                    for reference in property.SetMethod?.DeclaringSyntaxReferences ??
                         ImmutableArray[SyntaxReference].Empty {
                         let accessor = reference.GetSyntax()
                         parameterNames.Add("value")
@@ -3978,8 +3872,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if IsInsideNameof(expression) ||
             expression.Parent is AssignmentExpressionSyntax store &&
             store.Left == expression &&
-            store
-            .IsKind(SyntaxKind.SimpleAssignmentExpression) {
+            store.IsKind(SyntaxKind.SimpleAssignmentExpression) {
             if !IsInsideNameof(expression) && original is IParameterSymbol{IsParams: true} {
                 AddNullArgumentRead(reads, candidate, (false, default(string?)))
             }
@@ -4054,14 +3947,9 @@ internal shared class ObliviousNullabilityAnalyzer {
                     reads,
                     key,
                     (
-                        element?.NullableAnnotation == Microsoft
-                            .CodeAnalysis
-                            .NullableAnnotation
-                            .Annotated &&
+                        element?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
                             expected != nil &&
-                            SymbolEqualityComparer
-                            .IncludeNullability
-                            .Equals(
+                            SymbolEqualityComparer.IncludeNullability.Equals(
                             element,
                             expected.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
                         ),
@@ -4266,11 +4154,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         for source in RunSourceDeclarations(record.OriginalDefinition, compilations) {
             if source is INamedTypeSymbol sourceRecord && sourceRecord.GetMembers(method.Name).Any(
                 (member ISymbol) -> member is IMethodSymbol{IsImplicitlyDeclared: true} synthesized &&
-                    synthesized
-                    .Parameters
-                    .Length == method
-                    .Parameters
-                    .Length
+                    synthesized.Parameters.Length == method.Parameters.Length
             ) {
                 return sourceRecord
             }
@@ -4406,9 +4290,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 IsUserDefined: true,
                 MethodSymbol: {} conversionOperator
             } &&
-                conversionOperator
-                .Parameters
-                .Length > 0 {
+                conversionOperator.Parameters.Length > 0 {
                 return ClassifyNullArgumentSlot(conversionOperator.Parameters[0], model, run, localSafety)
             }
             if value.Parent is ParenthesizedExpressionSyntax parenthesized {
@@ -4444,9 +4326,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     call
                 )
                     .Symbol is IMethodSymbol{ReducedFrom: {} unreduced} &&
-                    unreduced
-                    .Parameters
-                    .Length > 0 {
+                    unreduced.Parameters.Length > 0 {
                     return ClassifyNullArgumentSlot(unreduced.Parameters[0], model, run, localSafety)
                 }
                 return (NullArgumentDereferencePreservesEvaluation(access, model), default(string?))
@@ -4461,9 +4341,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 // A user-defined operator is a call: the operand is its argument.
                 if model.GetSymbolInfo(binary)
                     .Symbol is IMethodSymbol{MethodKind: MethodKind.UserDefinedOperator} userOperator &&
-                    userOperator
-                    .Parameters
-                    .Length == 2 {
+                    userOperator.Parameters.Length == 2 {
                     let operand = if binary.Left == value {
                         userOperator.Parameters[0]
                     } else {
@@ -4671,13 +4549,11 @@ internal shared class ObliviousNullabilityAnalyzer {
         if argument.NameColon != nil ||
             argument.Parent is not BaseArgumentListSyntax arguments ||
             arguments.Parent is not{} call ||
-            model
-            .GetSymbolInfo(call).Symbol is not IMethodSymbol method || method.Parameters.LastOrDefault() is not{
+            model.GetSymbolInfo(call).Symbol is not IMethodSymbol method || method.Parameters.LastOrDefault() is not{
             IsParams: true
         } parameter ||
-            arguments
-            .Arguments
-            .IndexOf(argument) < parameter.Ordinal || MentionsTypeParameter(parameter.OriginalDefinition.Type) {
+            arguments.Arguments.IndexOf(argument) < parameter.Ordinal ||
+            MentionsTypeParameter(parameter.OriginalDefinition.Type) {
             return nil
         }
         if model.GetOperation(argument) is IArgumentOperation{ArgumentKind: ArgumentKind.Explicit} {
@@ -4707,9 +4583,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             if carrier is IArrayTypeSymbol targetArray &&
                 array.Rank == targetArray.Rank ||
                 carrier is INamedTypeSymbol &&
-                array
-                .AllInterfaces
-                .Any((view INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(view, carrier)) {
+                array.AllInterfaces.Any(
+                (view INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(view, carrier)
+            ) {
                 return array.ElementType
             }
             return nil
@@ -4760,9 +4636,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             let member = model.GetSymbolInfo(access).Symbol
             if member is IPropertySymbol property &&
                 !property.IsIndexer &&
-                property
-                .Parameters
-                .Length == 0 &&
+                property.Parameters.Length == 0 &&
                 !MentionsTypeParameter(property.OriginalDefinition.Type) &&
                 !IsEmittedByRun(property, run.Members) &&
                 (
@@ -4771,9 +4645,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     ParamsElementType(parameter) != nil &&
                     (property.Name is "Count" or "Length") &&
                     property.ContainingType is INamedTypeSymbol collection &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(
+                    SymbolEqualityComparer.Default.Equals(
                     collection.OriginalDefinition,
                     model.Compilation.GetTypeByMetadataName("System.Collections.Generic." + collection.MetadataName)
                 ) &&
@@ -4783,9 +4655,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         parameter.Type.OriginalDefinition
                     ) ||
                         parameter.Type is INamedTypeSymbol named &&
-                        named
-                        .AllInterfaces
-                        .Any(
+                        named.AllInterfaces.Any(
                         (view INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(view, property.ContainingType)
                     )
                 )
@@ -4798,9 +4668,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         if value.Parent is ArgumentSyntax cardinalityArgument &&
-            cardinalityArgument
-            .Parent
-            ?.Parent is InvocationExpressionSyntax cardinalityCall &&
+            cardinalityArgument.Parent?.Parent is InvocationExpressionSyntax cardinalityCall &&
             IsNullArgumentParamsCardinalityCall(cardinalityCall, model, run) {
             return (true, default(string?))
         }
@@ -4826,19 +4694,17 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) bool {
         if call.Expression is GenericNameSyntax ||
             call.Expression is MemberAccessExpressionSyntax{Name: GenericNameSyntax} ||
-            model
-            .GetSymbolInfo(call).Symbol is not IMethodSymbol method {
+            model.GetSymbolInfo(call).Symbol is not IMethodSymbol method {
             return false
         }
         let declaration = method.ReducedFrom ?? method
-        return declaration
-            .Parameters
-            .Length == 1 &&
+        return declaration.Parameters.Length == 1 &&
             (declaration.Name is "Count" or "LongCount" or "Any") &&
             !IsEmittedByRun(declaration, run.Members) &&
-            SymbolEqualityComparer
-            .Default
-            .Equals(declaration.ContainingType, model.Compilation.GetTypeByMetadataName("System.Linq.Enumerable"))
+            SymbolEqualityComparer.Default.Equals(
+            declaration.ContainingType,
+            model.Compilation.GetTypeByMetadataName("System.Linq.Enumerable")
+        )
     }
 
     private func SameParamsElement(left IParameterSymbol, right IParameterSymbol) bool -> SymbolEqualityComparer
@@ -4935,12 +4801,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         // Seed as false while on the active recursion stack so a cycle fails closed.
         memo[local] = false
-        if local
-            .DeclaringSyntaxReferences
-            .Length != 1 ||
-            local
-            .DeclaringSyntaxReferences[0]
-            .GetSyntax() is not VariableDeclaratorSyntax declarator {
+        if local.DeclaringSyntaxReferences.Length != 1 ||
+            local.DeclaringSyntaxReferences[0].GetSyntax() is not VariableDeclaratorSyntax declarator {
             return false
         }
         let enclosingScope SyntaxNode? = declarator.Ancestors().FirstOrDefault(
@@ -4972,9 +4834,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         NullableAnnotation: Microsoft.CodeAnalysis.NullableAnnotation.Annotated
     } &&
         !MentionsTypeParameter(local.Type) &&
-        local
-        .DeclaringSyntaxReferences
-        .Any(
+        local.DeclaringSyntaxReferences.Any(
         (r SyntaxReference) -> r.GetSyntax() is VariableDeclaratorSyntax{
             Parent: VariableDeclarationSyntax{Type: NullableTypeSyntax}
         }
@@ -5019,16 +4879,10 @@ internal shared class ObliviousNullabilityAnalyzer {
             default: default(ITypeSymbol?)
         }
         if type is not{IsReferenceType: true} reference ||
-            reference.NullableAnnotation == Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .Annotated {
+            reference.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
             return false
         }
-        return reference.NullableAnnotation != Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .None ||
+        return reference.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.None ||
             IsEmittedByRun(slot.OriginalDefinition, graphs)
     }
 
@@ -5048,9 +4902,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 candidate == canonical &&
                 graph.Owner is CSharpCompilation compilation &&
                 DeclarationOfNullArgumentId(id, compilation) is {} source &&
-                source
-                .DeclaringSyntaxReferences
-                .Length != 0 {
+                source.DeclaringSyntaxReferences.Length != 0 {
                 declarations.Add(OriginalNullArgumentDeclaration(source) ?? source)
             }
         }
@@ -5222,9 +5074,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func ReducedExtensionParameter(parameter IParameterSymbol) IParameterSymbol {
         if parameter.ContainingSymbol is IMethodSymbol{ReducedFrom: {} unreduced} &&
             parameter.Ordinal +
-            1 < unreduced
-            .Parameters
-            .Length {
+            1 < unreduced.Parameters.Length {
             return unreduced.Parameters[parameter.Ordinal + 1]
         }
         return parameter
@@ -5303,19 +5153,13 @@ internal shared class ObliviousNullabilityAnalyzer {
     // synthesized from, or null for any other property.
     private func PositionalParameter(property IPropertySymbol) ISymbol? {
         if property.ContainingType is not{IsRecord: true} record ||
-            property
-            .DeclaringSyntaxReferences
-            .FirstOrDefault()
-            ?.GetSyntax() is not ParameterSyntax declaring {
+            property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not ParameterSyntax declaring {
             return default(ISymbol?)
         }
         for constructor in record.InstanceConstructors {
             for parameter in constructor.Parameters {
                 if parameter.Name == property.Name &&
-                    parameter
-                    .DeclaringSyntaxReferences
-                    .FirstOrDefault()
-                    ?.GetSyntax() == declaring {
+                    parameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() == declaring {
                     return parameter
                 }
             }
@@ -5348,10 +5192,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         for member in method.ContainingType.GetMembers(parameter.Name) {
             if member is IPropertySymbol property &&
-                property
-                .DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax() == syntax {
+                property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() == syntax {
                 return property
             }
         }
@@ -5365,10 +5206,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     // `when model != null` hands a value the C# flow proved non-null to a `T`
     // parameter, and widening that parameter would make its body read a `T?`.
     private func IsRepaintableReference(type ITypeSymbol?) bool -> type is {IsReferenceType: true} reference &&
-        reference.NullableAnnotation != Microsoft
-        .CodeAnalysis
-        .NullableAnnotation
-        .Annotated &&
+        reference.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
         !IsTaskLike(reference)
 
     // Issue #5508: the compilation-independent identities of a candidate, every
@@ -5460,11 +5298,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         let keys = List[string]()
         for graph in graphs {
             if graph.Owner is not CSharpCompilation csharp ||
-                graph
-                .Owner
-                .Assembly
-                .Identity
-                .GetDisplayName() != identity {
+                graph.Owner.Assembly.Identity.GetDisplayName() != identity {
                 continue
             }
             if DeclarationOfNullArgumentId(id, csharp) is {} source && source.DeclaringSyntaxReferences.Length != 0 {
@@ -5493,9 +5327,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     // through its awaited result, so the task reference's own nullability has
     // no spelling the return rendering carries (a separate decision).
     private func IsTaskLike(type ITypeSymbol) bool -> type is INamedTypeSymbol named &&
-        named
-        .ContainingNamespace
-        ?.ToDisplayString() == "System.Threading.Tasks" &&
+        named.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks" &&
         (named.OriginalDefinition.Name == "Task" || named.OriginalDefinition.Name == "ValueTask")
 
     private func UnwrapConfigureAwait(expression ExpressionSyntax, model SemanticModel) ExpressionSyntax {
@@ -5503,8 +5335,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         if unwrapped is InvocationExpressionSyntax{
             Expression: MemberAccessExpressionSyntax{Name: {Identifier: {ValueText: "ConfigureAwait"}}} configured
         } configureAwaitCall &&
-            model
-            .GetSymbolInfo(configureAwaitCall).Symbol is IMethodSymbol{ContainingType: {} owner} && IsTaskLike(owner) {
+            model.GetSymbolInfo(configureAwaitCall).Symbol is IMethodSymbol{ContainingType: {} owner} &&
+            IsTaskLike(owner) {
             return Unwrap(configured.Expression)
         }
         return unwrapped
@@ -5520,17 +5352,13 @@ internal shared class ObliviousNullabilityAnalyzer {
             return false
         }
         if Unwrap(expression) is not InvocationExpressionSyntax getResultCall ||
-            getResultCall
-            .ArgumentList
-            .Arguments
-            .Count != 0 ||
+            getResultCall.ArgumentList.Arguments.Count != 0 ||
             getResultCall.Expression is not MemberAccessExpressionSyntax{
             Name: {Identifier: {ValueText: "GetResult"}}
         } getResultAccess {
             return false
         }
-        if model.GetSymbolInfo(getResultCall)
-            .Symbol is not IMethodSymbol getResultMethod ||
+        if model.GetSymbolInfo(getResultCall).Symbol is not IMethodSymbol getResultMethod ||
             getResultMethod
             .ContainingType
             ?.ContainingNamespace
@@ -5538,16 +5366,11 @@ internal shared class ObliviousNullabilityAnalyzer {
             return false
         }
         if Unwrap(getResultAccess.Expression) is not InvocationExpressionSyntax getAwaiterCall ||
-            getAwaiterCall
-            .ArgumentList
-            .Arguments
-            .Count != 0 ||
+            getAwaiterCall.ArgumentList.Arguments.Count != 0 ||
             getAwaiterCall.Expression is not MemberAccessExpressionSyntax{
             Name: {Identifier: {ValueText: "GetAwaiter"}}
         } getAwaiterAccess ||
-            model
-            .GetSymbolInfo(getAwaiterCall)
-            .Symbol is not IMethodSymbol getAwaiterMethod ||
+            model.GetSymbolInfo(getAwaiterCall).Symbol is not IMethodSymbol getAwaiterMethod ||
             getAwaiterMethod.Name != "GetAwaiter" {
             return false
         }
@@ -5658,9 +5481,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 for argument in CallArgumentOperations(node, model) {
                     if argument.Parameter is {} parameter &&
                         !parameter.IsParams &&
-                        argument
-                        .Value
-                        ?.Syntax is ExpressionSyntax value &&
+                        argument.Value?.Syntax is ExpressionSyntax value &&
                         ArgumentWritesNullValue(model, value) &&
                         OriginalNullArgumentDeclaration(parameter) is {} original &&
                         IsNullArgumentCandidate(original) {
@@ -5767,9 +5588,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 ) {
                     for argument in CallArgumentOperations(node, model) {
                         if argument.Parameter is {} parameter &&
-                            argument
-                            .Value
-                            ?.Syntax is ExpressionSyntax value &&
+                            argument.Value?.Syntax is ExpressionSyntax value &&
                             ReadsEnclosingParameterByName(value) {
                             let source = model.GetSymbolInfo(Unwrap(value)).Symbol
                             AddEdge(
@@ -5794,12 +5613,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     Expression: MemberAccessExpressionSyntax{Expression: {} receiver}
                 } invocation &&
                     ReadsEnclosingParameterByName(receiver) &&
-                    model
-                    .GetSymbolInfo(invocation)
-                    .Symbol is IMethodSymbol{ReducedFrom: {} unreduced} &&
-                    unreduced
-                    .Parameters
-                    .Length > 0 {
+                    model.GetSymbolInfo(invocation).Symbol is IMethodSymbol{ReducedFrom: {} unreduced} &&
+                    unreduced.Parameters.Length > 0 {
                     AddEdge(unreduced.Parameters[0], model.GetSymbolInfo(Unwrap(receiver)).Symbol, false)
                 }
             }
@@ -5867,13 +5682,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             return false
         }
         // The implicit `value` of a `set` / `init` accessor.
-        if name
-            .Identifier
-            .ValueText == "value" &&
-            name
-            .Ancestors()
-            .OfType[AccessorDeclarationSyntax]()
-            .FirstOrDefault() is {} accessor &&
+        if name.Identifier.ValueText == "value" &&
+            name.Ancestors().OfType[AccessorDeclarationSyntax]().FirstOrDefault() is {} accessor &&
             (accessor.Keyword.IsKind(SyntaxKind.SetKeyword) || accessor.Keyword.IsKind(SyntaxKind.InitKeyword)) {
             return true
         }
@@ -5925,9 +5735,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if (write.Target is IFieldSymbol or IPropertySymbol) &&
                     IsEvidenceDecidedGeneratedDeclaration(write.Target) &&
                     HasPromotableArrayElement(write.Target) &&
-                    write.Target!!
-                    .OriginalDefinition
-                    .GetDocumentationCommentId() is {} id && !targets.Contains(id) {
+                    write.Target!!.OriginalDefinition.GetDocumentationCommentId() is {} id && !targets.Contains(id) {
                     for element in ArrayLiteralElements(write.Value) {
                         if WritesNull(Model(), element) {
                             targets.Add(id)
@@ -5993,10 +5801,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func IsPromotableArrayElement(type ITypeSymbol) bool -> type is IArrayTypeSymbol{
         ElementType: {IsReferenceType: true} element
     } &&
-        element.NullableAnnotation != Microsoft
-        .CodeAnalysis
-        .NullableAnnotation
-        .Annotated
+        element.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated
 
     // Issue #3848: the pure-forwarding closure for one compilation, keyed like
     // `NullTargets` above so it is computed at most once per compilation.
@@ -6072,9 +5877,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
                 if (target is IFieldSymbol || target is IPropertySymbol) &&
                     IsEvidenceDecidedGeneratedDeclaration(target) &&
-                    target!!
-                    .OriginalDefinition
-                    .GetDocumentationCommentId() is {} sinkId {
+                    target!!.OriginalDefinition.GetDocumentationCommentId() is {} sinkId {
                     let value ExpressionSyntax? = switch node {
                         case assignment is AssignmentExpressionSyntax: assignment.Right
                         case initializer is EqualsValueClauseSyntax: initializer.Value
@@ -6129,16 +5932,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             symbol.ReturnsByRefReadonly ||
             symbol.IsAsync ||
             symbol.ReturnType is not{IsReferenceType: true} ||
-            symbol
-            .ReturnType
-            .NullableAnnotation == Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .Annotated ||
+            symbol.ReturnType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated ||
             IsSignatureFixedByAnotherDeclaration(symbol) ||
-            symbol
-            .OriginalDefinition
-            .GetDocumentationCommentId() is not{} id {
+            symbol.OriginalDefinition.GetDocumentationCommentId() is not{} id {
             return
         }
         let exits = List[ExpressionSyntax]()
@@ -6199,9 +5995,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         let source ISymbol? = model.GetSymbolInfo(expression).Symbol
         if !((source is IMethodSymbol || source is IPropertySymbol || source is IFieldSymbol)) ||
-            source!!
-            .OriginalDefinition
-            .GetDocumentationCommentId() is not{} id {
+            source!!.OriginalDefinition.GetDocumentationCommentId() is not{} id {
             return false
         }
         // The seed — direct generated null evidence — or a promotion an earlier
@@ -6234,13 +6028,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func WritesNull(model SemanticModel, expression ExpressionSyntax?) bool -> WritesNull(expression) ||
         (
         expression != nil &&
-            model
-            .GetTypeInfo(expression)
-            .Nullability
-            .FlowState == Microsoft
-            .CodeAnalysis
-            .NullableFlowState
-            .MaybeNull
+            model.GetTypeInfo(expression).Nullability.FlowState == Microsoft.CodeAnalysis.NullableFlowState.MaybeNull
     )
 
     // `null`, `default`, or either reachable through parentheses or a branch of
@@ -6360,9 +6148,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         // on both.
                         if inherited is IMethodSymbol inheritedMethod &&
                             parameter.Ordinal >= 0 &&
-                            parameter.Ordinal < inheritedMethod
-                            .Parameters
-                            .Length {
+                            parameter.Ordinal < inheritedMethod.Parameters.Length {
                             yield inheritedMethod.Parameters[parameter.Ordinal]
                         }
                     }
@@ -6445,14 +6231,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         return switch member {
             case method is IMethodSymbol: method.IsOverride ||
-                method
-                .ExplicitInterfaceImplementations
-                .Length > 0 ||
+                method.ExplicitInterfaceImplementations.Length > 0 ||
                 ImplementsInterfaceMember(method)
             case property is IPropertySymbol: property.IsOverride ||
-                property
-                .ExplicitInterfaceImplementations
-                .Length > 0 ||
+                property.ExplicitInterfaceImplementations.Length > 0 ||
                 ImplementsInterfaceMember(property)
             default: false
         }
@@ -6669,8 +6451,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
                 let (source, depth) = RefArrayStorage(assignment.Left, model)
                 if source != nil && depth > 0 && aliases.TryGetValue(source, out var positions) &&
-                    positions
-                    .TryGetValue(depth, out var sources) {
+                    positions.TryGetValue(depth, out var sources) {
                     CollectScalarValueFlow(sources[0], assignment.Right, model, tainted, edges, scalarTupleEdges)
                 }
             }
@@ -6907,9 +6688,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         value = Unwrap(value)
                         if value is not TupleExpressionSyntax tupleValue ||
                             index < 0 ||
-                            index >= tupleValue
-                            .Arguments
-                            .Count {
+                            index >= tupleValue.Arguments.Count {
                             return nil
                         }
                         value = tupleValue.Arguments[index].Expression
@@ -6957,8 +6736,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             )
             if declaration is SingleVariableDesignationSyntax designation &&
                 GetDeconstructionAliasValue(designation) is {} value &&
-                declarationModel
-                .GetSymbolInfo(value).Symbol is {} deconstructedSource {
+                declarationModel.GetSymbolInfo(value).Symbol is {} deconstructedSource {
                 return GetArrayStorageOwner(deconstructedSource, declarationModel, visited, preserveSubstitution) ??
                     local
             }
@@ -6978,14 +6756,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                         !declarationModel.GetNullableContext(declaration.SpanStart).HasFlag(
                             NullableContext.AnnotationsEnabled
                         ) &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(local.Type, declarationModel.GetTypeInfo(value).Type)
+                            SymbolEqualityComparer.Default.Equals(local.Type, declarationModel.GetTypeInfo(value).Type)
                     )
                 ) &&
-                    declarationModel
-                    .GetSymbolInfo(Unwrap(value))
-                    .Symbol is {} source &&
+                    declarationModel.GetSymbolInfo(Unwrap(value)).Symbol is {} source &&
                     source is not IFieldSymbol{ContainingType: {IsTupleType: true}} &&
                     source is ILocalSymbol or
                     IFieldSymbol or
@@ -7206,12 +6980,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if addParameters.IsDefaultOrEmpty ||
                     !(addParameters[^1] is {IsParams: true, Type: IArrayTypeSymbol addArray} addParamsParameter) ||
                     addArray.ElementType is not{IsReferenceType: true} ||
-                    addArray
-                    .ElementType
-                    .NullableAnnotation == Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated {
+                    addArray.ElementType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                     continue
                 }
                 if ParamsElementId(addParamsParameter) is not{} addTarget {
@@ -7253,12 +7022,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             parameters.IsDefaultOrEmpty ||
             !(parameters[^1] is {IsParams: true, Type: IArrayTypeSymbol array} parameter) ||
             array.ElementType is not{IsReferenceType: true} ||
-            array
-            .ElementType
-            .NullableAnnotation == Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .Annotated {
+            array.ElementType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
             return
         }
         let target string? = ParamsElementId(parameter)
@@ -7282,10 +7046,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func IsUnreassignedNonNullLocal(value ExpressionSyntax, model SemanticModel) bool {
         if value is not IdentifierNameSyntax identifier || model.GetSymbolInfo(identifier)
             .Symbol is not ILocalSymbol local ||
-            local
-            .DeclaringSyntaxReferences
-            .FirstOrDefault()
-            ?.GetSyntax() is not VariableDeclaratorSyntax declarator ||
+            local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not VariableDeclaratorSyntax declarator ||
             declarator
             .Initializer
             ?.Value is not(
@@ -7310,9 +7071,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             return false
         }
         return !scope_.DescendantNodes().Any(
-            (node SyntaxNode) -> node.SpanStart > declarator
-                .Span
-                .End &&
+            (node SyntaxNode) -> node.SpanStart > declarator.Span.End &&
                 CSharpToGSharpTranslator.SyntaxNodeWritesSymbol(node, local, model)
         )
     }
@@ -7352,9 +7111,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         for argument in arguments {
             if argument.Parameter is not IParameterSymbol parameter ||
-                argument
-                .Value
-                ?.Syntax is not ExpressionSyntax value {
+                argument.Value?.Syntax is not ExpressionSyntax value {
                 continue
             }
             let parameterSymbol ISymbol? = Canonical(parameter)
@@ -7364,12 +7121,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             // when the original null-producing caller lives in another project.
             for source in ResolveSources(value, model) {
                 if source is IParameterSymbol sourceParameter &&
-                    sourceParameter
-                    .Type
-                    .TypeKind == TypeKind.Delegate &&
-                    parameter
-                    .Type
-                    .TypeKind == TypeKind.Delegate {
+                    sourceParameter.Type.TypeKind == TypeKind.Delegate &&
+                    parameter.Type.TypeKind == TypeKind.Delegate {
                     edges.Add((Canonical(source), parameterSymbol))
                 }
             }
@@ -7385,9 +7138,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         for argument in arguments {
             if argument.Parameter is not IParameterSymbol parameter ||
-                argument
-                .Value
-                ?.Syntax is not ExpressionSyntax value {
+                argument.Value?.Syntax is not ExpressionSyntax value {
                 continue
             }
             // Issue #3501: an `out` argument flows the OPPOSITE way — the
@@ -7457,9 +7208,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         for argument in arguments {
             if argument.Parameter is not IParameterSymbol parameter ||
-                argument
-                .Value
-                ?.Syntax is not ExpressionSyntax value {
+                argument.Value?.Syntax is not ExpressionSyntax value {
                 continue
             }
             // Guarded concrete values do not widen storage. Open parameters retain promotion consolidation (#3501/#4816).
@@ -7736,9 +7485,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             )
         ) ||
             SymbolValueType(target) is not INamedTypeSymbol receiverType ||
-            model
-            .GetSymbolInfo(elementAccess)
-            .Symbol is not IPropertySymbol indexer ||
+            model.GetSymbolInfo(elementAccess).Symbol is not IPropertySymbol indexer ||
             !TryGetGenericReceiverTuplePath(
             receiverType,
             indexer.OriginalDefinition.Type,
@@ -7878,9 +7625,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 let refExpression ExpressionSyntax? = if refArgument is ArgumentSyntax sourceArgument {
                     sourceArgument.Expression
                 } else if call is InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax memberAccess} &&
-                    argument
-                    .Value
-                    ?.Syntax == memberAccess.Expression {
+                    argument.Value?.Syntax == memberAccess.Expression {
                     memberAccess.Expression
                 } else {
                     default(ExpressionSyntax?)
@@ -7942,9 +7687,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             if argument.Parameter is IParameterSymbol parameter &&
                 parameter.RefKind != RefKind.Out &&
-                argument
-                .Value
-                ?.Syntax is ExpressionSyntax value &&
+                argument.Value?.Syntax is ExpressionSyntax value &&
                 parameter.Type is ITypeSymbol parameterType {
                 CollectDeclarationTupleFlow(
                     Canonical(parameter),
@@ -8084,8 +7827,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         if call is BaseObjectCreationExpressionSyntax creation {
             let sink ISymbol? = ResolveCreationTupleSink(creation, model)
-            if model.GetTypeInfo(creation)
-                .Type is not INamedTypeSymbol createdType ||
+            if model.GetTypeInfo(creation).Type is not INamedTypeSymbol createdType ||
                 argument.Parameter is not IParameterSymbol creationParameter ||
                 creationParameter.RefKind == RefKind.Out ||
                 creationParameter.RefKind == RefKind.Ref ||
@@ -8095,9 +7837,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 out var creationTupleType,
                 out var creationTuplePath
             ) ||
-                argument
-                .Value
-                ?.Syntax is not ExpressionSyntax creationValue {
+                argument.Value?.Syntax is not ExpressionSyntax creationValue {
                 return
             }
             let createdTainted = HashSet[TupleElementKey](TupleElementKeyComparer.Instance)
@@ -8155,9 +7895,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             parameter.RefKind == RefKind.Out ||
             parameter.RefKind == RefKind.Ref ||
             !TryGetGenericReceiverTuplePath(receiverType, parameter, out var tupleType, out var tuplePath) ||
-            argument
-            .Value
-            ?.Syntax is not ExpressionSyntax value {
+            argument.Value?.Syntax is not ExpressionSyntax value {
             return
         }
         CollectTupleValueFlow(
@@ -8594,8 +8332,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             for element in initializer.Expressions {
                 if element is AssignmentExpressionSyntax assignment &&
                     assignment.Left is ImplicitElementAccessSyntax &&
-                    model
-                    .GetSymbolInfo(assignment.Left).Symbol is IPropertySymbol indexer {
+                    model.GetSymbolInfo(assignment.Left).Symbol is IPropertySymbol indexer {
                     CollectWrite(indexer.OriginalDefinition.Type, assignment.Right)
                     for argument in GetCallArguments(assignment.Left, model) {
                         if argument.Parameter is {} parameter && argument.Value.Syntax is ExpressionSyntax key {
@@ -8603,8 +8340,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                         }
                     }
                 } else if initializer.IsKind(SyntaxKind.CollectionInitializerExpression) &&
-                    model
-                    .GetCollectionInitializerSymbolInfo(element).Symbol is IMethodSymbol add && !add.IsExtensionMethod {
+                    model.GetCollectionInitializerSymbolInfo(element).Symbol is IMethodSymbol add &&
+                    !add.IsExtensionMethod {
                     let values = if element is InitializerExpressionSyntax complex {
                         complex.Expressions.ToList()
                     } else {
@@ -8703,8 +8440,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             if targetType is INamedTypeSymbol nestedTarget &&
                 nestedTarget.IsTupleType &&
                 sourceType is INamedTypeSymbol nestedSource &&
-                nestedSource
-                .IsTupleType {
+                nestedSource.IsTupleType {
                 AddTupleReverseContractEdges(
                     target,
                     nestedTarget,
@@ -8919,9 +8655,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                                 if scalarSource == nil {
                                     continue
                                 }
-                                if scalarSource
-                                    .DeclaringSyntaxReferences
-                                    .IsDefaultOrEmpty &&
+                                if scalarSource.DeclaringSyntaxReferences.IsDefaultOrEmpty &&
                                     !IsSourceAssembly(model.Compilation, scalarSource.ContainingAssembly) {
                                     continue
                                 }
@@ -8977,8 +8711,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             if targetType is INamedTypeSymbol nestedTarget &&
                 nestedTarget.IsTupleType &&
                 sourceType is INamedTypeSymbol nestedSource &&
-                nestedSource
-                .IsTupleType {
+                nestedSource.IsTupleType {
                 AddTupleShapeEdges(
                     target,
                     nestedTarget,
@@ -9084,10 +8817,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         let targetKey = TupleElementKey(target, targetPath)
         if sourceType.IsReferenceType &&
-            sourceType.NullableAnnotation == Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .Annotated {
+            sourceType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
             tupleTainted.Add(targetKey)
         } else {
             tupleEdges.Add((targetKey, TupleElementKey(source, sourcePath)))
@@ -9169,9 +8899,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         if value is TupleExpressionSyntax tupleValue &&
             TryGetDeconstructionElements(targetPattern, out var targets) &&
-            targets!!.Count == tupleValue
-            .Arguments
-            .Count {
+            targets!!.Count == tupleValue.Arguments.Count {
             for var i = 0; i < targets!!.Count; i++ {
                 CollectDeconstructionFlow(
                     targets!![i],
@@ -9189,11 +8917,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             targetPattern is DeclarationExpressionSyntax{
             Designation: ParenthesizedVariableDesignationSyntax declarationPattern
         } &&
-            declarationPattern
-            .Variables
-            .Count == declarationTupleValue
-            .Arguments
-            .Count {
+            declarationPattern.Variables.Count == declarationTupleValue.Arguments.Count {
             for var i = 0; i < declarationPattern.Variables.Count; i++ {
                 CollectDesignationFlow(
                     declarationPattern.Variables[i],
@@ -9243,11 +8967,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) {
         if target is ParenthesizedVariableDesignationSyntax parenthesized &&
             value is TupleExpressionSyntax tuple &&
-            parenthesized
-            .Variables
-            .Count == tuple
-            .Arguments
-            .Count {
+            parenthesized.Variables.Count == tuple.Arguments.Count {
             for var i = 0; i < parenthesized.Variables.Count; i++ {
                 CollectDesignationFlow(
                     parenthesized.Variables[i],
@@ -9313,8 +9033,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             let path = AppendTuplePath(prefix, i)
             if target is ParenthesizedVariableDesignationSyntax nestedPattern &&
                 sourceType is INamedTypeSymbol nestedTuple &&
-                nestedTuple
-                .IsTupleType {
+                nestedTuple.IsTupleType {
                 CollectDesignationPatternFromTupleSource(
                     nestedPattern,
                     source,
@@ -9435,9 +9154,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             if containerSource.StorageType is INamedTypeSymbol{IsTupleType: true} ||
                 HasNestedTupleSlots(containerSource.StorageType) ||
                 (
-                containerSource
-                    .Prefix
-                    .Length > 0 &&
+                containerSource.Prefix.Length > 0 &&
                     TuplePositionType(containerSource.Symbol, containerSource.Prefix, requireTuple: true) != nil
             ) {
                 sources.Add((containerSource.Symbol, containerSource.StorageType, containerSource.Prefix))
@@ -9664,9 +9381,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if index >= 0 {
                     for parent in EnumerateTupleContainerSources(receiver, model, unwrapSuppressions, visited) {
                         if parent.StorageType is INamedTypeSymbol{IsTupleType: true} parentTuple &&
-                            index < parentTuple
-                            .TupleElements
-                            .Length {
+                            index < parentTuple.TupleElements.Length {
                             yield (
                                 parent.Symbol,
                                 parentTuple.TupleElements[index].Type,
@@ -9750,8 +9465,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             case _ is InvocationExpressionSyntax or
                 _ is IdentifierNameSyntax or
                 _ is MemberAccessExpressionSyntax or
-                _ is ElementAccessExpressionSyntax: model
-                .GetSymbolInfo(current).Symbol
+                _ is ElementAccessExpressionSyntax: model.GetSymbolInfo(current).Symbol
             default: default(ISymbol?)
         }
         if symbol is ILocalSymbol{RefKind: not RefKind.None} refLocal && visited.Add(refLocal) {
@@ -9773,10 +9487,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         if symbol is ILocalSymbol local &&
-            local
-            .DeclaringSyntaxReferences
-            .FirstOrDefault()
-            ?.GetSyntax() is ForEachStatementSyntax forEach {
+            local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is ForEachStatementSyntax forEach {
             let forEachModel = TranslationContext.GetEffectiveSemanticModel(model.Compilation, forEach.SyntaxTree)
             if forEachModel.GetForEachStatementInfo(forEach)
                 .ElementType is INamedTypeSymbol{IsTupleType: true} elementTuple &&
@@ -9832,10 +9543,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 case member is MemberAccessExpressionSyntax: switch model.GetSymbolInfo(member).Symbol {
                     case field is IFieldSymbol: field.ContainingType.IsTupleType
                     case property is IPropertySymbol: property.Name == "Value" &&
-                        property
-                        .ContainingType
-                        .OriginalDefinition
-                        .SpecialType == SpecialType.System_Nullable_T
+                        property.ContainingType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
                     default: false
                 }
                 case invocation is InvocationExpressionSyntax: model.GetSymbolInfo(invocation)
@@ -9855,9 +9563,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         unwrapSuppressions,
                         HashSet[ISymbol](SymbolEqualityComparer.Default)
                     ) {
-                        if candidate
-                            .Prefix
-                            .Length > 0 &&
+                        if candidate.Prefix.Length > 0 &&
                             TuplePositionType(candidate.Symbol, candidate.Prefix, requireTuple: true) != nil {
                             source = TupleElementKey(candidate.Symbol, candidate.Prefix)
                             return true
@@ -9912,9 +9618,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         parameter.RefKind == RefKind.In ||
                         parameter.RefKind == RefKind.RefReadOnlyParameter
                 ) &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(parameter.Type, implementation.ReturnType) {
+                    SymbolEqualityComparer.Default.Equals(parameter.Type, implementation.ReturnType) {
                     parameterReturns.Add((parameter.Ordinal, string.Empty))
                 }
             }
@@ -10065,8 +9769,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         out source TupleElementKey
     ) bool {
         source = default(TupleElementKey)
-        if model.GetSymbolInfo(expression!!)
-            .Symbol is not ILocalSymbol local ||
+        if model.GetSymbolInfo(expression!!).Symbol is not ILocalSymbol local ||
             local
             .DeclaringSyntaxReferences
             .FirstOrDefault()
@@ -10107,12 +9810,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             forEach.Variable != current {
             return false
         }
-        if model.GetForEachStatementInfo(forEach)
-            .ElementType is not INamedTypeSymbol elementTuple ||
+        if model.GetForEachStatementInfo(forEach).ElementType is not INamedTypeSymbol elementTuple ||
             !elementTuple.IsTupleType ||
-            model
-            .GetSymbolInfo(forEach.Expression)
-            .Symbol is not{} collection ||
+            model.GetSymbolInfo(forEach.Expression).Symbol is not{} collection ||
             SymbolValueType(collection) is not{} collectionType {
             return false
         }
@@ -10142,9 +9842,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         for var i = 0; i < tupleType.TupleElements.Length; i++ {
             let candidate = tupleType.TupleElements[i].CorrespondingTupleField ?? tupleType.TupleElements[i]
             if SymbolEqualityComparer.Default.Equals(candidate, canonicalField) ||
-                tupleType
-                .TupleElements[i]
-                .Name == field.Name {
+                tupleType.TupleElements[i].Name == field.Name {
                 return i
             }
         }
@@ -10242,9 +9940,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if owner.ContainingType == nil {
             if SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, declaringType) &&
                 ordinal >= 0 &&
-                ordinal < owner
-                .TypeParameters
-                .Length {
+                ordinal < owner.TypeParameters.Length {
                 index = ordinal
                 return true
             }
@@ -10377,10 +10073,7 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     private func IsEligibleTupleLeaf(type ITypeSymbol?) bool -> type != nil &&
         type.IsReferenceType &&
-        type.NullableAnnotation == Microsoft
-        .CodeAnalysis
-        .NullableAnnotation
-        .None
+        type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.None
 
     internal func IsSubstitutableMethodPosition(symbol ISymbol?, path string, valuePosition bool = false) bool {
         if !TryGetMethodTypeParameterPosition(symbol, path, out var parameter, out var isNestedLeaf, valuePosition) {
@@ -10459,9 +10152,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             ContainingSymbol: IMethodSymbol{AssociatedSymbol: IPropertySymbol property} setter
         } parameter &&
             setter.MethodKind == MethodKind.PropertySet &&
-            parameter.Ordinal == setter
-            .Parameters
-            .Length - 1 {
+            parameter.Ordinal == setter.Parameters.Length - 1 {
             symbol = property
         }
         symbol = OwningMember(symbol)
@@ -10604,13 +10295,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             for contract in TupleContractDeclarations(compilation, OwningMember(parameter.ContainingSymbol)) {
                 let inheritedParameter IParameterSymbol? = switch contract {
                     case method is IMethodSymbol when parameter.Ordinal >= 0 &&
-                        parameter.Ordinal < method
-                        .Parameters
-                        .Length: method.Parameters[parameter.Ordinal]
+                        parameter.Ordinal < method.Parameters.Length: method.Parameters[parameter.Ordinal]
                     case property is IPropertySymbol when parameter.Ordinal >= 0 &&
-                        parameter.Ordinal < property
-                        .Parameters
-                        .Length: property.Parameters[parameter.Ordinal]
+                        parameter.Ordinal < property.Parameters.Length: property.Parameters[parameter.Ordinal]
                     default: default(IParameterSymbol?)
                 }
                 if inheritedParameter != nil {
@@ -10659,10 +10346,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         let type ITypeSymbol? = SymbolValueType(symbol)
         return type != nil &&
             type.IsReferenceType &&
-            type.NullableAnnotation != Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .Annotated
+            type.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated
     }
 
     private func IsDefaultTupleValue(expression ExpressionSyntax?, model SemanticModel) bool -> (
@@ -10869,12 +10553,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         // governed by this analysis; value types and `T?` declarations are left
         // untouched.
         if !(propertySymbol != nil && propertySymbol.Type.IsReferenceType == true) ||
-            propertySymbol
-            .Type
-            .NullableAnnotation == Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .Annotated {
+            propertySymbol.Type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
             return
         }
         let canonicalReturn ISymbol? = Canonical(propertySymbol)
@@ -10982,9 +10661,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) {
         for type in EnumerateSourceNamedTypes(compilation) {
             if (type.TypeKind != TypeKind.Class && type.TypeKind != TypeKind.Struct) ||
-                type
-                .AllInterfaces
-                .IsDefaultOrEmpty {
+                type.AllInterfaces.IsDefaultOrEmpty {
                 continue
             }
             for iface in type.AllInterfaces {
@@ -11136,10 +10813,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if first.ReturnsVoid ||
             second.ReturnsVoid ||
             !(effectiveReturnType != nil && effectiveReturnType.IsReferenceType == true) ||
-            effectiveReturnType.NullableAnnotation == Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .Annotated {
+            effectiveReturnType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
             return
         }
         let firstCanonical ISymbol? = Canonical(first)
@@ -11361,9 +11035,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             !(firstType is INamedTypeSymbol && firstType.IsTupleType == true) ||
                 !(secondType is INamedTypeSymbol && secondType.IsTupleType == true)
         ) &&
-            !SymbolEqualityComparer
-            .Default
-            .Equals(comparisonType, secondType) {
+            !SymbolEqualityComparer.Default.Equals(comparisonType, secondType) {
             if firstType is INamedTypeSymbol firstNamed &&
                 comparisonType is INamedTypeSymbol comparisonNamed &&
                 secondType is INamedTypeSymbol secondNamed &&
@@ -11471,13 +11143,9 @@ internal shared class ObliviousNullabilityAnalyzer {
                 current = named.TupleElements[index].Type
                 continue
             }
-            if named
-                .OriginalDefinition
-                .SpecialType == SpecialType.System_Nullable_T &&
+            if named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
                 index == 0 &&
-                named
-                .TypeArguments
-                .Length == 1 {
+                named.TypeArguments.Length == 1 {
                 current = named.TypeArguments[0]
                 continue
             }
@@ -11489,17 +11157,14 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func TupleContractComparisonType(first ISymbol, firstType ITypeSymbol?, second ISymbol?) ITypeSymbol? {
         if first is IMethodSymbol{Arity: > 0} firstMethod &&
             second is IMethodSymbol secondMethod &&
-            firstMethod.Arity == secondMethod
-            .Arity {
+            firstMethod.Arity == secondMethod.Arity {
             // Compare method parameters by ordinal without changing tuple-key ownership.
             return SymbolValueType(firstMethod.ConstructedFrom.Construct(secondMethod.TypeArguments.ToArray()))
         } else if first is IParameterSymbol{ContainingSymbol: IMethodSymbol{Arity: > 0} firstOwner} firstParam &&
             second is IParameterSymbol{ContainingSymbol: IMethodSymbol secondOwner} &&
             firstOwner.Arity == secondOwner.Arity &&
             firstParam.Ordinal >= 0 &&
-            firstParam.Ordinal < firstOwner
-            .Parameters
-            .Length {
+            firstParam.Ordinal < firstOwner.Parameters.Length {
             return SymbolValueType(
                 firstOwner.ConstructedFrom.Construct(secondOwner.TypeArguments.ToArray()).Parameters[firstParam.Ordinal]
             )
@@ -11650,15 +11315,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             yield break
         }
         if sourceNamed.IsTupleType && targetNamed.IsTupleType {
-            if sourceNamed
-                .TupleElements
-                .Length == targetNamed
-                .TupleElements
-                .Length &&
+            if sourceNamed.TupleElements.Length == targetNamed.TupleElements.Length &&
                 TrySplitTuplePath(targetPath, out var tupleIndex, out var tupleRemainder) &&
-                tupleIndex < sourceNamed
-                .TupleElements
-                .Length {
+                tupleIndex < sourceNamed.TupleElements.Length {
                 for projected in ProjectContractPathsToSource(
                     derivedSymbol,
                     sourceNamed.TupleElements[tupleIndex].Type,
@@ -11694,8 +11353,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 TrySplitTuplePath(targetPath, out var argIndex, out var argRemainder) &&
                 argIndex < sourceArguments.Count &&
                 argIndex < targetArguments.Count &&
-                argIndex < sourceParameters
-                .Count {
+                argIndex < sourceParameters.Count {
                 let childVariance = ComposeContractVariance(variance, sourceParameters[argIndex].Variance)
                 for projected in ProjectContractPathsToSource(
                     derivedSymbol,
@@ -11821,11 +11479,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             return true
         }
         if exact || !SymbolEqualityComparer.Default.Equals(actual.OriginalDefinition, target.OriginalDefinition) ||
-            actual
-            .TypeArguments
-            .Length != target
-            .TypeArguments
-            .Length {
+            actual.TypeArguments.Length != target.TypeArguments.Length {
             return false
         }
         if (actual.ContainingType != nil) != (target.ContainingType != nil) ||
@@ -11891,9 +11545,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 pair.Source,
                 normalizedSource
             ) &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(pair.Target, normalizedTarget)
+                SymbolEqualityComparer.Default.Equals(pair.Target, normalizedTarget)
         ) {
             return false
         }
@@ -11985,12 +11637,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                 .IsDefaultOrEmpty {
                 continue
             }
-            if model.GetTypeInfo(expression)
-                .ConvertedType is not INamedTypeSymbol delegateType ||
+            if model.GetTypeInfo(expression).ConvertedType is not INamedTypeSymbol delegateType ||
                 delegateType.TypeKind != TypeKind.Delegate ||
                 delegateType.DelegateInvokeMethod is not IMethodSymbol invoke ||
-                model
-                .GetSymbolInfo(expression).Symbol is not IMethodSymbol source {
+                model.GetSymbolInfo(expression).Symbol is not IMethodSymbol source {
                 continue
             }
             yield (delegateType, invoke, source)
@@ -12031,13 +11681,9 @@ internal shared class ObliviousNullabilityAnalyzer {
     // eligibility check at the call site) is returned unchanged.
     private func UnwrapAwaitedType(returnType ITypeSymbol) ITypeSymbol {
         if returnType is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} named &&
-            named
-            .OriginalDefinition
-            .SpecialType != SpecialType.System_Nullable_T &&
+            named.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T &&
             (named.Name == "Task" || named.Name == "ValueTask") &&
-            named
-            .ContainingNamespace
-            ?.ToDisplayString() == "System.Threading.Tasks" {
+            named.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks" {
             return named.TypeArguments[0]
         }
         return returnType
@@ -12556,8 +12202,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 .GetValue(model.Compilation, BuildRefArraySources)
                 .Writes
                 .TryGetValue(owner, out var positions) &&
-                positions
-                .TryGetValue(depth, out var writes) {
+                positions.TryGetValue(depth, out var writes) {
                 let visited = visitedArrayWrites ?? HashSet[List[ExpressionSyntax]]()
                 if visited.Add(writes) {
                     for written in writes {
@@ -12754,8 +12399,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             case access is ElementAccessExpressionSyntax when
             $scope != SourceScope.CallsOnly &&
                 $scope != SourceScope.CallsAndNonPropertyDeclarations &&
-                model
-                .GetSymbolInfo(access).Symbol is IPropertySymbol property {
+                model.GetSymbolInfo(access).Symbol is IPropertySymbol property {
                 yield (property, 0, false, false)
             }
             case access is ElementAccessExpressionSyntax when $scope != SourceScope.CallsOnly {
@@ -12864,9 +12508,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             IsStatic: false,
             ContainingType: {IsReferenceType: true}
         } field &&
-            field
-            .DeclaringSyntaxReferences
-            .Any((reference SyntaxReference) -> model.Compilation.ContainsSyntaxTree(reference.SyntaxTree)) &&
+            field.DeclaringSyntaxReferences.Any(
+            (reference SyntaxReference) -> model.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
+        ) &&
             !MayHaveOverlappingFields(field.ContainingType) &&
             CSharpToGSharpTranslator.IsUnqualifiedOrThisQualifiedFieldRead(stripped)
         if !readonlyField &&
@@ -12949,18 +12593,12 @@ internal shared class ObliviousNullabilityAnalyzer {
     // Explicit or unresolved layout cannot prove that readonly storage is separate.
     internal func MayHaveOverlappingFields(type INamedTypeSymbol?) bool -> type == nil || type.GetAttributes().Any(
         (attribute AttributeData) -> attribute.AttributeClass == nil ||
-            attribute
-            .AttributeClass
-            ?.TypeKind == TypeKind.Error ||
+            attribute.AttributeClass?.TypeKind == TypeKind.Error ||
             (
             attribute.AttributeClass?.ToDisplayString() == "System.Runtime.InteropServices.StructLayoutAttribute" &&
                 (
-                attribute
-                    .ConstructorArguments
-                    .Length != 1 ||
-                    attribute
-                    .ConstructorArguments[0]
-                    .Value is not int32 layout ||
+                attribute.ConstructorArguments.Length != 1 ||
+                    attribute.ConstructorArguments[0].Value is not int32 layout ||
                     (
                     layout != int32(System.Runtime.InteropServices.LayoutKind.Auto) &&
                         layout != int32(System.Runtime.InteropServices.LayoutKind.Sequential)
@@ -12996,26 +12634,20 @@ internal shared class ObliviousNullabilityAnalyzer {
             property.IsAbstract ||
             property.IsVirtual ||
             property.IsOverride ||
-            property
-            .ContainingType
-            .TypeKind == TypeKind.Interface {
+            property.ContainingType.TypeKind == TypeKind.Interface {
             return false
         }
         for reference in declarations {
             if reference.GetSyntax() is not PropertyDeclarationSyntax declaration ||
                 declaration.AccessorList is not{} accessorList ||
-                accessorList
-                .Accessors
-                .Count != 1 {
+                accessorList.Accessors.Count != 1 {
                 return false
             }
             let getter = accessorList.Accessors[0]
             if !getter.IsKind(SyntaxKind.GetAccessorDeclaration) ||
                 getter.Body != nil ||
                 getter.ExpressionBody != nil ||
-                !getter
-                .SemicolonToken
-                .IsKind(SyntaxKind.SemicolonToken) {
+                !getter.SemicolonToken.IsKind(SyntaxKind.SemicolonToken) {
                 return false
             }
         }
@@ -13122,8 +12754,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             ) ||
                 (
                 (node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax) &&
-                    node
-                    .DescendantNodes().Any(Writes)
+                    node.DescendantNodes().Any(Writes)
             )
         ) {
             return false
@@ -13141,9 +12772,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     node is ForEachStatementSyntax ||
                     node is ForEachVariableStatementSyntax
             ) &&
-                !node
-                .Span
-                .Contains($guard.Span) && node.DescendantNodes(Descend).Any(Writes) {
+                !node.Span.Contains($guard.Span) && node.DescendantNodes(Descend).Any(Writes) {
                 return false
             }
             if node is AccessorDeclarationSyntax ||
@@ -13191,28 +12820,13 @@ internal shared class ObliviousNullabilityAnalyzer {
     symbol != nil && IsPossibleStringNullGuard(invocation) && model.GetOperation(
         invocation
     ) is IInvocationOperation operation &&
-        operation
-        .TargetMethod
-        .IsStatic &&
-        operation
-        .TargetMethod
-        .ContainingType
-        .SpecialType == SpecialType.System_String &&
-        operation
-        .Arguments
-        .Length == 1 &&
-        operation
-        .Arguments[0]
-        .Value
-        .Syntax is ExpressionSyntax value &&
-        model
-        .GetTypeInfo(value)
-        .Type
-        ?.SpecialType == SpecialType.System_String &&
+        operation.TargetMethod.IsStatic &&
+        operation.TargetMethod.ContainingType.SpecialType == SpecialType.System_String &&
+        operation.Arguments.Length == 1 &&
+        operation.Arguments[0].Value.Syntax is ExpressionSyntax value &&
+        model.GetTypeInfo(value).Type?.SpecialType == SpecialType.System_String &&
         (symbol is not IFieldSymbol || CSharpToGSharpTranslator.IsUnqualifiedOrThisQualifiedFieldRead(value)) &&
-        SymbolEqualityComparer
-        .Default
-        .Equals(model.GetSymbolInfo(value).Symbol, symbol)
+        SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(value).Symbol, symbol)
 
     // The opposite branch proves non-null; a rejecting branch can also include empty strings.
     private func NullTestOf(
@@ -13232,9 +12846,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             if symbol is IFieldSymbol {
                 return CSharpToGSharpTranslator.IsUnqualifiedOrThisQualifiedFieldRead(expression) &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(model.GetSymbolInfo(expression).Symbol, symbol)
+                    SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(expression).Symbol, symbol)
             }
             return expression is IdentifierNameSyntax id && string.Equals(
                 id.Identifier.ValueText,
@@ -13461,10 +13073,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         (
         type != nil &&
             type.IsReferenceType == true &&
-            type.NullableAnnotation == Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .Annotated
+            type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
     )
 
     private func IsReferenceLike(type ITypeSymbol?) bool -> (type != nil && type.IsReferenceType) ||
@@ -13496,9 +13105,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         operatorMethod == nil ||
             (
             IsNullableValueType(operandType) &&
-                operatorMethod
-                .Parameters
-                .Length == 1 &&
+                operatorMethod.Parameters.Length == 1 &&
                 IsNonNullableValueType(operatorMethod.Parameters[0].Type)
         )
     )
@@ -13638,9 +13245,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         var containingChanged = false
         if named.ContainingType is INamedTypeSymbol containingType &&
             NormalizeContractTupleNames(containingType) is INamedTypeSymbol normalizedContaining &&
-            !SymbolEqualityComparer
-            .IncludeNullability
-            .Equals(normalizedContaining, containingType) {
+            !SymbolEqualityComparer.IncludeNullability.Equals(normalizedContaining, containingType) {
             for member in normalizedContaining.GetTypeMembers(named.Name, named.Arity) {
                 if !SymbolEqualityComparer.Default.Equals(member.OriginalDefinition, named.OriginalDefinition) {
                     continue

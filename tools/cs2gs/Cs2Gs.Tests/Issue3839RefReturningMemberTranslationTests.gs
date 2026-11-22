@@ -119,9 +119,7 @@ Translated G#:
             Assert.True(
                 getValue.ReturnType.IsByRef,
                 "The emitted GetValue must return by reference, not by value; it returned " +
-                    getValue
-                    .ReturnType
-                    .FullName
+                    getValue.ReturnType.FullName
             )
             // Behaviour direction: a C# consumer writes through the reference.
             let driverPath = CompileDriver(workDir, libraryPath, readOnly)

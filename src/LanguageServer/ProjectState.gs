@@ -179,12 +179,8 @@ open class ProjectState {
         lock compilationLock {
             let key = NormalizePath(filePath)
             if syntaxTrees.TryGetValue(key, out var existing) &&
-                existing
-                .Text
-                ?.FileName == filePath &&
-                existing
-                .Text
-                .ToString() == text &&
+                existing.Text?.FileName == filePath &&
+                existing.Text.ToString() == text &&
                 (
                 if rawBytes == nil {
                     existing.Text.RawBytes == nil || !HasRawByteEncodingDiagnostic(existing)

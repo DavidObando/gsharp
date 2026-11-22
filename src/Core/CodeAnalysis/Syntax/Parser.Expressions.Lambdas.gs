@@ -339,8 +339,7 @@ open partial class Parser {
         var parseNextParameter = true
         while parseNextParameter &&
             Current.Kind != SyntaxKind.CloseParenthesisToken &&
-            Current.Kind != SyntaxKind
-            .EndOfFileToken {
+            Current.Kind != SyntaxKind.EndOfFileToken {
             let parameter = ParseLambdaParameter()
             nodesAndSeparators.Add(parameter)
             if Current.Kind == SyntaxKind.CommaToken {
@@ -438,8 +437,7 @@ open partial class Parser {
         var parseNextElement = true
         while parseNextElement &&
             Current.Kind != SyntaxKind.CloseParenthesisToken &&
-            Current.Kind != SyntaxKind
-            .EndOfFileToken {
+            Current.Kind != SyntaxKind.EndOfFileToken {
             let elementIdentifier = MatchToken(SyntaxKind.IdentifierToken)
             let elementType = ParseTypeClause()
             nodesAndSeparators.Add(ParameterSyntax(syntaxTree, elementIdentifier, ellipsisToken: nil, elementType))

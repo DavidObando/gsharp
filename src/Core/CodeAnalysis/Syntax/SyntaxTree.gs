@@ -163,10 +163,7 @@ open class SyntaxTree {
             let tree = Parse(SourceText.From(text))
             let members = tree.Root.Members
             return if members.Length == 1 &&
-                tree
-                .Root
-                .FileAttributes
-                .IsDefaultOrEmpty &&
+                tree.Root.FileAttributes.IsDefaultOrEmpty &&
                 members[0] is GlobalStatementSyntax global {
                 global.Statement
             } else {
@@ -185,9 +182,7 @@ open class SyntaxTree {
             let root = parser.ParseExpressionFragment(out var isSingleExpression)
             syntaxTree.SetParseResult(root, parser.Diagnostics.ToImmutableArray(), parser.DocumentationTokens)
             return if isSingleExpression &&
-                root
-                .Members
-                .Length == 1 &&
+                root.Members.Length == 1 &&
                 root.Members[0] is GlobalStatementSyntax{Statement: ExpressionStatementSyntax statement} {
                 statement.Expression
             } else {

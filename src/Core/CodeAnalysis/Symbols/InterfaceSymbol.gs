@@ -1205,9 +1205,7 @@ class InterfaceSymbol : TypeSymbol {
                 del.Definition,
                 del
             ) &&
-                !del
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !del.TypeArguments.IsDefaultOrEmpty {
                 let substitutedArgs = ImmutableArray.CreateBuilder[TypeSymbol](del.TypeArguments.Length)
                 var changed = false
                 for var i = 0; i < del.TypeArguments.Length; i++ {
@@ -1229,9 +1227,7 @@ class InterfaceSymbol : TypeSymbol {
             // substitution.
             if type is ImportedTypeSymbol imported &&
                 imported.OpenDefinition != nil &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !imported.TypeArguments.IsDefaultOrEmpty {
                 let substitutedArgs = ImmutableArray.CreateBuilder[TypeSymbol](imported.TypeArguments.Length)
                 var changed = false
                 for var i = 0; i < imported.TypeArguments.Length; i++ {

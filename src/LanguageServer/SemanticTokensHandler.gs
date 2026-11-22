@@ -133,15 +133,9 @@ shared class SemanticTokensComputer {
         let holeSpans = List[TextSpan]()
         if node != nil {
             for holeExpr in node.HoleExpressions {
-                if holeExpr
-                    .Span
-                    .Length > 0 &&
-                    holeExpr
-                    .Span
-                    .Start >= literalSpan.Start &&
-                    holeExpr
-                    .Span
-                    .End <= literalSpan.End {
+                if holeExpr.Span.Length > 0 &&
+                    holeExpr.Span.Start >= literalSpan.Start &&
+                    holeExpr.Span.End <= literalSpan.End {
                     holeSpans.Add(holeExpr.Span)
                 }
                 let leaves = List[SyntaxToken]()
@@ -201,10 +195,7 @@ shared class SemanticTokensComputer {
 
     private func FindInterpolatedNode(node SyntaxNode, literalStart int32) InterpolatedStringExpressionSyntax? {
         if node is InterpolatedStringExpressionSyntax interpolated &&
-            interpolated
-            .StringToken
-            .Span
-            .Start == literalStart {
+            interpolated.StringToken.Span.Start == literalStart {
             return interpolated
         }
         for child in node.GetChildren() {

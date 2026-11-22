@@ -75,8 +75,7 @@ open partial class Parser {
             }
             if Current.Kind != SyntaxKind.ConstKeyword &&
                 Current.Kind != SyntaxKind.LetKeyword &&
-                Current.Kind != SyntaxKind
-                .VarKeyword {
+                Current.Kind != SyntaxKind.VarKeyword {
                 if leadingAnnotations.Length > 0 {
                     Diagnostics.ReportAnnotationsNotAllowedOnStatement(leadingAnnotations[0].AtToken.Location)
                 }
@@ -347,9 +346,7 @@ open partial class Parser {
         var write ExpressionSyntax
         let unwrappedOperand = AssignmentTargetSyntaxFacts.UnwrapParentheses(operand)
         let exactPostfix = unwrappedOperand is UnaryExpressionSyntax &&
-            unwrappedOperand
-            .OperatorToken
-            .Kind == SyntaxKind.StarToken ||
+            unwrappedOperand.OperatorToken.Kind == SyntaxKind.StarToken ||
             AssignmentTargetSyntaxFacts.IsCallResult(unwrappedOperand)
         if exactPostfix {
             return IndirectCompoundAssignmentExpressionSyntax(
@@ -567,8 +564,7 @@ open partial class Parser {
         // must come directly after the keyword: an explicit type clause or
         // identifier always starts with an identifier, so this is unambiguous.
         if (expected == SyntaxKind.LetKeyword || expected == SyntaxKind.VarKeyword) &&
-            Current.Kind == SyntaxKind
-            .OpenParenthesisToken {
+            Current.Kind == SyntaxKind.OpenParenthesisToken {
             let openParen = MatchToken(SyntaxKind.OpenParenthesisToken)
             let nodesAndSeparators = ImmutableArray.CreateBuilder[SyntaxNode]()
             nodesAndSeparators.Add(MatchToken(SyntaxKind.IdentifierToken))
@@ -645,8 +641,7 @@ open partial class Parser {
         if expected == SyntaxKind.VarKeyword &&
             refKindModifier == nil &&
             typeClause != nil &&
-            Current.Kind != SyntaxKind
-            .EqualsToken {
+            Current.Kind != SyntaxKind.EqualsToken {
             let decl = VariableDeclarationSyntax(
                 syntaxTree,
                 accessibilityModifier,
@@ -1293,9 +1288,7 @@ open partial class Parser {
             if Current.Kind == SyntaxKind.IdentifierToken &&
                 Current.Text == "ref" &&
                 CanStartExpression(Peek(1)) &&
-                syntaxTree
-                .Text
-                .GetLineIndex(Peek(1).Span.Start) == keywordLine {
+                syntaxTree.Text.GetLineIndex(Peek(1).Span.Start) == keywordLine {
                 refKeyword = NextToken()
             }
             expression = ParseExpression()

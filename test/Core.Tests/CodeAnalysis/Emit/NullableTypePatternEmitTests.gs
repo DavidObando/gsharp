@@ -76,9 +76,7 @@ let x = switch v { case y is int32?: 1 default: 0 }
         // false for a shape the binder produces, EmitTypePattern must
         // throw.
         let guardWouldFire = pattern.TargetType is NullableTypeSymbol n &&
-            n
-            .UnderlyingType
-            ?.ClrType is {IsValueType: true}
+            n.UnderlyingType?.ClrType is {IsValueType: true}
         Assert.True(
             guardWouldFire,
             "Nullable<int32> must trip the emit-time guard documented in EmitTypePattern (issue #420 / P3-2)."

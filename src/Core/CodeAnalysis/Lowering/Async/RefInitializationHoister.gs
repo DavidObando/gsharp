@@ -88,8 +88,7 @@ shared class RefInitializationHoister {
             // *refLocal → reconstructed lvalue template.
             if node.Operand is BoundVariableExpression varExpr &&
                 varExpr.Variable is LocalVariableSymbol local &&
-                refLocals
-                .TryGetValue(local, out var template) {
+                refLocals.TryGetValue(local, out var template) {
                 // The template only references hoisted temps and trivially
                 // repeatable leaves, so no further rewriting is required and
                 // every inlining is side-effect-free.

@@ -245,8 +245,7 @@ for value in values() {
                     continue
                 }
                 var signature = metadata.GetBlobReader(member.Signature)
-                if signature.ReadSignatureHeader()
-                    .Kind == SignatureKind.Field &&
+                if signature.ReadSignatureHeader().Kind == SignatureKind.Field &&
                     signature.ReadSignatureTypeCode() == expectedCode &&
                     signature.ReadCompressedInteger() == expectedOrdinal &&
                     ParentUsesGenericTypeArguments(metadata, member.Parent) {

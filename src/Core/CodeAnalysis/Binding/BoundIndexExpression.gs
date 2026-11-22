@@ -75,9 +75,7 @@ class BoundIndexExpression : BoundExpression {
         (
         !(Target.Type is MapTypeSymbol) &&
             Target.Type != TypeSymbol.String &&
-            Target
-            .Type
-            ?.ClrType is {IsArray: true} clrArray &&
+            Target.Type?.ClrType is {IsArray: true} clrArray &&
             clrArray.GetArrayRank() == 1
     )
 }

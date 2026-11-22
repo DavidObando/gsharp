@@ -180,10 +180,10 @@ class ValidationManifest {
         context.ProjectReferences.Clear()
         context.ProjectReferences.AddRange(DeclaredProjectItems.Read(context.App.ProjectPath, "ProjectReference"))
         if context.Options.EvaluatedProjectReferences != nil && !string.IsNullOrEmpty(context.App.ProjectPath) &&
-            context
-            .Options
-            .EvaluatedProjectReferences!!
-            .TryGetValue(Path.GetFullPath(context.App.ProjectPath), out var evaluatedReferencePaths) {
+            context.Options.EvaluatedProjectReferences!!.TryGetValue(
+            Path.GetFullPath(context.App.ProjectPath),
+            out var evaluatedReferencePaths
+        ) {
             context.EvaluatedProjectReferencePaths.Clear()
             for evaluatedReferencePath in evaluatedReferencePaths {
                 if !string.IsNullOrEmpty(evaluatedReferencePath) {
@@ -427,8 +427,7 @@ class ValidationManifest {
                 root.Contains('\u0000', StringComparison.Ordinal) || root.Split('/').Any(
                 (segment string) -> segment == "." || segment == ".."
             ) ||
-                !path!!
-                .StartsWith(prefix, ProducingPathComparison(root)) {
+                !path!!.StartsWith(prefix, ProducingPathComparison(root)) {
                 throw InvalidOperationException(
                     "Validation source '$original' is outside producing corpus '$producingRoot'."
                 )

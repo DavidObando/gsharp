@@ -120,12 +120,8 @@ internal shared class ConstantExpressionEvaluator {
     internal func TryGetDecimalConstantAttributeValue(attributes IList[CustomAttributeData], out value decimal) bool {
         value = default(decimal)
         for attribute in attributes {
-            if attribute
-                .AttributeType
-                .FullName != "System.Runtime.CompilerServices.DecimalConstantAttribute" ||
-                attribute
-                .ConstructorArguments
-                .Count != 5 {
+            if attribute.AttributeType.FullName != "System.Runtime.CompilerServices.DecimalConstantAttribute" ||
+                attribute.ConstructorArguments.Count != 5 {
                 continue
             }
             let args = attribute.ConstructorArguments
@@ -205,26 +201,16 @@ internal shared class ConstantExpressionEvaluator {
                 .Method
                 .DeclaringType
                 ?.IsSameAs(typeof(Convert)) == true &&
-                call
-                .Function
-                .Method
-                .Name == "ToString" &&
-                call
-                .Function
-                .Method
-                .GetParameters() is [{ParameterType: var parameterType}] &&
+                call.Function.Method.Name == "ToString" &&
+                call.Function.Method.GetParameters() is [{ParameterType: var parameterType}] &&
                 parameterType.IsSameAs(typeof(char)) &&
                 call.Arguments is [{} argument] &&
                 TryBuild(argument, out var charOperand) {
                 built = Expression.Call(ConvertCharToString, charOperand!!)
                 return true
             }
-            case fieldAccess is BoundFieldAccessExpression when fieldAccess
-                .Field
-                .IsConst &&
-                fieldAccess
-                .Field
-                .HasConstantValue {
+            case fieldAccess is BoundFieldAccessExpression when fieldAccess.Field.IsConst &&
+                fieldAccess.Field.HasConstantValue {
                 return TryBuildConstant(fieldAccess.Field.ConstantValue, fieldAccess.Field.Type, out built)
             }
             case BoundVariableExpression{Variable: GlobalVariableSymbol{IsConst: true} global} {
@@ -376,9 +362,7 @@ internal shared class ConstantExpressionEvaluator {
         }
         let checkedResult = checkedArithmetic &&
             (
-            binary
-                .Op
-                .Kind is BoundBinaryOperatorKind.Sum or
+            binary.Op.Kind is BoundBinaryOperatorKind.Sum or
                 BoundBinaryOperatorKind.Difference or
                 BoundBinaryOperatorKind.Product
         )

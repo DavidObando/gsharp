@@ -110,9 +110,7 @@ class AwaitableShape {
                 "IsCompleted"
             )
             if isCompleted == nil ||
-                isCompleted
-                .PropertyType
-                .FullName != "System.Boolean" ||
+                isCompleted.PropertyType.FullName != "System.Boolean" ||
                 isCompleted.GetMethod == nil {
                 return nil
             }

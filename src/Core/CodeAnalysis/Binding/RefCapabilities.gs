@@ -59,17 +59,13 @@ internal shared class RefCapabilities {
         switch expression {
         case call is BoundImportedInstanceCallExpression: ManagedReferenceOrigins.IsHandleBorrow(call) ||
             call.Type is ByRefTypeSymbol
-        case call is BoundUserInstanceCallExpression: call
-            .Method
-            .ReturnRefKind != RefKind.None &&
+        case call is BoundUserInstanceCallExpression: call.Method.ReturnRefKind != RefKind.None &&
             IsBorrowedLocation(call.Receiver, knownLocations, captureReferenceOwners)
         case call is BoundBaseInterfaceCallExpression: call.Method.ReturnRefKind != RefKind.None
         case call is BoundBaseClassCallExpression: (
             call.Method?.ReturnRefKind ?? call.Property?.ReturnRefKind
         ) != RefKind.None
-        case property is BoundPropertyAccessExpression: property
-            .Property
-            .ReturnRefKind != RefKind.None &&
+        case property is BoundPropertyAccessExpression: property.Property.ReturnRefKind != RefKind.None &&
             property.Receiver != nil &&
             IsBorrowedLocation(property.Receiver, knownLocations, captureReferenceOwners)
         case block is BoundBlockExpression: IsBorrowedLocation(block.Expression, knownLocations, captureReferenceOwners)
@@ -528,12 +524,8 @@ internal shared class RefCapabilities {
                 .GetCustomAttributesData()
                 .Any(
                 (attribute CustomAttributeData) -> KnownAttributes.IsRefSafetyRules(attribute.AttributeType) &&
-                    attribute
-                    .ConstructorArguments
-                    .Count == 1 &&
-                    attribute
-                    .ConstructorArguments[0]
-                    .Value is 11
+                    attribute.ConstructorArguments.Count == 1 &&
+                    attribute.ConstructorArguments[0].Value is 11
             )
         } catch {
             return false
@@ -626,8 +618,7 @@ internal shared class RefCapabilities {
         return if parameter.GetRequiredCustomModifiers().Any(
             (type Type) -> type.FullName == "System.Runtime.InteropServices.InAttribute"
         ) ||
-            parameter
-            .GetCustomAttributesData().Any(
+            parameter.GetCustomAttributesData().Any(
             (attribute CustomAttributeData) -> attribute
                 .AttributeType
                 .FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
@@ -645,8 +636,7 @@ internal shared class RefCapabilities {
             if GetReturnRefKind(property.GetMethod) == RefKind.RefReadOnly || property.GetRequiredCustomModifiers().Any(
                 (type Type) -> type.FullName == "System.Runtime.InteropServices.InAttribute"
             ) ||
-                property
-                .GetCustomAttributesData().Any(
+                property.GetCustomAttributesData().Any(
                 (attribute CustomAttributeData) -> attribute
                     .AttributeType
                     .FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
@@ -734,9 +724,7 @@ internal shared class RefCapabilities {
             .Variable
             .IsReadOnly &&
             Binder.IsReferenceTypeForConstraint(receiver.Type)
-        case variable is BoundVariableExpression: variable
-            .Variable
-            .IsReadOnly ||
+        case variable is BoundVariableExpression: variable.Variable.IsReadOnly ||
             variable.Variable is LocalVariableSymbol{RefKind: RefKind.RefReadOnly or RefKind.In}
         case tuple is BoundTupleElementAccessExpression: IsReadOnlyValueReceiver(tuple.Receiver)
         case block is BoundBlockExpression: IsReadOnlyStorage(block.Expression)
@@ -747,24 +735,16 @@ internal shared class RefCapabilities {
         case field is BoundFieldAccessExpression: field.Field.IsReadOnly || IsReadOnlyValueReceiver(field.Receiver)
         case address is BoundAddressOfExpression: address.IsReadOnly
         case dereference is BoundDereferenceExpression: IsReadOnlyReference(dereference.Operand)
-        case property is BoundPropertyAccessExpression: property
-            .Property
-            .ReturnRefKind == RefKind.RefReadOnly ||
+        case property is BoundPropertyAccessExpression: property.Property.ReturnRefKind == RefKind.RefReadOnly ||
             (
-            property
-                .Property
-                .ReturnRefKind == RefKind.Ref &&
+            property.Property.ReturnRefKind == RefKind.Ref &&
                 IsReadOnlyValueReceiver(property.Receiver) &&
                 (property.Receiver == nil || ReceiverContributesRefScope(property, property.Receiver))
         )
         case call is BoundCallExpression: call.Function.ReturnRefKind == RefKind.RefReadOnly
-        case call is BoundUserInstanceCallExpression: call
-            .Method
-            .ReturnRefKind == RefKind.RefReadOnly ||
+        case call is BoundUserInstanceCallExpression: call.Method.ReturnRefKind == RefKind.RefReadOnly ||
             (
-            call
-                .Method
-                .ReturnRefKind == RefKind.Ref &&
+            call.Method.ReturnRefKind == RefKind.Ref &&
                 IsReadOnlyValueReceiver(call.Receiver) &&
                 ReceiverContributesRefScope(call, call.Receiver)
         )

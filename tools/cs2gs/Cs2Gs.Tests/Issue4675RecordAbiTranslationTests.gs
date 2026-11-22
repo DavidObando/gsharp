@@ -318,13 +318,8 @@ namespace PositionalProperty {
         Assert.Contains(
             baselineOverloaded!!.GetMembers("PrintMembers").OfType[IMethodSymbol](),
             (method IMethodSymbol) -> method.IsImplicitlyDeclared &&
-                method
-                .Parameters
-                .Length == 1 &&
-                method
-                .Parameters[0]
-                .Type
-                .ToDisplayString() == "System.Text.StringBuilder"
+                method.Parameters.Length == 1 &&
+                method.Parameters[0].Type.ToDisplayString() == "System.Text.StringBuilder"
         )
         let document = Assert.Single(project.Documents)
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
@@ -566,11 +561,8 @@ public sealed class Child : Parent
                 .Single(
                 (method MethodInfo) -> method.Name == name &&
                     (
-                    name != "Equals" || method.GetParameters()
-                        .Length == 1 &&
-                        method
-                        .GetParameters()[0]
-                        .ParameterType == typeof(object)
+                    name != "Equals" || method.GetParameters().Length == 1 &&
+                        method.GetParameters()[0].ParameterType == typeof(object)
                 )
             )
             let actual = migratedLeaf!!.GetMethods(
@@ -579,11 +571,8 @@ public sealed class Child : Parent
                 .Single(
                 (method MethodInfo) -> method.Name == name &&
                     (
-                    name != "Equals" || method.GetParameters()
-                        .Length == 1 &&
-                        method
-                        .GetParameters()[0]
-                        .ParameterType == typeof(object)
+                    name != "Equals" || method.GetParameters().Length == 1 &&
+                        method.GetParameters()[0].ParameterType == typeof(object)
                 )
             )
             Assert.Equal(expected.IsFinal, actual.IsFinal)

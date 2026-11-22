@@ -55,12 +55,7 @@ open class MoveNextBodyRewriterTests {
         // ExpressionReturnLabel should appear somewhere in the try body
         let hasExprReturn = tryStmts.Any(
             (s BoundStatement) -> s is BoundLabelStatement ls &&
-                ls
-                .Label
-                .Name == plan
-                .MoveNextPlan
-                .ExpressionReturnLabel
-                .Name
+                ls.Label.Name == plan.MoveNextPlan.ExpressionReturnLabel.Name
         )
         Assert.True(hasExprReturn, "ExpressionReturnLabel should be present in try body.")
         // ExitLabel should appear at the end of try body
@@ -450,9 +445,7 @@ open class MoveNextBodyRewriterTests {
         ) {
             if stmt is BoundExpressionStatement es &&
                 es.Expression is BoundFieldAssignmentExpression fa &&
-                fa
-                .Field
-                .Name == targetField.Name {
+                fa.Field.Name == targetField.Name {
                 results.Add(fa)
             } else if stmt is BoundBlockStatement block {
                 for inner in block.Statements {

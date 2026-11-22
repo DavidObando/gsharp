@@ -241,8 +241,7 @@ internal shared class RepositoryMirror {
         }
         if !sourceFiles!!.Any(
             (path string) -> Path.GetExtension(path).Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
-                Path
-                .GetExtension(path).Equals(".slnx", StringComparison.OrdinalIgnoreCase)
+                Path.GetExtension(path).Equals(".slnx", StringComparison.OrdinalIgnoreCase)
         ) {
             expected.Add(DirectoryInfo(Path.GetFullPath(sourceRoot!!)).Name + ".slnx")
         }
@@ -411,10 +410,7 @@ internal shared class RepositoryMirror {
         let bootstrapImports = project.Root!!
             .Descendants()
             .Where(
-            (element XElement) -> element
-                .Name
-                .LocalName
-                .Equals("Import", StringComparison.OrdinalIgnoreCase) &&
+            (element XElement) -> element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase) &&
                 element
                 .Attribute(XName?("Project")!!)
                 ?.Value
@@ -453,8 +449,7 @@ internal shared class RepositoryMirror {
                 .Name
                 .LocalName
                 .Equals("ProjectReference", StringComparison.OrdinalIgnoreCase) &&
-                string
-                .Equals(
+                string.Equals(
                 element.Attribute(XName?("ReferenceOutputAssembly")!!)?.Value?.Trim(),
                 "false",
                 StringComparison.OrdinalIgnoreCase
@@ -565,8 +560,7 @@ internal shared class RepositoryMirror {
         let extension = Path.GetExtension(source)
         if extension.Equals(".cs", StringComparison.OrdinalIgnoreCase) &&
             copyAndTranslate != nil &&
-            copyAndTranslate
-            .Contains(source) {
+            copyAndTranslate.Contains(source) {
             yield source
             if excludedScope == nil || !excludedScope.IsExcluded(source) {
                 yield Path.ChangeExtension(source, ".gs")

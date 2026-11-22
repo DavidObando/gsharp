@@ -160,9 +160,7 @@ class ProgramFixProvider : GSharpCodeFixProvider {
         from SyntaxNode,
         to SyntaxNode
     ) bool -> !pattern.SameLine ||
-        tree
-        .Text
-        .GetLineIndex(from.Span.Start) == tree.Text.GetLineIndex(to.Span.Start)
+        tree.Text.GetLineIndex(from.Span.Start) == tree.Text.GetLineIndex(to.Span.Start)
 
     // The neighbouring real token whose text is the source text.
     private func Neighbour(tree SyntaxTree, node SyntaxNode, forward bool) SyntaxToken? {

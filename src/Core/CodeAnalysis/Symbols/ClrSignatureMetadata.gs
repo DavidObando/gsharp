@@ -136,9 +136,7 @@ internal shared class ClrSignatureMetadata {
                     let sig = memberRef.DecodeMethodSignature(SignatureMatcher(slotOwner, slot), default(object))
                     let returnMatcher = sig.ReturnType
                     if sig.GenericParameterCount != slotGenericArity ||
-                        sig
-                        .ParameterTypes
-                        .Length != slotParams.Length ||
+                        sig.ParameterTypes.Length != slotParams.Length ||
                         !returnMatcher(ClrNullability.GetSignatureType(slot.ReturnParameter)) {
                         continue
                     }
@@ -370,9 +368,7 @@ internal shared class ClrSignatureMetadata {
                 reader.GetString(exported.Name)
             ) != forwarded.FullName ||
                 !exported.IsForwarder ||
-                exported
-                .Implementation
-                .Kind != HandleKind.AssemblyReference {
+                exported.Implementation.Kind != HandleKind.AssemblyReference {
                 continue
             }
             let target = reader.GetAssemblyReference(cast[AssemblyReferenceHandle](exported.Implementation))
@@ -593,20 +589,14 @@ internal shared class ClrSignatureMetadata {
         Plain(
             func (actual Type) bool {
                 if !actual.IsFunctionPointer ||
-                    signature
-                    .Header
-                    .IsInstance ||
-                    signature
-                    .Header
-                    .HasExplicitThis ||
+                    signature.Header.IsInstance ||
+                    signature.Header.HasExplicitThis ||
                     signature.GenericParameterCount != 0 {
                     return false
                 }
                 let actualParams = actual.GetFunctionPointerParameterTypes()
                 let returnMatcher = signature.ReturnType
-                if actualParams.Length != signature
-                    .ParameterTypes
-                    .Length ||
+                if actualParams.Length != signature.ParameterTypes.Length ||
                     signature.RequiredParameterCount != actualParams.Length ||
                     !CallingConventionMatches(signature.Header.CallingConvention, actual) ||
                     !returnMatcher(actual.GetFunctionPointerReturnType()) {
@@ -636,8 +626,7 @@ internal shared class ClrSignatureMetadata {
                 case SignatureCallingConvention.Unmanaged:
                 actual.IsUnmanagedFunctionPointer &&
                     (
-                    actual.GetFunctionPointerCallingConventions()
-                        .Length == 0 ||
+                    actual.GetFunctionPointerCallingConventions().Length == 0 ||
                         HasCallConvModifier(actual.GetFunctionPointerReturnType())
                 )
                 default: false

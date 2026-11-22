@@ -726,24 +726,15 @@ shared class BaseCallForwarderRewriter {
                 return
             }
             if !enclosingParams.IsDefaultOrEmpty &&
-                !constructed
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty &&
-                constructed
-                .EnclosingTypeArguments
-                .Length == enclosingParams
-                .Length {
+                !constructed.EnclosingTypeArguments.IsDefaultOrEmpty &&
+                constructed.EnclosingTypeArguments.Length == enclosingParams.Length {
                 for var i = 0; i < enclosingParams.Length; i++ {
                     substitution[enclosingParams[i]] = constructed.EnclosingTypeArguments[i]
                 }
             }
             if !ownParams.IsDefaultOrEmpty &&
-                !constructed
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                constructed
-                .TypeArguments
-                .Length == ownParams.Length {
+                !constructed.TypeArguments.IsDefaultOrEmpty &&
+                constructed.TypeArguments.Length == ownParams.Length {
                 for var i = 0; i < ownParams.Length; i++ {
                     substitution[ownParams[i]] = constructed.TypeArguments[i]
                 }

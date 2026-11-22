@@ -982,9 +982,7 @@ shared class SymbolDisplay {
     private func StripReferenceNullable(type TypeSymbol) TypeSymbol -> if type is NullableTypeSymbol{
         UnderlyingType: {} underlying
     } &&
-        underlying
-        .ClrType
-        ?.IsValueType != true &&
+        underlying.ClrType?.IsValueType != true &&
         !((underlying is StructSymbol && underlying.IsClass == false || underlying is EnumSymbol)) {
         underlying
     } else {
@@ -1204,9 +1202,7 @@ shared class SymbolDisplay {
     private func FormatImportedType(imported ImportedTypeSymbol, qualifyNames bool = true) string {
         if !imported.TypeArguments.IsDefaultOrEmpty {
             if imported.ClrType is {IsArray: true, IsSZArray: false} nonSzClr && nonSzClr.GetArrayRank() == 1 &&
-                imported
-                .TypeArguments
-                .Length == 1 {
+                imported.TypeArguments.Length == 1 {
                 return "[*]${FormatType(imported.TypeArguments[0], qualifyNames)}"
             }
             let definition Type? = imported.OpenDefinition
@@ -1454,21 +1450,9 @@ shared class SymbolDisplay {
                 for declaration in FindVariableDeclarations(tree.Root) {
                     if object.ReferenceEquals(declaration.Identifier, identifier) ||
                         (
-                        declaration
-                            .Identifier
-                            .Span
-                            .Start == identifier
-                            .Span
-                            .Start &&
-                            declaration
-                            .Identifier
-                            .Span
-                            .Length == identifier
-                            .Span
-                            .Length &&
-                            declaration
-                            .Identifier
-                            .ValueText == identifier.ValueText
+                        declaration.Identifier.Span.Start == identifier.Span.Start &&
+                            declaration.Identifier.Span.Length == identifier.Span.Length &&
+                            declaration.Identifier.ValueText == identifier.ValueText
                     ) {
                         let keyword = declaration.Keyword?.Text
                         if !string.IsNullOrEmpty(keyword) {

@@ -582,8 +582,7 @@ internal partial class MethodBodyEmitter {
         let targetDefinition = OpenDefinition(target)
         let naturalDefinition = OpenDefinition(natural)
         return string.Equals(targetDefinition.FullName, naturalDefinition.FullName, StringComparison.Ordinal) &&
-            string
-            .Equals(
+            string.Equals(
             targetDefinition.Assembly.GetName().Name,
             naturalDefinition.Assembly.GetName().Name,
             StringComparison.Ordinal
@@ -874,9 +873,7 @@ internal partial class MethodBodyEmitter {
             return type?.ClrType.IsSameAs(typeof(object)) == true || type?.ClrType.IsSameAs(
                 typeof(ValueType)
             ) == true ||
-                type
-                ?.ClrType
-                .IsSameAs(typeof(Enum)) == true || IsInterfaceSourceType(type)
+                type?.ClrType.IsSameAs(typeof(Enum)) == true || IsInterfaceSourceType(type)
         }
 
         private func IsUnsignedClrType(t Type) bool -> t.IsSameAs(typeof(uint8)) || t.IsSameAs(typeof(uint16)) ||
@@ -1068,9 +1065,7 @@ internal partial class MethodBodyEmitter {
             // shapes never classify into this conversion binder-side.
             if a != nil && SequenceTypeSymbol.TryGetEnumerableInterfaceShape(a, out var aEnumerableDefinition, out _) &&
                 aEnumerableDefinition?.FullName == "System.Collections.Generic.IEnumerable`1" &&
-                b
-                ?.ClrType
-                ?.FullName == "System.Collections.IEnumerable" {
+                b?.ClrType?.FullName == "System.Collections.IEnumerable" {
                 return true
             }
             if a is StructSymbol aClass && b is StructSymbol bClass && aClass.IsClass && bClass.IsClass {
@@ -1160,9 +1155,7 @@ internal partial class MethodBodyEmitter {
                 (
                     a is ImportedTypeSymbol importedReference &&
                         (
-                        importedReference
-                            .OpenDefinition
-                            ?.IsValueType == false ||
+                        importedReference.OpenDefinition?.IsValueType == false ||
                             (
                             importedReference.OpenDefinition == nil &&
                                 importedReference.ClrType is {IsValueType: false, IsArray: false}
@@ -1186,12 +1179,8 @@ internal partial class MethodBodyEmitter {
             ) &&
                 (
                 (b is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol) ||
-                    b
-                    ?.ClrType
-                    ?.IsArray == true ||
-                    b
-                    ?.ClrType
-                    ?.IsInterface == true
+                    b?.ClrType?.IsArray == true ||
+                    b?.ClrType?.IsInterface == true
             ) {
                 return Conversion.ClassifyNonStructural(a!!, b!!) is {Exists: true, IsImplicit: true}
             }
@@ -1201,12 +1190,8 @@ internal partial class MethodBodyEmitter {
             // already satisfies the wider static type).
             if a?.ClrType != nil &&
                 b?.ClrType != nil &&
-                !a
-                .ClrType
-                .IsValueType &&
-                !b
-                .ClrType
-                .IsValueType &&
+                !a.ClrType.IsValueType &&
+                !b.ClrType.IsValueType &&
                 ClrTypeUtilities.IsAssignableByName(b.ClrType, a.ClrType) {
                 return true
             }
@@ -1215,9 +1200,7 @@ internal partial class MethodBodyEmitter {
             // covariance cannot bypass G#'s element restrictions.
             if a?.ClrType != nil &&
                 b?.ClrType != nil &&
-                b
-                .ClrType
-                .IsInterface &&
+                b.ClrType.IsInterface &&
                 ClrTypeUtilities.ImplementsInterfaceByName(a.ClrType, b.ClrType) {
                 return true
             }
@@ -1292,13 +1275,8 @@ internal partial class MethodBodyEmitter {
             // shape — and fall back to the CLR generic arguments when the symbol
             // elided them.
             if type is ImportedTypeSymbol imported &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                imported
-                .TypeArguments
-                .Length == clr
-                .GetGenericArguments().Length {
+                !imported.TypeArguments.IsDefaultOrEmpty &&
+                imported.TypeArguments.Length == clr.GetGenericArguments().Length {
                 let symbolicArgs = [imported.TypeArguments.Length]Type
                 for var i = 0; i < symbolicArgs.Length; i++ {
                     let argClr Type? = imported.TypeArguments[i]?.ClrType

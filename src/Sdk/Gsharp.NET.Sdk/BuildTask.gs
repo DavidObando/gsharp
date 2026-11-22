@@ -326,9 +326,7 @@ open class BuildTask : Task, ICancelableTask {
             if !string.IsNullOrWhiteSpace(name) &&
                 (
                 string.Equals(resource.GetMetadata("Type"), "Resx", StringComparison.OrdinalIgnoreCase) ||
-                    resource
-                    .ItemSpec
-                    .EndsWith(".resources", StringComparison.OrdinalIgnoreCase)
+                    resource.ItemSpec.EndsWith(".resources", StringComparison.OrdinalIgnoreCase)
             ) &&
                 !name!!.EndsWith(".resources", StringComparison.Ordinal) {
                 name += ".resources"

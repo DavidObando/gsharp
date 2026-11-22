@@ -65,9 +65,7 @@ internal class WorkerProcessClient : IDisposable {
                     try {
                         Start(path, workerFlag, requestedIdentity, environment, cancellation)
                     } catch (ex Exception) when ex is IOException ||
-                        ex is System
-                        .ComponentModel
-                        .Win32Exception ||
+                        ex is System.ComponentModel.Win32Exception ||
                         ex is InvalidOperationException ||
                         ex is ArgumentException ||
                         ex is NotSupportedException ||
@@ -132,9 +130,7 @@ internal class WorkerProcessClient : IDisposable {
                     ex is FormatException ||
                     ex is DecoderFallbackException ||
                     ex is InvalidOperationException ||
-                    ex is System
-                    .ComponentModel
-                    .Win32Exception {
+                    ex is System.ComponentModel.Win32Exception {
                     let detail = nativeOut?.FailureMessage() ?? nativeError?.FailureMessage() ?? ex.Message
                     cancellation.ThrowIfCancellationRequested()
                     throw IOException("Worker request transport failed: $detail", ex)

@@ -22,15 +22,11 @@ internal class IndependentBodyClassifier {
 
     private func CanBindBody(function FunctionSymbol) bool {
         currentFunction = function
-        if function
-            .Declaration
-            ?.Body is not{} body ||
+        if function.Declaration?.Body is not{} body ||
             function.ThisParameter != nil ||
             function.IsAsyncOrSuspending ||
             function.IsReturnTypeInferred ||
-            !function
-            .TypeParameters
-            .IsDefaultOrEmpty ||
+            !function.TypeParameters.IsDefaultOrEmpty ||
             function.ReturnRefKind != RefKind.None ||
             (function.Type != TypeSymbol.Void && !IsPrimitive(function.Type)) {
             return false
@@ -83,9 +79,7 @@ internal class IndependentBodyClassifier {
                     declaration.IsScoped ||
                     declaration.HasRefKindModifier ||
                     declaration.IsGeneric ||
-                    !declaration
-                    .Annotations
-                    .IsDefaultOrEmpty ||
+                    !declaration.Annotations.IsDefaultOrEmpty ||
                     declaration.Initializer is not{} initializer ||
                     locals.ContainsKey(declaration.Identifier.ValueText) {
                     return false

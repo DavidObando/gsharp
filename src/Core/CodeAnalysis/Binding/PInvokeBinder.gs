@@ -314,9 +314,7 @@ internal shared class PInvokeBinder {
             return IsBlittablePrimitive(byRef.PointeeType) ||
                 (
                 IsStructMarshallingType(byRef.PointeeType) &&
-                    byRef
-                    .PointeeType
-                    .IsValueType &&
+                    byRef.PointeeType.IsValueType &&
                     BlittableDetector().IsBlittable(byRef.PointeeType)
             )
         }
@@ -439,14 +437,9 @@ internal shared class PInvokeBinder {
             return false
         }
         if type is StructSymbol source {
-            return source
-                .TypeParameters
-                .IsDefaultOrEmpty &&
-                source
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                StructSymbol
-                .CollectEnclosingTypeParameters(source).IsDefaultOrEmpty
+            return source.TypeParameters.IsDefaultOrEmpty &&
+                source.TypeArguments.IsDefaultOrEmpty &&
+                StructSymbol.CollectEnclosingTypeParameters(source).IsDefaultOrEmpty
         }
         return BlittableDetector.IsValueStruct(type)
     }
@@ -655,8 +648,7 @@ internal shared class PInvokeBinder {
         // a future ADR; Custom + a string parameter is an error today.
         if hasStringSurface &&
             stringMarshalling != StringMarshalling.Utf8 &&
-            stringMarshalling != StringMarshalling
-            .Utf16 {
+            stringMarshalling != StringMarshalling.Utf16 {
             diagnostics.ReportLibraryImportRequiresStringMarshalling(
                 Invariant
                     .Required(
@@ -750,9 +742,7 @@ internal shared class PInvokeBinder {
         if attr == nil {
             return
         }
-        let annotationLocation = attr
-            .Syntax
-            ?.Location ??
+        let annotationLocation = attr.Syntax?.Location ??
             (
             if parameterIndex < parameterSyntaxes.Count {
                 parameterSyntaxes[parameterIndex].Location
@@ -806,8 +796,7 @@ internal shared class PInvokeBinder {
         var unmanagedType UnmanagedType
         let unmanagedTypeArgument = attr.GetConstructorArgument(0, "unmanagedType")
         if unmanagedTypeArgument?.Value is not{} positionalValue ||
-            !KnownAttributes
-            .TryConvertAttributeEnum[UnmanagedType](positionalValue, out unmanagedType) {
+            !KnownAttributes.TryConvertAttributeEnum[UnmanagedType](positionalValue, out unmanagedType) {
             diagnostics.ReportMarshalAsUnsupportedUnmanagedType(
                 annotationLocation,
                 unmanagedTypeArgument?.Value?.ToString() ?? "<missing>"

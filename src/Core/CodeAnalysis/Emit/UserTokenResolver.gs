@@ -312,14 +312,8 @@ internal class UserTokenResolver {
     /// @param fn The lambda function whose function pointer is loaded.
     /// @returns The MethodDef or MethodSpec token for the `ldftn`.
     internal func ResolveLambdaFunctionFtnToken(fn FunctionSymbol) EntityHandle {
-        if !this
-            .cache
-            .FunctionHandles
-            .TryGetValue(fn, out var methodHandle) &&
-            !this
-            .cache
-            .MethodHandles
-            .TryGetValue(fn, out methodHandle) {
+        if !this.cache.FunctionHandles.TryGetValue(fn, out var methodHandle) &&
+            !this.cache.MethodHandles.TryGetValue(fn, out methodHandle) {
             throw InvalidOperationException("Function '${fn.Name}' has no emitted MethodDef.")
         }
         if this.lambdaMethodTypeArgsByFunction.TryGetValue(fn, out var typeArgs) && !typeArgs.IsDefaultOrEmpty {
@@ -1244,14 +1238,8 @@ internal class UserTokenResolver {
     /// static-property paths). The MemberRef signature is the open static method
     /// signature (no `this`) produced by (cref:EncodeOpenMethodSignature).
     internal func ResolveUserStaticMethodToken(containingType StructSymbol, method FunctionSymbol) EntityHandle {
-        if !this
-            .cache
-            .MethodHandles
-            .TryGetValue(method, out var openDef) &&
-            !this
-            .cache
-            .FunctionHandles
-            .TryGetValue(method, out openDef) {
+        if !this.cache.MethodHandles.TryGetValue(method, out var openDef) &&
+            !this.cache.FunctionHandles.TryGetValue(method, out openDef) {
             if containingType.ClrType != nil {
                 let importedMethod MethodInfo? = ReflectionMetadataEmitter.FindImportedMethod(
                     containingType.ClrType,
@@ -1313,14 +1301,8 @@ internal class UserTokenResolver {
         method FunctionSymbol
     ) EntityHandle {
         let openMethod = InterfaceImplEmitter.ResolveOpenInterfaceStaticMethod(containingInterface, method)
-        if !this
-            .cache
-            .MethodHandles
-            .TryGetValue(openMethod, out var openDef) &&
-            !this
-            .cache
-            .FunctionHandles
-            .TryGetValue(openMethod, out openDef) {
+        if !this.cache.MethodHandles.TryGetValue(openMethod, out var openDef) &&
+            !this.cache.FunctionHandles.TryGetValue(openMethod, out openDef) {
             throw InvalidOperationException("Static interface method '${method.Name}' has no emitted handle.")
         }
         if !ReflectionMetadataEmitter.IsUserGenericInterfaceReference(containingInterface) {
@@ -1814,9 +1796,7 @@ internal class UserTokenResolver {
         if !ctorKey.IsClass && ctorKey.IsData && !ctorKey.HasDataConstructionPrimary {
             let explicitDefault = ctorKey.EffectiveExplicitConstructors.FirstOrDefault(
                 (candidate ConstructorSymbol) -> !candidate.IsSynthesizedFromPrimaryConstructor &&
-                    candidate
-                    .Parameters
-                    .IsEmpty
+                    candidate.Parameters.IsEmpty
             )
             if explicitDefault != nil {
                 return this.ResolveUserCtorTokenForExplicit(structType, explicitDefault)
@@ -2549,11 +2529,7 @@ internal class UserTokenResolver {
                 } else if actual?.ClrType is {} actualClr &&
                     actualClr.IsGenericType &&
                     IsValueTupleOpenDefinition(actualClr.GetGenericTypeDefinition()) &&
-                    actualClr
-                    .GenericTypeArguments
-                    .Length == ftup
-                    .ElementTypes
-                    .Length {
+                    actualClr.GenericTypeArguments.Length == ftup.ElementTypes.Length {
                     let b = ImmutableArray.CreateBuilder[TypeSymbol](actualClr.GenericTypeArguments.Length)
                     for arg in actualClr.GenericTypeArguments {
                         b.Add(TypeSymbol.FromClrTypeWithoutNullability(arg, NullabilityFreeReason.TypeStructure))
@@ -2584,9 +2560,7 @@ internal class UserTokenResolver {
             // interface-typed formal parameter (no `T` in the return).
             if formal is ImportedTypeSymbol formalImported &&
                 formalImported.ClrType is {IsInterface: true, IsGenericType: true} formalIface &&
-                !formalImported
-                .TypeArguments
-                .IsDefaultOrEmpty &&
+                !formalImported.TypeArguments.IsDefaultOrEmpty &&
                 (actual is SliceTypeSymbol || actual is ArrayTypeSymbol) &&
                 actual?.ClrType is {IsArray: true} actualClrArray {
                 var matched Type? = nil
@@ -2635,8 +2609,7 @@ internal class UserTokenResolver {
             if (formal is FunctionTypeSymbol || actual is FunctionTypeSymbol) &&
                 TryGetFunctionShapeSlots(formal, out var formalFnSlots) &&
                 TryGetFunctionShapeSlots(actual, out var actualFnSlots) &&
-                formalFnSlots.Length == actualFnSlots
-                .Length {
+                formalFnSlots.Length == actualFnSlots.Length {
                 for var i = 0; i < formalFnSlots.Length; i++ {
                     if TryUnify(formalFnSlots[i], actualFnSlots[i], tp, out inferred) {
                         return true
@@ -2833,8 +2806,7 @@ internal class UserTokenResolver {
             if parameterType is NullableTypeSymbol nullable {
                 if !clrParameterType.IsGenericParameter &&
                     clrParameterType.IsGenericType &&
-                    clrParameterType
-                    .GetGenericTypeDefinition().FullName == "System.Nullable`1" {
+                    clrParameterType.GetGenericTypeDefinition().FullName == "System.Nullable`1" {
                     return IndexParameterTypeMatches(
                         clrParameterType.GetGenericArguments()[0],
                         nullable.UnderlyingType,
@@ -3008,11 +2980,7 @@ internal class UserTokenResolver {
             for candidate in definitionProperties {
                 if candidate.Name == property.Name &&
                     candidate.IsIndexer == property.IsIndexer &&
-                    candidate
-                    .Parameters
-                    .Length == property
-                    .Parameters
-                    .Length {
+                    candidate.Parameters.Length == property.Parameters.Length {
                     return candidate
                 }
             }

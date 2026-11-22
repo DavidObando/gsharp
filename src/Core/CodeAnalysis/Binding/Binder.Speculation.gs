@@ -188,9 +188,7 @@ partial class Binder {
                 let probe = Binder(parentScope, function)
                 for call in body.DescendantNodesAndSelf() {
                     if call is CallExpressionSyntax deferred &&
-                        probe
-                        .statements
-                        .IsDeferredLinqOperatorNameForSpeculation(deferred.Identifier.ValueText) {
+                        probe.statements.IsDeferredLinqOperatorNameForSpeculation(deferred.Identifier.ValueText) {
                         return SpeculativePass("the body calls a deferred LINQ operator")
                     }
                 }
@@ -238,23 +236,13 @@ partial class Binder {
                     return SpeculativePass("a call-effect summary that the bind reads depends on the caller")
                 }
                 if (globalScope.RefDelegateCache is {} && parentScope.GetSynthesizedRefDelegateCache().WasQueried) ||
-                    parentScope
-                    .GetAnonymousTypeCache()
-                    .Symbols
-                    .Count != anonymousTypes ||
-                    parentScope
-                    .GetRichAnonymousObjectPlans().Count != richPlans || parentScope.GetLatestRichAnonymousObjectPlans()
-                    .Count != latestRichPlans ||
-                    registry
-                    .Types
-                    .Count != adapterTypes ||
-                    registry
-                    .MethodBodies
-                    .Count != adapterBodies ||
+                    parentScope.GetAnonymousTypeCache().Symbols.Count != anonymousTypes ||
+                    parentScope.GetRichAnonymousObjectPlans().Count != richPlans ||
+                    parentScope.GetLatestRichAnonymousObjectPlans().Count != latestRichPlans ||
+                    registry.Types.Count != adapterTypes ||
+                    registry.MethodBodies.Count != adapterBodies ||
                     registry.Counter != adapterCounter ||
-                    registry
-                    .ProtocolOperations
-                    .Count > 0 {
+                    registry.ProtocolOperations.Count > 0 {
                     return SpeculativePass("the body synthesizes a type that the pass shares")
                 }
                 return SpeculativePass(result.Body, result.Diagnostics, direct, withOverrides, probe)

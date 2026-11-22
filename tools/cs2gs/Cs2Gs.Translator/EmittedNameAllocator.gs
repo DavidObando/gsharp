@@ -63,9 +63,7 @@ internal class EmittedNameAllocator {
                 .OfType[IMethodSymbol]()
                 .Any(
                 (member IMethodSymbol) -> member.Name == "Deconstruct" &&
-                    member
-                    .DeclaringSyntaxReferences
-                    .IsDefaultOrEmpty
+                    member.DeclaringSyntaxReferences.IsDefaultOrEmpty
             )
         }
     }
@@ -74,9 +72,7 @@ internal class EmittedNameAllocator {
         if method == nil ||
             SourceName(method) != "Deconstruct" ||
             method.IsImplicitlyDeclared ||
-            method
-            .DeclaringSyntaxReferences
-            .IsDefaultOrEmpty {
+            method.DeclaringSyntaxReferences.IsDefaultOrEmpty {
             return false
         }
         lock this.gate {
@@ -126,9 +122,8 @@ internal class EmittedNameAllocator {
         symbol = Canonical(symbol)
         if symbol!!.Name == "_" &&
             (symbol is ILocalSymbol || symbol is IParameterSymbol) &&
-            symbol!!
-            .DeclaringSyntaxReferences
-            .FirstOrDefault() is {} declaration && !this.compilation.ContainsSyntaxTree(declaration.SyntaxTree) &&
+            symbol!!.DeclaringSyntaxReferences.FirstOrDefault() is {} declaration &&
+            !this.compilation.ContainsSyntaxTree(declaration.SyntaxTree) &&
             FindDeclaringCompilation(this.compilation, declaration.SyntaxTree, HashSet[Compilation]()) is {} owner {
             let declared = TranslationContext.GetEffectiveSemanticModel(owner, declaration.SyntaxTree)
                 .GetDeclaredSymbol(declaration.GetSyntax())
@@ -199,9 +194,7 @@ internal class EmittedNameAllocator {
                                 .OfType[IMethodSymbol]()
                                 .Where(
                                 (candidate IMethodSymbol) -> !candidate.IsImplicitlyDeclared &&
-                                    !candidate
-                                    .ExplicitInterfaceImplementations
-                                    .IsDefaultOrEmpty &&
+                                    !candidate.ExplicitInterfaceImplementations.IsDefaultOrEmpty &&
                                     SourceName(candidate) == "Deconstruct" &&
                                     !contract.Contains(Canonical(candidate)!!)
                             )
@@ -230,20 +223,14 @@ internal class EmittedNameAllocator {
                     renamed = "deconstruct" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 }
                 for member in contract {
-                    let keepOriginalName = member
-                        .DeclaringSyntaxReferences
-                        .IsDefaultOrEmpty ||
+                    let keepOriginalName = member.DeclaringSyntaxReferences.IsDefaultOrEmpty ||
                         (
                         member is IMethodSymbol explicitMethod &&
-                            !explicitMethod
-                            .ContainingType
-                            .IsRecord &&
-                            !explicitMethod
-                            .ExplicitInterfaceImplementations
-                            .IsDefaultOrEmpty &&
-                            explicitMethod
-                            .ExplicitInterfaceImplementations
-                            .All((slot IMethodSymbol) -> slot.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+                            !explicitMethod.ContainingType.IsRecord &&
+                            !explicitMethod.ExplicitInterfaceImplementations.IsDefaultOrEmpty &&
+                            explicitMethod.ExplicitInterfaceImplementations.All(
+                            (slot IMethodSymbol) -> slot.DeclaringSyntaxReferences.IsDefaultOrEmpty
+                        )
                     )
                     this.emittedNames[member] = if keepOriginalName {
                         SourceName(member)
@@ -285,9 +272,7 @@ internal class EmittedNameAllocator {
     private func GetReferencedBindingScopeNames(symbol ISymbol) IReadOnlyCollection[string]? {
         var names HashSet[string]? = nil
         let references = if symbol.ContainingSymbol is {} containing &&
-            !containing
-            .DeclaringSyntaxReferences
-            .IsDefaultOrEmpty {
+            !containing.DeclaringSyntaxReferences.IsDefaultOrEmpty {
             containing.DeclaringSyntaxReferences.AsEnumerable()
         } else {
             symbol.DeclaringSyntaxReferences.AsEnumerable()
@@ -357,10 +342,8 @@ internal class EmittedNameAllocator {
             return nil
         }
         let parts = Stack[string]()
-        for var current INamespaceSymbol? = namespaceSymbol;
-            current != nil &&
-            !current.IsGlobalNamespace;
-            current = current!!.ContainingNamespace {
+        for var current INamespaceSymbol? = namespaceSymbol; current != nil &&
+            !current.IsGlobalNamespace; current = current!!.ContainingNamespace {
             parts.Push(this.GetName(current)!!)
         }
         return string.Join(".", parts)
@@ -384,9 +367,7 @@ internal class EmittedNameAllocator {
                     .ParameterSyntax
             ): GSharpIdentifierNameContext.Parameter
             case method is IMethodSymbol when method.Name == "init" &&
-                !method
-                .DeclaringSyntaxReferences
-                .IsDefaultOrEmpty: GSharpIdentifierNameContext.Invocation
+                !method.DeclaringSyntaxReferences.IsDefaultOrEmpty: GSharpIdentifierNameContext.Invocation
             case method is IMethodSymbol when method.MethodKind == MethodKind.LocalFunction: GSharpIdentifierNameContext.Local
             case local is ILocalSymbol when local.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> reference.GetSyntax() is SingleVariableDesignationSyntax
@@ -439,11 +420,7 @@ internal class EmittedNameAllocator {
                 return this.GetAliasScopeNames(alias)
             }
             case namespaceSymbol is INamespaceSymbol {
-                return namespaceSymbol
-                    .ContainingNamespace
-                    ?.GetMembers()
-                    .Select(SourceName)
-                    .ToArray() ??
+                return namespaceSymbol.ContainingNamespace?.GetMembers().Select(SourceName).ToArray() ??
                     Array.Empty[string]()
             }
             default {
@@ -559,10 +536,7 @@ internal class EmittedNameAllocator {
             .DeclaringSyntaxReferences
             .AsEnumerable()
             .Concat(
-            method
-                .PartialImplementationPart
-                ?.DeclaringSyntaxReferences
-                .AsEnumerable() ??
+            method.PartialImplementationPart?.DeclaringSyntaxReferences.AsEnumerable() ??
                 Enumerable.Empty[SyntaxReference]()
         )
         for reference in references {
@@ -595,12 +569,9 @@ internal class EmittedNameAllocator {
             names.UnionWith(this.GetVisibleTypeMemberNames(containingType))
         }
         names.UnionWith(this.GetStaticUsingMemberNames())
-        for var current ISymbol? = parameter.ContainingSymbol;
-            current != nil &&
+        for var current ISymbol? = parameter.ContainingSymbol; current != nil &&
             current is not INamespaceSymbol &&
-            current is not INamedTypeSymbol;
-            current = current!!
-            .ContainingSymbol {
+            current is not INamedTypeSymbol; current = current!!.ContainingSymbol {
             let candidates = switch current {
                 case currentMethod is IMethodSymbol: currentMethod.Parameters.AsEnumerable()
                 case currentProperty is IPropertySymbol: currentProperty.Parameters.AsEnumerable()
@@ -620,27 +591,18 @@ internal class EmittedNameAllocator {
                     .DeclaringSyntaxReferences
                     .AsEnumerable()
                     .Concat(
-                    currentMethod
-                        .PartialImplementationPart
-                        ?.DeclaringSyntaxReferences
-                        .AsEnumerable() ??
+                    currentMethod.PartialImplementationPart?.DeclaringSyntaxReferences.AsEnumerable() ??
                         Enumerable.Empty[SyntaxReference]()
                 )
                     .Concat(
-                    currentMethod
-                        .AssociatedSymbol
-                        ?.DeclaringSyntaxReferences
-                        .AsEnumerable() ??
+                    currentMethod.AssociatedSymbol?.DeclaringSyntaxReferences.AsEnumerable() ??
                         Enumerable.Empty[SyntaxReference]()
                 )
                 case currentProperty is IPropertySymbol: currentProperty
                     .DeclaringSyntaxReferences
                     .AsEnumerable()
                     .Concat(
-                    currentProperty
-                        .PartialImplementationPart
-                        ?.DeclaringSyntaxReferences
-                        .AsEnumerable() ??
+                    currentProperty.PartialImplementationPart?.DeclaringSyntaxReferences.AsEnumerable() ??
                         Enumerable.Empty[SyntaxReference]()
                 )
                 default: current.DeclaringSyntaxReferences.AsEnumerable()
@@ -757,10 +719,8 @@ internal class EmittedNameAllocator {
                             .CSharp
                             .Syntax
                             .ParameterSyntax parameterSyntax &&
-                            TranslationContext
-                            .GetEffectiveSemanticModel(this.compilation, reference.SyntaxTree).GetDeclaredSymbol(
-                            parameterSyntax
-                        ) is IParameterSymbol parameter {
+                            TranslationContext.GetEffectiveSemanticModel(this.compilation, reference.SyntaxTree)
+                            .GetDeclaredSymbol(parameterSyntax) is IParameterSymbol parameter {
                             Union(propertyMember, parameter)
                         }
                     }
@@ -843,14 +803,10 @@ internal class EmittedNameAllocator {
                         .Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword) &&
                         property.ExpressionBody == nil &&
                         property.AccessorList != nil &&
-                        property.AccessorList!!
-                        .Accessors
-                        .All(
+                        property.AccessorList!!.Accessors.All(
                         (accessor AccessorDeclarationSyntax) -> accessor.Body == nil && accessor.ExpressionBody == nil
                     ) &&
-                        property.AccessorList!!
-                        .Accessors
-                        .Any(
+                        property.AccessorList!!.Accessors.Any(
                         (accessor AccessorDeclarationSyntax) -> accessor.IsKind(
                             Microsoft.CodeAnalysis.CSharp.SyntaxKind.GetAccessorDeclaration
                         )
@@ -937,23 +893,16 @@ internal class EmittedNameAllocator {
                     Expression: Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment
                 }
             ) ||
-                !assignment
-                .OperatorToken
-                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsToken) || model.GetSymbolInfo(assignment.Left)
-                .Symbol is not ISymbol target ||
+                !assignment.OperatorToken.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsToken) ||
+                model.GetSymbolInfo(assignment.Left).Symbol is not ISymbol target ||
                 !(target is IFieldSymbol) &&
                 !(target is IPropertySymbol) ||
                 target.IsStatic ||
-                !SymbolEqualityComparer
-                .Default
-                .Equals(target.ContainingType, containingType) ||
+                !SymbolEqualityComparer.Default.Equals(target.ContainingType, containingType) ||
                 assignment.Right is not IdentifierNameSyntax right ||
-                model
-                .GetSymbolInfo(right)
-                .Symbol is not IParameterSymbol parameter ||
-                !SymbolEqualityComparer
-                .Default
-                .Equals(parameter.ContainingSymbol, constructorSymbol) || !targets.TryAdd(parameter, target) {
+                model.GetSymbolInfo(right).Symbol is not IParameterSymbol parameter ||
+                !SymbolEqualityComparer.Default.Equals(parameter.ContainingSymbol, constructorSymbol) ||
+                !targets.TryAdd(parameter, target) {
                 return
             }
         }
@@ -982,11 +931,11 @@ internal class EmittedNameAllocator {
                     this.invocationSensitive.Add(Canonical(symbol)!!)
                 }
                 if simple is GenericNameSyntax &&
-                    !symbol
-                    .DeclaringSyntaxReferences
-                    .IsDefaultOrEmpty &&
-                    GSharpSyntaxFacts
-                    .IsReservedIdentifier(simple.Identifier.ValueText, GSharpIdentifierNameContext.Index) {
+                    !symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty &&
+                    GSharpSyntaxFacts.IsReservedIdentifier(
+                    simple.Identifier.ValueText,
+                    GSharpIdentifierNameContext.Index
+                ) {
                     this.AddPrecomputedContext(symbol, GSharpIdentifierNameContext.Index)
                 }
             }
@@ -1014,10 +963,8 @@ internal class EmittedNameAllocator {
                 ) {
                     this.invocationSensitive.Add(Canonical(type)!!)
                 }
-                if model.GetTypeInfo(creation)
-                    .Type is INamedTypeSymbol{IsGenericType: true} genericType &&
-                    GSharpSyntaxFacts
-                    .IsReservedIdentifier(genericType.Name, GSharpIdentifierNameContext.Index) {
+                if model.GetTypeInfo(creation).Type is INamedTypeSymbol{IsGenericType: true} genericType &&
+                    GSharpSyntaxFacts.IsReservedIdentifier(genericType.Name, GSharpIdentifierNameContext.Index) {
                     this.AddPrecomputedContext(genericType, GSharpIdentifierNameContext.Index)
                 }
             }
@@ -1027,12 +974,8 @@ internal class EmittedNameAllocator {
                     identifier.Identifier.ValueText,
                     GSharpIdentifierNameContext.Index
                 ) &&
-                    model
-                    .GetSymbolInfo(identifier)
-                    .Symbol is {} symbol &&
-                    !symbol
-                    .DeclaringSyntaxReferences
-                    .IsDefaultOrEmpty {
+                    model.GetSymbolInfo(identifier).Symbol is {} symbol &&
+                    !symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty {
                     this.AddPrecomputedContext(symbol, GSharpIdentifierNameContext.Index)
                 }
             }
@@ -1042,13 +985,9 @@ internal class EmittedNameAllocator {
     shared {
         func IsUserRecordDeconstruct(method IMethodSymbol?) bool -> method != nil &&
             SourceName(method) == "Deconstruct" &&
-            method
-            .ContainingType
-            .IsRecord &&
+            method.ContainingType.IsRecord &&
             !method.IsImplicitlyDeclared &&
-            !method
-            .DeclaringSyntaxReferences
-            .IsDefaultOrEmpty
+            !method.DeclaringSyntaxReferences.IsDefaultOrEmpty
 
         private let Cache ObliviousNullabilityAnalyzer.ScopedCompilationCache[
             EmittedNameAllocator
@@ -1081,9 +1020,7 @@ internal class EmittedNameAllocator {
         private func Canonical(symbol ISymbol?) ISymbol? {
             if symbol is IParameterSymbol parameter && parameter.ContainingSymbol is IMethodSymbol method {
                 if method.AssociatedSymbol is IPropertySymbol property &&
-                    parameter.Ordinal < property
-                    .Parameters
-                    .Length {
+                    parameter.Ordinal < property.Parameters.Length {
                     return Canonical(property.OriginalDefinition.Parameters[parameter.Ordinal])
                 }
                 let source = method.ReducedFrom ?? method
@@ -1102,12 +1039,8 @@ internal class EmittedNameAllocator {
             return switch symbol {
                 case parameter is IParameterSymbol when
                 parameter.ContainingSymbol is IPropertySymbol{PartialDefinitionPart: {} definition} &&
-                    parameter.Ordinal < definition
-                    .Parameters
-                    .Length &&
-                    definition
-                    .Parameters[parameter.Ordinal]
-                    .Name == parameter.Name:
+                    parameter.Ordinal < definition.Parameters.Length &&
+                    definition.Parameters[parameter.Ordinal].Name == parameter.Name:
                 cast[ISymbol](definition.OriginalDefinition.Parameters[parameter.Ordinal])
                 case parameter is IParameterSymbol: cast[ISymbol](parameter.OriginalDefinition)
                 case method is IMethodSymbol: cast[ISymbol](
@@ -1138,9 +1071,7 @@ internal class EmittedNameAllocator {
                 member.ContainingAssembly,
                 derivedType.ContainingAssembly
             ) ||
-                member
-                .ContainingAssembly
-                ?.GivesAccessTo(derivedType.ContainingAssembly!!) == true
+                member.ContainingAssembly?.GivesAccessTo(derivedType.ContainingAssembly!!) == true
             default: false
         }
 

@@ -184,15 +184,9 @@ internal class ManagedReferenceLowerer : BoundTreeRewriter {
             isClass: true
         )
         helper.SetImportedBaseType(type)
-        let enclosing = this
-            .function
-            ?.ReceiverType ??
-            this
-            .function
-            ?.StaticOwnerType ??
-            this
-            .function
-            ?.LexicalEnclosingType
+        let enclosing = this.function?.ReceiverType ??
+            this.function?.StaticOwnerType ??
+            this.function?.LexicalEnclosingType
         let enclosingDefinition TypeSymbol? = switch enclosing {
             case aggregate is StructSymbol: cast[TypeSymbol](aggregate.Definition)
             case interfaceType is InterfaceSymbol: cast[TypeSymbol](interfaceType.Definition)
@@ -433,8 +427,7 @@ internal class ManagedReferenceLowerer : BoundTreeRewriter {
         )
 
         private func ParametersMatch(left[]ParameterInfo, right[]ParameterInfo) bool -> left.Length == right.Length &&
-            left
-            .Zip(right).All(
+            left.Zip(right).All(
             (pair(First ParameterInfo, Second ParameterInfo)) -> ClrTypeUtilities.AreSame(
                 pair.First.ParameterType,
                 pair.Second.ParameterType

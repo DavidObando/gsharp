@@ -88,16 +88,9 @@ open class Adr0212ImportedRecordMemberTests {
         Assert.DoesNotContain(
             equals,
             (m Symbol) -> m is ImportedFunctionSymbol imported &&
-                !imported
-                .Method
-                .IsGenericMethod &&
-                imported
-                .Method
-                .DeclaringType!!.Name == "Object" &&
-                imported
-                .Method
-                .GetParameters()
-                .Length == 1
+                !imported.Method.IsGenericMethod &&
+                imported.Method.DeclaringType!!.Name == "Object" &&
+                imported.Method.GetParameters().Length == 1
         )
     }
 

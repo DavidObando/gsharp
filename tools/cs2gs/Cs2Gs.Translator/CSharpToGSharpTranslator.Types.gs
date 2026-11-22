@@ -43,9 +43,7 @@ partial class CSharpToGSharpTranslator {
             } else if parameterList != nil {
                 for var index = 0; index < parameterList.Parameters.Count; index++ {
                     let exactParameter IParameterSymbol? = if exactTargetInvoke != nil &&
-                        index < exactTargetInvoke
-                        .Parameters
-                        .Length {
+                        index < exactTargetInvoke.Parameters.Length {
                         exactTargetInvoke.Parameters[index]
                     } else {
                         default(IParameterSymbol?)
@@ -90,10 +88,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             let isAsync = lambda.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword)
-            let lambdaSymbol IMethodSymbol? = this
-                .context
-                .GetSymbolInfo(lambda)
-                .Symbol as IMethodSymbol ??
+            let lambdaSymbol IMethodSymbol? = this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol ??
                 GetDelegateInvokeMethod(this.context.GetTypeInfo(lambda).ConvertedType)
             var exactReturnType GTypeReference? = if exactTargetInvoke != nil {
                 this.MapDelegateLikeReturnType(exactTargetInvoke, isAsync, lambda.GetLocation())
@@ -121,14 +116,9 @@ partial class CSharpToGSharpTranslator {
             }
             let hasUnderscoreParameter = (
                 lambda is SimpleLambdaExpressionSyntax simpleLambda &&
-                    simpleLambda
-                    .Parameter
-                    .Identifier
-                    .ValueText == "_"
+                    simpleLambda.Parameter.Identifier.ValueText == "_"
             ) ||
-                parameterList
-                ?.Parameters
-                .Any(
+                parameterList?.Parameters.Any(
                 (parameter Microsoft.CodeAnalysis.CSharp.Syntax.ParameterSyntax) -> parameter
                     .Identifier
                     .ValueText == "_"
@@ -239,8 +229,7 @@ partial class CSharpToGSharpTranslator {
                     out _,
                     out _
                 ) &&
-                    voidHelper!!
-                    .ReturnsVoid {
+                    voidHelper!!.ReturnsVoid {
                     return LambdaExpression(
                         parameters,
                         blockBody: BlockStatement(
@@ -256,11 +245,7 @@ partial class CSharpToGSharpTranslator {
                         isAsync: false
                     )
                 }
-                if lambda.Body is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .AssignmentExpressionSyntax assignmentBody &&
+                if lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignmentBody &&
                     lambdaSymbol != nil &&
                     lambdaSymbol.ReturnsVoid == true {
                     // A C# assignment-bodied lambda converted to a void delegate
@@ -291,17 +276,8 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 if isAsync &&
-                    lambda.Body is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ExpressionSyntax voidAsyncBody &&
-                    this
-                    .context
-                    .GetTypeInfo(voidAsyncBody)
-                    .Type
-                    ?.SpecialType == SpecialType
-                    .System_Void {
+                    lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax voidAsyncBody &&
+                    this.context.GetTypeInfo(voidAsyncBody).Type?.SpecialType == SpecialType.System_Void {
                     return LambdaExpression(
                         parameters,
                         blockBody: BlockStatement(
@@ -351,8 +327,7 @@ partial class CSharpToGSharpTranslator {
                             invoke
                         )
                     } else if this.IsGSharpNullableAnalyzerExpression(bodyExpression) &&
-                        this
-                        .AnalyzerBridgeTargetIsNonNull(targetType, invoke, bodyExpression) {
+                        this.AnalyzerBridgeTargetIsNonNull(targetType, invoke, bodyExpression) {
                         // Issue #4356: a `T?`-only-in-G# analyzer value returned
                         // where the delegate's EFFECTIVE G# result is non-null —
                         // the `T` of an async `Task<T>`, never the envelope — the
@@ -367,8 +342,7 @@ partial class CSharpToGSharpTranslator {
                     } else if !this.LambdaResultFlowsToNullableSink(lambda) && !this.LambdaResultFeedsUnobservedTaskRun(
                         bodyExpression
                     ) &&
-                        this
-                        .SlotTypeIsDeclared(invoke, bodyExpression) {
+                        this.SlotTypeIsDeclared(invoke, bodyExpression) {
                         expressionBody = this.ForgiveNullableReferenceValue(
                             bodyExpression,
                             expressionBody,
@@ -425,9 +399,7 @@ partial class CSharpToGSharpTranslator {
             let returnType = symbol!!.ReturnType
             if isAsync &&
                 returnType is INamedTypeSymbol{Name: "Task"} task &&
-                task
-                .ContainingNamespace
-                ?.ToDisplayString() == "System.Threading.Tasks" {
+                task.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks" {
                 return this.MapUnwrappedAsyncReturnType(symbol!!, task, location)
             }
             // Issue #914 (oblivious sink): local-function/lambda return
@@ -436,12 +408,9 @@ partial class CSharpToGSharpTranslator {
             var mapped GTypeReference? = this.typeMapper.Map(returnType, this.context, location)
             mapped = this.PromoteTupleDeclarationIfTainted(mapped, returnType, symbol)
             if returnType is INamedTypeSymbol{IsGenericType: true} taskLike &&
-                taskLike
-                .TypeArguments
-                .Length == 1 &&
-                taskLike
-                .ContainingNamespace
-                ?.ToDisplayString() == "System.Threading.Tasks" && (taskLike.Name is "Task" or "ValueTask") {
+                taskLike.TypeArguments.Length == 1 &&
+                taskLike.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks" &&
+                (taskLike.Name is "Task" or "ValueTask") {
                 return this.PromoteTaskEnvelopeReturnIfTainted(mapped, taskLike.TypeArguments[0], symbol)
             }
             return this.PromoteReturnIfTainted(mapped, symbol)
@@ -673,21 +642,11 @@ partial class CSharpToGSharpTranslator {
                 (
                 node.Arms.Count(
                     (arm SwitchExpressionArmSyntax) -> arm.Pattern is not(
-                        Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .DiscardPatternSyntax or
-                            Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .VarPatternSyntax
+                        Microsoft.CodeAnalysis.CSharp.Syntax.DiscardPatternSyntax or
+                            Microsoft.CodeAnalysis.CSharp.Syntax.VarPatternSyntax
                     )
                 ) > 1 ||
-                    node
-                    .Arms
-                    .Any(
+                    node.Arms.Any(
                     (arm SwitchExpressionArmSyntax) -> arm
                         .Pattern
                         .DescendantNodesAndSelf()
@@ -910,13 +869,8 @@ partial class CSharpToGSharpTranslator {
                 info.ConvertedType is {} valueTarget &&
                 valueTarget.TypeKind != TypeKind.Error &&
                 IsNonNullableValueType(valueTarget) &&
-                !SymbolEqualityComparer
-                .Default
-                .Equals(valueArmType, valueTarget) && this.GetUserDefinedConversionInputOperator(
-                expression,
-                valueTarget,
-                out _
-            ) != nil {
+                !SymbolEqualityComparer.Default.Equals(valueArmType, valueTarget) &&
+                this.GetUserDefinedConversionInputOperator(expression, valueTarget, out _) != nil {
                 return this.CoerceOperandTo(translated, valueTarget, expression.GetLocation())
             }
             // Issue #3553: C# also target-types REFERENCE arms — `value switch
@@ -930,9 +884,7 @@ partial class CSharpToGSharpTranslator {
             // `!!`/promotion machinery owns those), as do identical types.
             if info.Type is {IsReferenceType: true} armType &&
                 info.ConvertedType is {IsReferenceType: true} armTarget &&
-                !SymbolEqualityComparer
-                .Default
-                .Equals(armType, armTarget) &&
+                !SymbolEqualityComparer.Default.Equals(armType, armTarget) &&
                 info.Type!!.TypeKind != TypeKind.Error &&
                 info.ConvertedType!!.TypeKind != TypeKind.Error {
                 return this.CoerceReferenceValueTo(expression, translated, armTarget)
@@ -971,9 +923,7 @@ partial class CSharpToGSharpTranslator {
                     .state
                     .MaterializedConversionResults
                     .TryGetValue(UnwrapTranslatedValue(translated)!!, out var materializedOperator) &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(materializedOperator, conversionOperator)
+                    SymbolEqualityComparer.Default.Equals(materializedOperator, conversionOperator)
                 let converted GExpression? = if convertedResultIsAsserted {
                     translated
                 } else {
@@ -1128,11 +1078,7 @@ partial class CSharpToGSharpTranslator {
                 let nullableCapture = this.state.StoredPatternCaptures.Contains(matchedValue)
                 let symbolSyntax = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
                 let symbolType = if !nullableCapture &&
-                    symbolSyntax?.Parent is not Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .VarPatternSyntax {
+                    symbolSyntax?.Parent is not Microsoft.CodeAnalysis.CSharp.Syntax.VarPatternSyntax {
                     this.PatternBindingStorageType(symbol).WithNullableAnnotation(
                         Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
                     )
@@ -1517,10 +1463,7 @@ partial class CSharpToGSharpTranslator {
             // an imported-interface-typed scrutinee (here, `ITypeSymbol` from
             // `GetTypeInfo().Type`) under self-hosting. Same fix shape as the
             // four call sites #4155 already decomposed for TypeKind.Delegate.
-            if this
-                .context
-                .GetTypeInfo(node.Expression)
-                .Type is not INamedTypeSymbol enumType ||
+            if this.context.GetTypeInfo(node.Expression).Type is not INamedTypeSymbol enumType ||
                 enumType.TypeKind != TypeKind.Enum {
                 return false
             }
@@ -1662,11 +1605,7 @@ partial class CSharpToGSharpTranslator {
                     ancestor is AccessorDeclarationSyntax ||
                     ancestor is LocalFunctionStatementSyntax ||
                     ancestor is AnonymousFunctionExpressionSyntax ||
-                    ancestor is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .CompilationUnitSyntax
+                    ancestor is Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax
             ) ??
                 node
             let key(Scope Microsoft.CodeAnalysis.SyntaxNode?, Prefix string) = (scope_, prefix)
@@ -1697,29 +1636,15 @@ partial class CSharpToGSharpTranslator {
             let typeInfo = this.context.GetTypeInfo(node.Expression)
             let declaredType ITypeSymbol? = this.GetDeclaredValueType(node.Expression)
             if declaredType?.IsReferenceType == true &&
-                declaredType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated &&
+                declaredType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
                 typeInfo.ConvertedType is {} convertedType &&
                 convertedType.IsReferenceType &&
-                convertedType.NullableAnnotation != Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated &&
-                this
-                .context
-                .GetSymbolInfo(node.Expression)
-                .Symbol is ILocalSymbol yieldedLocal &&
-                yieldedLocal
-                .DeclaringSyntaxReferences
-                .Any((reference SyntaxReference) -> reference.GetSyntax() is ForEachStatementSyntax) &&
-                typeInfo
-                .Nullability
-                .FlowState == Microsoft
-                .CodeAnalysis
-                .NullableFlowState
-                .NotNull {
+                convertedType.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
+                this.context.GetSymbolInfo(node.Expression).Symbol is ILocalSymbol yieldedLocal &&
+                yieldedLocal.DeclaringSyntaxReferences.Any(
+                (reference SyntaxReference) -> reference.GetSyntax() is ForEachStatementSyntax
+            ) &&
+                typeInfo.Nullability.FlowState == Microsoft.CodeAnalysis.NullableFlowState.NotNull {
                 // Preserve the non-null iterator element type through lowering;
                 // ordinary locals need no assertion at this seam.
                 value = EnsureNonNullAssertion(value)
@@ -1739,16 +1664,8 @@ partial class CSharpToGSharpTranslator {
             if node.Expression is TupleExpressionSyntax tupleValue &&
                 typeInfo.ConvertedType is INamedTypeSymbol{IsTupleType: true} tupleTarget &&
                 value is TupleLiteralExpression tupleLiteral &&
-                tupleValue
-                .Arguments
-                .Count == tupleTarget
-                .TupleElements
-                .Length &&
-                tupleLiteral
-                .Elements
-                .Count == tupleValue
-                .Arguments
-                .Count {
+                tupleValue.Arguments.Count == tupleTarget.TupleElements.Length &&
+                tupleLiteral.Elements.Count == tupleValue.Arguments.Count {
                 let bridged = List[GExpression](tupleLiteral.Elements.Count)
                 for var i = 0; i < tupleLiteral.Elements.Count; i++ {
                     bridged.Add(
@@ -1966,16 +1883,8 @@ partial class CSharpToGSharpTranslator {
                     IsTupleType: true
                 } sourceTuple &&
                     destination is INamedTypeSymbol{IsTupleType: true} destinationTuple &&
-                    tuple
-                    .Arguments
-                    .Count == sourceTuple
-                    .TupleElements
-                    .Length &&
-                    tuple
-                    .Arguments
-                    .Count == destinationTuple
-                    .TupleElements
-                    .Length {
+                    tuple.Arguments.Count == sourceTuple.TupleElements.Length &&
+                    tuple.Arguments.Count == destinationTuple.TupleElements.Length {
                     for var i = 0; i < tuple.Arguments.Count; i++ {
                         this.CollectProjectedForEachVariableBindings(
                             tuple.Arguments[i].Expression,
@@ -2015,15 +1924,9 @@ partial class CSharpToGSharpTranslator {
                             .ManagedReferenceArrayProjectedLocalType[symbol] = projectedType
                         projectedBindings.Add(symbol)
                     }
-                    if projectedType?.NullableAnnotation == Microsoft
-                        .CodeAnalysis
-                        .NullableAnnotation
-                        .Annotated &&
+                    if projectedType?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
                         this.IsReferenceLikeOrManagedReference(projectedType) &&
-                        this
-                        .state
-                        .NullableForEachBindings
-                        .Add(symbol) {
+                        this.state.NullableForEachBindings.Add(symbol) {
                         nullableBindings.Add(symbol)
                     }
                 }
@@ -2031,16 +1934,8 @@ partial class CSharpToGSharpTranslator {
                     IsTupleType: true
                 } sourceTuple &&
                     destination is INamedTypeSymbol{IsTupleType: true} destinationTuple &&
-                    tuple
-                    .Variables
-                    .Count == sourceTuple
-                    .TupleElements
-                    .Length &&
-                    tuple
-                    .Variables
-                    .Count == destinationTuple
-                    .TupleElements
-                    .Length {
+                    tuple.Variables.Count == sourceTuple.TupleElements.Length &&
+                    tuple.Variables.Count == destinationTuple.TupleElements.Length {
                     for var i = 0; i < tuple.Variables.Count; i++ {
                         this.CollectProjectedForEachVariableBindings(
                             tuple.Variables[i],
@@ -2233,10 +2128,7 @@ partial class CSharpToGSharpTranslator {
             }
             var mappedType = this.typeMapper.Map(targetType, this.context, single.GetLocation())
             mappedType = this.PromoteIfUsedAsNullable(mappedType, local)
-            if this
-                .state
-                .NullableForEachBindings
-                .Contains(local) ||
+            if this.state.NullableForEachBindings.Contains(local) ||
                 (
                 (!hasSlot || conversion.IsIdentity) &&
                     (
@@ -2257,8 +2149,7 @@ partial class CSharpToGSharpTranslator {
                 inferredType &&
                 hasSlot &&
                 conversion.IsIdentity &&
-                !this
-                .InferredLocalDefaultRequiresTypedDeclaration(local) {
+                !this.InferredLocalDefaultRequiresTypedDeclaration(local) {
                 // Inferred captures retain platform and widened element types without a new coercion.
                 mappedType = nil
             }
@@ -2374,11 +2265,7 @@ partial class CSharpToGSharpTranslator {
         private func TupleConversionRequiresExplicitLowering(sourceType ITypeSymbol?, targetType ITypeSymbol?) bool {
             if sourceType is not INamedTypeSymbol{IsTupleType: true} sourceTuple ||
                 targetType is not INamedTypeSymbol{IsTupleType: true} targetTuple ||
-                sourceTuple
-                .TupleElements
-                .Length != targetTuple
-                .TupleElements
-                .Length {
+                sourceTuple.TupleElements.Length != targetTuple.TupleElements.Length {
                 return false
             }
             for var i = 0; i < sourceTuple.TupleElements.Length; i++ {
@@ -2408,13 +2295,8 @@ partial class CSharpToGSharpTranslator {
         ) GExpression {
             if targetTypeSymbol is INamedTypeSymbol{IsTupleType: true} targetTuple &&
                 sourceType is INamedTypeSymbol{IsTupleType: true} sourceTuple &&
-                targetTuple
-                .TupleElements
-                .Length == sourceTuple
-                .TupleElements
-                .Length &&
-                this
-                .TupleConversionRequiresExplicitLowering(sourceTuple, targetTuple) {
+                targetTuple.TupleElements.Length == sourceTuple.TupleElements.Length &&
+                this.TupleConversionRequiresExplicitLowering(sourceTuple, targetTuple) {
                 let elements = List[GExpression](targetTuple.TupleElements.Length)
                 for var i = 0; i < targetTuple.TupleElements.Length; i++ {
                     let sourceElem = GetEffectiveTupleElementType(sourceTuple, i)
@@ -2442,8 +2324,7 @@ partial class CSharpToGSharpTranslator {
                 OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
                 TypeArguments: [{} underlyingTarget]
             } &&
-                slotConversion
-                .IsNullable {
+                slotConversion.IsNullable {
                 let mappedUnderlying = this.typeMapper.Map(underlyingTarget, this.context, location)
                 if sourceType is INamedTypeSymbol{
                     OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
@@ -2511,11 +2392,7 @@ partial class CSharpToGSharpTranslator {
                 info = this.context.SemanticModel.GetDeconstructionInfo(forEach)
                 let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(forEach)
                 currentSourceType = this.GetProjectedForEachElementType(forEach, forEachInfo) ?? forEachInfo.ElementType
-            } else if current.Parent is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .AssignmentExpressionSyntax assignment &&
+            } else if current.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment &&
                 assignment.Left == current {
                 info = this.context.SemanticModel.GetDeconstructionInfo(assignment)
                 currentSourceType = this.context.GetTypeInfo(assignment.Right).Type
@@ -2540,9 +2417,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 } else if currentSourceType is INamedTypeSymbol{IsTupleType: true} tupleType &&
                     position >= 0 &&
-                    position < tupleType
-                    .TupleElements
-                    .Length {
+                    position < tupleType.TupleElements.Length {
                     currentSourceType = GetEffectiveTupleElementType(tupleType, position)
                 } else {
                     currentSourceType = nil
@@ -2611,11 +2486,8 @@ partial class CSharpToGSharpTranslator {
                     }
                     if mutableBindings != nil &&
                         varPattern.Designation is SingleVariableDesignationSyntax mutableVariable &&
-                        this
-                        .context
-                        .GetDeclaredSymbol(mutableVariable) is ILocalSymbol mutableSymbol &&
-                        this
-                        .PatternBindingNeedsStorage(mutableSymbol) {
+                        this.context.GetDeclaredSymbol(mutableVariable) is ILocalSymbol mutableSymbol &&
+                        this.PatternBindingNeedsStorage(mutableSymbol) {
                         let captureName = this.NewMutableSwitchPatternCaptureName(varPattern, usedDesignators)
                         mutableBindings.Add((mutableSymbol, IdentifierExpression(captureName)))
                         return VarPattern(captureName)
@@ -2628,9 +2500,7 @@ partial class CSharpToGSharpTranslator {
                         }
                     )
                 }
-                case RecursivePatternSyntax{Type: {} type} recursive when this
-                    .state
-                    .TranslatingBooleanPattern &&
+                case RecursivePatternSyntax{Type: {} type} recursive when this.state.TranslatingBooleanPattern &&
                     !PatternIntroducesBinding(recursive) {
                     let nativeTypePattern = this.BuildPatternTypeTest("_", type, recursive)
                     if recursive.PropertyPatternClause == nil && recursive.PositionalPatternClause == nil {
@@ -2760,22 +2630,12 @@ partial class CSharpToGSharpTranslator {
                 return VarPattern(temp)
             }
             if receiverSyntax.Parent is SwitchExpressionSyntax switchParent &&
-                pattern is not Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .DiscardPatternSyntax &&
+                pattern is not Microsoft.CodeAnalysis.CSharp.Syntax.DiscardPatternSyntax &&
                 (
-                pattern is not Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .VarPatternSyntax varSwitchPattern ||
+                pattern is not Microsoft.CodeAnalysis.CSharp.Syntax.VarPatternSyntax varSwitchPattern ||
                     varSwitchPattern.Designation is SingleVariableDesignationSyntax
             ) &&
-                switchParent
-                .Arms
-                .Any(
+                switchParent.Arms.Any(
                 (arm SwitchExpressionArmSyntax) -> this.PatternScrutineeMayChangeDuringMatch(
                     receiverSyntax,
                     arm.Pattern
@@ -2797,8 +2657,7 @@ partial class CSharpToGSharpTranslator {
                 pattern.Type != nil &&
                 pattern.PropertyPatternClause != nil &&
                 PatternIntroducesBinding(pattern) &&
-                this
-                .IsNativelyExpressiblePattern(pattern, topLevel: true) {
+                this.IsNativelyExpressiblePattern(pattern, topLevel: true) {
                 let scope_ = this.state.CurrentBodyScope ?? pattern.SyntaxTree.GetRoot()
                 let locals = pattern
                     .DescendantNodesAndSelf()
@@ -2869,8 +2728,7 @@ partial class CSharpToGSharpTranslator {
                     sliceIndex
                 )
                 if this.RecordPatternDecisionOwner(element) is {} owner &&
-                    this
-                    .DecisionSubtreeRunsUserRecordDeconstruct(owner, element) {
+                    this.DecisionSubtreeRunsUserRecordDeconstruct(owner, element) {
                     let elementType = this.GetListPatternElementType(
                         listPattern,
                         if this.context.SemanticModel.GetOperation(listPattern) is IPatternOperation op {
@@ -2931,8 +2789,7 @@ partial class CSharpToGSharpTranslator {
                     if mutableBindings != nil && this.context.GetDeclaredSymbol(
                         variable
                     ) is ILocalSymbol mutableSymbol &&
-                        this
-                        .PatternBindingNeedsStorage(mutableSymbol) {
+                        this.PatternBindingNeedsStorage(mutableSymbol) {
                         let captureName = this.NewMutableSwitchPatternCaptureName(slice, usedDesignators)
                         mutableBindings.Add((mutableSymbol, IdentifierExpression(captureName)))
                         return SlicePattern(captureName)
@@ -3174,8 +3031,7 @@ partial class CSharpToGSharpTranslator {
                         if mutableBindings != nil && this.context.GetDeclaredSymbol(
                             propertyVariable
                         ) is ILocalSymbol propertySymbol &&
-                            this
-                            .PatternBindingNeedsStorage(propertySymbol) {
+                            this.PatternBindingNeedsStorage(propertySymbol) {
                             let captureName = this.NewMutableSwitchPatternCaptureName(recursive, usedDesignators)
                             mutableBindings.Add((propertySymbol, IdentifierExpression(captureName)))
                             propertyDesignator = captureName
@@ -3237,16 +3093,8 @@ partial class CSharpToGSharpTranslator {
                     if sub.ExpressionColon != nil &&
                         (
                         sub.Pattern is not(
-                            Microsoft
-                                .CodeAnalysis
-                                .CSharp
-                                .Syntax
-                                .VarPatternSyntax or
-                                Microsoft
-                                .CodeAnalysis
-                                .CSharp
-                                .Syntax
-                                .DiscardPatternSyntax
+                            Microsoft.CodeAnalysis.CSharp.Syntax.VarPatternSyntax or
+                                Microsoft.CodeAnalysis.CSharp.Syntax.DiscardPatternSyntax
                         ) ||
                             this.ExtendedPathHasNullableLink(sub.ExpressionColon!!.Expression) ||
                             (sharedPrefixes != nil && sub.NameColon == nil)
@@ -3403,14 +3251,8 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 var matched = this.state.PatternBindings[added]
-                let scope_ = this
-                    .state
-                    .CurrentBodyScope ??
-                    (added as ILocalSymbol)
-                    ?.DeclaringSyntaxReferences
-                    .FirstOrDefault()
-                    ?.SyntaxTree
-                    .GetRoot()
+                let scope_ = this.state.CurrentBodyScope ??
+                    (added as ILocalSymbol)?.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree.GetRoot()
                 let isReassigned = added is ILocalSymbol reassignedLocal && this.PatternBindingNeedsStorage(
                     reassignedLocal
                 )
@@ -3420,11 +3262,7 @@ partial class CSharpToGSharpTranslator {
                     this.ReadsSymbol(scope_, receiverBinder) && ExpressionReferencesIdentifier(matched, receiver) {
                     let binderSyntax = receiverBinder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
                     let nullableCapture = this.ScrutineeStorageIsNullableInGSharp(receiverSyntax) ||
-                        binderSyntax?.Parent is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .VarPatternSyntax
+                        binderSyntax?.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.VarPatternSyntax
                     if matched is NonNullAssertionExpression nonNullMatched &&
                         ExpressionReferencesIdentifier(nonNullMatched.Operand, receiver) {
                         matched = nonNullMatched.Operand
@@ -3501,9 +3339,7 @@ partial class CSharpToGSharpTranslator {
                 .CSharp
                 .Syntax
                 .VarPatternSyntax{Designation: SingleVariableDesignationSyntax bound} &&
-                this
-                .context
-                .GetDeclaredSymbol(bound) is {} boundSymbol {
+                this.context.GetDeclaredSymbol(bound) is {} boundSymbol {
                 if mutableBindings != nil &&
                     boundSymbol is ILocalSymbol mutableSymbol &&
                     this.PatternBindingNeedsStorage(mutableSymbol) {
@@ -3534,16 +3370,8 @@ partial class CSharpToGSharpTranslator {
             let stem = SanitizeIdentifier(LowerCamel(GetRightmostTypeName(recursive!!.Type)))
             let arm Microsoft.CodeAnalysis.SyntaxNode? = recursive!!.Ancestors().FirstOrDefault(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> node is SwitchSectionSyntax ||
-                    node is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .SwitchExpressionArmSyntax ||
-                    node is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .StatementSyntax
+                    node is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax ||
+                    node is Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax
             ) ??
                 recursive
             let occupied = HashSet[string](usedDesignators!!, StringComparer.Ordinal)
@@ -3569,14 +3397,8 @@ partial class CSharpToGSharpTranslator {
                     occupied.Add(this.EmittedName(token.Parent, token)!!)
                 }
             }
-            let owner INamedTypeSymbol? = this
-                .state
-                .CurrentEmittedAggregate ??
-                this
-                .context
-                .SemanticModel
-                .GetEnclosingSymbol(recursive!!.SpanStart)
-                ?.ContainingType
+            let owner INamedTypeSymbol? = this.state.CurrentEmittedAggregate ??
+                this.context.SemanticModel.GetEnclosingSymbol(recursive!!.SpanStart)?.ContainingType
             let designator = LiftedLocalFunctionNameAllocator.For(this.context.Compilation).ClaimDesignator(
                 owner,
                 stem,
@@ -3595,8 +3417,7 @@ partial class CSharpToGSharpTranslator {
             uniquify bool = false
         ) string? {
             if mutableBindings != nil && this.context.GetDeclaredSymbol(variable) is ILocalSymbol symbol &&
-                this
-                .PatternBindingNeedsStorage(symbol) {
+                this.PatternBindingNeedsStorage(symbol) {
                 let captureName = this.NewMutableSwitchPatternCaptureName(pattern, usedDesignators)
                 mutableBindings.Add((symbol, IdentifierExpression(captureName)))
                 return captureName
@@ -3885,14 +3706,8 @@ partial class CSharpToGSharpTranslator {
             if mappedArrayElement != nil {
                 return mappedArrayElement
             }
-            let sourceType ITypeSymbol? = this
-                .context
-                .GetTypeInfo(source)
-                .Type ??
-                this
-                .context
-                .GetTypeInfo(source)
-                .ConvertedType
+            let sourceType ITypeSymbol? = this.context.GetTypeInfo(source).Type ??
+                this.context.GetTypeInfo(source).ConvertedType
             if anchor is FromClauseSyntax{Parent: QueryExpressionSyntax} initialFrom {
                 let query QueryExpressionSyntax? = cast[QueryExpressionSyntax](initialFrom.Parent)
                 let queryOperator IMethodSymbol? = this
@@ -3935,9 +3750,7 @@ partial class CSharpToGSharpTranslator {
             }
             return if (projectedSource ?? sourceType) is INamedTypeSymbol queryProvider &&
                 queryProvider.IsGenericType &&
-                queryProvider
-                .TypeArguments
-                .Length == 1 {
+                queryProvider.TypeArguments.Length == 1 {
                 GetEffectiveTypeArgument(queryProvider, 0)
             } else {
                 default(ITypeSymbol?)
@@ -3961,9 +3774,7 @@ partial class CSharpToGSharpTranslator {
                         }
                     )
                 ) is {} reducedFrom &&
-                    reducedFrom
-                    .Parameters
-                    .Length > 0 {
+                    reducedFrom.Parameters.Length > 0 {
                     let constructedMethod = if queryOperator.ReducedFrom != nil {
                         queryOperator
                     } else {
@@ -3975,14 +3786,8 @@ partial class CSharpToGSharpTranslator {
                         methodReplacements = Dictionary[ITypeParameterSymbol, ITypeSymbol](
                             SymbolEqualityComparer.Default
                         )
-                        for var i = 0;
-                            i < openExtension
-                            .TypeParameters
-                            .Length &&
-                            i < constructedMethod
-                            .TypeArguments
-                            .Length;
-                            i++ {
+                        for var i = 0; i < openExtension.TypeParameters.Length &&
+                            i < constructedMethod.TypeArguments.Length; i++ {
                             var effectiveArg = this.GetEffectiveMethodTypeArgument(constructedMethod, i)
                             if this.TryGetProjectedTypeArgument(
                                 openReceiverType,
@@ -4011,14 +3816,8 @@ partial class CSharpToGSharpTranslator {
                         methodReplacements = Dictionary[ITypeParameterSymbol, ITypeSymbol](
                             SymbolEqualityComparer.Default
                         )
-                        for var i = 0;
-                            i < openInstance
-                            .TypeParameters
-                            .Length &&
-                            i < queryOperator
-                            .TypeArguments
-                            .Length;
-                            i++ {
+                        for var i = 0; i < openInstance.TypeParameters.Length &&
+                            i < queryOperator.TypeArguments.Length; i++ {
                             methodReplacements[openInstance.TypeParameters[i]] = this.GetEffectiveMethodTypeArgument(
                                 queryOperator,
                                 i
@@ -4047,24 +3846,16 @@ partial class CSharpToGSharpTranslator {
                 }
                 var delegateType = parameterType as INamedTypeSymbol
                 if delegateType != nil &&
-                    delegateType
-                    .OriginalDefinition
-                    .MetadataName == "Expression`1" &&
-                    delegateType
-                    .TypeArguments
-                    .Length == 1 &&
+                    delegateType.OriginalDefinition.MetadataName == "Expression`1" &&
+                    delegateType.TypeArguments.Length == 1 &&
                     delegateType.DelegateInvokeMethod == nil &&
-                    delegateType
-                    .ContainingNamespace
-                    ?.ToDisplayString() == "System.Linq.Expressions" {
+                    delegateType.ContainingNamespace?.ToDisplayString() == "System.Linq.Expressions" {
                     delegateType = GetEffectiveTypeArgument(delegateType, 0) as INamedTypeSymbol
                 }
                 if delegateType?.DelegateInvokeMethod is {Parameters: {Length: > 0}} invoke {
                     let rawRangeType = invoke.OriginalDefinition.Parameters[0].Type
                     return this.SubstituteProjectedContainingTypeParameter(delegateType, rawRangeType) ??
-                        invoke
-                        .Parameters[0]
-                        .Type
+                        invoke.Parameters[0].Type
                 }
             }
             return nil
@@ -4151,12 +3942,8 @@ partial class CSharpToGSharpTranslator {
                     // no-op the C# compiler elides; keep it only when it transforms.
                     if $scope.Count == 1 &&
                         select_.Expression is IdentifierNameSyntax id &&
-                        id
-                        .Identifier
-                        .ValueText == $scope[0].Name &&
-                        body
-                        .Clauses
-                        .Count > 0 {
+                        id.Identifier.ValueText == $scope[0].Name &&
+                        body.Clauses.Count > 0 {
                         if $scope[0].Symbol != nil {
                             this.state.ProjectedQueryBindingType.TryGetValue($scope[0].Symbol, out resultTypeSymbol)
                         }
@@ -4365,19 +4152,14 @@ partial class CSharpToGSharpTranslator {
             }
             let isIdentity = $scope.Count == 1 &&
                 group.GroupExpression is IdentifierNameSyntax id &&
-                id
-                .Identifier
-                .ValueText == $scope[0].Name
+                id.Identifier.ValueText == $scope[0].Name
             let args = List[GExpression]{keySelector}
             var elementType GTypeReference?
             var elementTypeSymbol ITypeSymbol?
             if isIdentity {
                 elementType = $scope[0].Type
                 elementTypeSymbol = if $scope[0].Symbol != nil &&
-                    this
-                    .state
-                    .ProjectedQueryBindingType
-                    .TryGetValue($scope[0].Symbol, out var projectedElement) {
+                    this.state.ProjectedQueryBindingType.TryGetValue($scope[0].Symbol, out var projectedElement) {
                     projectedElement
                 } else {
                     this.context.GetTypeInfo(group.GroupExpression).Type
@@ -4395,10 +4177,7 @@ partial class CSharpToGSharpTranslator {
             resultType = NamedTypeReference("IGrouping", List[GTypeReference]{keyType!!, elementType!!})
             resultTypeSymbol = if keyTypeSymbol != nil &&
                 elementTypeSymbol != nil &&
-                this
-                .context
-                .Compilation
-                .GetTypeByMetadataName("System.Linq.IGrouping`2") is {} groupingType {
+                this.context.Compilation.GetTypeByMetadataName("System.Linq.IGrouping`2") is {} groupingType {
                 groupingType.Construct(keyTypeSymbol, elementTypeSymbol)
             } else {
                 default(INamedTypeSymbol?)
@@ -4524,15 +4303,9 @@ partial class CSharpToGSharpTranslator {
             for (_, type, symbol) in $scope {
                 if type!!.IsNullable &&
                     symbol != nil &&
-                    this
-                    .state
-                    .ProjectedQueryBindingType
-                    .TryGetValue(symbol, out var bindingType) &&
+                    this.state.ProjectedQueryBindingType.TryGetValue(symbol, out var bindingType) &&
                     this.IsReferenceLikeOrManagedReference(bindingType) &&
-                    this
-                    .state
-                    .NullableForEachBindings
-                    .Add(symbol) {
+                    this.state.NullableForEachBindings.Add(symbol) {
                     addedNullableBindings.Add(symbol)
                 }
             }
@@ -4681,9 +4454,7 @@ partial class CSharpToGSharpTranslator {
                 return isAsync &&
                     symbol.ReturnType is INamedTypeSymbol{IsGenericType: false} taskLike &&
                     (taskLike.Name is "Task" or "ValueTask") &&
-                    taskLike
-                    .ContainingNamespace
-                    ?.ToDisplayString() == "System.Threading.Tasks"
+                    taskLike.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks"
             }
 
             // Issue #4977: whether `block` ends in a G# value-capable tail that
@@ -4695,10 +4466,7 @@ partial class CSharpToGSharpTranslator {
                 for var i = block.Statements.Count - 1; i >= 0; i-- {
                     let candidate = block.Statements[i]
                     if candidate is RawStatement raw &&
-                        raw
-                        .Text
-                        .TrimStart()
-                        .StartsWith("//", StringComparison.Ordinal) {
+                        raw.Text.TrimStart().StartsWith("//", StringComparison.Ordinal) {
                         continue
                     }
                     return StatementHasValueCapableTail(candidate)
@@ -4713,9 +4481,7 @@ partial class CSharpToGSharpTranslator {
                 case block is BlockStatement: !block.IsUnsafe &&
                     !block.IsChecked &&
                     !block.IsUnchecked &&
-                    block
-                    .SuppressedDiagnostics
-                    .Count == 0 &&
+                    block.SuppressedDiagnostics.Count == 0 &&
                     BlockHasValueCapableTail(block)
                 case ifStmt is IfStatement: IfChainEndsInPlainElse(ifStmt) && IfChainHasValueCapableBranch(ifStmt)
                 case ifLetStmt is IfLetStatement: IfChainEndsInPlainElse(ifLetStmt) &&
@@ -4771,17 +4537,9 @@ partial class CSharpToGSharpTranslator {
                 .CSharp
                 .Syntax
                 .DiscardPatternSyntax ||
-                pattern is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .VarPatternSyntax ||
+                pattern is Microsoft.CodeAnalysis.CSharp.Syntax.VarPatternSyntax ||
                 (
-                pattern is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ParenthesizedPatternSyntax parenthesized &&
+                pattern is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedPatternSyntax parenthesized &&
                     IsTotalPattern(parenthesized.Pattern)
             ) ||
                 (
@@ -4805,11 +4563,7 @@ partial class CSharpToGSharpTranslator {
                 .SwitchStatementSyntax ||
                 node is ForStatementSyntax ||
                 node is CommonForEachStatementSyntax ||
-                node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .WhileStatementSyntax ||
+                node is Microsoft.CodeAnalysis.CSharp.Syntax.WhileStatementSyntax ||
                 node is DoStatementSyntax
 
             private func IsRedundantSwitchSectionBreak(
@@ -4823,14 +4577,8 @@ partial class CSharpToGSharpTranslator {
                         return section.Statements.LastOrDefault() == child
                     }
                     if ancestor is BlockSyntax block &&
-                        child is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .StatementSyntax statement &&
-                        block
-                        .Statements
-                        .LastOrDefault() != statement {
+                        child is Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax statement &&
+                        block.Statements.LastOrDefault() != statement {
                         return false
                     }
                     child = ancestor
@@ -4849,10 +4597,7 @@ partial class CSharpToGSharpTranslator {
                     return true
                 }
                 return text.StartsWith("[", StringComparison.Ordinal) &&
-                    !text
-                    .Substring(1)
-                    .TrimStart()
-                    .StartsWith("]", StringComparison.Ordinal)
+                    !text.Substring(1).TrimStart().StartsWith("]", StringComparison.Ordinal)
             }
 
             private func GetBreakTarget(node Microsoft.CodeAnalysis.CSharp.Syntax.YieldStatementSyntax) Microsoft

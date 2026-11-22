@@ -238,9 +238,7 @@ partial class CSharpToGSharpTranslator {
             let data AttributeData? = CSharpToGSharpTranslator.FindLibraryImportAttribute(symbol)
             if data != nil && data.NamedArguments.Any(
                 (named KeyValuePair[string, TypedConstant]) -> named.Key == "StringMarshallingCustomType" &&
-                    named
-                    .Value
-                    .Value != nil
+                    named.Value.Value != nil
             ) {
                 let message = "[LibraryImport] method '$name' names a StringMarshallingCustomType; gsc's native " +
                     "@LibraryImport accepts the argument but runs no custom string marshaller (ADR-0092), " +
@@ -267,16 +265,10 @@ partial class CSharpToGSharpTranslator {
                 )
             )
             if returnMarshalAs != nil &&
-                symbol
-                .ReturnType
-                .SpecialType != SpecialType.System_String &&
+                symbol.ReturnType.SpecialType != SpecialType.System_String &&
                 !(
-                returnMarshalAs
-                    .ConstructorArguments
-                    .Length == 1 &&
-                    returnMarshalAs
-                    .ConstructorArguments[0]
-                    .Value is int32 unmanagedType &&
+                returnMarshalAs.ConstructorArguments.Length == 1 &&
+                    returnMarshalAs.ConstructorArguments[0].Value is int32 unmanagedType &&
                     unmanagedType == int32(UnmanagedType.Bool)
             ) {
                 let message = "$returnSubject carries [return: MarshalAs] other than UnmanagedType.Bool; gsc applies " +
@@ -326,9 +318,7 @@ partial class CSharpToGSharpTranslator {
             }
             let cdeclOnly = callConv.NamedArguments.All(
                 (named KeyValuePair[string, TypedConstant]) -> named.Key == "CallConvs" &&
-                    named
-                    .Value
-                    .Kind == TypedConstantKind.Array &&
+                    named.Value.Kind == TypedConstantKind.Array &&
                     named
                     .Value
                     .Values
@@ -435,12 +425,10 @@ partial class CSharpToGSharpTranslator {
                 return
             }
             if implementation == nil ||
-                implementation
-                .DeclaringSyntaxReferences
-                .Length == 0 ||
-                implementation
-                .DeclaringSyntaxReferences
-                .Any((reference SyntaxReference) -> this.IsTranslatedByThisRun(reference.SyntaxTree)) {
+                implementation.DeclaringSyntaxReferences.Length == 0 ||
+                implementation.DeclaringSyntaxReferences.Any(
+                (reference SyntaxReference) -> this.IsTranslatedByThisRun(reference.SyntaxTree)
+            ) {
                 return
             }
             let generatedFile = implementation.DeclaringSyntaxReferences[0].SyntaxTree.FilePath
@@ -486,9 +474,7 @@ partial class CSharpToGSharpTranslator {
             private func MapConstructorArgumentConstant(data AttributeData, index int32) GExpression? -> if index < data
                 .ConstructorArguments
                 .Length &&
-                data
-                .ConstructorArguments[index]
-                .Value is string text {
+                data.ConstructorArguments[index].Value is string text {
                 LiteralExpression.String(text)
             } else {
                 default(LiteralExpression?)
@@ -587,12 +573,8 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 usesMarshalAs = true
-                let unmanagedType = if marshalAs
-                    .ConstructorArguments
-                    .Length == 1 &&
-                    marshalAs
-                    .ConstructorArguments[0]
-                    .Value is int32 raw {
+                let unmanagedType = if marshalAs.ConstructorArguments.Length == 1 &&
+                    marshalAs.ConstructorArguments[0].Value is int32 raw {
                     raw
                 } else {
                     -1

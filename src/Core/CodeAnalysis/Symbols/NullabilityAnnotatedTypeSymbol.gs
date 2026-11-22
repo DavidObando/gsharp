@@ -286,8 +286,7 @@ class NullabilityAnnotatedTypeSymbol : TypeSymbol {
             }
             if source is TupleTypeSymbol namedTuple &&
                 target is TupleTypeSymbol unnamedTuple &&
-                namedTuple.Arity == unnamedTuple
-                .Arity {
+                namedTuple.Arity == unnamedTuple.Arity {
                 let elements = ImmutableArray.CreateBuilder[TypeSymbol](unnamedTuple.ElementTypes.Length)
                 for var i = 0; i < unnamedTuple.ElementTypes.Length; i++ {
                     elements.Add(TransferTupleNames(namedTuple.ElementTypes[i], unnamedTuple.ElementTypes[i]))
@@ -301,13 +300,8 @@ class NullabilityAnnotatedTypeSymbol : TypeSymbol {
             if source is ImportedTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}} namedImported &&
                 target is ImportedTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}} unnamedImported &&
                 unnamedImported.ClrType is Type unnamedImportedClr &&
-                namedImported
-                .TypeArguments
-                .Length == unnamedImported
-                .TypeArguments
-                .Length &&
-                TypeSymbol
-                .ContainsNamedTupleElements(namedImported) {
+                namedImported.TypeArguments.Length == unnamedImported.TypeArguments.Length &&
+                TypeSymbol.ContainsNamedTupleElements(namedImported) {
                 let arguments = ImmutableArray.CreateBuilder[TypeSymbol](unnamedImported.TypeArguments.Length)
                 for var i = 0; i < unnamedImported.TypeArguments.Length; i++ {
                     arguments.Add(TransferTupleNames(namedImported.TypeArguments[i], unnamedImported.TypeArguments[i]))
@@ -338,8 +332,7 @@ class NullabilityAnnotatedTypeSymbol : TypeSymbol {
                 annotatedTarget.ClrType is Type annotatedTargetClr &&
                 annotatedTargetClr.IsGenericType &&
                 !annotatedTargetClr.IsGenericTypeDefinition &&
-                TypeSymbol
-                .ContainsNamedTupleElements(namedSourceGeneric) {
+                TypeSymbol.ContainsNamedTupleElements(namedSourceGeneric) {
                 let clrArguments = annotatedTargetClr.GetGenericArguments()
                 if namedSourceGeneric.TypeArguments.Length == clrArguments.Length {
                     let openDefinition = (annotatedTarget.BaseType as ImportedTypeSymbol)?.OpenDefinition ??
@@ -361,8 +354,7 @@ class NullabilityAnnotatedTypeSymbol : TypeSymbol {
             }
             if source is ArrayTypeSymbol namedArray &&
                 target is ArrayTypeSymbol unnamedArray &&
-                namedArray.Length == unnamedArray
-                .Length {
+                namedArray.Length == unnamedArray.Length {
                 return ArrayTypeSymbol.Get(
                     TransferTupleNames(namedArray.ElementType, unnamedArray.ElementType),
                     unnamedArray.Length
@@ -370,8 +362,7 @@ class NullabilityAnnotatedTypeSymbol : TypeSymbol {
             }
             if source is RectangularArrayTypeSymbol namedRectangular &&
                 target is RectangularArrayTypeSymbol unnamedRectangular &&
-                namedRectangular.Rank == unnamedRectangular
-                .Rank {
+                namedRectangular.Rank == unnamedRectangular.Rank {
                 return RectangularArrayTypeSymbol.Get(
                     TransferTupleNames(namedRectangular.ElementType, unnamedRectangular.ElementType),
                     unnamedRectangular.Rank

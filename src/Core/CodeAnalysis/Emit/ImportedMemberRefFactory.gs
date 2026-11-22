@@ -115,9 +115,7 @@ internal class ImportedMemberRefFactory {
         if element is NullableTypeSymbol nullableElement && !NullableLifting.RequiresSymbolicNullableGetValue(
             nullableElement
         ) &&
-            nullableElement
-            .UnderlyingType
-            ?.ClrType is {IsValueType: true} nullableInnerClr {
+            nullableElement.UnderlyingType?.ClrType is {IsValueType: true} nullableInnerClr {
             // Issue #571: route Nullable<T> through the ReferenceResolver so the
             // open definition and the (possibly MLC-backed) inner come from the
             // same load context. The host `typeof(System.Nullable<>)` mixes
@@ -223,13 +221,9 @@ internal class ImportedMemberRefFactory {
             return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
         if element is ImportedTypeSymbol symbolicImported &&
-            !symbolicImported
-            .TypeArguments
-            .IsDefaultOrEmpty &&
+            !symbolicImported.TypeArguments.IsDefaultOrEmpty &&
             !symbolicImported.HasTypeParameterArgument &&
-            symbolicImported
-            .TypeArguments
-            .Any(TypeSymbol.RequiresSymbolicProjection) {
+            symbolicImported.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection) {
             let sigBlob = BlobBuilder()
             this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), symbolicImported)
             return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
@@ -293,31 +287,17 @@ internal class ImportedMemberRefFactory {
             let encoder = BlobEncoder(sigBlob).TypeSpecificationSignature()
             // Issue #810: inside an iterator state-machine member,
             // source TPs are remapped to the SM class's own TPs.
-            if this
-                .remaps
-                .ActiveIteratorStateMachineRemap != nil &&
-                this
-                .remaps
-                .ActiveIteratorStateMachineRemap!!.TryGetValue(tpSym, out var smClassOrd) {
+            if this.remaps.ActiveIteratorStateMachineRemap != nil &&
+                this.remaps.ActiveIteratorStateMachineRemap!!.TryGetValue(tpSym, out var smClassOrd) {
                 encoder.GenericTypeParameter(smClassOrd)
-            } else if this
-                .remaps
-                .ActiveLambdaMethodTypeParamRemap != nil &&
-                this
-                .remaps
-                .ActiveLambdaMethodTypeParamRemap!!
-                .TryGetValue(tpSym, out var lambdaMethodOrd) {
+            } else if this.remaps.ActiveLambdaMethodTypeParamRemap != nil &&
+                this.remaps.ActiveLambdaMethodTypeParamRemap!!.TryGetValue(tpSym, out var lambdaMethodOrd) {
                 // Issue #2118: reference to an enclosing type parameter inside a
                 // generic-promoted non-capturing lambda's signature/body maps to
                 // the lambda method's own MVar(idx) slot.
                 encoder.GenericMethodTypeParameter(lambdaMethodOrd)
-            } else if this
-                .remaps
-                .ActiveIteratorStateMachineRemap != nil &&
-                this
-                .remaps
-                .ActiveIteratorStateMachineRemap!!
-                .TryGetValue(tpSym, out var smClassOrd2) {
+            } else if this.remaps.ActiveIteratorStateMachineRemap != nil &&
+                this.remaps.ActiveIteratorStateMachineRemap!!.TryGetValue(tpSym, out var smClassOrd2) {
                 // Issue #1477: synthesized closure, capture-box, and nested-type
                 // remaps still map class type parameters to their own VAR slots.
                 encoder.GenericTypeParameter(smClassOrd2)
@@ -386,9 +366,7 @@ internal class ImportedMemberRefFactory {
         // (binder/evaluator collapse the wrapper to its underlying type for
         // every other purpose — ADR-0001).
         if type is NullableTypeSymbol nullable && !NullableLifting.RequiresSymbolicNullableGetValue(nullable) &&
-            nullable
-            .UnderlyingType
-            .ClrType is {IsValueType: true} valueClr {
+            nullable.UnderlyingType.ClrType is {IsValueType: true} valueClr {
             // Issue #571: see GetElementTypeToken for rationale.
             if !NullableLifting.TryConstructNullable(this.emitCtx.References, valueClr, out var nullableType) {
                 throw InvalidOperationException(
@@ -703,8 +681,7 @@ internal class ImportedMemberRefFactory {
                 if !typeArgSymbols.IsDefaultOrEmpty &&
                     i < typeArgSymbols.Length &&
                     typeArgSymbols[i] is {} symbolicTypeArgument &&
-                    TypeSymbol
-                    .RequiresSymbolicProjection(symbolicTypeArgument) {
+                    TypeSymbol.RequiresSymbolicProjection(symbolicTypeArgument) {
                     this.signatures.EncodeTypeSymbol(symbolicArgsEncoder.AddArgument(), symbolicTypeArgument)
                 } else {
                     this.signatures.EncodeClrType(symbolicArgsEncoder.AddArgument(), symbolicClosedArgs[i])
@@ -751,8 +728,7 @@ internal class ImportedMemberRefFactory {
             if !typeArgSymbols.IsDefaultOrEmpty &&
                 i < typeArgSymbols.Length &&
                 typeArgSymbols[i] is {} symbolicTypeArgument &&
-                TypeSymbol
-                .RequiresSymbolicProjection(symbolicTypeArgument) {
+                TypeSymbol.RequiresSymbolicProjection(symbolicTypeArgument) {
                 this.signatures.EncodeTypeSymbol(argsEncoder.AddArgument(), symbolicTypeArgument)
             } else {
                 this.signatures.EncodeClrType(argsEncoder.AddArgument(), closedArgs[i])
@@ -947,12 +923,8 @@ internal class ImportedMemberRefFactory {
         if ctor == nil ||
             containingTypeSymbol is not ImportedTypeSymbol imported ||
             imported.OpenDefinition == nil ||
-            imported
-            .TypeArguments
-            .IsDefaultOrEmpty ||
-            !imported
-            .TypeArguments
-            .Any(TypeSymbol.RequiresSymbolicProjection) {
+            imported.TypeArguments.IsDefaultOrEmpty ||
+            !imported.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection) {
             return false
         }
         let cacheKey = MetadataTokenCache.CtorRefSymbolKey(ctor, imported.TypeArguments, this.remaps.CurrentScope)
@@ -1900,12 +1872,8 @@ internal class ImportedMemberRefFactory {
                 default(EntityHandle?)
             }
         }
-        if builderInfo
-            .TaskProperty
-            ?.PropertyType is not Type taskClrType ||
-            plan
-            .StateMachine
-            .ResultTypeSymbol is not TypeSymbol resultSym {
+        if builderInfo.TaskProperty?.PropertyType is not Type taskClrType ||
+            plan.StateMachine.ResultTypeSymbol is not TypeSymbol resultSym {
             return nil
         }
         let taskReturn TypeSymbol = if taskClrType.IsConstructedGenericType {
@@ -2013,9 +1981,7 @@ internal class ImportedMemberRefFactory {
             @NotNullWhen(true) out projected Type?
         ) bool {
             projected = nil
-            if type
-                .Assembly
-                .ReflectionOnly ||
+            if type.Assembly.ReflectionOnly ||
                 type.IsGenericParameter ||
                 type.HasElementType ||
                 type.IsConstructedGenericType {
@@ -2070,8 +2036,7 @@ internal class ImportedMemberRefFactory {
             ) {
                 if candidate.Name == method.Name &&
                     candidate.IsStatic == method.IsStatic &&
-                    candidate.IsGenericMethod == method
-                    .IsGenericMethod {
+                    candidate.IsGenericMethod == method.IsGenericMethod {
                     var parametersMatch = true
                     try {
                         parametersMatch = candidate.GetParameters().Length == method.GetParameters().Length
@@ -2217,8 +2182,7 @@ internal class ImportedMemberRefFactory {
             let declaring Type? = property?.DeclaringType
             if !ContainsTypeBuilderGenericArgument(declaring) ||
                 declaring == nil ||
-                !declaring
-                .IsConstructedGenericType {
+                !declaring.IsConstructedGenericType {
                 return if wantSetter {
                     property?.GetSetMethod(nonPublic)
                 } else {
@@ -2322,8 +2286,7 @@ internal class ImportedMemberRefFactory {
                 case map_ is MapTypeSymbol when map_.ClrType == nil || TypeSymbol.RequiresSymbolicProjection(
                     map_.KeyType
                 ) ||
-                    TypeSymbol
-                    .RequiresSymbolicProjection(map_.ValueType) {
+                    TypeSymbol.RequiresSymbolicProjection(map_.ValueType) {
                     openDefinition = if map_.ClrType is {IsGenericType: true} mapClr {
                         mapClr.GetGenericTypeDefinition()
                     } else {
@@ -2397,8 +2360,7 @@ internal class ImportedMemberRefFactory {
             ) {
                 if candidate.Name == method.Name &&
                     candidate.IsStatic == method.IsStatic &&
-                    candidate.IsGenericMethod == method
-                    .IsGenericMethod {
+                    candidate.IsGenericMethod == method.IsGenericMethod {
                     var parametersMatch = true
                     try {
                         parametersMatch = candidate.GetParameters().Length == method.GetParameters().Length

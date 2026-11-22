@@ -460,9 +460,7 @@ public static class Consumer {
                         throw InvalidOperationException("Missing ordinary equality body.")
                 ),
                 (instruction IlInstruction) -> instruction.MetadataToken is int32 token &&
-                    selfEquals
-                    .Module
-                    .ResolveMethod(token, leaf.GetGenericArguments(), nil) is {} target &&
+                    selfEquals.Module.ResolveMethod(token, leaf.GetGenericArguments(), nil) is {} target &&
                     target.Name == "Equals" &&
                     target.DeclaringType == directBase
             )
@@ -754,9 +752,7 @@ public static class Consumer {
             let baseCall = Assert.Single(
                 instructions,
                 (instruction IlInstruction) -> instruction.MetadataToken is int32 token &&
-                    selfEquals
-                    .Module
-                    .ResolveMethod(token, leaf.GetGenericArguments(), nil) is {} target &&
+                    selfEquals.Module.ResolveMethod(token, leaf.GetGenericArguments(), nil) is {} target &&
                     target.Name == "Equals" &&
                     target.DeclaringType == directBase
             )
@@ -983,8 +979,7 @@ public func Check() bool {
                 (method MethodDefinition) -> (
                     method.Attributes.ToString() + "|" + Convert.ToHexString(metadata.GetBlobBytes(method.Signature)) +
                         "|" +
-                        string
-                        .Join(
+                        string.Join(
                         ";",
                         method.GetParameters().Select(
                             (handle ParameterHandle) -> {

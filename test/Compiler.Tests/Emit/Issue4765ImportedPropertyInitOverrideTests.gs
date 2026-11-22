@@ -193,9 +193,9 @@ public class Driver {
                 this.output.WriteLine(
                     "Actual set_Value: " + method.Attributes.ToString() +
                         "; RVA=" +
-                        method
-                        .RelativeVirtualAddress
-                        .ToString() + "; signature=" + Convert.ToHexString(metadata.GetBlobBytes(method.Signature))
+                        method.RelativeVirtualAddress.ToString() + "; signature=" + Convert.ToHexString(
+                        metadata.GetBlobBytes(method.Signature)
+                    )
                 )
             }
         }

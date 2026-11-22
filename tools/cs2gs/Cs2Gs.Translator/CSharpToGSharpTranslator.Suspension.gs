@@ -89,9 +89,7 @@ partial class CSharpToGSharpTranslator {
             private func IsValueTaskEnvelope(type ITypeSymbol) bool -> type is INamedTypeSymbol{
                 Name: "ValueTask"
             } named &&
-                named
-                .ContainingNamespace
-                ?.ToDisplayString() == "System.Threading.Tasks"
+                named.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks"
 
             private func IsConcurrencyRuntimeNamespace(ns INamespaceSymbol?) bool -> ns != nil &&
                 !ns.IsGlobalNamespace &&

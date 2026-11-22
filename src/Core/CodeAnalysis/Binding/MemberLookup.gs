@@ -73,26 +73,16 @@ internal class MemberLookup {
         const dataMembers = MemberKinds.Field | MemberKinds.Property | MemberKinds.Event
         for var current TypeSymbol? = type; current != nil; current = current!!.ContainingType {
             if TypeMemberModel.EnumerateMembers(current, MemberQuery.Instance(dataMembers)).Any(matches) ||
-                TypeMemberModel
-                .EnumerateMembers(current, MemberQuery.Static(dataMembers)).Any(matches) || TypeMemberModel.GetMethods(
-                current,
-                name,
-                MemberQuery.Instance(MemberKinds.Method)
-            )
-                .Length != 0 ||
-                TypeMemberModel
-                .GetMethods(current, name, MemberQuery.Static(MemberKinds.Method))
-                .Length != 0 ||
+                TypeMemberModel.EnumerateMembers(current, MemberQuery.Static(dataMembers)).Any(matches) ||
+                TypeMemberModel.GetMethods(current, name, MemberQuery.Instance(MemberKinds.Method)).Length != 0 ||
+                TypeMemberModel.GetMethods(current, name, MemberQuery.Static(MemberKinds.Method)).Length != 0 ||
                 TypeMemberModel.TryGetStaticField(current, name, out _) {
                 return current
             }
             if current is InterfaceSymbol iface &&
                 (
-                iface.GetStaticField(name) != nil || iface.GetPrivateMethods(name)
-                    .Length != 0 ||
-                    iface
-                    .GetStaticPrivateMethods(name)
-                    .Length != 0 ||
+                iface.GetStaticField(name) != nil || iface.GetPrivateMethods(name).Length != 0 ||
+                    iface.GetStaticPrivateMethods(name).Length != 0 ||
                     GetInterfaceImportedBaseInstanceDataMember(iface, name, dataMembers) != nil ||
                     GetInterfaceImportedBaseInstanceMethods(iface, name, out _).Count != 0
             ) {
@@ -451,9 +441,7 @@ internal class MemberLookup {
     /// @returns The list of candidate (cref:MethodInfo) overloads.
     func CollectImportedExtensionMethods(methodName string) List[MethodInfo] {
         let classes = this.GetImportedExtensionClasses()
-        let cache = binderCtx
-            .Services
-            .CachedImportedExtensionMethods ??
+        let cache = binderCtx.Services.CachedImportedExtensionMethods ??
             Dictionary[string, ImmutableArray[MethodInfo]](StringComparer.Ordinal)
         binderCtx.Services.CachedImportedExtensionMethods = cache
         if cache.TryGetValue(methodName, out var cached) {
@@ -658,12 +646,8 @@ internal class MemberLookup {
         if services.CachedImportedExtensionClasses != nil &&
             services.CachedImportedExtensionImportCount == importCount &&
             object.ReferenceEquals(services.CachedImportedExtensionReferences, binderCtx.References) &&
-            services.CachedImportedExtensionAssemblyName == binderCtx
-            .RootScope
-            .ConsumerAssemblyName &&
-            services
-            .CachedImportedExtensionImports
-            .SequenceEqual(imports) && object.ReferenceEquals(
+            services.CachedImportedExtensionAssemblyName == binderCtx.RootScope.ConsumerAssemblyName &&
+            services.CachedImportedExtensionImports.SequenceEqual(imports) && object.ReferenceEquals(
             services.CachedImportedExtensionSyntaxTree,
             binderCtx.RootScope.GetCurrentReferencingSyntaxTreeForCache()
         ) {
@@ -733,10 +717,8 @@ internal class MemberLookup {
         // accessibility is admitted.
         let includeInternal = this.binderCtx.CanAccessInternalMembers(clrTarget.Assembly)
         var anyAncestorGrantsInternal = includeInternal
-        for var ancestor Type? = clrTarget.BaseType;
-            ancestor != nil &&
-            !anyAncestorGrantsInternal;
-            ancestor = ancestor?.BaseType {
+        for var ancestor Type? = clrTarget.BaseType; ancestor != nil &&
+            !anyAncestorGrantsInternal; ancestor = ancestor?.BaseType {
             anyAncestorGrantsInternal = this.binderCtx.CanAccessInternalMembers(ancestor.Assembly)
         }
         let collected = List[PropertyInfo]()
@@ -801,9 +783,7 @@ internal class MemberLookup {
         type.IsNestedPublic ||
         (
         (type.IsNotPublic || type.IsNestedAssembly || type.IsNestedFamORAssem) &&
-            this
-            .binderCtx
-            .CanAccessInternalMembers(type.Assembly)
+            this.binderCtx.CanAccessInternalMembers(type.Assembly)
     )
 
     /// Issue #985: a single CLR interface method slot that an implementing type
@@ -1122,8 +1102,7 @@ internal class MemberLookup {
                 ) {
                     if string.Equals(method.Name, "GetEnumerator", StringComparison.Ordinal) &&
                         !method.IsGenericMethod &&
-                        method
-                        .GetParameters().Length == 0 {
+                        method.GetParameters().Length == 0 {
                         candidates.Add(method)
                     }
                 }
@@ -1680,8 +1659,7 @@ internal class MemberLookup {
                         name,
                         BindingFlags.Public | BindingFlags.Instance
                     )
-                    if property != nil && property.GetIndexParameters()
-                        .Length == 0 &&
+                    if property != nil && property.GetIndexParameters().Length == 0 &&
                         (!requireReadableProperty || property.CanRead) {
                         declaringContext = contexts[i]
                         return property
@@ -1861,13 +1839,9 @@ internal class MemberLookup {
             // recovers the member-bearing user `Shape` symbol.
             if type is ImportedTypeSymbol importedSym &&
                 importedSym.OpenDefinition is {} openDefinition &&
-                !importedSym
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !importedSym.TypeArguments.IsDefaultOrEmpty {
                 if openDefinition.FullName == "System.Collections.Generic.IAsyncEnumerable`1" &&
-                    importedSym
-                    .TypeArguments
-                    .Length == 1 {
+                    importedSym.TypeArguments.Length == 1 {
                     elementType = importedSym.TypeArguments[0]
                     return true
                 }
@@ -2340,8 +2314,7 @@ internal class MemberLookup {
                         currentOpenClr.DeclaringMethod,
                         openMethodDefinition
                     ) ||
-                        currentOpenClr.DeclaringMethod!!.MetadataToken == openMethodDefinition
-                        .MetadataToken {
+                        currentOpenClr.DeclaringMethod!!.MetadataToken == openMethodDefinition.MetadataToken {
                         let pos = currentOpenClr.GenericParameterPosition
                         if uint32(pos) < uint32(methodTypeArguments.Length) {
                             let mapped TypeSymbol? = methodTypeArguments[pos]
@@ -2412,9 +2385,7 @@ internal class MemberLookup {
                     ClrNullability.ContainsFunctionPointer(openClr) ||
                     (
                     openElement?.ContainsGenericParameters == true &&
-                        mappedElement
-                        .ClrType
-                        ?.ContainsGenericParameters == false
+                        mappedElement.ClrType?.ContainsGenericParameters == false
                 ) {
                     return SliceTypeSymbol.Get(mappedElement)
                 }
@@ -2441,9 +2412,7 @@ internal class MemberLookup {
                     ClrNullability.ContainsFunctionPointer(openClr) ||
                     (
                     openPointee?.ContainsGenericParameters == true &&
-                        mappedPointee
-                        .ClrType
-                        ?.ContainsGenericParameters == false
+                        mappedPointee.ClrType?.ContainsGenericParameters == false
                 ) {
                     return ByRefTypeSymbol.Get(mappedPointee)
                 }
@@ -2978,10 +2947,8 @@ internal class MemberLookup {
                         let expandedCount = sourceToParameter.Count((parameter int32) -> parameter == paramsIndex)
                         let byParameter = [paramsIndex + expandedCount]TypeSymbol?
                         var expandedSlot = paramsIndex
-                        for var source = 0;
-                            source < orderedSymbolicArgTypes.Length &&
-                            source < sourceToParameter.Length;
-                            source++ {
+                        for var source = 0; source < orderedSymbolicArgTypes.Length &&
+                            source < sourceToParameter.Length; source++ {
                             let parameter = sourceToParameter[source]
                             if parameter == paramsIndex {
                                 byParameter[expandedSlot] = orderedSymbolicArgTypes[source]
@@ -2994,10 +2961,8 @@ internal class MemberLookup {
                         if !methodGroupArgumentSlots.IsDefault {
                             let byParameterFlags = [paramsIndex + expandedCount]bool
                             var expandedFlagSlot = paramsIndex
-                            for var source = 0;
-                                source < methodGroupArgumentSlots.Length &&
-                                source < sourceToParameter.Length;
-                                source++ {
+                            for var source = 0; source < methodGroupArgumentSlots.Length &&
+                                source < sourceToParameter.Length; source++ {
                                 let parameter = sourceToParameter[source]
                                 if parameter == paramsIndex {
                                     byParameterFlags[expandedFlagSlot] = methodGroupArgumentSlots[source]
@@ -3010,19 +2975,15 @@ internal class MemberLookup {
                         }
                     } else {
                         let byParameter = [parameterCount]TypeSymbol?
-                        for var source = 0;
-                            source < orderedSymbolicArgTypes.Length &&
-                            source < sourceToParameter.Length;
-                            source++ {
+                        for var source = 0; source < orderedSymbolicArgTypes.Length &&
+                            source < sourceToParameter.Length; source++ {
                             byParameter[sourceToParameter[source]] = orderedSymbolicArgTypes[source]
                         }
                         orderedSymbolicArgTypes = ImmutableArray.Create(byParameter)
                         if !methodGroupArgumentSlots.IsDefault {
                             let byParameterFlags = [parameterCount]bool
-                            for var source = 0;
-                                source < methodGroupArgumentSlots.Length &&
-                                source < sourceToParameter.Length;
-                                source++ {
+                            for var source = 0; source < methodGroupArgumentSlots.Length &&
+                                source < sourceToParameter.Length; source++ {
                                 byParameterFlags[sourceToParameter[source]] = methodGroupArgumentSlots[source]
                             }
                             orderedMethodGroupArgumentSlots = ImmutableArray.Create(byParameterFlags)
@@ -3322,8 +3283,7 @@ internal class MemberLookup {
                     if argumentType == nil ||
                         parameterSymbol == nil ||
                         !(
-                        Conversion.Classify(argumentType, parameterSymbol)
-                            .Exists ||
+                        Conversion.Classify(argumentType, parameterSymbol).Exists ||
                             ConversionClassifier.HasUserDefinedImplicitConversionForTypes(argumentType, parameterSymbol)
                     ) {
                         accepts = false
@@ -3597,9 +3557,7 @@ internal class MemberLookup {
                     let tupleDefinition = openParameterType.GetGenericTypeDefinition()
                     let tupleArguments = openParameterType.GetGenericArguments()
                     if tupleDefinition.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true &&
-                        tupleArguments.Length == tuple
-                        .ElementTypes
-                        .Length {
+                        tupleArguments.Length == tuple.ElementTypes.Length {
                         for var i = 0; i < tupleArguments.Length; i++ {
                             if IsErasureOnlyEnumMatch(tupleArguments[i], tuple.ElementTypes[i]) {
                                 return true
@@ -3615,8 +3573,7 @@ internal class MemberLookup {
                 }
                 if openParameterType.IsArray && openParameterType.GetArrayRank() > 1 &&
                     symbolicArgumentType is RectangularArrayTypeSymbol rectangular &&
-                    rectangular.Rank == openParameterType
-                    .GetArrayRank() {
+                    rectangular.Rank == openParameterType.GetArrayRank() {
                     return IsErasureOnlyEnumMatch(openParameterType.GetElementType(), rectangular.ElementType)
                 }
                 if openParameterType.IsGenericType {
@@ -3627,8 +3584,7 @@ internal class MemberLookup {
                         openParameterType.GetGenericTypeDefinition(),
                         out var liftedArguments
                     ) &&
-                        liftedArguments.Length == openArguments
-                        .Length {
+                        liftedArguments.Length == openArguments.Length {
                         for var i = 0; i < openArguments.Length; i++ {
                             if IsErasureOnlyEnumMatch(openArguments[i], liftedArguments[i]) {
                                 return true
@@ -3643,13 +3599,8 @@ internal class MemberLookup {
                         }
                     }
                     if symbolicArgumentType is ImportedTypeSymbol imported &&
-                        !imported
-                        .TypeArguments
-                        .IsDefaultOrEmpty &&
-                        imported
-                        .TypeArguments
-                        .Length == openArguments
-                        .Length {
+                        !imported.TypeArguments.IsDefaultOrEmpty &&
+                        imported.TypeArguments.Length == openArguments.Length {
                         for var i = 0; i < openArguments.Length; i++ {
                             if IsErasureOnlyEnumMatch(openArguments[i], imported.TypeArguments[i]) {
                                 return true
@@ -3827,8 +3778,7 @@ internal class MemberLookup {
                     if TryProjectErasedClrType(channel.ElementType, out var channelElement) && channelElement != nil {
                         let openChannel = ChannelTypeSymbol.OpenClrDefinition(channel.Direction)
                         if !channelElement.IsRuntimeProvidedType() &&
-                            MapTypeSymbol
-                            .TryMakeErasedSingleArgumentClrTypeInReferenceContext(
+                            MapTypeSymbol.TryMakeErasedSingleArgumentClrTypeInReferenceContext(
                             openChannel,
                             ChannelTypeSymbol.ProbeMethodName(channel.Direction),
                             channelElement
@@ -3876,8 +3826,7 @@ internal class MemberLookup {
                         !mapKeyErased.IsByRef &&
                         !mapKeyErased.IsPointer &&
                         !mapValueErased.IsByRef &&
-                        !mapValueErased
-                        .IsPointer {
+                        !mapValueErased.IsPointer {
                         try {
                             // Issue #4023: the erasure exists to be REFLECTED on,
                             // and the host `typeof(Dictionary<,>)` cannot produce a
@@ -3963,8 +3912,7 @@ internal class MemberLookup {
                     // element type for the member's return projection.
                     if TryProjectErasedClrType(seq.ElementType, out var seqElement) && seqElement != nil {
                         if !seqElement.IsRuntimeProvidedType() &&
-                            MapTypeSymbol
-                            .TryMakeErasedSingleArgumentClrTypeInReferenceContext(
+                            MapTypeSymbol.TryMakeErasedSingleArgumentClrTypeInReferenceContext(
                             typeof(System.Collections.Generic.IEnumerable[_]),
                             "GetEnumerator",
                             seqElement
@@ -3982,8 +3930,7 @@ internal class MemberLookup {
                     // `IAsyncEnumerable<T>`.
                     if TryProjectErasedClrType(aseq.ElementType, out var aseqElement) && aseqElement != nil {
                         if !aseqElement.IsRuntimeProvidedType() &&
-                            MapTypeSymbol
-                            .TryMakeErasedSingleArgumentClrTypeInReferenceContext(
+                            MapTypeSymbol.TryMakeErasedSingleArgumentClrTypeInReferenceContext(
                             typeof(System.Collections.Generic.IAsyncEnumerable[_]),
                             "GetAsyncEnumerator",
                             aseqElement
@@ -4080,8 +4027,7 @@ internal class MemberLookup {
                         let liftToNullable = [elementTypes.Length]bool
                         for var i = 0; i < elementTypes.Length; i++ {
                             if elementTypes[i] is NullableTypeSymbol nullableElement &&
-                                NullableLifting
-                                .IsValueTypeNullable(nullableElement) {
+                                NullableLifting.IsValueTypeNullable(nullableElement) {
                                 if !TryProjectErasedClrType(nullableElement.UnderlyingType, out var erasedUnderlying) ||
                                     erasedUnderlying == nil {
                                     return false
@@ -4205,9 +4151,7 @@ internal class MemberLookup {
         func TryGetUserPatternEnumerableElementType(type StructSymbol, out elementType TypeSymbol?) bool {
             elementType = nil
             if !TypeMemberModel.TryGetMethodIncludingInherited(type, "GetEnumerator", out var getEnumerator) ||
-                getEnumerator
-                .Parameters
-                .Length != 0 ||
+                getEnumerator.Parameters.Length != 0 ||
                 getEnumerator.Type == nil {
                 return false
             }
@@ -4220,9 +4164,7 @@ internal class MemberLookup {
             }
             if effectiveEnumeratorType is StructSymbol enumeratorType {
                 if TypeMemberModel.TryGetMethodIncludingInherited(enumeratorType, "MoveNext", out var moveNext) &&
-                    moveNext
-                    .Parameters
-                    .Length == 0 &&
+                    moveNext.Parameters.Length == 0 &&
                     moveNext.Type == TypeSymbol.Bool &&
                     TryGetUserEnumeratorCurrent(enumeratorType, out _, out elementType) {
                     return true
@@ -4317,9 +4259,7 @@ internal class MemberLookup {
                     return TryGetDelegateFunctionTypeFromSymbol(annotated.BaseType, out functionType)
                 }
                 case imported is ImportedTypeSymbol when imported.OpenDefinition != nil &&
-                    !imported
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
+                    !imported.TypeArguments.IsDefaultOrEmpty &&
                     TryGetDelegateFunctionTypeFromOpenDefinition(
                     imported.OpenDefinition,
                     imported.TypeArguments,
@@ -4524,8 +4464,7 @@ internal class MemberLookup {
                         "System.Linq.Expressions.Expression`1",
                         StringComparison.Ordinal
                     ) &&
-                        annotatedClr
-                        .GetGenericArguments().Length == 1 {
+                        annotatedClr.GetGenericArguments().Length == 1 {
                         delegateType = annotated.GetTypeArgumentSymbol(0)
                         return true
                     }
@@ -4538,9 +4477,7 @@ internal class MemberLookup {
                 "System.Linq.Expressions.Expression`1",
                 StringComparison.Ordinal
             ) &&
-                imported
-                .TypeArguments
-                .Length == 1 {
+                imported.TypeArguments.Length == 1 {
                 delegateType = imported.TypeArguments[0]
                 return true
             }
@@ -4760,15 +4697,9 @@ internal class MemberLookup {
             symbolicArgs = default(ImmutableArray[TypeSymbol])
             if ifaceSym is ImportedTypeSymbol imported &&
                 imported.OpenDefinition != nil &&
-                imported
-                .OpenDefinition
-                .IsInterface &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                imported
-                .TypeArguments
-                .Any(IsSymbolicTypeArgument) {
+                imported.OpenDefinition.IsInterface &&
+                !imported.TypeArguments.IsDefaultOrEmpty &&
+                imported.TypeArguments.Any(IsSymbolicTypeArgument) {
                 openDefinition = imported.OpenDefinition
                 symbolicArgs = imported.TypeArguments
                 return true
@@ -5199,9 +5130,7 @@ internal class MemberLookup {
             clrProperty PropertyInfo
         ) bool {
             if GetProjectionReceiverImportedType(slotOwner) is ImportedTypeSymbol imported &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty &&
+                !imported.TypeArguments.IsDefaultOrEmpty &&
                 TryGetSymbolicDeclaringContext(
                 imported,
                 clrProperty.DeclaringType,
@@ -5561,8 +5490,7 @@ internal class MemberLookup {
                     // the merge keep deciding concrete positions.
                     if !projectOnlyWhenSymbolicallyRequired ||
                         projectionType.IsGenericParameter ||
-                        projectionType
-                        .ContainsGenericParameters {
+                        projectionType.ContainsGenericParameters {
                         // Issue #3705 (family 2): this branch returned the
                         // receiver-substituted type RAW, exactly as
                         // GetClrMethodReturnTypeSymbol's did before #3741 — and
@@ -6221,8 +6149,7 @@ internal class MemberLookup {
                     (type TypeSymbol?) -> type == nil || type == TypeSymbol.Error
                 )
             ) &&
-                !closedMethod
-                .IsGenericMethodDefinition {
+                !closedMethod.IsGenericMethodDefinition {
                 let closedTypeArguments = BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod)
                 let effectiveCount = if effectiveMethodTypeArguments.IsDefault {
                     0
@@ -6290,9 +6217,7 @@ internal class MemberLookup {
         ) TypeSymbol? {
             if GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp ||
                 closedMethod == nil ||
-                closedMethod
-                .DeclaringType
-                ?.IsGenericType != true ||
+                closedMethod.DeclaringType?.IsGenericType != true ||
                 !TryGetSymbolicDeclaringContext(
                 imp,
                 closedMethod.DeclaringType,
@@ -6353,9 +6278,7 @@ internal class MemberLookup {
             if receiverType == nil ||
                 GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp ||
                 closedMethod == nil ||
-                closedMethod
-                .DeclaringType
-                ?.IsGenericType != true ||
+                closedMethod.DeclaringType?.IsGenericType != true ||
                 paramIndex < 0 ||
                 !TryGetSymbolicDeclaringContext(
                 imp,
@@ -6658,12 +6581,8 @@ internal class MemberLookup {
                         receiverOpenDefinition,
                         (layout Type) -> MapOpenClrTypeToSymbolic(layout, receiverOpenDefinition, receiverTypeArguments)
                     )
-                } catch (error Exception) when error is System
-                    .IO
-                    .InvalidDataException ||
-                    error is System
-                    .IO
-                    .IOException ||
+                } catch (error Exception) when error is System.IO.InvalidDataException ||
+                    error is System.IO.IOException ||
                     error is BadImageFormatException ||
                     error is NotSupportedException {
                     // Marked contracts diagnose unreadable relationship metadata during import preflight.
@@ -6691,9 +6610,7 @@ internal class MemberLookup {
                 return false
             }
             if imported.OpenDefinition != nil &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty &&
+                !imported.TypeArguments.IsDefaultOrEmpty &&
                 TryMapThroughImplemented(imported, openDefinition!!, out typeArguments) {
                 return true
             }
@@ -6804,8 +6721,7 @@ internal class MemberLookup {
             if type is NullabilityAnnotatedTypeSymbol annotated &&
                 receiverClr != nil &&
                 receiverClr.IsGenericType &&
-                !receiverClr
-                .IsGenericTypeDefinition {
+                !receiverClr.IsGenericTypeDefinition {
                 let receiverArguments = receiverClr
                     .GetGenericArguments()
                     .Select((_ Type, index int32) -> annotated.GetTypeArgumentSymbol(index))
@@ -6834,8 +6750,7 @@ internal class MemberLookup {
         internal func TryGetClosedSequenceProjectionView(type TypeSymbol) ImportedTypeSymbol? {
             if (type is SequenceTypeSymbol or AsyncSequenceTypeSymbol) &&
                 type.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} sequenceClr &&
-                SequenceTypeSymbol
-                .TryGetEnumerableInterfaceShape(type, out _, out var elementType) {
+                SequenceTypeSymbol.TryGetEnumerableInterfaceShape(type, out _, out var elementType) {
                 return ImportedTypeSymbol.GetConstructed(
                     sequenceClr,
                     sequenceClr.GetGenericTypeDefinition(),
@@ -7312,9 +7227,7 @@ internal class MemberLookup {
             if enumeratorType is ImportedTypeSymbol imported &&
                 imported.HasSubstitutableTypeArgument &&
                 imported.OpenDefinition != nil &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !imported.TypeArguments.IsDefaultOrEmpty {
                 let openCurrent PropertyInfo? = SafeGetPropertyIncludingSelfAndInterfaces(
                     imported.OpenDefinition,
                     "Current"
@@ -7578,12 +7491,8 @@ internal class MemberLookup {
                 target is not ImportedTypeSymbol targetImported ||
                 sourceImported.OpenDefinition is not{} sourceOpenDefinition ||
                 targetImported.OpenDefinition is not{} targetOpenDefinition ||
-                sourceImported
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                targetImported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                sourceImported.TypeArguments.IsDefaultOrEmpty ||
+                targetImported.TypeArguments.IsDefaultOrEmpty {
                 return false
             }
             var sourceArguments ImmutableArray[TypeSymbol]
@@ -8167,11 +8076,7 @@ internal class MemberLookup {
                 importedB.OpenDefinition != nil &&
                 (!importedA.TypeArguments.IsDefaultOrEmpty || !importedB.TypeArguments.IsDefaultOrEmpty) {
                 if !ClrTypeUtilities.AreSame(importedA.OpenDefinition, importedB.OpenDefinition) ||
-                    importedA
-                    .TypeArguments
-                    .Length != importedB
-                    .TypeArguments
-                    .Length {
+                    importedA.TypeArguments.Length != importedB.TypeArguments.Length {
                     return false
                 }
                 for var i = 0; i < importedA.TypeArguments.Length; i++ {
@@ -8514,9 +8419,7 @@ internal class MemberLookup {
                 }
             }
             if isExpanded && openParams.Length > 0 && ClrOverloadResolution.IsParamsArrayParameter(openParams[^1]) &&
-                openParams[^1]
-                .ParameterType
-                .GetElementType() is Type paramsElementType {
+                openParams[^1].ParameterType.GetElementType() is Type paramsElementType {
                 let paramsIndex = openParams.Length - 1
                 let fixedPairs = Math.Min(paramsIndex, argumentCount)
                 for var i = 0; i < fixedPairs; i++ {
@@ -8584,8 +8487,7 @@ internal class MemberLookup {
                     for var i = 1; i < exact.Count; i++ {
                         // Exact bounds are non-null, and MergeRecoveredTypeArgument preserves a non-null existing bound.
                         if !DeclarationBinder.TypeSignaturesEquivalent(fixedType, exact[i]) &&
-                            !TypeSymbol
-                            .AreRuntimeEquivalentIgnoringReferenceNullability(fixedType!!, exact[i]) {
+                            !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fixedType!!, exact[i]) {
                             fixedType = SymbolicInferenceConflict
                             break
                         }
@@ -9124,8 +9026,7 @@ internal class MemberLookup {
                     actual
                 }
                 if object.ReferenceEquals(openClr.DeclaringMethod, openMethod) ||
-                    openClr.DeclaringMethod!!.MetadataToken == openMethod
-                    .MetadataToken {
+                    openClr.DeclaringMethod!!.MetadataToken == openMethod.MetadataToken {
                     let pos = openClr.GenericParameterPosition
                     if uint32(pos) < uint32(bounds.Arity) {
                         bounds.Add(pos, NormalizeRecoveredNullability(inferredActual), boundKind)
@@ -9163,8 +9064,7 @@ internal class MemberLookup {
             }
             if openClr.IsArray && openClr.GetArrayRank() > 1 {
                 if actual is RectangularArrayTypeSymbol actualRectangular &&
-                    actualRectangular.Rank == openClr
-                    .GetArrayRank() {
+                    actualRectangular.Rank == openClr.GetArrayRank() {
                     let layoutElement = if layoutClr != nil && layoutClr.IsArray == true {
                         layoutClr.GetElementType()
                     } else {
@@ -9342,9 +9242,7 @@ internal class MemberLookup {
                     "System.ValueTuple`",
                     StringComparison.Ordinal
                 ) == true &&
-                    openArgs.Length == tuple
-                    .ElementTypes
-                    .Length {
+                    openArgs.Length == tuple.ElementTypes.Length {
                     for var i = 0; i < openArgs.Length; i++ {
                         let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(i)
                         UnifyForMethodTypeArgs(
@@ -9392,8 +9290,7 @@ internal class MemberLookup {
                 // `Conversion` owns the lattice and still refuses an `out chan[T]`
                 // source against a `ChannelReader[T]` formal at applicability.
                 if openArgs.Length == 1 && ChannelTypeSymbol.IsChannelClrDefinitionName(openDef.FullName) &&
-                    ChannelTypeSymbol
-                    .TryGetChannelShape(actual, out var channelActualElement, out _, out _) {
+                    ChannelTypeSymbol.TryGetChannelShape(actual, out var channelActualElement, out _, out _) {
                     let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(0)
                     UnifyForMethodTypeArgs(
                         openArgs[0],
@@ -9425,8 +9322,7 @@ internal class MemberLookup {
                 // `ImportedTypeSymbol` already and reached Pattern A on its own.
                 if actual is MapTypeSymbol mapActual &&
                     TryProjectErasedClrType(mapActual, out var erasedMapClr) &&
-                    erasedMapClr
-                    .IsGenericType {
+                    erasedMapClr.IsGenericType {
                     actual = ImportedTypeSymbol.GetConstructed(
                         erasedMapClr,
                         erasedMapClr.GetGenericTypeDefinition(),
@@ -9437,10 +9333,7 @@ internal class MemberLookup {
                     TryGetConstructedImportedProjection(imp, out var projectedImp) &&
                     projectedImp != nil &&
                     ClrTypeUtilities.AreSame(projectedImp.OpenDefinition, openDef) &&
-                    projectedImp
-                    .TypeArguments
-                    .Length == openArgs
-                    .Length {
+                    projectedImp.TypeArguments.Length == openArgs.Length {
                     for var j = 0; j < openArgs.Length; j++ {
                         let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(j)
                         UnifyForMethodTypeArgs(
@@ -9508,9 +9401,7 @@ internal class MemberLookup {
                     }
                     if invoke != nil &&
                         invokeParameters != nil &&
-                        invokeParameters.Length == namedDelegateFunction
-                        .ParameterTypes
-                        .Length {
+                        invokeParameters.Length == namedDelegateFunction.ParameterTypes.Length {
                         for var j = 0; j < invokeParameters.Length; j++ {
                             let (paramLayout, paramFlagPosition, paramDelegateLayouts) = ResolveLayoutStep(
                                 if openInvokeParameters != nil && uint32(j) < uint32(openInvokeParameters.Length) {
@@ -9534,9 +9425,7 @@ internal class MemberLookup {
                             )
                         }
                         if !FunctionTypeSymbol.IsVoidReturn(namedDelegateFunction.ReturnType) &&
-                            !invoke
-                            .ReturnType
-                            .IsSameAs(typeof(Void)) {
+                            !invoke.ReturnType.IsSameAs(typeof(Void)) {
                             let (returnLayout, returnFlagPosition, returnDelegateLayouts) = ResolveLayoutStep(
                                 openInvoke?.ReturnType,
                                 -1,
@@ -9773,11 +9662,7 @@ internal class MemberLookup {
                 existingImported.OpenDefinition != nil &&
                 incomingImported.OpenDefinition != nil &&
                 ClrTypeUtilities.AreSame(existingImported.OpenDefinition, incomingImported.OpenDefinition) &&
-                existingImported
-                .TypeArguments
-                .Length == incomingImported
-                .TypeArguments
-                .Length {
+                existingImported.TypeArguments.Length == incomingImported.TypeArguments.Length {
                 let merged = ImmutableArray.CreateBuilder[TypeSymbol](existingImported.TypeArguments.Length)
                 var changed = false
                 for var i = 0; i < existingImported.TypeArguments.Length; i++ {
@@ -9807,8 +9692,7 @@ internal class MemberLookup {
             }
             if existing is SliceTypeSymbol existingSlice &&
                 incoming is SliceTypeSymbol incomingSlice &&
-                DeclarationBinder
-                .TypeSignaturesEquivalent(existingSlice.ElementType, incomingSlice.ElementType) {
+                DeclarationBinder.TypeSignaturesEquivalent(existingSlice.ElementType, incomingSlice.ElementType) {
                 return SliceTypeSymbol.Get(
                     Invariant.Required(
                         MergeRecoveredTypeArgument(existingSlice.ElementType, incomingSlice.ElementType),
@@ -9820,8 +9704,7 @@ internal class MemberLookup {
             if existing is ArrayTypeSymbol existingArray &&
                 incoming is ArrayTypeSymbol incomingArray &&
                 existingArray.Length == incomingArray.Length &&
-                DeclarationBinder
-                .TypeSignaturesEquivalent(existingArray.ElementType, incomingArray.ElementType) {
+                DeclarationBinder.TypeSignaturesEquivalent(existingArray.ElementType, incomingArray.ElementType) {
                 return ArrayTypeSymbol.Get(
                     Invariant.Required(
                         MergeRecoveredTypeArgument(existingArray.ElementType, incomingArray.ElementType),
@@ -9834,8 +9717,10 @@ internal class MemberLookup {
             if existing is RectangularArrayTypeSymbol existingRectangular &&
                 incoming is RectangularArrayTypeSymbol incomingRectangular &&
                 existingRectangular.Rank == incomingRectangular.Rank &&
-                DeclarationBinder
-                .TypeSignaturesEquivalent(existingRectangular.ElementType, incomingRectangular.ElementType) {
+                DeclarationBinder.TypeSignaturesEquivalent(
+                existingRectangular.ElementType,
+                incomingRectangular.ElementType
+            ) {
                 return RectangularArrayTypeSymbol.Get(
                     Invariant.Required(
                         MergeRecoveredTypeArgument(existingRectangular.ElementType, incomingRectangular.ElementType),
@@ -9849,11 +9734,7 @@ internal class MemberLookup {
             }
             if existing is TupleTypeSymbol existingTuple &&
                 incoming is TupleTypeSymbol incomingTuple &&
-                existingTuple
-                .ElementTypes
-                .Length == incomingTuple
-                .ElementTypes
-                .Length {
+                existingTuple.ElementTypes.Length == incomingTuple.ElementTypes.Length {
                 let merged = ImmutableArray.CreateBuilder[TypeSymbol](existingTuple.ElementTypes.Length)
                 for var i = 0; i < existingTuple.ElementTypes.Length; i++ {
                     if !DeclarationBinder.TypeSignaturesEquivalent(

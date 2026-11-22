@@ -156,9 +156,7 @@ partial class CSharpToGSharpTranslator {
             owner = nil
             source = nil
             if !((symbol is IPropertySymbol || symbol is IFieldSymbol || symbol is IMethodSymbol)) ||
-                SymbolEqualityComparer
-                .Default
-                .Equals(symbol?.ContainingAssembly, this.context.Compilation.Assembly) {
+                SymbolEqualityComparer.Default.Equals(symbol?.ContainingAssembly, this.context.Compilation.Assembly) {
                 return false
             }
             return ObliviousNullabilityAnalyzer.TryGetSourceMember(
@@ -210,10 +208,7 @@ partial class CSharpToGSharpTranslator {
             // widens unless `T` is known to be a reference type.
             let declared = PromotableDeclaredType(source)
             if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(declared) ||
-                declared!!.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                declared!!.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return false
             }
             if source is IMethodSymbol method {
@@ -282,9 +277,7 @@ partial class CSharpToGSharpTranslator {
                 node = node!!.Parent
             }
             if node!!.Parent is not ArgumentSyntax argument ||
-                argument
-                .Parent
-                ?.Parent is not InvocationExpressionSyntax invocation {
+                argument.Parent?.Parent is not InvocationExpressionSyntax invocation {
                 return false
             }
             if this.context.GetSymbolInfo(invocation).Symbol is not(IMethodSymbol and {IsGenericMethod: true}) {
@@ -355,10 +348,7 @@ partial class CSharpToGSharpTranslator {
             if type == nil ||
                 type.IsNullable ||
                 !(elementType != nil && elementType.IsReferenceType == true) ||
-                elementType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                elementType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return type
             }
             if !ObliviousNullabilityAnalyzer.IsParamsElementTainted(
@@ -407,12 +397,7 @@ partial class CSharpToGSharpTranslator {
             if !(type is ArrayTypeReference{ElementType: {IsNullable: false} element} array) ||
                 symbol!!.ReturnType is not IArrayTypeSymbol returnArray ||
                 !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(returnArray.ElementType) ||
-                returnArray
-                .ElementType
-                .NullableAnnotation != Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .None ||
+                returnArray.ElementType.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.None ||
                 !this.ArrayReturnElementAcceptsNullableSelectorResult(symbol) {
                 return type
             }
@@ -463,10 +448,7 @@ partial class CSharpToGSharpTranslator {
         // the iterator's rendered element cannot disagree.
         private func AwaitedReturnIsTainted(awaitedType ITypeSymbol?, symbol ISymbol?) bool {
             if awaitedType == nil || !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(awaitedType) ||
-                awaitedType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                awaitedType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return false
             }
             // Issue #4262 follow-up: unlike `ShouldPromoteToNullableReference`
@@ -484,10 +466,7 @@ partial class CSharpToGSharpTranslator {
             // ENABLED base declaration itself to `Task<string?>`. Only trust
             // `IsTainted` here when `awaitedType` is itself oblivious (`None`) —
             // the same condition the ordinary declaration path already requires.
-            return awaitedType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .None &&
+            return awaitedType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.None &&
                 (
                 if symbol is IMethodSymbol {
                     ObliviousNullabilityAnalyzer.IsTainted(
@@ -521,10 +500,7 @@ partial class CSharpToGSharpTranslator {
                 CSharpToGSharpTranslator.UnwrapParenthesesAndSuppressions(
                 forEach.Expression
             ) is not InvocationExpressionSyntax invocation ||
-                this
-                .context
-                .GetSymbolInfo(invocation)
-                .Symbol is not IMethodSymbol invoked {
+                this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol invoked {
                 return false
             }
             let method = invoked.OriginalDefinition
@@ -624,9 +600,7 @@ partial class CSharpToGSharpTranslator {
             if ObliviousNullabilityAnalyzer.SymbolValueType(symbol) is INamedTypeSymbol{
                 TypeArguments: {Length: 1}
             } envelope &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(returnType, envelope.TypeArguments[0]) {
+                SymbolEqualityComparer.Default.Equals(returnType, envelope.TypeArguments[0]) {
                 path.Add(0)
             }
             return this.PromoteTupleTypeArguments(mapped, returnType, symbol, path)
@@ -949,21 +923,12 @@ partial class CSharpToGSharpTranslator {
         private func LocalHoldsPromotedValueCore(local ILocalSymbol) bool {
             // A type clause fixes the storage, so its nullability is the answer. Without a clause, only a
             // certainly non-null initializer gives a certain answer.
-            if this
-                .state
-                .EmittedLocalStorageAcceptsNil
-                .TryGetValue(local, out var acceptsNil) &&
+            if this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var acceptsNil) &&
                 (!acceptsNil || this.state.EmittedLocalTypeClauses.Contains(local)) {
                 return acceptsNil
             }
-            if this
-                .state
-                .PatternBindings
-                .TryGetValue(local, out var boundReplacement) &&
-                this
-                .state
-                .StoredPatternCaptures
-                .Contains(boundReplacement) {
+            if this.state.PatternBindings.TryGetValue(local, out var boundReplacement) &&
+                this.state.StoredPatternCaptures.Contains(boundReplacement) {
                 return true
             }
             if !this.ShouldPromoteToNullableReference(local) &&
@@ -993,11 +958,7 @@ partial class CSharpToGSharpTranslator {
                 case assignment is AssignmentExpressionSyntax when assignment.IsKind(
                     SyntaxKind.SimpleAssignmentExpression
                 ) &&
-                    this
-                    .context
-                    .GetTypeInfo(assignment)
-                    .Type
-                    ?.IsReferenceType == true {
+                    this.context.GetTypeInfo(assignment).Type?.IsReferenceType == true {
                     // An assignment has the type of its destination's storage.
                     if this.context.GetSymbolInfo(assignment.Left).Symbol is ILocalSymbol destination {
                         this.RecordPromotedValueDependency(destination)
@@ -1080,12 +1041,8 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let source ISymbol? = this.context.GetSymbolInfo(expression).Symbol
-            let compilations IReadOnlyList[CSharpCompilation]? = this
-                .context
-                .RepositoryCompilations ??
-                this
-                .context
-                .SiblingCompilations
+            let compilations IReadOnlyList[CSharpCompilation]? = this.context.RepositoryCompilations ??
+                this.context.SiblingCompilations
             // Issue #3848: promotion and forgiveness stay symmetric. A value
             // promoted along a pure forwarding edge is `T?` in the emitted G#
             // exactly as a directly-promoted generated declaration is, so it
@@ -1111,8 +1068,7 @@ partial class CSharpToGSharpTranslator {
         // return type now accepts. Scoped to the pure-forwarding promotion so
         // every other value position keeps its existing bytes.
         private func IsPureForwardingPromotedTarget(targetSymbol ISymbol?) bool -> targetSymbol != nil &&
-            ObliviousNullabilityAnalyzer
-            .IsPromotedByPureForwarding(
+            ObliviousNullabilityAnalyzer.IsPromotedByPureForwarding(
             this.context.Compilation,
             targetSymbol,
             this.context.RepositoryCompilations ?? this.context.SiblingCompilations
@@ -1124,11 +1080,7 @@ partial class CSharpToGSharpTranslator {
                 expression = parenthesized.Expression
             }
             return expression is AnonymousFunctionExpressionSyntax ||
-                this
-                .context
-                .SemanticModel
-                .GetMemberGroup(expression!!)
-                .Length > 0
+                this.context.SemanticModel.GetMemberGroup(expression!!).Length > 0
         }
 
         // Issue #914 (oblivious sink): promote the arrow (delegate) parameter
@@ -1199,8 +1151,11 @@ partial class CSharpToGSharpTranslator {
                             .CodeAnalysis
                             .NullableAnnotation
                             .Annotated ||
-                            ObliviousNullabilityAnalyzer
-                            .IsTainted(this.context.Compilation, declaredParameter, this.context.SiblingCompilations) {
+                            ObliviousNullabilityAnalyzer.IsTainted(
+                            this.context.Compilation,
+                            declaredParameter,
+                            this.context.SiblingCompilations
+                        ) {
                             nullablePositions.Add(i)
                         }
                     }
@@ -1218,10 +1173,7 @@ partial class CSharpToGSharpTranslator {
                     !parameterType!!.IsNullable &&
                     invokeParameterType != nil &&
                     invokeParameterType.IsReferenceType == true &&
-                    invokeParameterType.NullableAnnotation != Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated {
+                    invokeParameterType.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                     parameterType = MakeNullable(parameterType)
                     changed = true
                 }
@@ -1309,10 +1261,7 @@ partial class CSharpToGSharpTranslator {
             if elementType == nil ||
                 elementType.IsNullable ||
                 !(elementTypeSymbol != nil && elementTypeSymbol.IsReferenceType == true) ||
-                elementTypeSymbol.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                elementTypeSymbol.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return elementType
             }
             if literal != nil &&
@@ -1335,10 +1284,7 @@ partial class CSharpToGSharpTranslator {
                         (
                         projectedElement != nil &&
                             projectedElement.IsReferenceType == true &&
-                            projectedElement.NullableAnnotation == Microsoft
-                            .CodeAnalysis
-                            .NullableAnnotation
-                            .Annotated
+                            projectedElement.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
                     )
                 ) {
                     return MakeNullable(elementType)
@@ -1450,12 +1396,8 @@ partial class CSharpToGSharpTranslator {
             var position = prefix
             for (isArray, index) in steps {
                 while current is INamedTypeSymbol nullableNamed &&
-                    nullableNamed
-                    .OriginalDefinition
-                    .SpecialType == SpecialType.System_Nullable_T &&
-                    nullableNamed
-                    .TypeArguments
-                    .Length == 1 {
+                    nullableNamed.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+                    nullableNamed.TypeArguments.Length == 1 {
                     position = JoinPosition(position, "0")
                     current = nullableNamed.TypeArguments[0]
                 }
@@ -1464,9 +1406,7 @@ partial class CSharpToGSharpTranslator {
                     current = (current as IArrayTypeSymbol)?.ElementType
                 } else if current is INamedTypeSymbol{IsTupleType: true} tuple &&
                     index >= 0 &&
-                    index < tuple
-                    .TupleElements
-                    .Length {
+                    index < tuple.TupleElements.Length {
                     current = tuple.TupleElements[index].Type
                 } else {
                     current = nil
@@ -1481,8 +1421,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsGeneratedArrayElementPromotedSink(symbol ISymbol?) bool -> symbol != nil &&
-            ObliviousNullabilityAnalyzer
-            .IsGeneratedArrayElementAssignedNull(
+            ObliviousNullabilityAnalyzer.IsGeneratedArrayElementAssignedNull(
             this.context.Compilation,
             symbol,
             this.context.RepositoryCompilations ?? this.context.SiblingCompilations
@@ -1526,10 +1465,7 @@ partial class CSharpToGSharpTranslator {
                 default: default(ITypeSymbol?)
             }
             if !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(declaredType) ||
-                declaredType!!.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                declaredType!!.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return type
             }
             return if this.ShouldPromoteToNullableReference(symbol) || this.IsNullableInitializer(initializer) {
@@ -1578,11 +1514,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             // Issue #5527: an await (or synchronous GetAwaiter().GetResult()) of a `Task<T?>` where C# runs no flow analysis.
-            if expression is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .AwaitExpressionSyntax awaited &&
+            if expression is Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax awaited &&
                 this.DeclaredAwaitedResultIsAnnotatedNullable(awaited) {
                 return true
             }
@@ -1630,10 +1562,7 @@ partial class CSharpToGSharpTranslator {
             }
             return symbolType != nil &&
                 symbolType.IsReferenceType == true &&
-                symbolType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated
+                symbolType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
         }
 
         // Issue #3644: the subset of <see cref="IsNullableInitializer"/> whose
@@ -1713,10 +1642,7 @@ partial class CSharpToGSharpTranslator {
                     default(SyntaxNode?)
                 }
                 if argumentNode is ArgumentSyntax argument && argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) &&
-                    this
-                    .context
-                    .SemanticModel
-                    .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
+                    this.context.SemanticModel.GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
                     this.ShouldPromoteToNullableReference(parameter.OriginalDefinition) {
                     return true
                 }
@@ -1749,10 +1675,7 @@ partial class CSharpToGSharpTranslator {
         // Inferred, unchanged locals inherit the emitted positional declaration, not Roslyn's local annotation.
         private func InferredDeconstructedPositionalParameter(local ILocalSymbol) IParameterSymbol? {
             if !IsImplicitlyTypedLocal(local) ||
-                this
-                .state
-                .EmittedLocalTypeClauses
-                .Contains(local) ||
+                this.state.EmittedLocalTypeClauses.Contains(local) ||
                 local
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
@@ -1762,14 +1685,11 @@ partial class CSharpToGSharpTranslator {
                 !conversion.IsIdentity ||
                 this.DeconstructedElementDeclaration(local) is not IPropertySymbol property ||
                 NormalizePositionalRecordProperty(property) is not IParameterSymbol parameter ||
-                !SymbolEqualityComparer
-                .Default
-                .Equals(parameter.Type, sourceType) || !this.EmittedAssemblyIdentities()!!.Contains(
-                parameter.ContainingAssembly.Identity
-            ) ||
-                !parameter
-                .DeclaringSyntaxReferences
-                .Any((reference SyntaxReference) -> this.IsTranslatedByThisRun(reference.SyntaxTree)) {
+                !SymbolEqualityComparer.Default.Equals(parameter.Type, sourceType) ||
+                !this.EmittedAssemblyIdentities()!!.Contains(parameter.ContainingAssembly.Identity) ||
+                !parameter.DeclaringSyntaxReferences.Any(
+                (reference SyntaxReference) -> this.IsTranslatedByThisRun(reference.SyntaxTree)
+            ) {
                 return nil
             }
             return parameter
@@ -1801,16 +1721,8 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             var current = expression
             while (
-                current is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ParenthesizedExpressionSyntax or
-                    Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .CheckedExpressionSyntax
+                current is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax or
+                    Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax
             ) {
                 current = switch current {
                     case parenthesized is Microsoft
@@ -1850,13 +1762,8 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return this.EmittedExpandedParamsElementMayBeNull(coalesce.Right)
             }
-            if current is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .AssignmentExpressionSyntax coalesceAssignment &&
-                coalesceAssignment
-                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression) {
+            if current is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax coalesceAssignment &&
+                coalesceAssignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression) {
                 return !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
                     this.EmittedExpandedParamsElementMayBeNull(coalesceAssignment.Right)
             }
@@ -1923,14 +1830,8 @@ partial class CSharpToGSharpTranslator {
                 default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
             }
             if receiverExpression != nil &&
-                this
-                .context
-                .GetSymbolInfo(callNode)
-                .Symbol is IMethodSymbol{ReducedFrom: {} reducedFrom} &&
-                reducedFrom
-                .OriginalDefinition
-                .Parameters
-                .FirstOrDefault() is {} receiverParameter {
+                this.context.GetSymbolInfo(callNode).Symbol is IMethodSymbol{ReducedFrom: {} reducedFrom} &&
+                reducedFrom.OriginalDefinition.Parameters.FirstOrDefault() is {} receiverParameter {
                 let receiverType ITypeSymbol? = this.GetExpressionInferenceType(receiverExpression)
                 let initialVariance = if receiverParameter.RefKind != RefKind.None {
                     VarianceKind.None
@@ -1999,16 +1900,8 @@ partial class CSharpToGSharpTranslator {
             var unwrapped = expression
             var suppressedTopLevel = false
             while (
-                unwrapped is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ParenthesizedExpressionSyntax or
-                    Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .CheckedExpressionSyntax or
+                unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax or
+                    Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax or
                     PostfixUnaryExpressionSyntax and
                     {RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)}
             ) {
@@ -2074,8 +1967,7 @@ partial class CSharpToGSharpTranslator {
                 symbol != nil &&
                 (
                 this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol) ||
-                    this
-                    .GetDeclaredValueType(unwrapped)
+                    this.GetDeclaredValueType(unwrapped)
                     ?.NullableAnnotation == Microsoft
                     .CodeAnalysis
                     .NullableAnnotation
@@ -2106,20 +1998,12 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetTypeInfo(unwrapped)
                 .ConvertedType is not INamedTypeSymbol{TypeKind: TypeKind.Delegate} named ||
-                named
-                .OriginalDefinition
-                .DelegateInvokeMethod is not{} invokeDefinition {
+                named.OriginalDefinition.DelegateInvokeMethod is not{} invokeDefinition {
                 return nil
             }
             let definition = named.OriginalDefinition
-            if definition
-                .TypeParameters
-                .Length == 0 ||
-                callableMethod
-                .Parameters
-                .Length != invokeDefinition
-                .Parameters
-                .Length {
+            if definition.TypeParameters.Length == 0 ||
+                callableMethod.Parameters.Length != invokeDefinition.Parameters.Length {
                 return nil
             }
             let bindings = TypeParameterMap()
@@ -2157,8 +2041,7 @@ partial class CSharpToGSharpTranslator {
                     boundParameters
                 )
             } else if unwrapped is AnonymousFunctionExpressionSyntax anonymousFunction &&
-                !invokeDefinition
-                .ReturnsVoid {
+                !invokeDefinition.ReturnsVoid {
                 var returnPositions ObliviousPositionSet? = nil
                 for returnExpression in GetLambdaResultExpressions(anonymousFunction) {
                     if this.GetExpressionNullablePositions(returnExpression) is {} expressionPositions {
@@ -2223,16 +2106,8 @@ partial class CSharpToGSharpTranslator {
         ) ITypeSymbol? {
             var current = expression
             while (
-                current is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ParenthesizedExpressionSyntax or
-                    Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .CheckedExpressionSyntax or
+                current is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax or
+                    Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax or
                     PostfixUnaryExpressionSyntax and
                     {RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)}
             ) {
@@ -2265,8 +2140,7 @@ partial class CSharpToGSharpTranslator {
             }
             if this.UserDefinedConversionOperator(current, this.context.SemanticModel) is {} conversionOperator {
                 return if this.ShouldPromoteToNullableReference(conversionOperator) ||
-                    this
-                    .IsTranslatorWidenedDeclaration(conversionOperator) {
+                    this.IsTranslatorWidenedDeclaration(conversionOperator) {
                     conversionOperator.ReturnType.WithNullableAnnotation(
                         Microsoft.CodeAnalysis.NullableAnnotation.Annotated
                     )
@@ -2300,14 +2174,10 @@ partial class CSharpToGSharpTranslator {
                 targetType == nil ||
                 !IsNullOrSuppressedNull(argument.Expression) ||
                 !targetType.IsReferenceType ||
-                targetParameter
-                .OriginalDefinition
-                .Type is ITypeParameterSymbol {
+                targetParameter.OriginalDefinition.Type is ITypeParameterSymbol {
                 return false
             }
-            if targetParameter
-                .ContainingAssembly
-                ?.Name != "Gsharp.Runtime.Values" &&
+            if targetParameter.ContainingAssembly?.Name != "Gsharp.Runtime.Values" &&
                 !ContainsTypeParameter(targetParameter.OriginalDefinition.Type) {
                 return false
             }
@@ -2315,13 +2185,8 @@ partial class CSharpToGSharpTranslator {
                 targetParameter.ContainingAssembly,
                 this.context.Compilation.Assembly
             ) &&
-                targetParameter
-                .ContainingAssembly
-                ?.Name is {} targetAssemblyName &&
-                targetAssemblyName != this
-                .context
-                .Compilation
-                .AssemblyName &&
+                targetParameter.ContainingAssembly?.Name is {} targetAssemblyName &&
+                targetAssemblyName != this.context.Compilation.AssemblyName &&
                 (this.context.RepositoryCompilations ?? this.context.SiblingCompilations)?.Any(
                 (compilation CSharpCompilation) -> compilation.AssemblyName == targetAssemblyName
             ) == true &&
@@ -2342,18 +2207,10 @@ partial class CSharpToGSharpTranslator {
                 return convertedType
             }
             if named.TypeKind == TypeKind.Delegate &&
-                named
-                .OriginalDefinition
-                .DelegateInvokeMethod is {} invokeDefinition {
+                named.OriginalDefinition.DelegateInvokeMethod is {} invokeDefinition {
                 let definition = named.OriginalDefinition
-                if definition
-                    .TypeParameters
-                    .Length == 0 ||
-                    callableMethod
-                    .Parameters
-                    .Length != invokeDefinition
-                    .Parameters
-                    .Length {
+                if definition.TypeParameters.Length == 0 ||
+                    callableMethod.Parameters.Length != invokeDefinition.Parameters.Length {
                     return named
                 }
                 let bindings = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
@@ -2386,8 +2243,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 if includeReturn && !invokeDefinition.ReturnsVoid {
                     let returnType = if this.ShouldPromoteToNullableReference(callableMethod) ||
-                        this
-                        .IsTranslatorWidenedDeclaration(callableMethod) {
+                        this.IsTranslatorWidenedDeclaration(callableMethod) {
                         callableMethod.ReturnType.WithNullableAnnotation(
                             Microsoft.CodeAnalysis.NullableAnnotation.Annotated
                         )
@@ -2425,10 +2281,7 @@ partial class CSharpToGSharpTranslator {
         private func ShouldPromoteToNullableReference(symbol ISymbol?, checkRefStorage bool = true) bool {
             let declared ITypeSymbol? = PromotableDeclaredType(symbol)
             if declared == nil || !CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(declared) ||
-                declared.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                declared.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return false
             }
             // Issue #5601: the answer is about the declaration the translator
@@ -2552,9 +2405,7 @@ partial class CSharpToGSharpTranslator {
             if symbol is IParameterSymbol parameter &&
                 EffectiveDefaultParameter(parameter) is {HasExplicitDefaultValue: true} defaulted &&
                 defaulted.ExplicitDefaultValue == nil &&
-                defaulted
-                .Type
-                .TypeKind == TypeKind.Delegate {
+                defaulted.Type.TypeKind == TypeKind.Delegate {
                 return true
             }
             // Issue #2113: in a nullable-OBLIVIOUS compilation, a reference
@@ -2621,13 +2472,13 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return true
             }
-            if declared.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .None &&
+            if declared.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.None &&
                 PartialPartnerAllowsObliviousPromotion(symbol) &&
-                ObliviousNullabilityAnalyzer
-                .IsTainted(this.context.Compilation, NormalizePositionalRecordProperty(symbol), taintCompilations) {
+                ObliviousNullabilityAnalyzer.IsTainted(
+                this.context.Compilation,
+                NormalizePositionalRecordProperty(symbol),
+                taintCompilations
+            ) {
                 return true
             }
             // Issue #3676: a declaration inside an `<auto-generated/>` file is
@@ -2744,8 +2595,7 @@ partial class CSharpToGSharpTranslator {
                     string.Empty,
                     valuePosition: true
                 ) &&
-                    this
-                    .RefStoragePositionType(source, depth)
+                    this.RefStoragePositionType(source, depth)
                     ?.NullableAnnotation != Microsoft
                     .CodeAnalysis
                     .NullableAnnotation
@@ -2756,8 +2606,7 @@ partial class CSharpToGSharpTranslator {
             if receiver is InvocationExpressionSyntax{
                 Expression: MemberAccessExpressionSyntax{Name: IdentifierNameSyntax} access
             } &&
-                model
-                .GetTypeInfo(access.Expression).Type is INamedTypeSymbol receiverType {
+                model.GetTypeInfo(access.Expression).Type is INamedTypeSymbol receiverType {
                 source = this.RefStorageIdentity(source, receiverType)
             }
             if depth > 0 {
@@ -2876,13 +2725,9 @@ partial class CSharpToGSharpTranslator {
                         let storageType = ObliviousNullabilityAnalyzer.SymbolDeclaredType(
                             model.GetSymbolInfo(argument.Expression).Symbol
                         ) ??
-                            model
-                            .GetTypeInfo(argument.Expression).Type
+                            model.GetTypeInfo(argument.Expression).Type
                         if storageType?.IsReferenceType == true &&
-                            storageType?.NullableAnnotation == Microsoft
-                            .CodeAnalysis
-                            .NullableAnnotation
-                            .Annotated &&
+                            storageType?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
                             parameter
                             .Type
                             .NullableAnnotation == Microsoft
@@ -3113,10 +2958,7 @@ partial class CSharpToGSharpTranslator {
                                 !conflict &&
                                 inferred != nil &&
                                 !(
-                                inferred.NullableAnnotation == Microsoft
-                                    .CodeAnalysis
-                                    .NullableAnnotation
-                                    .Annotated &&
+                                inferred.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
                                     NullableTypeArgumentViolatesTranslatedConstraints(definition.TypeParameters[index])
                             ) {
                                 arguments[index] = inferred
@@ -3134,9 +2976,10 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func RefStorageContractIsFrozen(symbol ISymbol?, depth int32) bool -> symbol != nil &&
-            this
-            .frozenRefStorageContracts
-            ?.TryGetValue(RefStorageIdentity(symbol).OriginalDefinition, out var positions) == true &&
+            this.frozenRefStorageContracts?.TryGetValue(
+            RefStorageIdentity(symbol).OriginalDefinition,
+            out var positions
+        ) == true &&
             positions.Contains(depth)
 
         private func RefStorageSlotIsFixed(slot RefStorageSlot) bool {
@@ -3147,8 +2990,7 @@ partial class CSharpToGSharpTranslator {
             }
             if this.RefStorageContractIsFrozen(slot.Symbol, slot.Depth) ||
                 (
-                this.RefStoragePositionType(slot.Symbol.OriginalDefinition, slot.Depth)
-                    ?.IsReferenceType != true &&
+                this.RefStoragePositionType(slot.Symbol.OriginalDefinition, slot.Depth)?.IsReferenceType != true &&
                     !(
                     slot.Depth == 0 && ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(
                         slot.Symbol,
@@ -3190,8 +3032,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             return !(slot.Depth == 1 && this.IsGeneratedArrayElementPromotedSink(slot.Symbol)) &&
-                !this
-                .IsWidenedArrayElementStorageCore(
+                !this.IsWidenedArrayElementStorageCore(
                 slot.Symbol,
                 string.Join(".", Enumerable.Repeat("0", slot.Depth)),
                 checkRefStorage: false
@@ -3249,10 +3090,7 @@ partial class CSharpToGSharpTranslator {
                         out var positions
                     ) &&
                         positions.Contains(member.Depth) || this.RefStorageSlotType(member)?.NullableAnnotation ==
-                    Microsoft
-                        .CodeAnalysis
-                        .NullableAnnotation
-                        .Annotated ||
+                    Microsoft.CodeAnalysis.NullableAnnotation.Annotated ||
                         (
                         member.Depth == 0 && this.ShouldPromoteToNullableReference(
                             member.Symbol,
@@ -3344,19 +3182,17 @@ partial class CSharpToGSharpTranslator {
             writtenValue ExpressionSyntax? = nil
         ) bool {
             if !(targetType != nil && targetType.IsReferenceType == true) ||
-                targetType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                targetType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return false
             }
             if targetSymbol is IMethodSymbol returning && !SymbolEqualityComparer.Default.Equals(
                 targetType,
                 returning.ReturnType
             ) &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(targetType, ObliviousNullabilityAnalyzer.SymbolValueType(returning)) &&
+                SymbolEqualityComparer.Default.Equals(
+                targetType,
+                ObliviousNullabilityAnalyzer.SymbolValueType(returning)
+            ) &&
                 this.AwaitedReturnIsTainted(targetType, returning) {
                 return false
             }
@@ -3467,11 +3303,9 @@ partial class CSharpToGSharpTranslator {
                     (paramsParameter.OriginalDefinition.Type as IArrayTypeSymbol)
                     ?.ElementType
                     .IsReferenceType != true ||
-                    !SymbolEqualityComparer
-                    .Default
-                    .Equals(targetType, array.ElementType) || this.TargetContractIsFrozenInMetadata(paramsParameter) ||
-                    !ObliviousNullabilityAnalyzer
-                    .IsParamsElementTainted(
+                    !SymbolEqualityComparer.Default.Equals(targetType, array.ElementType) ||
+                    this.TargetContractIsFrozenInMetadata(paramsParameter) ||
+                    !ObliviousNullabilityAnalyzer.IsParamsElementTainted(
                     this.context.Compilation,
                     paramsParameter,
                     this.context.RepositoryCompilations ?? this.context.SiblingCompilations
@@ -3482,9 +3316,7 @@ partial class CSharpToGSharpTranslator {
             ) == true ||
                 (
                 targetSymbol is IFieldSymbol{AssociatedSymbol: {} associatedSymbol} &&
-                    associatedSymbol
-                    .DeclaringSyntaxReferences
-                    .Any(
+                    associatedSymbol.DeclaringSyntaxReferences.Any(
                     (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
                 )
             )
@@ -3505,13 +3337,12 @@ partial class CSharpToGSharpTranslator {
         private func InferredMethodAcceptsDeclaredNullableValue(target ISymbol?, value ExpressionSyntax?) bool {
             if value == nil ||
                 target is not IParameterSymbol{RefKind: RefKind.None} parameter ||
-                parameter
-                .OriginalDefinition
-                .Type is not ITypeParameterSymbol typeParameter ||
+                parameter.OriginalDefinition.Type is not ITypeParameterSymbol typeParameter ||
                 parameter.ContainingSymbol is not IMethodSymbol{ReducedFrom: nil} method ||
-                !SymbolEqualityComparer
-                .Default
-                .Equals(typeParameter.DeclaringMethod?.OriginalDefinition, method.OriginalDefinition) ||
+                !SymbolEqualityComparer.Default.Equals(
+                typeParameter.DeclaringMethod?.OriginalDefinition,
+                method.OriginalDefinition
+            ) ||
                 !this.SinkInfersTypeFromValue(parameter, value) ||
                 CallResultMentionsTypeParameter(method, typeParameter) ||
                 method
@@ -3532,28 +3363,20 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             if OutermostTransparentNode(value, stopAtAssignment: true)?.Parent is not ArgumentSyntax argument ||
-                argument
-                .Parent
-                ?.Parent is not InvocationExpressionSyntax invocation ||
-                !SymbolEqualityComparer
-                .Default
-                .Equals(this.GetArgumentParameter(argument), parameter) || this.InvocationEmitsTypeArguments(
-                invocation,
-                method
-            ) {
+                argument.Parent?.Parent is not InvocationExpressionSyntax invocation ||
+                !SymbolEqualityComparer.Default.Equals(this.GetArgumentParameter(argument), parameter) ||
+                this.InvocationEmitsTypeArguments(invocation, method) {
                 return false
             }
             // Roslyn's constructed argument can omit the nullable annotation on captured storage.
             // This exception is for an annotated reference type parameter, not flow-narrowed concrete references.
             let declared = this.GetDeclaredValueType(Unparenthesize(value))
             return declared is ITypeParameterSymbol{IsReferenceType: true} &&
-                declared.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(declared, this.GetEffectiveMethodTypeArgument(method, typeParameter.Ordinal))
+                declared.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
+                SymbolEqualityComparer.Default.Equals(
+                declared,
+                this.GetEffectiveMethodTypeArgument(method, typeParameter.Ordinal)
+            )
         }
 
         private func CoalesceAssignmentTargetIsNonNullInGSharp(assignment AssignmentExpressionSyntax) bool {
@@ -3563,10 +3386,7 @@ partial class CSharpToGSharpTranslator {
             }
             let target ISymbol? = this.GetProjectedAssignmentTarget(left, this.context.GetSymbolInfo(left).Symbol)
             if target is ILocalSymbol local &&
-                this
-                .state
-                .EmittedLocalStorageAcceptsNil
-                .TryGetValue(local, out var acceptsNil) {
+                this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var acceptsNil) {
                 return !acceptsNil
             }
             return this.AssignmentResultHasNonNullStaticType(assignment)
@@ -3609,9 +3429,7 @@ partial class CSharpToGSharpTranslator {
                 typeParameter.HasValueTypeConstraint ||
                 typeParameter.HasNotNullConstraint ||
                 typeParameter.HasConstructorConstraint ||
-                typeParameter
-                .ConstraintTypes
-                .Length > 0 ||
+                typeParameter.ConstraintTypes.Length > 0 ||
                 !this.IsInferredGenericParameterTarget(parameter, argumentExpression) ||
                 !this.TargetContractIsFrozenInMetadata(parameter) {
                 return false
@@ -3659,8 +3477,7 @@ partial class CSharpToGSharpTranslator {
                 method,
                 writtenValue
             ) is {} lambda &&
-                !this
-                .LambdaHasExplicitDelegateCast(lambda) {
+                !this.LambdaHasExplicitDelegateCast(lambda) {
                 let sink = this.ResolveValueSink(lambda)
                 if sink != nil && this.TargetContractIsFrozenInMetadata(sink) {
                     let declaredDelegate ITypeSymbol? = switch sink.OriginalDefinition {
@@ -3694,9 +3511,7 @@ partial class CSharpToGSharpTranslator {
             let declaredType ITypeSymbol? = switch original {
                 case parameter is IParameterSymbol: if targetType != nil &&
                     targetSymbol is IParameterSymbol constructedParameter &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(targetType, GetParamsElementType(constructedParameter)) {
+                    SymbolEqualityComparer.Default.Equals(targetType, GetParamsElementType(constructedParameter)) {
                     GetParamsElementType(parameter) ?? parameter.Type
                 } else {
                     parameter.Type
@@ -3725,12 +3540,8 @@ partial class CSharpToGSharpTranslator {
         private func EmittedAssemblyIdentities() HashSet[AssemblyIdentity]? {
             if this.emittedAssemblyIdentities == nil {
                 this.emittedAssemblyIdentities = HashSet[AssemblyIdentity]{this.context.Compilation.Assembly.Identity}
-                for compilation in this
-                    .context
-                    .RepositoryCompilations ??
-                    this
-                    .context
-                    .SiblingCompilations ??
+                for compilation in this.context.RepositoryCompilations ??
+                    this.context.SiblingCompilations ??
                     cast[IReadOnlyList[CSharpCompilation]](Array.Empty[CSharpCompilation]()) {
                     this.emittedAssemblyIdentities!!.Add(compilation.Assembly.Identity)
                 }
@@ -3763,9 +3574,7 @@ partial class CSharpToGSharpTranslator {
             if original == nil || !original.DeclaringSyntaxReferences.IsDefaultOrEmpty {
                 return false
             }
-            return original
-                .ContainingAssembly
-                ?.Identity is not{} assemblyIdentity ||
+            return original.ContainingAssembly?.Identity is not{} assemblyIdentity ||
                 !this.EmittedAssemblyIdentities()!!.Contains(assemblyIdentity)
         }
 
@@ -3779,12 +3588,7 @@ partial class CSharpToGSharpTranslator {
             if type == nil ||
                 type.IsNullable ||
                 field?.Type is not{IsReferenceType: true} ||
-                field
-                .Type
-                .NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                field.Type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return type
             }
             for property in field.ContainingType.GetMembers().OfType[IPropertySymbol]() {
@@ -3881,15 +3685,11 @@ partial class CSharpToGSharpTranslator {
                 case method is IMethodSymbol{
                     PartialDefinitionPart: IMethodSymbol definition
                 } when parameter.Ordinal >= 0 &&
-                    parameter.Ordinal < definition
-                    .Parameters
-                    .Length: definition.Parameters[parameter.Ordinal]
+                    parameter.Ordinal < definition.Parameters.Length: definition.Parameters[parameter.Ordinal]
                 case property is IPropertySymbol{
                     PartialDefinitionPart: IPropertySymbol definition
                 } when parameter.Ordinal >= 0 &&
-                    parameter.Ordinal < definition
-                    .Parameters
-                    .Length: definition.Parameters[parameter.Ordinal]
+                    parameter.Ordinal < definition.Parameters.Length: definition.Parameters[parameter.Ordinal]
                 default: parameter
             }
 
@@ -3897,9 +3697,7 @@ partial class CSharpToGSharpTranslator {
                 case property is IPropertySymbol: property.PartialDefinitionPart ?? property.PartialImplementationPart
                 case parameter is IParameterSymbol: switch PartialCounterpart(parameter.ContainingSymbol) {
                     case property is IPropertySymbol when parameter.Ordinal >= 0 &&
-                        parameter.Ordinal < property
-                        .Parameters
-                        .Length: property.Parameters[parameter.Ordinal]
+                        parameter.Ordinal < property.Parameters.Length: property.Parameters[parameter.Ordinal]
                     default: default(ISymbol?)
                 }
                 default: default(ISymbol?)
@@ -3943,8 +3741,7 @@ partial class CSharpToGSharpTranslator {
                         root.SyntaxTree
                     )
                     let BindsTo = func (expression ExpressionSyntax) bool {
-                        return model.GetSymbolInfo(Unparenthesize(expression)!!)
-                            .Symbol is {} bound &&
+                        return model.GetSymbolInfo(Unparenthesize(expression)!!).Symbol is {} bound &&
                             (
                             SymbolEqualityComparer.Default.Equals(bound, symbol) ||
                                 (counterpart != nil && SymbolEqualityComparer.Default.Equals(bound, counterpart))
@@ -3953,8 +3750,7 @@ partial class CSharpToGSharpTranslator {
                     for node in TranslationContext.GetEffectiveNodes(root, declaringModel.Compilation) {
                         switch node {
                             case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.EqualsExpression) ||
-                                binary
-                                .IsKind(SyntaxKind.NotEqualsExpression) {
+                                binary.IsKind(SyntaxKind.NotEqualsExpression) {
                                 if (IsNullLiteral(binary.Right) && BindsTo(binary.Left)) ||
                                     (IsNullLiteral(binary.Left) && BindsTo(binary.Right)) {
                                     return true
@@ -3986,9 +3782,7 @@ partial class CSharpToGSharpTranslator {
                             }
                             case declarator is VariableDeclaratorSyntax when declarator.Initializer != nil &&
                                 IsNullOrSuppressedNull(declarator.Initializer!!.Value) &&
-                                SymbolEqualityComparer
-                                .Default
-                                .Equals(model.GetDeclaredSymbol(declarator), symbol) {
+                                SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(declarator), symbol) {
                                 return true
                             }
                         }
@@ -4033,16 +3827,10 @@ partial class CSharpToGSharpTranslator {
             private func GetDelegateInvokeMethod(targetType ITypeSymbol?) IMethodSymbol? {
                 var targetType = targetType
                 if targetType is INamedTypeSymbol expression &&
-                    expression
-                    .OriginalDefinition
-                    .MetadataName == "Expression`1" &&
-                    expression
-                    .TypeArguments
-                    .Length == 1 &&
+                    expression.OriginalDefinition.MetadataName == "Expression`1" &&
+                    expression.TypeArguments.Length == 1 &&
                     expression.DelegateInvokeMethod == nil &&
-                    expression
-                    .ContainingNamespace
-                    ?.ToDisplayString() == "System.Linq.Expressions" {
+                    expression.ContainingNamespace?.ToDisplayString() == "System.Linq.Expressions" {
                     targetType = expression.TypeArguments[0]
                 }
                 return (targetType as INamedTypeSymbol)?.DelegateInvokeMethod
@@ -4142,9 +3930,7 @@ partial class CSharpToGSharpTranslator {
                 return symbol is IParameterSymbol parameter &&
                     parameter.ContainingSymbol is IMethodSymbol method &&
                     method.MethodKind == MethodKind.Constructor &&
-                    method
-                    .ContainingType
-                    .IsRecord
+                    method.ContainingType.IsRecord
             }
 
             private func ParameterArgumentPreventsNullableInference(
@@ -4165,10 +3951,7 @@ partial class CSharpToGSharpTranslator {
                     return (variance is VarianceKind.None or VarianceKind.In) &&
                         !promotedNullable &&
                         actualType != nil &&
-                        actualType.NullableAnnotation != Microsoft
-                        .CodeAnalysis
-                        .NullableAnnotation
-                        .Annotated
+                        actualType.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated
                 }
                 if declaredType is IArrayTypeSymbol declaredArray {
                     return ParameterArgumentPreventsNullableInference(
@@ -4425,11 +4208,7 @@ partial class CSharpToGSharpTranslator {
                         arrayType.NullableAnnotation
                     )
                 } else if result is INamedTypeSymbol{IsGenericType: true} namedType &&
-                    namedType
-                    .TypeArguments
-                    .Length == namedType
-                    .TypeParameters
-                    .Length {
+                    namedType.TypeArguments.Length == namedType.TypeParameters.Length {
                     let rebuiltContaining = if namedType.ContainingType != nil {
                         ToCallableBoundType(
                             namedType.ContainingType,
@@ -4487,8 +4266,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 if existing is IArrayTypeSymbol existingArray &&
                     candidate is IArrayTypeSymbol candidateArray &&
-                    existingArray.Rank == candidateArray
-                    .Rank {
+                    existingArray.Rank == candidateArray.Rank {
                     let reconciledElement = ReconcileCallableBoundType(
                         existingArray.ElementType,
                         candidateArray.ElementType,
@@ -4499,14 +4277,11 @@ partial class CSharpToGSharpTranslator {
                 }
                 if existing is INamedTypeSymbol{IsGenericType: true} existingNamed &&
                     candidate is INamedTypeSymbol{IsGenericType: true} candidateNamed &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(existingNamed.OriginalDefinition, candidateNamed.OriginalDefinition) &&
-                    existingNamed
-                    .TypeArguments
-                    .Length == candidateNamed
-                    .TypeArguments
-                    .Length {
+                    SymbolEqualityComparer.Default.Equals(
+                    existingNamed.OriginalDefinition,
+                    candidateNamed.OriginalDefinition
+                ) &&
+                    existingNamed.TypeArguments.Length == candidateNamed.TypeArguments.Length {
                     let rebuiltContaining = if existingNamed.ContainingType != nil &&
                         candidateNamed.ContainingType != nil {
                         ReconcileCallableBoundType(
@@ -4548,8 +4323,8 @@ partial class CSharpToGSharpTranslator {
                     rebuiltContaining,
                     template.ContainingType
                 ) &&
-                    rebuiltContaining
-                    .GetTypeMembers(template.Name, template.Arity).FirstOrDefault() is {} nestedDefinition {
+                    rebuiltContaining.GetTypeMembers(template.Name, template.Arity)
+                    .FirstOrDefault() is {} nestedDefinition {
                     definition = nestedDefinition
                 }
                 let constructed INamedTypeSymbol = if typeArguments.Count > 0 {
@@ -4621,9 +4396,7 @@ partial class CSharpToGSharpTranslator {
                             if !MentionsTypeParameter(argument, typeParameter) {
                                 continue
                             }
-                            if named
-                                .TypeParameters[i]
-                                .Variance != VarianceKind.None ||
+                            if named.TypeParameters[i].Variance != VarianceKind.None ||
                                 (
                                 !(argument is ITypeParameterSymbol) &&
                                     !MentionsTypeParameterOnlyInvariantly(argument, typeParameter)

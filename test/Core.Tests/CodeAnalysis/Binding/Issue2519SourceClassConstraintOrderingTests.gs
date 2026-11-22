@@ -102,9 +102,7 @@ open class FrameFinalBase2519[T] {
             (diagnostic Diagnostic) -> diagnostic.Message.Contains("FrameEntry2519") || diagnostic.Message.Contains(
                 "Chunk"
             ) ||
-                diagnostic
-                .Message
-                .Contains("SamplesInFrame")
+                diagnostic.Message.Contains("SamplesInFrame")
         )
     }
 

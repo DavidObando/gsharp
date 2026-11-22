@@ -136,14 +136,8 @@ internal class SlotPlanner {
                 }
             }
             for field in type.StaticFields {
-                if !this
-                    .emitCtx
-                    .Program
-                    .Initializers
-                    .ContainsKey((type, true)) &&
-                    type
-                    .StaticFieldInitializers
-                    .TryGetValue(field, out var initializer) {
+                if !this.emitCtx.Program.Initializers.ContainsKey((type, true)) &&
+                    type.StaticFieldInitializers.TryGetValue(field, out var initializer) {
                     collector.Visit(initializer)
                 }
             }
@@ -158,22 +152,14 @@ internal class SlotPlanner {
             // block expressions whose tail is a lambda. These arguments live
             // on constructor symbols rather than in Program.Functions, so they
             // must participate in MethodDef planning explicitly.
-            if !this
-                .emitCtx
-                .Program
-                .Initializers
-                .ContainsKey((type, false)) &&
+            if !this.emitCtx.Program.Initializers.ContainsKey((type, false)) &&
                 type.BaseConstructorInitializer is {} primaryBaseInitializer {
                 for argument in primaryBaseInitializer.Arguments {
                     collector.Visit(argument)
                 }
             }
             for constructor in type.ExplicitConstructors {
-                if this
-                    .emitCtx
-                    .Program
-                    .Initializers
-                    .ContainsKey((constructor.Function, false)) ||
+                if this.emitCtx.Program.Initializers.ContainsKey((constructor.Function, false)) ||
                     constructor.BaseInitializer is not{} baseInitializer {
                     continue
                 }
@@ -189,14 +175,8 @@ internal class SlotPlanner {
             .OrderBy((i InterfaceSymbol) -> i.Declaration?.Span.Start ?? int32.MaxValue)
             .ThenBy((i InterfaceSymbol) -> i.Name, StringComparer.Ordinal) {
             for field in type.StaticFields {
-                if !this
-                    .emitCtx
-                    .Program
-                    .Initializers
-                    .ContainsKey((type, true)) &&
-                    type
-                    .StaticFieldInitializers
-                    .TryGetValue(field, out var initializer) {
+                if !this.emitCtx.Program.Initializers.ContainsKey((type, true)) &&
+                    type.StaticFieldInitializers.TryGetValue(field, out var initializer) {
                     collector.Visit(initializer)
                 }
             }
@@ -442,9 +422,7 @@ internal class SlotPlanner {
             if node.Operand is BoundVariableExpression bve &&
                 bve.Variable is LocalVariableSymbol lvs &&
                 !(lvs is ParameterSymbol) &&
-                !this
-                .locals
-                .ContainsKey(lvs) {
+                !this.locals.ContainsKey(lvs) {
                 this.locals[lvs] = this.localTypes.Count
                 this.localTypes.Add(lvs.Type)
             }
@@ -784,9 +762,7 @@ internal class SlotPlanner {
         protected override func VisitClrEventSubscriptionExpression(node BoundClrEventSubscriptionExpression) {
             if this.quoteDepth == 0 &&
                 node.Handler is BoundFunctionLiteralExpression literal &&
-                node
-                .Event
-                .EventHandlerType is {} handlerClr {
+                node.Event.EventHandlerType is {} handlerClr {
                 this.VisitExpression(node.Receiver)
                 this.VisitLambdaWithTarget(
                     literal,
@@ -1141,8 +1117,7 @@ internal class SlotPlanner {
             if receiver is BoundFieldAccessExpression fieldAccess && ReflectionMetadataEmitter.IsValueTypeSymbol(
                 receiver.Type
             ) &&
-                !this
-                .needsRvalueReceiverSpill(receiver, this.function, this.locals, false) {
+                !this.needsRvalueReceiverSpill(receiver, this.function, this.locals, false) {
                 if fieldAccess.Receiver != nil {
                     this.AddIfCompoundReused(fieldAccess.Receiver, value)
                 }
@@ -1330,15 +1305,9 @@ internal class SlotPlanner {
             // Issue #2544: non-identity lifted unary operators need the same
             // Nullable<T>-typed spill slot as `!!` so emit can branch on
             // HasValue and unwrap the present value exactly once.
-            if node
-                .Op
-                .Kind != BoundUnaryOperatorKind.NullAssertion &&
-                node
-                .Op
-                .Kind != BoundUnaryOperatorKind.Identity &&
-                node
-                .Operand
-                .Type is NullableTypeSymbol liftedOperand &&
+            if node.Op.Kind != BoundUnaryOperatorKind.NullAssertion &&
+                node.Op.Kind != BoundUnaryOperatorKind.Identity &&
+                node.Operand.Type is NullableTypeSymbol liftedOperand &&
                 node.Type is NullableTypeSymbol &&
                 NullableLifting.IsValueTypeNullable(liftedOperand) {
                 this.sink.Add(node)
@@ -1346,9 +1315,7 @@ internal class SlotPlanner {
             if node.Op.Kind == BoundUnaryOperatorKind.NullAssertion {
                 var needsSlot = false
                 if node.Operand.Type is NullableTypeSymbol n {
-                    needsSlot = n
-                        .UnderlyingType
-                        ?.ClrType is {IsValueType: true} ||
+                    needsSlot = n.UnderlyingType?.ClrType is {IsValueType: true} ||
                         (n.UnderlyingType is TypeParameterSymbol tp && !tp.HasValueTypeConstraint) ||
                         NullableLifting.RequiresSymbolicNullableGetValue(n)
                 } else if node.Operand.Type is TypeParameterSymbol bare && !bare.HasValueTypeConstraint {
@@ -1405,9 +1372,7 @@ internal class SlotPlanner {
             if node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
                 var needsSlot = false
                 if node.Left.Type is NullableTypeSymbol n {
-                    needsSlot = n
-                        .UnderlyingType
-                        ?.ClrType is {IsValueType: true} ||
+                    needsSlot = n.UnderlyingType?.ClrType is {IsValueType: true} ||
                         (n.UnderlyingType is TypeParameterSymbol tp && !tp.HasValueTypeConstraint) ||
                         NullableLifting.RequiresSymbolicNullableGetValue(n)
                 } else if SlotPlanner.IsReferenceTypeParameterCoalesceProbe(node, out _) {
@@ -1484,9 +1449,7 @@ internal class SlotPlanner {
                 // test. A nullable reference annotation over a same-compilation
                 // class must not allocate Nullable<T> spill/result slots.
                 return node.Left.Type is NullableTypeSymbol left && NullableLifting.IsAnyValueTypeNullable(left) &&
-                    node
-                    .Right
-                    .Type is NullableTypeSymbol right &&
+                    node.Right.Type is NullableTypeSymbol right &&
                     NullableLifting.IsAnyValueTypeNullable(right)
             }
 
@@ -1512,9 +1475,7 @@ internal class SlotPlanner {
                 // signature) — `NullableLifting.IsValueTypeNullable` is the
                 // canonical predicate that already special-cases tuples for
                 // exactly this reason.
-                let leftIsValueNullable = node
-                    .Left
-                    .Type is NullableTypeSymbol left &&
+                let leftIsValueNullable = node.Left.Type is NullableTypeSymbol left &&
                     NullableLifting.IsValueTypeNullable(left)
                 if !leftIsValueNullable {
                     return false
@@ -1594,12 +1555,8 @@ internal class SlotPlanner {
                 target TypeSymbol
             ) bool -> source is NullableTypeSymbol from &&
                 target is NullableTypeSymbol to &&
-                from
-                .UnderlyingType
-                ?.ClrType is {IsValueType: true} &&
-                to
-                .UnderlyingType
-                ?.ClrType is {IsValueType: true} &&
+                from.UnderlyingType?.ClrType is {IsValueType: true} &&
+                to.UnderlyingType?.ClrType is {IsValueType: true} &&
                 from.UnderlyingType != to.UnderlyingType
         }
     }
@@ -1634,12 +1591,8 @@ internal class SlotPlanner {
             node BoundBinaryExpression,
             @NotNullWhen(true) out typeParameter TypeParameterSymbol?
         ) bool {
-            if node
-                .Op
-                .Kind == BoundBinaryOperatorKind.NullCoalesce &&
-                node
-                .Left
-                .Type is TypeParameterSymbol tp &&
+            if node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce &&
+                node.Left.Type is TypeParameterSymbol tp &&
                 !tp.HasValueTypeConstraint {
                 typeParameter = tp
                 return true

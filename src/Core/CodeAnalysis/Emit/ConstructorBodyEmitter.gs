@@ -884,10 +884,7 @@ internal class ConstructorBodyEmitter {
         for var level = 1; level < ancestorChain.Count; level++ {
             let ancestor = ancestorChain[level]
             if ancestor.Deinitializer != nil &&
-                this
-                .cache
-                .MethodHandles
-                .TryGetValue(ancestor.Deinitializer!!.Function, out var ancestorHandle) {
+                this.cache.MethodHandles.TryGetValue(ancestor.Deinitializer!!.Function, out var ancestorHandle) {
                 baseFinalizeToken = ancestorHandle
                 break
             }

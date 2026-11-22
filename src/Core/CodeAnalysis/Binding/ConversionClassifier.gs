@@ -145,9 +145,7 @@ internal class ConversionClassifier {
                 return BindConversion(conv.Syntax?.Location ?? default(TextLocation), resolvedInner, conv.Type)
             }
         } else if expression is BoundClrConstructorCallExpression ctorCall &&
-            ctorCall
-            .Arguments
-            .Length == 1 &&
+            ctorCall.Arguments.Length == 1 &&
             ctorCall.Arguments[0] is BoundArrayCreationExpression {
             let resolvedInner = ResolveReboundSibling(ctorCall.Arguments[0])
             if !object.ReferenceEquals(resolvedInner, ctorCall.Arguments[0]) {
@@ -521,16 +519,14 @@ internal class ConversionClassifier {
             type
         ) &&
             FunctionTypeSymbol.ContainsOptionalContract(resultType) &&
-            TypeSymbol
-            .AreRuntimeEquivalentIgnoringReferenceNullability(resultType, type) {
+            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resultType, type) {
             result = BoundConversionExpression(nil, type, result, binderCtx.IsCheckedContext)
         }
         if !allowExplicit &&
             expression.Type != TypeSymbol.Error &&
             result.Type != TypeSymbol.Error &&
             expression.Type != result.Type &&
-            !object
-            .ReferenceEquals(result, expression) {
+            !object.ReferenceEquals(result, expression) {
             // The outer conversion owns the original operand even when its
             // implementation builds calls or chains through other conversions.
             result.ImplicitConversionOperand = expression
@@ -631,9 +627,7 @@ internal class ConversionClassifier {
     internal func CaptureNarrowedValue(expression BoundExpression, syntax SyntaxNode) BoundExpression? {
         if expression is BoundBlockExpression block {
             if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
-                resultVar
-                .Name
-                .StartsWith("<blockResult", StringComparison.Ordinal) {
+                resultVar.Name.StartsWith("<blockResult", StringComparison.Ordinal) {
                 var captured BoundExpression? = nil
                 let _ = RewriteCleanupBlockExpression(
                     block,
@@ -681,9 +675,7 @@ internal class ConversionClassifier {
     ) BoundExpression {
         if expression is BoundBlockExpression block {
             if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
-                resultVar
-                .Name
-                .StartsWith("<blockResult", StringComparison.Ordinal) {
+                resultVar.Name.StartsWith("<blockResult", StringComparison.Ordinal) {
                 if TryResolveCleanupBlockValue(
                     diagnosticLocation,
                     block.Statements,
@@ -726,11 +718,8 @@ internal class ConversionClassifier {
         if expression is BoundTupleLiteralExpression literal && ExpressionBinder.GetTargetTupleType(
             target
         ) is {} targetTuple &&
-            literal
-            .TupleType
-            .Arity == targetTuple.Arity &&
-            Conversion
-            .Classify(literal.TupleType, targetTuple).IsIdentity {
+            literal.TupleType.Arity == targetTuple.Arity &&
+            Conversion.Classify(literal.TupleType, targetTuple).IsIdentity {
             var rewritten ImmutableArray[BoundExpression].Builder? = nil
             var consumedCaptures = false
             for var index = 0; index < literal.Elements.Length; index++ {
@@ -891,8 +880,7 @@ internal class ConversionClassifier {
             expression = ResolveNarrowedValue(diagnosticLocation, expression, type, allowExplicit)
         }
         if NativeSliceTypes.HaveIncompatibleElements(expression.Type, type) ||
-            ManagedReferenceTypes
-            .HaveIncompatibleElements(expression.Type, type!!) {
+            ManagedReferenceTypes.HaveIncompatibleElements(expression.Type, type!!) {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type!!)
             return BoundErrorExpression(expression.Syntax)
         }
@@ -929,8 +917,7 @@ internal class ConversionClassifier {
             return expression
         }
         if type != nil && type != TypeSymbol.Error && type != TypeSymbol.Void && !TypeSymbol.ContainsNeverType(type) &&
-            TypeSymbol
-            .ContainsNeverType(expression.Type) {
+            TypeSymbol.ContainsNeverType(expression.Type) {
             if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _) &&
                 !(type.StripToBareShape() is TupleTypeSymbol) {
                 let materialized = TypeSymbol.MaterializeNeverFunctionReturns(expression.Type)
@@ -974,10 +961,7 @@ internal class ConversionClassifier {
                 return BoundConversionExpression(nil, type, convertedTuple, binderCtx.IsCheckedContext)
             }
             if expression is BoundUnaryExpression neverAssertion &&
-                neverAssertion
-                .Op
-                .Kind == BoundUnaryOperatorKind
-                .NullAssertion {
+                neverAssertion.Op.Kind == BoundUnaryOperatorKind.NullAssertion {
                 let convertedOperand = BindConversion(
                     diagnosticLocation,
                     neverAssertion.Operand,
@@ -999,10 +983,7 @@ internal class ConversionClassifier {
                 }
             }
             if expression is BoundBinaryExpression neverCoalesce &&
-                neverCoalesce
-                .Op
-                .Kind == BoundBinaryOperatorKind
-                .NullCoalesce {
+                neverCoalesce.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
                 let convertedLeft = BindConversion(
                     diagnosticLocation,
                     neverCoalesce.Left,
@@ -1200,8 +1181,7 @@ internal class ConversionClassifier {
         if expression is BoundMethodGroupExpression userGroupWithoutDelegateTarget &&
             !(type is FunctionTypeSymbol) &&
             !(type is DelegateTypeSymbol) &&
-            !MemberLookup
-            .TryGetLambdaTargetFunctionTypeFromSymbol(type!!, out _) {
+            !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type!!, out _) {
             return MethodGroupDiagnostics.ReportRequiresTarget(
                 Diagnostics,
                 userGroupWithoutDelegateTarget,
@@ -1255,9 +1235,7 @@ internal class ConversionClassifier {
                     !userMethodGroup.HasTargetDelegateType &&
                     MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type!!, out _)
             ) ||
-                userMethodGroup
-                .Function
-                ?.ReturnRefKind != RefKind.None ||
+                userMethodGroup.Function?.ReturnRefKind != RefKind.None ||
                 HasByRefDelegateReturn(type!!) ||
                 (
                 type is FunctionTypeSymbol targetFn &&
@@ -1267,8 +1245,7 @@ internal class ConversionClassifier {
             return BindUserMethodGroupConversion(diagnosticLocation, userMethodGroup, type!!)
         }
         if expression is BoundFunctionLiteralExpression expressionTreeLiteral &&
-            MemberLookup
-            .TryGetExpressionTreeDelegateTypeFromSymbol(type, out var expressionTreeDelegateType) {
+            MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var expressionTreeDelegateType) {
             if !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
                 expressionTreeDelegateType,
                 out var expressionTreeTargetFunction
@@ -1301,9 +1278,7 @@ internal class ConversionClassifier {
             TypeSymbol.MaterializeNeverFunctionReturns(
             refUpcastLiteral.FunctionType
         ) is FunctionTypeSymbol materializedRefUpcastFnType &&
-            binderCtx
-            .RootScope
-            .TryGetSynthesizedRefDelegateForLiteral(
+            binderCtx.RootScope.TryGetSynthesizedRefDelegateForLiteral(
             refUpcastLiteral.Function,
             materializedRefUpcastFnType.ReturnType
         ) is {} synthesizedRefUpcastDelegate {
@@ -1360,15 +1335,13 @@ internal class ConversionClassifier {
             expression.Type != nil &&
             type != nil &&
             MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _) &&
-            !Conversion
-            .HaveCompatibleOptionalContracts(expression.Type, type) {
+            !Conversion.HaveCompatibleOptionalContracts(expression.Type, type) {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type)
             return BoundErrorExpression(expression.Syntax)
         }
         if expression is BoundFunctionLiteralExpression literal &&
             type is FunctionTypeSymbol targetFunctionType &&
-            TypeSymbol
-            .ContainsTypeParameter(targetFunctionType) {
+            TypeSymbol.ContainsTypeParameter(targetFunctionType) {
             return createErasedFunctionLiteralAdapter(literal, targetFunctionType, false)
         }
         // Issue #2716: a throw-expression lambda naturally has a `never`
@@ -1406,8 +1379,7 @@ internal class ConversionClassifier {
                 MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type!!, out var voidTargetFnType) &&
                 voidTargetFnType.ReturnType == TypeSymbol.Void &&
                 voidTargetFnType.Arity == voidCandidateFnType.Arity &&
-                !object
-                .ReferenceEquals(type, voidCandidateFnType) {
+                !object.ReferenceEquals(type, voidCandidateFnType) {
                 let voidized = createErasedFunctionLiteralAdapter(voidCandidateLiteral, voidTargetFnType, false)
                 if !object.ReferenceEquals(voidized, voidCandidateLiteral) {
                     return BindConversion(diagnosticLocation, voidized, type, allowExplicit, callParameter)
@@ -1451,8 +1423,7 @@ internal class ConversionClassifier {
                 adaptedTargetFnType.Arity == adaptedCandidateFnType.Arity &&
                 !object.ReferenceEquals(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType) &&
                 !IsNumericReturnWideningCore(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType) &&
-                Conversion
-                .Classify(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType).IsImplicit {
+                Conversion.Classify(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType).IsImplicit {
                 let adapted = createErasedFunctionLiteralAdapter(adaptedCandidateLiteral, adaptedTargetFnType, true)
                 if !object.ReferenceEquals(adapted, adaptedCandidateLiteral) {
                     return BindConversion(diagnosticLocation, adapted, type, allowExplicit, callParameter)
@@ -1482,13 +1453,10 @@ internal class ConversionClassifier {
                 (
                 SmartCastStability.TryGetStableMemberPath(expression, out var memberPath, out _) &&
                     memberPath != nil &&
-                    binderCtx
-                    .NarrowedVariables
-                    .Query(memberPath) != nil
+                    binderCtx.NarrowedVariables.Query(memberPath) != nil
             )
         ) &&
-            Conversion
-            .Classify(tpSource, NullableTypeSymbol.Get(type!!)).IsImplicit {
+            Conversion.Classify(tpSource, NullableTypeSymbol.Get(type!!)).IsImplicit {
             conversion = Conversion.Implicit
         }
         conversion = ClassifyConvertedDelegate(expression, type!!, conversion)
@@ -1545,10 +1513,7 @@ internal class ConversionClassifier {
         if !conversion.Exists &&
             expression is BoundTupleLiteralExpression sourceTupleLiteral &&
             type is TupleTypeSymbol targetTupleLiteral &&
-            sourceTupleLiteral
-            .Elements
-            .Length == targetTupleLiteral
-            .Arity {
+            sourceTupleLiteral.Elements.Length == targetTupleLiteral.Arity {
             return BindTupleConversion(
                 diagnosticLocation,
                 expression,
@@ -1600,9 +1565,7 @@ internal class ConversionClassifier {
             ) {
                 return BoundClrConversionCallExpression(nil, expression, symbolicConvMethod, type!!)
             }
-            if expression
-                .Type
-                ?.ClrType != nil &&
+            if expression.Type?.ClrType != nil &&
                 type?.ClrType != nil &&
                 ClrOperatorResolution.TryResolveConversionForTypes(
                 expression.Type,
@@ -1623,8 +1586,7 @@ internal class ConversionClassifier {
             if expression.Type is {} sourceType &&
                 type is {} targetType &&
                 sourceType != TypeSymbol.Error &&
-                targetType != TypeSymbol
-                .Error {
+                targetType != TypeSymbol.Error {
                 if !conversion.IsInvariantArgumentMismatch && !StructuralProjectionPlanner.TryCreate(
                     sourceType,
                     targetType,
@@ -1633,8 +1595,7 @@ internal class ConversionClassifier {
                     out _,
                     out var projectionFailure
                 ) &&
-                    !string
-                    .IsNullOrEmpty(projectionFailure) {
+                    !string.IsNullOrEmpty(projectionFailure) {
                     Diagnostics.ReportStructuralProjectionFailure(
                         diagnosticLocation,
                         sourceType,
@@ -1673,8 +1634,7 @@ internal class ConversionClassifier {
             if expression is BoundTupleLiteralExpression identityTupleLiteral &&
                 expression.Type is TupleTypeSymbol identitySourceTuple &&
                 type is TupleTypeSymbol identityTargetTuple &&
-                !object
-                .ReferenceEquals(identitySourceTuple, identityTargetTuple) {
+                !object.ReferenceEquals(identitySourceTuple, identityTargetTuple) {
                 if identitySourceTuple.HasNames && identityTargetTuple.HasNames {
                     for var i = 0; i < identitySourceTuple.Arity; i++ {
                         let sourceName string? = identitySourceTuple.ElementNames[i]
@@ -1771,9 +1731,7 @@ internal class ConversionClassifier {
             ) {
                 return BoundClrConversionCallExpression(nil, expression, projectionSymbolicConvMethod, type!!)
             }
-            if expression
-                .Type
-                ?.ClrType != nil &&
+            if expression.Type?.ClrType != nil &&
                 type?.ClrType != nil &&
                 ClrOperatorResolution.TryResolveConversionForTypes(
                 expression.Type,
@@ -1850,8 +1808,7 @@ internal class ConversionClassifier {
         if TypeSymbol.IsByRefLike(expression.Type) && type != TypeSymbol.String && Conversion.IsReferenceLikeTarget(
             type!!
         ) &&
-            expression.Type != TypeSymbol
-            .Error {
+            expression.Type != TypeSymbol.Error {
             Diagnostics.ReportByRefLikeEscape(
                 diagnosticLocation,
                 expression.Type,
@@ -2059,9 +2016,7 @@ internal class ConversionClassifier {
             if paramIndex < parameters.Length &&
                 call?.TypeArgumentList == nil &&
                 method is {IsGenericMethod: true} genericMethod &&
-                !parameters[paramIndex]
-                .ParameterType
-                .IsByRef &&
+                !parameters[paramIndex].ParameterType.IsByRef &&
                 (
                 if genericMethod.IsGenericMethodDefinition {
                     genericMethod
@@ -2069,9 +2024,7 @@ internal class ConversionClassifier {
                     genericMethod.GetGenericMethodDefinition()
                 }
             ).GetParameters()[paramIndex] is {} openParameter &&
-                openParameter
-                .ParameterType
-                .IsGenericMethodParameter {
+                openParameter.ParameterType.IsGenericMethodParameter {
                 let sourceIndex = i - receiverArgCount
                 let slotType = TrySubstituteParameterTypeFromMethodTypeArgs(
                     method,
@@ -2110,8 +2063,7 @@ internal class ConversionClassifier {
                 // Error-typed default that produces invalid IL.
                 if !parameterType.IsByRef &&
                     argument is BoundDefaultExpression{Type: var defType} &&
-                    defType == TypeSymbol
-                    .Error {
+                    defType == TypeSymbol.Error {
                     // Issue #1471: a generic-method call closed over an open
                     // type parameter (e.g. `Task.FromResult[T?](default)` for an
                     // unconstrained `T`) erases its method type-argument to the
@@ -2713,8 +2665,7 @@ internal class ConversionClassifier {
                     } else if argument.Type != targetType &&
                         NeedsBindClrParameterConversion(argument.Type, parameterType, substituted) &&
                         ChannelTypeSymbol.TryGetChannelShape(argument.Type, out _, out _, out _) &&
-                        ChannelTypeSymbol
-                        .TryGetChannelShape(targetType, out _, out _, out _) {
+                        ChannelTypeSymbol.TryGetChannelShape(targetType, out _, out _, out _) {
                         // Issue #3982: the arms above all end in "leave the
                         // argument alone", which is how G# stays lenient about a
                         // CLR parameter's declared nullability (a `string?`
@@ -2739,9 +2690,7 @@ internal class ConversionClassifier {
                         let channelSourceIndex = i - receiverArgCount
                         let channelLocation = if call != nil &&
                             channelSourceIndex >= 0 &&
-                            channelSourceIndex < call
-                            .Arguments
-                            .Count {
+                            channelSourceIndex < call.Arguments.Count {
                             call.Arguments[channelSourceIndex].Location
                         } else {
                             call?.Location ?? default(TextLocation)
@@ -2816,13 +2765,14 @@ internal class ConversionClassifier {
         }
         if argument.Type != TypeSymbol.Error &&
             TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var symbolicConvMethod) &&
-            BoundClrConversionCallExpression
-            .CanApplyImplicitClrConversion(argument.Type, expectedType, symbolicConvMethod) {
+            BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
+            argument.Type,
+            expectedType,
+            symbolicConvMethod
+        ) {
             return true
         }
-        if argument
-            .Type
-            ?.ClrType != nil &&
+        if argument.Type?.ClrType != nil &&
             expectedType.ClrType != nil &&
             argument.Type != TypeSymbol.Error &&
             ClrOperatorResolution.TryResolveConversionForTypes(
@@ -2871,15 +2821,16 @@ internal class ConversionClassifier {
         // branch can bind the `<object>` operator.
         if argument.Type != TypeSymbol.Error &&
             TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var symbolicConvMethod) &&
-            BoundClrConversionCallExpression
-            .CanApplyImplicitClrConversion(argument.Type, expectedType!!, symbolicConvMethod) {
+            BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
+            argument.Type,
+            expectedType!!,
+            symbolicConvMethod
+        ) {
             converted = BoundClrConversionCallExpression(nil, argument, symbolicConvMethod, expectedType!!)
             recordConvertedArgument?(argument, converted)
             return true
         }
-        if argument
-            .Type
-            ?.ClrType != nil &&
+        if argument.Type?.ClrType != nil &&
             expectedType!!.ClrType != nil &&
             argument.Type != TypeSymbol.Error &&
             ClrOperatorResolution.TryResolveConversionForTypes(
@@ -2889,8 +2840,7 @@ internal class ConversionClassifier {
             out var convMethod,
             out _
         ) &&
-            BoundClrConversionCallExpression
-            .CanApplyImplicitClrConversion(argument.Type, expectedType!!, convMethod) {
+            BoundClrConversionCallExpression.CanApplyImplicitClrConversion(argument.Type, expectedType!!, convMethod) {
             converted = BoundClrConversionCallExpression(nil, argument, convMethod, expectedType!!)
             recordConvertedArgument?(argument, converted)
             return true
@@ -2907,8 +2857,11 @@ internal class ConversionClassifier {
             expectedType != nil &&
             argument.Type != TypeSymbol.Error &&
             TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var openConvMethod) &&
-            BoundClrConversionCallExpression
-            .CanApplyImplicitClrConversion(argument.Type, expectedType, openConvMethod) {
+            BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
+            argument.Type,
+            expectedType,
+            openConvMethod
+        ) {
             converted = BoundClrConversionCallExpression(nil, argument, openConvMethod, expectedType)
             recordConvertedArgument?(argument, converted)
             return true
@@ -3318,9 +3271,7 @@ internal class ConversionClassifier {
                 }
                 var paramsMatch = true
                 for var i = 0; i < targetParameterTypes.Length; i++ {
-                    if candidate
-                        .Parameters[i + parameterOffset]
-                        .RefKind != targetParameterRefKinds[i] ||
+                    if candidate.Parameters[i + parameterOffset].RefKind != targetParameterRefKinds[i] ||
                         !TryCanonicalizeMethodGroupType(
                         candidateParameterTypes[i],
                         targetParameterTypes[i],
@@ -3670,9 +3621,7 @@ internal class ConversionClassifier {
                     addr
                 }
                 let operandType TypeSymbol? = ByRefStorageMatching.TryGetStorageType(addr, parameter.RefKind) ??
-                    addr
-                    .Operand
-                    ?.Type
+                    addr.Operand?.Type
                 if operandType == TypeSymbol.Error ||
                     expectedType == TypeSymbol.Error ||
                     (
@@ -3770,8 +3719,7 @@ internal class ConversionClassifier {
                     out _,
                     out var branchNestedMismatch
                 ) ||
-                    !ByRefStorageMatching
-                    .AreSameStorageType(
+                    !ByRefStorageMatching.AreSameStorageType(
                     leaf.WriteStorage,
                     parameterType,
                     out _,
@@ -4093,16 +4041,12 @@ internal class ConversionClassifier {
                     builder ??= arguments.ToBuilder()
                     builder[i] = rejectedArgument
                 } else if (TypeSymbol.ContainsNullLiteralType(argument.Type) || argument.Type is NullableTypeSymbol) &&
-                    !Conversion
-                    .Classify(argument.Type, parameterType).IsImplicit {
+                    !Conversion.Classify(argument.Type, parameterType).IsImplicit {
                     builder ??= arguments.ToBuilder()
                     builder[i] = BindConversion(location, argument, parameterType)
-                } else if !parameters[paramIndex]
-                    .ParameterType
-                    .IsGenericParameter &&
+                } else if !parameters[paramIndex].ParameterType.IsGenericParameter &&
                     argument.Type is PlatformTypeSymbol &&
-                    Conversion
-                    .Classify(argument.Type, parameterType).RequiresPlatformNilCheck {
+                    Conversion.Classify(argument.Type, parameterType).RequiresPlatformNilCheck {
                     // ADR-0186 §4, #4451: a platform argument at a non-null
                     // parameter of a constrained call is a coercion point like
                     // any other. This path otherwise passes arguments
@@ -4237,12 +4181,9 @@ internal class ConversionClassifier {
             "Dispose",
             out var userDispose
         ) &&
-            userDispose
-            .Parameters
-            .Length == 0 &&
+            userDispose.Parameters.Length == 0 &&
             (userDispose.Type == TypeSymbol.Void || userDispose.Type == nil) &&
-            userDispose.Accessibility == Accessibility
-            .Public {
+            userDispose.Accessibility == Accessibility.Public {
             return BoundUserInstanceCallExpression(nil, receiver, userDispose, ImmutableArray[BoundExpression].Empty)
         }
         // Extended CLR-type path: walk self + transitive interfaces so a
@@ -4310,11 +4251,8 @@ internal class ConversionClassifier {
             "DisposeAsync",
             out var userDisposeAsync
         ) &&
-            userDisposeAsync
-            .Parameters
-            .Length == 0 &&
-            userDisposeAsync.Accessibility == Accessibility
-            .Public {
+            userDisposeAsync.Parameters.Length == 0 &&
+            userDisposeAsync.Accessibility == Accessibility.Public {
             let call = BoundUserInstanceCallExpression(
                 nil,
                 receiver,
@@ -4448,12 +4386,8 @@ internal class ConversionClassifier {
             trackNarrowing: false
         )
         let call = BoundCallExpression(nil, method, ImmutableArray.Create(operand), resultType){
-            StaticGenericOwnerType = if !methodOwner
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                !(methodOwner.Definition ?? methodOwner)
-                .TypeParameters
-                .IsDefaultOrEmpty {
+            StaticGenericOwnerType = if !methodOwner.TypeArguments.IsDefaultOrEmpty ||
+                !(methodOwner.Definition ?? methodOwner).TypeParameters.IsDefaultOrEmpty {
                 methodOwner
             } else {
                 default(StructSymbol?)
@@ -4782,9 +4716,7 @@ internal class ConversionClassifier {
                         element = synthesizedRefLiteral
                     }
                     let elementSyntax ExpressionSyntax? = if literalSource.Syntax is TupleLiteralExpressionSyntax tupleSyntax &&
-                        i < tupleSyntax
-                        .Elements
-                        .Count {
+                        i < tupleSyntax.Elements.Count {
                         tupleSyntax.Elements[i]
                     } else {
                         element.Syntax as ExpressionSyntax
@@ -4840,9 +4772,7 @@ internal class ConversionClassifier {
                 convertedLiteralElements.ToImmutable()
             )
             if expression.Syntax is TupleLiteralExpressionSyntax tupleSyntax &&
-                tupleSyntax
-                .Elements
-                .Count == arity &&
+                tupleSyntax.Elements.Count == arity &&
                 verifyCallArgumentsAfterConversions != nil {
                 resultTuple = verifyCallArgumentsAfterConversions(
                     tupleSyntax.Elements,
@@ -4917,9 +4847,7 @@ internal class ConversionClassifier {
         switch expression {
             case block is BoundBlockExpression {
                 if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
-                    resultVar
-                    .Name
-                    .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                    resultVar.Name.StartsWith("<blockResult", StringComparison.Ordinal) &&
                     TryRewriteCleanupBlockResult(
                     block.Statements,
                     resultVar,
@@ -4969,13 +4897,8 @@ internal class ConversionClassifier {
                     type
                 )
             }
-            case coalesce is BoundBinaryExpression when coalesce
-                .Op
-                .Kind == BoundBinaryOperatorKind.NullCoalesce &&
-                coalesce
-                .Left
-                .Type == TypeSymbol
-                .Null {
+            case coalesce is BoundBinaryExpression when coalesce.Op.Kind == BoundBinaryOperatorKind.NullCoalesce &&
+                coalesce.Left.Type == TypeSymbol.Null {
                 let right = BindConversion(diagnosticLocation, coalesce.Right, type, allowExplicit)
                 return if StatementBinder.IsNilLiteral(coalesce.Left) {
                     right
@@ -5089,10 +5012,7 @@ internal class ConversionClassifier {
         }
         if expression is BoundTupleLiteralExpression sourceTuple &&
             targetType is TupleTypeSymbol targetTuple &&
-            sourceTuple
-            .Elements
-            .Length == targetTuple
-            .Arity {
+            sourceTuple.Elements.Length == targetTuple.Arity {
             let elements = ImmutableArray.CreateBuilder[BoundExpression](targetTuple.Arity)
             for var i = 0; i < targetTuple.Arity; i++ {
                 elements.Add(
@@ -5197,11 +5117,9 @@ internal class ConversionClassifier {
         let constructorArguments = ImmutableArray.CreateBuilder[BoundExpression](plan!!.ConstructorSlots.Length)
         for slot in plan!!.ConstructorSlots {
             if usesPrimaryZero && slot.Source == nil && explicitNames?.Contains(slot.Name) != true &&
-                resolvedPlan
-                .Construction
-                .UserType!!
-                .PrimaryConstructorParameters
-                .FirstOrDefault((parameter ParameterSymbol) -> parameter.Name == slot.Name) is {} parameter {
+                resolvedPlan.Construction.UserType!!.PrimaryConstructorParameters.FirstOrDefault(
+                (parameter ParameterSymbol) -> parameter.Name == slot.Name
+            ) is {} parameter {
                 let owner = resolvedPlan.Construction.UserType!!
                 let zero = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
                     constructionSyntax ?? expression.Syntax,
@@ -5249,9 +5167,7 @@ internal class ConversionClassifier {
         }
         if targetType is StructSymbol &&
             (ownsDataInitialization || plan!!.Construction.Kind == StructuralProjectionConstructionKind.UserDefault) &&
-            plan!!
-            .Construction
-            .UserType is {IsClass: false} userType {
+            plan!!.Construction.UserType is {IsClass: false} userType {
             let initializers = ImmutableArray.CreateBuilder[BoundFieldInitializer](plan!!.InitializerSlots.Length)
             let initializedFields = HashSet[FieldSymbol]()
             for var i = 0; i < plan!!.ConstructorSlots.Length; i++ {
@@ -5513,9 +5429,7 @@ internal class ConversionClassifier {
         trackNarrowing bool
     ) BoundExpression {
         if neverBlock.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
-            resultLocal
-            .Name
-            .StartsWith("<blockResult", StringComparison.Ordinal) {
+            resultLocal.Name.StartsWith("<blockResult", StringComparison.Ordinal) {
             let needsRewrite = TypeSymbol.ContainsNeverType(resultLocal.Type) ||
                 DelegateRefKindUtilities.HasNonNoneSourceParameterRefKinds(neverBlock)
             if needsRewrite &&
@@ -5898,8 +5812,7 @@ internal class ConversionClassifier {
             let valueType = GetOptionalDefaultValueType(parameterType)
             if valueType.StripToBareShape() == TypeSymbol.Object ||
                 valueType == TypeSymbol.NInt ||
-                valueType == TypeSymbol
-                .NUInt {
+                valueType == TypeSymbol.NUInt {
                 let literal = BoundLiteralExpression(nil, value)
                 if literal.Type != valueType {
                     return LiftOptionalDefaultValue(BoundConversionExpression(nil, valueType, literal), parameterType)
@@ -6010,8 +5923,7 @@ internal class ConversionClassifier {
             }
             if unwrappedSourceTuple != nil &&
                 unwrappedTargetTuple != nil &&
-                unwrappedSourceTuple.Arity == unwrappedTargetTuple
-                .Arity {
+                unwrappedSourceTuple.Arity == unwrappedTargetTuple.Arity {
                 for var i = 0; i < unwrappedSourceTuple.Arity; i++ {
                     if HasReferenceNullabilityReturnMismatch(
                         unwrappedSourceTuple.ElementTypes[i],
@@ -6027,9 +5939,7 @@ internal class ConversionClassifier {
                 sourceReturn == TypeSymbol.Error ||
                 targetReturn == TypeSymbol.Void ||
                 targetReturn == TypeSymbol.Error ||
-                targetReturn
-                .ClrType
-                ?.ContainsGenericParameters == true ||
+                targetReturn.ClrType?.ContainsGenericParameters == true ||
                 object.ReferenceEquals(sourceReturn, targetReturn) || NullableLifting.IsAnyValueTypeNullable(
                 sourceReturn as NullableTypeSymbol
             ) ||
@@ -6038,8 +5948,7 @@ internal class ConversionClassifier {
                 targetReturn is PlatformTypeSymbol {
                 return false
             }
-            if Conversion.Classify(sourceReturn, targetReturn)
-                .IsImplicit ||
+            if Conversion.Classify(sourceReturn, targetReturn).IsImplicit ||
                 HasUserDefinedImplicitConversionForTypes(sourceReturn, targetReturn) {
                 return false
             }
@@ -6184,12 +6093,8 @@ internal class ConversionClassifier {
             if method == nil || receiverType == nil || MemberLookup.GetProjectionReceiverImportedType(
                 receiverType
             ) is not ImportedTypeSymbol imported ||
-                imported
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                !imported
-                .TypeArguments
-                .Any(
+                imported.TypeArguments.IsDefaultOrEmpty ||
+                !imported.TypeArguments.Any(
                 (argument TypeSymbol) -> TypeSymbol.RequiresSymbolicProjection(argument) ||
                     TypeSymbol.ContainsFixedLengthArray(argument) || argument is TupleTypeSymbol
             ) {
@@ -6331,9 +6236,7 @@ internal class ConversionClassifier {
             // Issue #3932: the operator declared on the TARGET's open definition
             // (`Memory`1::op_Implicit(!0[])`).
             if bareTarget is ImportedTypeSymbol{OpenDefinition: {} targetOpen} importedTarget &&
-                !importedTarget
-                .TypeArguments
-                .IsDefaultOrEmpty &&
+                !importedTarget.TypeArguments.IsDefaultOrEmpty &&
                 TryFindSymbolicOperator(
                 targetOpen,
                 importedTarget.TypeArguments,
@@ -6349,9 +6252,7 @@ internal class ConversionClassifier {
             // branch would otherwise bind `Span<object>`'s operator inside a
             // generic body and emit unverifiable IL.
             if bareSource is ImportedTypeSymbol{OpenDefinition: {} sourceOpen} importedSource &&
-                !importedSource
-                .TypeArguments
-                .IsDefaultOrEmpty &&
+                !importedSource.TypeArguments.IsDefaultOrEmpty &&
                 TryFindSymbolicOperator(
                 sourceOpen,
                 importedSource.TypeArguments,
@@ -6366,9 +6267,7 @@ internal class ConversionClassifier {
                 return false
             }
             if bareTarget is ImportedTypeSymbol{OpenDefinition: {} explicitTargetOpen} explicitImportedTarget &&
-                !explicitImportedTarget
-                .TypeArguments
-                .IsDefaultOrEmpty &&
+                !explicitImportedTarget.TypeArguments.IsDefaultOrEmpty &&
                 TryFindSymbolicOperator(
                 explicitTargetOpen,
                 explicitImportedTarget.TypeArguments,
@@ -6380,9 +6279,7 @@ internal class ConversionClassifier {
                 return true
             }
             return bareSource is ImportedTypeSymbol{OpenDefinition: {} explicitSourceOpen} explicitImportedSource &&
-                !explicitImportedSource
-                .TypeArguments
-                .IsDefaultOrEmpty &&
+                !explicitImportedSource.TypeArguments.IsDefaultOrEmpty &&
                 TryFindSymbolicOperator(
                 explicitSourceOpen,
                 explicitImportedSource.TypeArguments,
@@ -6530,9 +6427,7 @@ internal class ConversionClassifier {
         ) TypeSymbol? {
             if method == nil ||
                 receiverType is not ImportedTypeSymbol imported ||
-                imported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                imported.TypeArguments.IsDefaultOrEmpty {
                 return nil
             }
             let declaring Type? = method.DeclaringType
@@ -6568,9 +6463,7 @@ internal class ConversionClassifier {
             }
             if openParamType.IsGenericParameter &&
                 openParamType.DeclaringMethod == nil &&
-                openParamType.GenericParameterPosition < imported
-                .TypeArguments
-                .Length &&
+                openParamType.GenericParameterPosition < imported.TypeArguments.Length &&
                 imported.TypeArguments[openParamType.GenericParameterPosition] is TypeParameterSymbol recovered {
                 return recovered
             }
@@ -6671,9 +6564,7 @@ internal class ConversionClassifier {
         /// @param variable The variable to test.
         /// @returns `true` for an implicit-`in` spill temp.
         func IsImplicitInTemp(variable VariableSymbol) bool -> variable is LocalVariableSymbol &&
-            variable
-            .Name
-            .StartsWith(ImplicitInTempPrefix, StringComparison.Ordinal)
+            variable.Name.StartsWith(ImplicitInTempPrefix, StringComparison.Ordinal)
 
         /// Issue #4400: whether [`argument`](paramref) is a plain value at an
         /// imported `in` (or `ref readonly`) parameter — one that still
@@ -6691,9 +6582,7 @@ internal class ConversionClassifier {
         /// accepts a plain value by implicit readonly reference.
         /// @param parameter The imported CLR parameter.
         /// @returns `true` for an `in` or `ref readonly` parameter.
-        func IsImplicitInClrParameter(parameter ParameterInfo) bool -> parameter
-            .ParameterType
-            .IsByRef &&
+        func IsImplicitInClrParameter(parameter ParameterInfo) bool -> parameter.ParameterType.IsByRef &&
             parameter.IsIn &&
             !parameter.IsOut
 
@@ -6885,8 +6774,10 @@ internal class ConversionClassifier {
                 out var ordinary,
                 out var ordinaryOwner
             ) &&
-                Conversion
-                .ClassifyNonStructural(source, ordinaryOwner.SubstituteMemberType(ordinary.Parameters[0].Type)!!)
+                Conversion.ClassifyNonStructural(
+                source,
+                ordinaryOwner.SubstituteMemberType(ordinary.Parameters[0].Type)!!
+            )
                 .IsIdentity {
                 return false
             }
@@ -6920,15 +6811,10 @@ internal class ConversionClassifier {
             ) &&
                 resolvedOwner != nil &&
                 resolvedOwner.ClrType == nil &&
-                resolvedMethod
-                .Parameters
-                .Length == 1 &&
-                resolvedMethod
-                .Parameters[0]
-                .RefKind == RefKind.None &&
+                resolvedMethod.Parameters.Length == 1 &&
+                resolvedMethod.Parameters[0].RefKind == RefKind.None &&
                 resolvedMethod.ReturnRefKind == RefKind.None &&
-                Conversion
-                .ClassifyNonStructural(
+                Conversion.ClassifyNonStructural(
                 source.UnderlyingType,
                 resolvedOwner.SubstituteMemberType(resolvedMethod.Parameters[0].Type)!!
             )
@@ -6938,8 +6824,7 @@ internal class ConversionClassifier {
                     resolvedOwner.SubstituteMemberType(resolvedMethod.Type),
                     targetUnderlying
                 ) ||
-                    TypeSymbol
-                    .AreRuntimeEquivalentIgnoringReferenceNullability(
+                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                     resolvedOwner.SubstituteMemberType(resolvedMethod.Type),
                     target
                 )
@@ -7046,11 +6931,8 @@ internal class ConversionClassifier {
             }
             for candidate in owner.StaticMethods {
                 if !string.Equals(candidate.Name, opName, StringComparison.Ordinal) ||
-                    candidate
-                    .Parameters
-                    .Length != 1 ||
-                    candidates
-                    .Any(
+                    candidate.Parameters.Length != 1 ||
+                    candidates.Any(
                     (
                         c(Method FunctionSymbol, Owner StructSymbol, SourceRank int32, TargetRank int32)
                     ) -> object.ReferenceEquals(c.Method, candidate) &&
@@ -7117,8 +6999,7 @@ internal class ConversionClassifier {
                     targetFn != nil &&
                     i < sourceFn.Arity &&
                     i < targetFn.Arity &&
-                    !TypeSymbol
-                    .AreRuntimeEquivalentIgnoringReferenceNullability(
+                    !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                     sourceFn.ParameterTypes[i],
                     targetFn.ParameterTypes[i]
                 ) {
@@ -7188,9 +7069,7 @@ internal class ConversionClassifier {
         }
 
         private func GetClrParameterTargetType(argumentType TypeSymbol, parameter ParameterInfo) TypeSymbol {
-            if !parameter
-                .ParameterType
-                .IsValueType &&
+            if !parameter.ParameterType.IsValueType &&
                 argumentType is NullableTypeSymbol nullable &&
                 (
                 NullableLifting.IsValueTypeNullable(nullable) || NullableLifting.IsUserValueTypeNullable(nullable) ||
@@ -7295,9 +7174,7 @@ internal class ConversionClassifier {
                 }
                 case block is BoundBlockExpression {
                     if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
-                        resultLocal
-                        .Name
-                        .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                        resultLocal.Name.StartsWith("<blockResult", StringComparison.Ordinal) &&
                         DelegateRefKindUtilities.TryFindCleanupBlockResultInitializer(
                         block.Statements,
                         resultLocal
@@ -7337,12 +7214,8 @@ internal class ConversionClassifier {
                     return true
                 }
                 case conversion is BoundConversionExpression {
-                    return conversion
-                        .Expression
-                        .Type == TypeSymbol.Null ||
-                        conversion
-                        .Expression
-                        .Type == TypeSymbol.Never ||
+                    return conversion.Expression.Type == TypeSymbol.Null ||
+                        conversion.Expression.Type == TypeSymbol.Never ||
                         CanAdaptNeverDelegateValue(conversion.Expression)
                 }
                 case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion {
@@ -7354,41 +7227,27 @@ internal class ConversionClassifier {
                 }
                 case block is BoundBlockExpression {
                     if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
-                        resultLocal
-                        .Name
-                        .StartsWith("<blockResult", StringComparison.Ordinal) {
+                        resultLocal.Name.StartsWith("<blockResult", StringComparison.Ordinal) {
                         return TypeSymbol.ContainsNeverType(resultLocal.Type)
                     }
                     return CanAdaptNeverDelegateValue(block.Expression)
                 }
                 case conditional is BoundConditionalExpression {
                     return (
-                        conditional
-                            .WhenTrue
-                            .Type == TypeSymbol.Null ||
-                            conditional
-                            .WhenTrue
-                            .Type == TypeSymbol.Never ||
+                        conditional.WhenTrue.Type == TypeSymbol.Null ||
+                            conditional.WhenTrue.Type == TypeSymbol.Never ||
                             CanAdaptNeverDelegateValue(conditional.WhenTrue)
                     ) &&
                         (
-                        conditional
-                            .WhenFalse
-                            .Type == TypeSymbol.Null ||
-                            conditional
-                            .WhenFalse
-                            .Type == TypeSymbol.Never ||
+                        conditional.WhenFalse.Type == TypeSymbol.Null ||
+                            conditional.WhenFalse.Type == TypeSymbol.Never ||
                             CanAdaptNeverDelegateValue(conditional.WhenFalse)
                     )
                 }
                 case switchExpr is BoundSwitchExpression {
                     for arm in switchExpr.Arms {
-                        if arm
-                            .Result
-                            .Type != TypeSymbol.Null &&
-                            arm
-                            .Result
-                            .Type != TypeSymbol.Never &&
+                        if arm.Result.Type != TypeSymbol.Null &&
+                            arm.Result.Type != TypeSymbol.Never &&
                             !CanAdaptNeverDelegateValue(arm.Result) {
                             return false
                         }
@@ -7521,8 +7380,7 @@ internal class ConversionClassifier {
                     targetParameterType,
                     out var targetDelegateFunctionType
                 ) &&
-                    Conversion
-                    .ClassifyNonStructural(targetDelegateFunctionType, writtenFunctionType).IsImplicit
+                    Conversion.ClassifyNonStructural(targetDelegateFunctionType, writtenFunctionType).IsImplicit
                 let compatible = runtimeEquivalent ||
                     structurallyCompatibleDelegate ||
                     (
@@ -7786,12 +7644,9 @@ internal class ConversionClassifier {
         private func IsMissingParameterDefault(parameter ParameterInfo) bool {
             try {
                 let raw = parameter.RawDefaultValue
-                return raw is Missing || raw?.GetType()
-                    .FullName == "System.Reflection.Missing" ||
+                return raw is Missing || raw?.GetType().FullName == "System.Reflection.Missing" ||
                     (
-                    parameter
-                        .ParameterType
-                        .FullName == "System.Object" &&
+                    parameter.ParameterType.FullName == "System.Object" &&
                         parameter.IsOptional &&
                         (raw is DBNull || !parameter.HasDefaultValue)
                 )
@@ -8150,9 +8005,7 @@ internal class ConversionClassifier {
 
         internal func NeedsSymbolicConversion(type TypeSymbol) bool {
             if type.StripToBareShape() is not ImportedTypeSymbol{OpenDefinition: not nil} imported ||
-                imported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                imported.TypeArguments.IsDefaultOrEmpty {
                 return false
             }
             for typeArgument in imported.TypeArguments {
@@ -8234,11 +8087,7 @@ internal class ConversionClassifier {
             if !(mapped is ImportedTypeSymbol{OpenDefinition: {} mappedOpen} mappedImported) ||
                 !(expected is ImportedTypeSymbol{OpenDefinition: {} expectedOpen} expectedImported) ||
                 !ClrTypeUtilities.AreSame(mappedOpen, expectedOpen) ||
-                mappedImported
-                .TypeArguments
-                .Length != expectedImported
-                .TypeArguments
-                .Length {
+                mappedImported.TypeArguments.Length != expectedImported.TypeArguments.Length {
                 return false
             }
             for var i = 0; i < mappedImported.TypeArguments.Length; i++ {

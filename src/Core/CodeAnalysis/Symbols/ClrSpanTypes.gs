@@ -105,7 +105,6 @@ internal shared class ClrSpanTypes {
             resolved.IsGenericTypeDefinition &&
             resolved.IsValueType &&
             resolved.IsByRefLike &&
-            resolved
-            .GetGenericArguments().Length == 1
+            resolved.GetGenericArguments().Length == 1
     }
 }

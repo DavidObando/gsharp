@@ -498,9 +498,7 @@ internal partial class StatementBinder {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
-            labeledBlock
-            .Statements
-            .Length == 2 &&
+            labeledBlock.Statements.Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
         }
@@ -744,9 +742,7 @@ internal partial class StatementBinder {
         // may write a nullable value to the local, while keeping a local passed only
         // to a non-null `ref T` or `out T` parameter. Compound statements without
         // user gotos/labels already updated and joined `NonNullByRefVariables` per branch.
-        if binderCtx
-            .NonNullByRefVariables
-            .Count > 0 &&
+        if binderCtx.NonNullByRefVariables.Count > 0 &&
             !(
             filterWrites == nil &&
                 boundStatement is BoundIfStatement or
@@ -904,9 +900,7 @@ internal partial class StatementBinder {
         var aliasesAtEntry = aliasesAtEntry
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
-            labeledBlock
-            .Statements
-            .Length == 2 &&
+            labeledBlock.Statements.Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
             aliasesAtEntry = Array.Empty[VariableSymbol]()
@@ -1040,9 +1034,7 @@ internal partial class StatementBinder {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
-            labeledBlock
-            .Statements
-            .Length == 2 &&
+            labeledBlock.Statements.Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
         }
@@ -1136,9 +1128,7 @@ internal partial class StatementBinder {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
-            labeledBlock
-            .Statements
-            .Length == 2 &&
+            labeledBlock.Statements.Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
         }
@@ -1242,12 +1232,8 @@ internal partial class StatementBinder {
                 )
             }
             case ctorCall is BoundConstructorCallExpression {
-                let parameters = ctorCall
-                    .SelectedConstructor
-                    ?.Parameters ??
-                    ctorCall
-                    .StructType
-                    .PrimaryConstructorParameters
+                let parameters = ctorCall.SelectedConstructor?.Parameters ??
+                    ctorCall.StructType.PrimaryConstructorParameters
                 return !parameters.IsDefaultOrEmpty &&
                     UserCallPreservesNonNullByRefVariable(parameters, ctorCall.Arguments, 0, target, underlying)
             }
@@ -1271,8 +1257,7 @@ internal partial class StatementBinder {
                 continue
             }
             if arguments[i] is BoundAddressOfExpression{IsReadOnly: false, Operand: BoundVariableExpression v} &&
-                object
-                .ReferenceEquals(v.Variable, target) {
+                object.ReferenceEquals(v.Variable, target) {
                 if HasUserNullabilityContract(param) ||
                     !OutputTypeDischargesNullableWidening(param.Type, underlying) ||
                     HasCompetingWritableReferenceArgument(arguments, i, target) {
@@ -1298,12 +1283,8 @@ internal partial class StatementBinder {
                 CollectUserOutCallVariables(uic.Method.Parameters, uic.Arguments, offset, sink)
             }
             case ctorCall is BoundConstructorCallExpression {
-                let parameters = ctorCall
-                    .SelectedConstructor
-                    ?.Parameters ??
-                    ctorCall
-                    .StructType
-                    .PrimaryConstructorParameters
+                let parameters = ctorCall.SelectedConstructor?.Parameters ??
+                    ctorCall.StructType.PrimaryConstructorParameters
                 if !parameters.IsDefaultOrEmpty {
                     CollectUserOutCallVariables(parameters, ctorCall.Arguments, 0, sink)
                 }
@@ -1439,8 +1420,7 @@ internal partial class StatementBinder {
                 if commonType != nil {
                     commonIncoming.Add(entry.Key, commonType)
                     if incomingSnapshots[0].TryGetNarrowingFrameIndex(entry.Key, out var frameIndex) &&
-                        incomingSnapshots
-                        .All(
+                        incomingSnapshots.All(
                         (snapshot NarrowingJumpState) -> snapshot.TryGetNarrowingFrameIndex(
                             entry.Key,
                             out var incomingFrame
@@ -1460,9 +1440,7 @@ internal partial class StatementBinder {
             }
             for entry in commonIncoming {
                 let targetFrame = if commonFrameIndices.TryGetValue(entry.Key, out var frameIndex) &&
-                    frameIndex < binderCtx
-                    .NarrowedVariables
-                    .Count {
+                    frameIndex < binderCtx.NarrowedVariables.Count {
                     binderCtx.NarrowedVariables[frameIndex]
                 } else {
                     binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]
@@ -1658,9 +1636,7 @@ internal partial class StatementBinder {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
-            labeledBlock
-            .Statements
-            .Length == 2 &&
+            labeledBlock.Statements.Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
         }
@@ -1681,9 +1657,7 @@ internal partial class StatementBinder {
                         entry.Value
                     ) ||
                         DropsOnMemberMutation(entry.Key, summary.Mutations) ||
-                        summary
-                        .Mutations
-                        .InvalidatesNarrowing(entry.Key.Root, entry.Value)
+                        summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value)
                 ) {
                     conditionKillJournal?.Add((frame, entry.Key, entry.Value))
                     frame.Remove(entry.Key)
@@ -1706,9 +1680,7 @@ internal partial class StatementBinder {
                     entry.Value
                 ) ||
                     DropsOnMemberMutation(entry.Key, summary.Mutations) ||
-                    summary
-                    .Mutations
-                    .InvalidatesNarrowing(entry.Key.Root, entry.Value)
+                    summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value)
             ) {
                 snapshot.RemoveNarrowing(entry.Key)
             }
@@ -1783,9 +1755,7 @@ internal partial class StatementBinder {
         }
         let underlying = widenedNullable.UnderlyingType
         if !IsReferenceLikeType(underlying) || !SmartCastStability.IsAssignmentNarrowingRoot(path.Root) ||
-            path
-            .Root
-            .IsReadOnly {
+            path.Root.IsReadOnly {
             return false
         }
         var expr = bound
@@ -1798,8 +1768,7 @@ internal partial class StatementBinder {
         }
         if TryExtractNullCoalescingAssignmentFromExpression(expr, out var ncaAssign) &&
             ncaAssign != nil &&
-            object
-            .ReferenceEquals(ncaAssign.Variable, path.Root) {
+            object.ReferenceEquals(ncaAssign.Variable, path.Root) {
             return AssignmentTypePreservesNarrowing(ncaAssign.AssignedValueType, underlying) ||
                 NestedAssignmentPreservesNarrowing(ncaAssign.Expression, underlying)
         }
@@ -2026,9 +1995,7 @@ internal partial class StatementBinder {
         var current = statement
         while current is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
-            labeledBlock
-            .Statements
-            .Length == 2 &&
+            labeledBlock.Statements.Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             current = labeledBlock.Statements[1]
         }
@@ -2098,9 +2065,8 @@ internal partial class StatementBinder {
             ): true
             case _ when SmartCastStability.TryGetStableMemberPath(expression, out var path, out _) &&
                 path != nil &&
-                binderCtx
-                .NarrowedVariables
-                .Query(path) is {} pathNarrowed && !(pathNarrowed is NullableTypeSymbol): true
+                binderCtx.NarrowedVariables.Query(path) is {} pathNarrowed &&
+                !(pathNarrowed is NullableTypeSymbol): true
             case variable is BoundVariableExpression: IsDefinitelyNonNullVariable(variable.Variable)
             case call is BoundCallExpression: FunctionReturnsDefinitelyNonNull(call.Function)
             default: false
@@ -2157,8 +2123,7 @@ internal partial class StatementBinder {
             expectedType.Name,
             StringComparison.Ordinal
         ) &&
-            $scope
-            .TryLookupFunctions(call.Identifier.ValueText).IsDefaultOrEmpty
+            $scope.TryLookupFunctions(call.Identifier.ValueText).IsDefaultOrEmpty
     }
 
     /// Applies a conditional cleanup to the jump's entry facts.
@@ -2294,9 +2259,7 @@ internal partial class StatementBinder {
             }
             case inner is BoundBlockStatement {
                 if inner.Syntax is LabeledStatementSyntax &&
-                    inner
-                    .Statements
-                    .Length == 2 &&
+                    inner.Statements.Length == 2 &&
                     inner.Statements[0] is BoundLabelStatement {
                     // A user label can be reached by a goto from outside the branch,
                     // so only facts established after the label hold on all paths out.
@@ -3578,22 +3541,14 @@ internal partial class StatementBinder {
                 )
                 state.Clear()
                 aliases.Clear()
-                if condAddr
-                    .WhenTrueOperand
-                    .Type == TypeSymbol.Never &&
-                    condAddr
-                    .WhenFalseOperand
-                    .Type != TypeSymbol.Never {
+                if condAddr.WhenTrueOperand.Type == TypeSymbol.Never &&
+                    condAddr.WhenFalseOperand.Type != TypeSymbol.Never {
                     for kv in elseState {
                         state[kv.Key] = kv.Value
                     }
                     aliases.UnionWith(elseAliases)
-                } else if condAddr
-                    .WhenFalseOperand
-                    .Type == TypeSymbol.Never &&
-                    condAddr
-                    .WhenTrueOperand
-                    .Type != TypeSymbol.Never {
+                } else if condAddr.WhenFalseOperand.Type == TypeSymbol.Never &&
+                    condAddr.WhenTrueOperand.Type != TypeSymbol.Never {
                     for kv in thenState {
                         state[kv.Key] = kv.Value
                     }
@@ -4111,8 +4066,7 @@ internal partial class StatementBinder {
         }
         if ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(expression, out var branchySyntax) &&
             branchySyntax != nil &&
-            ExpressionBinder
-            .IsTargetDependentBlockArgumentSyntax(branchySyntax) {
+            ExpressionBinder.IsTargetDependentBlockArgumentSyntax(branchySyntax) {
             ApplyDeferredBlockArgumentNarrowingEffects(branchySyntax)
             return
         }
@@ -4128,9 +4082,7 @@ internal partial class StatementBinder {
         let statement = BoundExpressionStatement(anchor, expression)
         InvalidateNarrowingsForAssignedVariables(anchor, statement)
         UpdateExternalCallableAliases(statement, aliasesAtEntry)
-        if binderCtx
-            .NarrowedVariables
-            .Count > 0 &&
+        if binderCtx.NarrowedVariables.Count > 0 &&
             TryClassifyNullCoalescingExpressionNonNullAssignments(expression, aliasesAtEntry) is {} ncaNarrowed {
             let topFrame = binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]
             for kv in ncaNarrowed {
@@ -4472,8 +4424,7 @@ internal partial class StatementBinder {
                         )
                         if finalArg is BoundAddressOfExpression finalAddr &&
                             reboundRef is BoundAddressOfExpression reboundAddr &&
-                            !object
-                            .ReferenceEquals(reboundAddr.Operand, finalAddr.Operand) {
+                            !object.ReferenceEquals(reboundAddr.Operand, finalAddr.Operand) {
                             let rebuiltAddr = finalAddr.Update(reboundAddr.Operand)
                             replacements[finalAddr] = rebuiltAddr
                             finalArg = rebuiltAddr
@@ -5270,16 +5221,8 @@ internal partial class StatementBinder {
         var toRemove List[SyntaxNode]? = nil
         for key in branchyArgumentEntries.Keys {
             if object.ReferenceEquals(key.SyntaxTree, root.SyntaxTree) &&
-                key
-                .Span
-                .Start >= root
-                .Span
-                .Start &&
-                key
-                .Span
-                .End <= root
-                .Span
-                .End {
+                key.Span.Start >= root.Span.Start &&
+                key.Span.End <= root.Span.End {
                 (toRemove ??= List[SyntaxNode]()).Add(key)
             }
         }
@@ -6639,8 +6582,7 @@ internal partial class StatementBinder {
                                     isDirectWrite: true
                                 )
                             } else if pointer is BoundVariableExpression variable &&
-                                writableReferenceAliases
-                                .TryGetValue(variable.Variable, out var operand) {
+                                writableReferenceAliases.TryGetValue(variable.Variable, out var operand) {
                                 RecordWritableReference(operand, invalidateCallableState: true, isDirectWrite: true)
                             } else {
                                 MayMutateAnyRoot = true
@@ -6979,15 +6921,10 @@ internal partial class StatementBinder {
                 visitedFunctionLiterals.Count == 0 &&
                 tryAssignedVariables == nil &&
                 pendingConditionalTargets.Count == 0 &&
-                normalCallableState
-                .LocalParameters
-                .Count == 0 &&
-                allEntryCallableState
-                .LocalParameters
-                .Count == 0 &&
+                normalCallableState.LocalParameters.Count == 0 &&
+                allEntryCallableState.LocalParameters.Count == 0 &&
                 writableReferenceAliases.Count == 0 &&
-                knownStatements
-                .TryGetValue(node, out var known) {
+                knownStatements.TryGetValue(node, out var known) {
                 Roots.UnionWith(known.AssignedRoots)
                 for root in known.AssignedRoots {
                     normalCallableState = normalCallableState.InvalidateVariable(
@@ -7034,8 +6971,7 @@ internal partial class StatementBinder {
                 if !visitedLabels.Contains(gotoStatement.Label) {
                     pendingConditionalTargets.Add(gotoStatement.Label)
                 } else if callableInvocationCountsAtLabel.TryGetValue(gotoStatement.Label, out var invocationStart) &&
-                    invocationStart < callableInvocations
-                    .Count {
+                    invocationStart < callableInvocations.Count {
                     PushStep(
                         WalkStepKind.GotoReplayStep,
                         state: GotoReplayFrame(invocationStart, callableInvocations.Count)
@@ -7052,8 +6988,7 @@ internal partial class StatementBinder {
                         statements[count - 4] is BoundGotoStatement endGoto &&
                         statements[count - 3] is BoundLabelStatement elseLabel &&
                         statements[count - 1] is BoundLabelStatement endLabel &&
-                        endGoto.Label == endLabel
-                        .Label {
+                        endGoto.Label == endLabel.Label {
                         let frame = IfLetFrame(statements, elseLabel.Label, CaptureCallableState())
                         PushStep(WalkStepKind.IfLetStep, state: frame)
                     } else {
@@ -7657,9 +7592,7 @@ internal partial class StatementBinder {
                 runsEscapedClosureHere = true
             }
             if node is BoundFunctionLiteralExpression nestedLiteral &&
-                !nestedLiteral
-                .CapturedVariables
-                .IsDefaultOrEmpty {
+                !nestedLiteral.CapturedVariables.IsDefaultOrEmpty {
                 normalCallableState = normalCallableState.AddCapturedVariables(nestedLiteral.CapturedVariables)
                 allEntryCallableState = allEntryCallableState.AddCapturedVariables(nestedLiteral.CapturedVariables)
             }
@@ -7870,12 +7803,8 @@ internal partial class StatementBinder {
                 }
                 case BoundNodeKind.ConstructorCallExpression {
                     let ctor = cast[BoundConstructorCallExpression](node)
-                    let parameters = ctor
-                        .SelectedConstructor
-                        ?.Parameters ??
-                        ctor
-                        .StructType
-                        .PrimaryConstructorParameters
+                    let parameters = ctor.SelectedConstructor?.Parameters ??
+                        ctor.StructType.PrimaryConstructorParameters
                     if ctor.Arguments.Length > 0 {
                         let frame = CallSiteFrame(
                             ctor.Arguments,
@@ -8822,9 +8751,7 @@ internal partial class StatementBinder {
             let allSource = targetState?.AllEntry ?? allEntryCallableState
             let isReadonlyCallableParameter = variable is ParameterSymbol &&
                 variable.IsReadOnly == true &&
-                !normalSource
-                .LocalParameters
-                .Contains(variable) && !allSource.LocalParameters.Contains(variable)
+                !normalSource.LocalParameters.Contains(variable) && !allSource.LocalParameters.Contains(variable)
             normalSource.Literals.TryGetValue(variable, out var normalLiterals)
             let isNormalExternal = isReadonlyCallableParameter || normalSource.External.Contains(variable)
             let isNormalUnknown = normalSource.Unknown.Contains(variable) ||
@@ -9422,21 +9349,11 @@ internal partial class StatementBinder {
                 if object.ReferenceEquals(this, other) {
                     return true
                 }
-                if Literals.Count != other
-                    .Literals
-                    .Count ||
-                    Unknown.Count != other
-                    .Unknown
-                    .Count ||
-                    External.Count != other
-                    .External
-                    .Count ||
-                    LocalParameters.Count != other
-                    .LocalParameters
-                    .Count ||
-                    CapturedVariables.Count != other
-                    .CapturedVariables
-                    .Count {
+                if Literals.Count != other.Literals.Count ||
+                    Unknown.Count != other.Unknown.Count ||
+                    External.Count != other.External.Count ||
+                    LocalParameters.Count != other.LocalParameters.Count ||
+                    CapturedVariables.Count != other.CapturedVariables.Count {
                     return false
                 }
                 if !object.ReferenceEquals(Unknown, other.Unknown) && !Unknown.SetEquals(other.Unknown) {
@@ -9940,17 +9857,13 @@ internal partial class StatementBinder {
                         if !sameExternal {
                             for variable in left.External {
                                 if !right.External.Contains(variable) && !right.Unknown.Contains(variable) &&
-                                    !right
-                                    .Literals
-                                    .ContainsKey(variable) {
+                                    !right.Literals.ContainsKey(variable) {
                                     unknown = unknown.Add(variable)
                                 }
                             }
                             for variable in right.External {
                                 if !left.External.Contains(variable) && !left.Unknown.Contains(variable) &&
-                                    !left
-                                    .Literals
-                                    .ContainsKey(variable) {
+                                    !left.Literals.ContainsKey(variable) {
                                     unknown = unknown.Add(variable)
                                 }
                             }
@@ -10064,9 +9977,7 @@ internal partial class StatementBinder {
                     HasInternallyReachableExpressionFallthrough(switchStatement.Discriminant) &&
                         CanCompleteNormally(switchStatement)
                 ) ||
-                    switchStatement
-                    .Arms
-                    .Any(
+                    switchStatement.Arms.Any(
                     (arm BoundPatternSwitchArm) -> (
                         HasInternallyReachableExpressionFallthrough(arm.Guard) && !EndsInUnconditionalExit(arm.Body)
                     ) ||
@@ -10195,14 +10106,8 @@ internal partial class StatementBinder {
         if expression is BoundAwaitExpression awaited {
             expression = awaited.Expression
         } else if expression is BoundImportedCallExpression{Function: {Name: "Wait"}} bridge &&
-            bridge
-            .Function
-            .ImportedClass
-            .ClassType
-            .FullName == "Gsharp.Concurrency.Blocking" &&
-            bridge
-            .Arguments
-            .Length == 1 {
+            bridge.Function.ImportedClass.ClassType.FullName == "Gsharp.Concurrency.Blocking" &&
+            bridge.Arguments.Length == 1 {
             expression = bridge.Arguments[0]
         } else if AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(resultType, out var produced) {
             // An `async func` call (ADR-0023) is typed `Task[R]` and carries no
@@ -10289,12 +10194,8 @@ internal partial class StatementBinder {
                 default(BoundStatement)
             }
         }
-        let isReadOnly = syntax
-            .Keyword
-            ?.Kind == SyntaxKind.ConstKeyword ||
-            syntax
-            .Keyword
-            ?.Kind == SyntaxKind.LetKeyword
+        let isReadOnly = syntax.Keyword?.Kind == SyntaxKind.ConstKeyword ||
+            syntax.Keyword?.Kind == SyntaxKind.LetKeyword
         let type TypeSymbol? = if syntax.TypeClause is {} typeClause {
             bindTypeClause(typeClause)
         } else {
@@ -10357,8 +10258,7 @@ internal partial class StatementBinder {
                 syntax.Initializer
             ) is {} targetTypedLambda &&
                 bindLambdaWithTargetType != nil &&
-                MemberLookup
-                .TryGetLambdaTargetFunctionTypeFromSymbol(type, out var targetFnType) {
+                MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var targetFnType) {
                 // ADR-0076 / issue #716: when a binding has an explicit
                 // function-type and is initialised with an arrow lambda,
                 // bind the lambda with the target shape so omitted
@@ -10697,8 +10597,7 @@ internal partial class StatementBinder {
                 $scope.References!!,
                 out var utf8Type
             ) &&
-                ClrTypeUtilities
-                .AreSame(convertedInitializer.Type.ClrType, utf8Type) {
+                ClrTypeUtilities.AreSame(convertedInitializer.Type.ClrType, utf8Type) {
                 Diagnostics.ReportInvalidUtf8StringLiteral(
                     syntax.Initializer?.Location ?? syntax.Identifier.Location,
                     "A readonly byte span is not a constant."
@@ -10739,8 +10638,7 @@ internal partial class StatementBinder {
                 )
             ) &&
                 !(convertedInitializer is BoundErrorExpression) &&
-                !ConstantExpressionEvaluator
-                .ContainsCheckedOutOfRangeFloatingConstantConversion(convertedInitializer) {
+                !ConstantExpressionEvaluator.ContainsCheckedOutOfRangeFloatingConstantConversion(convertedInitializer) {
                 // Issue #5767: the condition excludes an initializer that does not fold because of a checked
                 // conversion of a value out of range. Its GS0635 gives the cause.
                 Diagnostics.ReportConstFieldInitializerNotConstant(
@@ -11615,10 +11513,7 @@ internal partial class StatementBinder {
         let declarations = ImmutableArray.CreateBuilder[BoundStatement](identifiers.Count)
         let convertedReceiver = conversions.BindConversion(location, receiver, selected.ReceiverParamType)
         arguments.Add(convertedReceiver)
-        let receiverScoped = !selected
-            .Method
-            .Parameters[0]
-            .IsScoped &&
+        let receiverScoped = !selected.Method.Parameters[0].IsScoped &&
             (HasFunctionLocalEscapeScope(receiver) || HasFunctionLocalEscapeScope(convertedReceiver))
         for var i = 0; i < identifiers.Count; i++ {
             let parameter = selected.Method.Parameters[i + 1]
@@ -11680,9 +11575,7 @@ internal partial class StatementBinder {
         if candidate.Type != TypeSymbol.Void ||
             candidate.IsAsync ||
             candidate.IsSuspending ||
-            !candidate
-            .TypeParameters
-            .IsDefaultOrEmpty {
+            !candidate.TypeParameters.IsDefaultOrEmpty {
             return false
         }
         if !AccessibilityChecker.IsAccessible(candidate.Accessibility, effectiveDeclaringType, getCurrentFunction()) {
@@ -11828,9 +11721,7 @@ internal partial class StatementBinder {
         )
         if receiver.Type is ImportedTypeSymbol symbolicReceiver &&
             symbolicReceiver.OpenDefinition != nil &&
-            !symbolicReceiver
-            .TypeArguments
-            .IsDefaultOrEmpty {
+            !symbolicReceiver.TypeArguments.IsDefaultOrEmpty {
             receiverClrType = symbolicReceiver.ReifyClosedClrType() ?? receiverClrType
         }
         let probes = MemberLookup(binderCtx).CollectImportedMethodProbes(
@@ -11848,9 +11739,7 @@ internal partial class StatementBinder {
             var candidates = List[MethodInfo]()
             for candidate in probe.Methods {
                 let candidateParameters = candidate.GetParameters()
-                var parametersMatch = candidate
-                    .ReturnType
-                    .FullName == typeof(Void).FullName &&
+                var parametersMatch = candidate.ReturnType.FullName == typeof(Void).FullName &&
                     candidateParameters.Length == identifiers.Count +
                     receiverOffset
                 for var i = receiverOffset; parametersMatch && i < candidateParameters.Length; i++ {
@@ -12366,9 +12255,7 @@ internal partial class StatementBinder {
                 switch value {
                     case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.NullCoalesce: bin
                     case block is BoundBlockExpression when block.Expression is BoundBinaryExpression bin &&
-                        bin
-                        .Op
-                        .Kind == BoundBinaryOperatorKind.NullCoalesce: bin
+                        bin.Op.Kind == BoundBinaryOperatorKind.NullCoalesce: bin
                     default: default(BoundBinaryExpression?)
                 }
             } else {
@@ -12447,9 +12334,7 @@ internal partial class StatementBinder {
             let coalesce BoundBinaryExpression? = switch current {
                 case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.NullCoalesce: bin
                 case block is BoundBlockExpression when block.Expression is BoundBinaryExpression bin &&
-                    bin
-                    .Op
-                    .Kind == BoundBinaryOperatorKind.NullCoalesce: bin
+                    bin.Op.Kind == BoundBinaryOperatorKind.NullCoalesce: bin
                 default: default(BoundBinaryExpression?)
             }
             if coalesce == nil {
@@ -12682,8 +12567,7 @@ internal partial class StatementBinder {
                 if ancestor is BlockStatementSyntax or
                     BlockExpressionSyntax or
                     ForClauseStatementSyntax &&
-                    index
-                    .DeclarationsOf(ancestor).TryGetValue(name, out var declared) {
+                    index.DeclarationsOf(ancestor).TryGetValue(name, out var declared) {
                     for candidate in declared {
                         if candidate.Span.End <= siteStart {
                             declaration = candidate
@@ -12920,9 +12804,7 @@ internal partial class StatementBinder {
                 if origin is BoundConversionExpression conversion {
                     origin = conversion.Expression
                 } else if origin is BoundUnaryExpression unary &&
-                    unary
-                    .Op
-                    .Kind == BoundUnaryOperatorKind.NullAssertion {
+                    unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion {
                     origin = unary.Operand
                 } else if origin is BoundTupleElementAccessExpression tuple {
                     origin = tuple.Receiver
@@ -13021,12 +12903,8 @@ internal partial class StatementBinder {
             }
             if type is StructSymbol structure {
                 return structure.IsClass &&
-                    structure
-                    .TypeParameters
-                    .IsDefaultOrEmpty &&
-                    structure
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
+                    structure.TypeParameters.IsDefaultOrEmpty &&
+                    structure.TypeArguments.IsDefaultOrEmpty &&
                     !structure.IsConstructedNestedType &&
                     !TypeSymbol.IsUnboundGenericDefinition(structure)
             }
@@ -13286,12 +13164,8 @@ internal partial class StatementBinder {
         // Native map hashing and equality run after the key and stored value.
         // Indexed maps can carry CLR custom comparers, even with primitive keys.
         private func NativeMapAccessRunsUserCode(node BoundExpression) bool -> switch node {
-            case literal is BoundMapLiteralExpression: !literal
-                .Entries
-                .IsDefaultOrEmpty &&
-                literal
-                .MapType
-                .KeyType != TypeSymbol.String &&
+            case literal is BoundMapLiteralExpression: !literal.Entries.IsDefaultOrEmpty &&
+                literal.MapType.KeyType != TypeSymbol.String &&
                 !TypeSymbol.IsLegalPointeeType(literal.MapType.KeyType)
             case read is BoundIndexExpression: StripNullability(read.Target.Type) is MapTypeSymbol
             case write is BoundIndexAssignmentExpression: StripNullability(
@@ -13378,13 +13252,9 @@ internal partial class StatementBinder {
         /// `EmitClrIndex`: only a read, only a type that satisfies `IList` (with an `int32` index) or `IDictionary`
         /// (so not a `Span<T>`), and only one index argument. A write is always emitted on the concrete setter.
         private func ClrIndexReadIsErasedInterfaceCall(node BoundClrIndexExpression) bool {
-            if node
-                .Target
-                .Type is not ImportedTypeSymbol{HasTypeParameterArgument: true} erased ||
+            if node.Target.Type is not ImportedTypeSymbol{HasTypeParameterArgument: true} erased ||
                 erased.ClrType is not{} clrType ||
-                node
-                .Arguments
-                .Length != 1 {
+                node.Arguments.Length != 1 {
                 return false
             }
             return (ClrLoadContext.Satisfies(clrType, typeof(IList)) && node.Arguments[0].Type == TypeSymbol.Int32) ||
@@ -13417,16 +13287,9 @@ internal partial class StatementBinder {
         private func PatternReadsInput(pattern BoundPattern) bool -> switch pattern {
             case BoundDiscardPattern{Variable: nil}: false
             case property is BoundPropertyPattern: property.InputVariable != nil ||
-                property
-                .Fields
-                .Length > 0 ||
+                property.Fields.Length > 0 ||
                 property.Type is NullableTypeSymbol ||
-                !GSharp
-                .Core
-                .CodeAnalysis
-                .Emit
-                .ReflectionMetadataEmitter
-                .IsValueTypeSymbol(property.Type)
+                !GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(property.Type)
             case binary is BoundBinaryPattern: PatternReadsInput(binary.Left) || PatternReadsInput(binary.Right)
             case negation is BoundNotPattern: PatternReadsInput(negation.Pattern)
             default: true
@@ -13462,9 +13325,7 @@ internal partial class StatementBinder {
         /// whose `Equals` can be user code (structural equality on a data or inline type, or a type parameter). A null
         /// operand never reaches `Equals`.
         internal func BinaryEqualityRunsUserCode(node BoundBinaryExpression) bool {
-            if node
-                .Op
-                .Kind is not(BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals) ||
+            if node.Op.Kind is not(BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals) ||
                 IsNullOperand(node.Left) ||
                 IsNullOperand(node.Right) {
                 return false
@@ -13677,13 +13538,9 @@ internal partial class StatementBinder {
             for var depth = 0; current != nil && depth < 64; depth++ {
                 let definition = current.Definition ?? current
                 if definition.DeclaresInstanceFieldInitializer ||
-                    !definition
-                    .InstanceFieldInitializers
-                    .IsEmpty ||
+                    !definition.InstanceFieldInitializers.IsEmpty ||
                     definition.HasPrimaryConstructor ||
-                    !definition
-                    .EffectiveExplicitConstructors
-                    .IsDefaultOrEmpty ||
+                    !definition.EffectiveExplicitConstructors.IsDefaultOrEmpty ||
                     definition.ImportedBaseType != nil ||
                     TypeInitializationRunsUserCode(definition, atStaticMemberAccess: false) {
                     return true
@@ -13716,9 +13573,7 @@ internal partial class StatementBinder {
                     if origin is BoundConversionExpression conversion {
                         origin = conversion.Expression
                     } else if origin is BoundUnaryExpression unary &&
-                        unary
-                        .Op
-                        .Kind == BoundUnaryOperatorKind.NullAssertion {
+                        unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion {
                         origin = unary.Operand
                     } else if origin is BoundTupleElementAccessExpression {
                         return true
@@ -13788,12 +13643,8 @@ internal partial class StatementBinder {
         internal func IsStableSystemIndexOperation(node BoundExpression) bool -> switch node {
             case ctor is BoundClrConstructorCallExpression: ClrTypeInspector.IsSameAs(ctor.ClrType, typeof(Index)) ||
                 ClrTypeInspector.IsSameAs(ctor.ClrType, typeof(Range))
-            case call is BoundImportedInstanceCallExpression: call
-                .Method
-                .Name == "GetOffset" &&
-                call
-                .Method
-                .DeclaringType is {} declaring &&
+            case call is BoundImportedInstanceCallExpression: call.Method.Name == "GetOffset" &&
+                call.Method.DeclaringType is {} declaring &&
                 ClrTypeInspector.IsSameAs(declaring, typeof(Index))
             default: false
         }
@@ -13847,9 +13698,7 @@ internal partial class StatementBinder {
                 case construction is BoundConstructorCallExpression: construction.SelectedConstructor != nil ||
                     ConstructionRunsUserCode(construction.StructType)
                 case literal is BoundStructLiteralExpression: ConstructionRunsUserCode(literal.StructType) ||
-                    literal
-                    .Initializers
-                    .Any(
+                    literal.Initializers.Any(
                     (initializer BoundFieldInitializer) -> initializer.Property is {} property &&
                         SourcePropertyRunsUserCode(property, receiverType: nil, isWrite: true)
                 )
@@ -13957,9 +13806,7 @@ internal partial class StatementBinder {
                     return true
                 }
                 case block is BoundBlockStatement {
-                    return !block
-                        .Statements
-                        .IsDefaultOrEmpty &&
+                    return !block.Statements.IsDefaultOrEmpty &&
                         EndsInEscapingExit(block.Statements[block.Statements.Length - 1])
                 }
                 case nested is BoundIfStatement {
@@ -14076,9 +13923,7 @@ internal partial class StatementBinder {
         private func IsNullCoalescingExpression(
             syntax ExpressionSyntax?
         ) bool -> syntax is BinaryExpressionSyntax binary &&
-            binary
-            .OperatorToken
-            .Kind == SyntaxKind.QuestionQuestionToken
+            binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken
 
         private func IsExternalCallableSource(
             expression BoundExpression,
@@ -14185,13 +14030,9 @@ internal partial class StatementBinder {
             if current is BoundTupleElementAccessExpression tupleAccess {
                 let parentTree = BuildCallableParameterNameTree(tupleAccess.Receiver)
                 if parentTree == nil ||
-                    parentTree
-                    .Elements
-                    .IsDefaultOrEmpty ||
+                    parentTree.Elements.IsDefaultOrEmpty ||
                     tupleAccess.Index < 0 ||
-                    tupleAccess.Index >= parentTree
-                    .Elements
-                    .Length {
+                    tupleAccess.Index >= parentTree.Elements.Length {
                     return nil
                 }
                 return parentTree.Elements[tupleAccess.Index]
@@ -14303,9 +14144,7 @@ internal partial class StatementBinder {
             if aggregate.IsData &&
                 aggregate.HasPrimaryConstructor &&
                 index >= 0 &&
-                index < aggregate
-                .PrimaryConstructorParameters
-                .Length {
+                index < aggregate.PrimaryConstructorParameters.Length {
                 if aggregate.ClrType is not{} aggregateClrType {
                     let positionalType = aggregate.PrimaryConstructorParameters[index].Type
                     return if TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(memberType, positionalType) {

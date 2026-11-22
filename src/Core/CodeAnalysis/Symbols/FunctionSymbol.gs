@@ -646,8 +646,7 @@ class FunctionSymbol : Symbol {
             InterfaceSymbol and
             {TypeParameters: {IsEmpty: true}}
     ) &&
-        StructSymbol
-        .CollectEnclosingTypeParameters(owner).IsEmpty
+        StructSymbol.CollectEnclosingTypeParameters(owner).IsEmpty
 
     /// Gets or sets a value indicating whether a function literal's body is bound under this symbol.
     internal prop IsFunctionLiteral bool

@@ -92,12 +92,8 @@ class BoundErrorExpression : BoundExpression {
             var builder ImmutableArray[BoundErrorExpression].Builder? = nil
             if left is BoundErrorExpression leftError &&
                 (
-                !leftError
-                    .MemberGroup
-                    .IsDefaultOrEmpty ||
-                    !leftError
-                    .FailedChildren
-                    .IsDefaultOrEmpty ||
+                !leftError.MemberGroup.IsDefaultOrEmpty ||
+                    !leftError.FailedChildren.IsDefaultOrEmpty ||
                     leftError.FailedReceiver != nil
             ) {
                 builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
@@ -105,12 +101,8 @@ class BoundErrorExpression : BoundExpression {
             }
             if right is BoundErrorExpression rightError &&
                 (
-                !rightError
-                    .MemberGroup
-                    .IsDefaultOrEmpty ||
-                    !rightError
-                    .FailedChildren
-                    .IsDefaultOrEmpty ||
+                !rightError.MemberGroup.IsDefaultOrEmpty ||
+                    !rightError.FailedChildren.IsDefaultOrEmpty ||
                     rightError.FailedReceiver != nil
             ) {
                 builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()

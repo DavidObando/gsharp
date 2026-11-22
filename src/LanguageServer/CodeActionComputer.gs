@@ -356,13 +356,7 @@ shared class CodeActionComputer {
                 let openDocument DocumentContent? = client.DocumentOf?(documentUri)
                 if openDocument != nil {
                     if !object.ReferenceEquals(openDocument.SyntaxTree, document.Tree) &&
-                        openDocument
-                        .SyntaxTree
-                        .Text
-                        .ToString() != document
-                        .Tree
-                        .Text
-                        .ToString() {
+                        openDocument.SyntaxTree.Text.ToString() != document.Tree.Text.ToString() {
                         return nil
                     }
                     version = openDocument.Version
@@ -371,9 +365,7 @@ shared class CodeActionComputer {
             }
             let edits = if client.SupportsDocumentChanges &&
                 client.SupportsSnippetEdits &&
-                !document
-                .Placeholders
-                .IsEmpty {
+                !document.Placeholders.IsEmpty {
                 SnippetEdits(document)
             } else {
                 PlainEdits(document)

@@ -95,9 +95,7 @@ internal shared class NativeProtocolMetadata {
         )
     ) +
         ")->" +
-        method
-        .ReturnRefKind
-        .ToString() + ":" + TypeSignature(method.Type, localAssembly)
+        method.ReturnRefKind.ToString() + ":" + TypeSignature(method.Type, localAssembly)
 
     private func TypeSignature(type TypeSymbol, localAssembly string) string ->
     TypeShape(type, localAssembly) + "[" + string.Join(",", NullableFlagsBuilder.Build(type)) + "]"
@@ -226,26 +224,17 @@ internal shared class NativeProtocolMetadata {
     private func HasStorageMarker(member MemberInfo) bool -> member.GetCustomAttributesData().Any(
         (attribute CustomAttributeData) ->
         IsAttributeType(attribute, typeof(CompilerFeatureRequiredAttribute)) &&
-            attribute
-            .ConstructorArguments
-            .Count == 1 &&
-            attribute
-            .ConstructorArguments[0]
-            .Value is string feature &&
+            attribute.ConstructorArguments.Count == 1 &&
+            attribute.ConstructorArguments[0].Value is string feature &&
             feature == StorageFeatureName
     )
 
     internal func HasFeatureMarker(member MemberInfo) bool -> HasNativeImage(member.Module.Assembly) &&
-        member
-        .GetCustomAttributesData().Any(
+        member.GetCustomAttributesData().Any(
         (attribute CustomAttributeData) ->
         IsAttributeType(attribute, typeof(CompilerFeatureRequiredAttribute)) &&
-            attribute
-            .ConstructorArguments
-            .Count == 1 &&
-            attribute
-            .ConstructorArguments[0]
-            .Value is string feature &&
+            attribute.ConstructorArguments.Count == 1 &&
+            attribute.ConstructorArguments[0].Value is string feature &&
             feature.StartsWith("GSharp.NativeProtocols.", StringComparison.Ordinal)
     )
 
@@ -258,19 +247,13 @@ internal shared class NativeProtocolMetadata {
             .Where(
             (attribute CustomAttributeData) ->
             IsAttributeType(attribute, typeof(CompilerFeatureRequiredAttribute)) &&
-                attribute
-                .ConstructorArguments
-                .Count == 1 &&
-                attribute
-                .ConstructorArguments[0]
-                .Value is string feature &&
+                attribute.ConstructorArguments.Count == 1 &&
+                attribute.ConstructorArguments[0].Value is string feature &&
                 feature.StartsWith("GSharp.NativeProtocols.", StringComparison.Ordinal)
         )
             .ToArray()
         return markers.Length == 1 &&
-            markers[0]
-            .ConstructorArguments[0]
-            .Value is string feature &&
+            markers[0].ConstructorArguments[0].Value is string feature &&
             feature == FeatureName
     }
 
@@ -284,20 +267,14 @@ internal shared class NativeProtocolMetadata {
         var manifest = default(JsonElement)
         for attribute in assembly.GetCustomAttributesData() {
             if !IsAttributeType(attribute, typeof(AssemblyMetadataAttribute)) ||
-                attribute
-                .ConstructorArguments
-                .Count != 2 ||
-                attribute
-                .ConstructorArguments[0]
-                .Value is not string key {
+                attribute.ConstructorArguments.Count != 2 ||
+                attribute.ConstructorArguments[0].Value is not string key {
                 continue
             }
             if key == FeatureKey {
                 featureCount++
                 if featureCount > 1 ||
-                    attribute
-                    .ConstructorArguments[1]
-                    .Value is not string feature ||
+                    attribute.ConstructorArguments[1].Value is not string feature ||
                     feature != Schema {
                     return NativeProtocolAssemblyContract(
                         ImmutableArray[Type].Empty,
@@ -417,10 +394,5 @@ internal shared class NativeProtocolMetadata {
 
     private func IsAttributeType(attribute CustomAttributeData, expected Type) bool ->
     ClrTypeUtilities.AreSame(attribute.AttributeType, expected) &&
-        attribute
-        .AttributeType
-        .Assembly
-        .FullName == expected
-        .Assembly
-        .FullName
+        attribute.AttributeType.Assembly.FullName == expected.Assembly.FullName
 }

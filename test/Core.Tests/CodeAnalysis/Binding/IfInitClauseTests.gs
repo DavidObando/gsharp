@@ -38,9 +38,7 @@ open class IfInitClauseTests {
         Assert.Contains(
             diagnostics,
             (d Diagnostic) -> d.Message.Contains("doesn't exist", StringComparison.OrdinalIgnoreCase) ||
-                d
-                .Message
-                .Contains("undefined", StringComparison.OrdinalIgnoreCase)
+                d.Message.Contains("undefined", StringComparison.OrdinalIgnoreCase)
         )
     }
 

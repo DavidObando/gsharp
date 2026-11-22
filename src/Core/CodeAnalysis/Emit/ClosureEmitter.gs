@@ -201,18 +201,10 @@ internal class ClosureEmitter {
     // NotSupportedException for that case.
     func SynthesizeClosures(literals List[BoundFunctionLiteralExpression], hostPackage PackageSymbol) {
         for literal in literals {
-            if literal
-                .Function
-                .LocalDeclaration != nil &&
-                literal
-                .CapturedVariables
-                .IsEmpty &&
-                literal
-                .Function
-                .HasNonGenericLexicalOwner &&
-                literal
-                .Function
-                .LexicalEnclosingType is {} localEnclosing {
+            if literal.Function.LocalDeclaration != nil &&
+                literal.CapturedVariables.IsEmpty &&
+                literal.Function.HasNonGenericLexicalOwner &&
+                literal.Function.LexicalEnclosingType is {} localEnclosing {
                 // Keep direct generic MethodDef/MethodSpec identity while sharing the
                 // lexical type's accessibility domain. No delegate or host instance.
                 let host = StructSymbol(
@@ -295,34 +287,21 @@ internal class ClosureEmitter {
                 // that ALSO needs its lexical owner's accessibility domain
                 // (private/protected member access) remains unsupported
                 // (GS0586) when that owner is itself generic.
-                if literal
-                    .Function
-                    .IsGeneric ||
-                    literal
-                    .Function
-                    .LocalDeclaration != nil ||
-                    literal
-                    .Function
-                    .LexicalEnclosingType is not{} zeroCaptureEnclosing ||
+                if literal.Function.IsGeneric ||
+                    literal.Function.LocalDeclaration != nil ||
+                    literal.Function.LexicalEnclosingType is not{} zeroCaptureEnclosing ||
                     !((zeroCaptureEnclosing is StructSymbol || zeroCaptureEnclosing is InterfaceSymbol)) {
                     continue
                 }
                 let requiredTypeParameters = CollectOwnerTypeParameters(zeroCaptureEnclosing)
                 var cachedDelegateType TypeSymbol? = nil
-                if !literal
-                    .Function
-                    .IsAsyncOrSuspending &&
-                    literal
-                    .Function
-                    .ReturnRefKind == RefKind.None &&
+                if !literal.Function.IsAsyncOrSuspending &&
+                    literal.Function.ReturnRefKind == RefKind.None &&
                     literal
                     .Function
                     .Parameters
                     .All((p ParameterSymbol) -> p.RefKind == RefKind.None && p.Type is not ByRefTypeSymbol) &&
-                    this
-                    .slotPlanner
-                    .LambdaTargetDelegateTypes
-                    .TryGetValue(literal, out var recordedTarget) &&
+                    this.slotPlanner.LambdaTargetDelegateTypes.TryGetValue(literal, out var recordedTarget) &&
                     CanEncodeCachedDelegateFieldType(recordedTarget) {
                     cachedDelegateType = recordedTarget
                 }
@@ -387,13 +366,9 @@ internal class ClosureEmitter {
                 this.ClosureInfosByFunction[literal.Function] = genericInfo
                 this.GenericLocalClosures[literal.Function] = (literal, genericInfo)
                 // Nest inside enclosing type if accessible
-                if literal
-                    .Function
-                    .LexicalEnclosingType is {} genericEnclosing &&
+                if literal.Function.LexicalEnclosingType is {} genericEnclosing &&
                     (genericEnclosing is StructSymbol or InterfaceSymbol) &&
-                    genericInfo
-                    .ClassSym
-                    .ContainingType == nil {
+                    genericInfo.ClassSym.ContainingType == nil {
                     genericInfo.ClassSym.SetContainingType(genericEnclosing)
                 }
                 continue
@@ -438,13 +413,9 @@ internal class ClosureEmitter {
             // single `T`). Without nesting, the reified closure was emitted as a
             // top-level type and its Invoke could not read the generic encloser's
             // private captured field ("Field is not visible").
-            if literal
-                .Function
-                .LexicalEnclosingType is {} enclosing &&
+            if literal.Function.LexicalEnclosingType is {} enclosing &&
                 (enclosing is StructSymbol or InterfaceSymbol) &&
-                info
-                .ClassSym
-                .ContainingType == nil {
+                info.ClassSym.ContainingType == nil {
                 info.ClassSym.SetContainingType(enclosing)
             }
         }
@@ -655,18 +626,11 @@ internal class ClosureEmitter {
 
     internal func GetClosureReifiedTypeParameters(fn FunctionSymbol) ImmutableArray[TypeParameterSymbol] {
         if this.GenericLocalClosures.TryGetValue(fn, out var genericLocal) &&
-            !genericLocal
-            .Info
-            .ClassSym
-            .ReifiedFromTypeParameters
-            .IsDefaultOrEmpty {
+            !genericLocal.Info.ClassSym.ReifiedFromTypeParameters.IsDefaultOrEmpty {
             return genericLocal.Info.ClassSym.ReifiedFromTypeParameters
         }
         if this.ClosureInfosByFunction.TryGetValue(fn, out var info) &&
-            !info
-            .ClassSym
-            .ReifiedFromTypeParameters
-            .IsDefaultOrEmpty {
+            !info.ClassSym.ReifiedFromTypeParameters.IsDefaultOrEmpty {
             return info.ClassSym.ReifiedFromTypeParameters
         }
         return ImmutableArray[TypeParameterSymbol].Empty
@@ -1039,9 +1003,7 @@ internal class ClosureEmitter {
                 return false
             }
             if type is FunctionTypeSymbol fn {
-                if fn
-                    .ParameterTypes
-                    .Length > 16 ||
+                if fn.ParameterTypes.Length > 16 ||
                     !CanUseInSystemDelegateTypeArgument(fn.ReturnType, allowVoid: true) {
                     return false
                 }

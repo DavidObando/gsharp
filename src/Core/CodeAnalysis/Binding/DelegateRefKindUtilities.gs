@@ -27,9 +27,8 @@ internal shared class DelegateRefKindUtilities {
         }
         if branch is BoundBlockExpression blockExpr {
             if blockExpr.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
-                resultLocal
-                .Name
-                .StartsWith("<blockResult", StringComparison.Ordinal) && conversions.RewriteCleanupBlockExpression(
+                resultLocal.Name.StartsWith("<blockResult", StringComparison.Ordinal) &&
+                conversions.RewriteCleanupBlockExpression(
                 blockExpr,
                 resultLocal,
                 (initExpr BoundExpression) -> UnwrapSynthesizedRefDelegateBranch(initExpr, conversions)
@@ -91,9 +90,7 @@ internal shared class DelegateRefKindUtilities {
 
     private func IsUnwrappedRefDelegateBranch(branch BoundExpression) bool -> branch.Type == TypeSymbol.Never ||
         branch.Type == TypeSymbol.Null ||
-        branch
-        .Type
-        .StripToBareShape() is FunctionTypeSymbol
+        branch.Type.StripToBareShape() is FunctionTypeSymbol
 
     private func ReplaceBareShape(original TypeSymbol, bare TypeSymbol) TypeSymbol -> switch original {
         case NullableTypeSymbol: NullableTypeSymbol.Get(bare)
@@ -241,9 +238,7 @@ internal shared class DelegateRefKindUtilities {
             }
             if current is BoundBlockExpression blockExpr {
                 if blockExpr.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
-                    resultLocal
-                    .Name
-                    .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                    resultLocal.Name.StartsWith("<blockResult", StringComparison.Ordinal) &&
                     TryFindCleanupBlockResultInitializer(blockExpr.Statements, resultLocal) is {} initExpr {
                     current = initExpr
                     continue
@@ -296,9 +291,7 @@ internal shared class DelegateRefKindUtilities {
             }
             if expression is BoundBlockExpression blockExpr {
                 if blockExpr.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
-                    resultLocal
-                    .Name
-                    .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                    resultLocal.Name.StartsWith("<blockResult", StringComparison.Ordinal) &&
                     TryFindCleanupBlockResultInitializer(blockExpr.Statements, resultLocal) is {} initExpr {
                     expression = initExpr
                     continue

@@ -57,10 +57,7 @@ internal shared class FriendAssemblyDeclarations {
             let annotations = tree.Root?.FileAttributes ?? ImmutableArray[AnnotationSyntax].Empty
             for annotation in annotations {
                 let name = annotation.GetNameText()
-                if annotation
-                    .Target
-                    ?.KindIdentifier
-                    .ValueText == "assembly" &&
+                if annotation.Target?.KindIdentifier.ValueText == "assembly" &&
                     (
                     string.Equals(name, AnnotationName, StringComparison.Ordinal) || string.Equals(
                         name,
@@ -102,13 +99,10 @@ internal shared class FriendAssemblyDeclarations {
                     // `Binder.BindGlobalScope` via `CollectOtherAnnotations`.
                     continue
                 }
-                if annotation
-                    .Arguments
-                    .Count != 1 ||
+                if annotation.Arguments.Count != 1 ||
                     annotation.Arguments[0] is not LiteralExpressionSyntax literal ||
                     literal.Value is not string friendName ||
-                    string
-                    .IsNullOrWhiteSpace(friendName) {
+                    string.IsNullOrWhiteSpace(friendName) {
                     let argLocation = if annotation.Arguments.Count > 0 {
                         annotation.Arguments[0].Location
                     } else {

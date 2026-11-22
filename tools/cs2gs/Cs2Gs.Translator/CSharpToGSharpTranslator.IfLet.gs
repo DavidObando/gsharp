@@ -528,9 +528,9 @@ partial class CSharpToGSharpTranslator {
                 out var designation,
                 out var residualPattern
             ) ||
-                this
-                .context
-                .GetDeclaredSymbol(designation) is not ILocalSymbol binder || this.IsLocalReassigned(binder) ||
+                this.context.GetDeclaredSymbol(designation) is not ILocalSymbol binder || this.IsLocalReassigned(
+                binder
+            ) ||
                 IsTrivialPatternReceiver(isPattern.Expression) ||
                 guards.Any(ContainsSpillHoistingConstruct) {
                 return false
@@ -677,9 +677,7 @@ partial class CSharpToGSharpTranslator {
         private func IsNullableIfLetReceiver(receiver ExpressionSyntax) bool {
             let type ITypeSymbol? = this.context.GetTypeInfo(receiver).Type
             if type is INamedTypeSymbol namedType &&
-                namedType
-                .OriginalDefinition
-                .SpecialType == SpecialType.System_Nullable_T {
+                namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T {
                 return true
             }
             return type != nil && type.IsReferenceType == true && this.IsNullablePromotedValue(receiver)

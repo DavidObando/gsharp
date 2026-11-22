@@ -377,9 +377,7 @@ shared class NullConditionalChain {
                 parent = call
                 return true
             }
-            case deref is UnaryExpressionSyntax when deref
-                .OperatorToken
-                .Kind == SyntaxKind.StarToken &&
+            case deref is UnaryExpressionSyntax when deref.OperatorToken.Kind == SyntaxKind.StarToken &&
                 object.ReferenceEquals(deref.Operand, node) &&
                 deref.Parent is AccessorExpressionSyntax outer &&
                 object.ReferenceEquals(outer.LeftPart, deref) {

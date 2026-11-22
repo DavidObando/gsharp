@@ -138,8 +138,7 @@ class ImportedClassSymbol : Symbol {
         let level = FindNearestNamedMemberLevel(text)
         var property PropertyInfo? = nil
         for candidate in level.Properties {
-            if candidate.GetIndexParameters()
-                .Length == 0 &&
+            if candidate.GetIndexParameters().Length == 0 &&
                 IsStatic(candidate) &&
                 IsVisibleToCurrentCompilation(candidate) {
                 property = candidate
@@ -620,8 +619,7 @@ class ImportedClassSymbol : Symbol {
                     out var position
                 ) &&
                     position >= 0 &&
-                    position < typeArgSymbols
-                    .Length {
+                    position < typeArgSymbols.Length {
                     // #4451: the explicit-argument rule, as in
                     // BuildSymbolicMethodTypeArgs (an oblivious slot gives T!).
                     returnOverride = MemberLookup.ApplyExplicitMethodTypeArgument(
@@ -965,12 +963,8 @@ class ImportedClassSymbol : Symbol {
             }
         }
 
-        private func IsStatic(property PropertyInfo) bool -> property
-            .GetMethod
-            ?.IsStatic == true ||
-            property
-            .SetMethod
-            ?.IsStatic == true
+        private func IsStatic(property PropertyInfo) bool -> property.GetMethod?.IsStatic == true ||
+            property.SetMethod?.IsStatic == true
 
         /// Issue #3907: whether a by-ref argument's pointee is a same-compilation
         /// user REFERENCE type — a G# `class`, interface or named delegate

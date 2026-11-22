@@ -46,12 +46,8 @@ internal partial class ExpressionBinder {
         let paramIndex = argSlot + 1
         for candidate in extCandidates {
             if candidate != nil &&
-                paramIndex < candidate
-                .Parameters
-                .Length &&
-                candidate
-                .Parameters[paramIndex]
-                .Type is FunctionTypeSymbol {
+                paramIndex < candidate.Parameters.Length &&
+                candidate.Parameters[paramIndex].Type is FunctionTypeSymbol {
                 return true
             }
         }
@@ -450,8 +446,7 @@ internal partial class ExpressionBinder {
             return false
         }
         if ClrTypeUtilities.SafeGetProperty(clrType, methodName, flags) is PropertyInfo prop &&
-            prop
-            .GetIndexParameters().Length == 0 && prop.CanRead {
+            prop.GetIndexParameters().Length == 0 && prop.CanRead {
             let propType = MemberLookup.GetClrMemberValueTypeSymbol(prop)
             let clrAccess = BoundClrPropertyAccessExpression(ce.Identifier, receiver, prop, propType)
             ApplySubExpressionNarrowingEffects(ce.Identifier, clrAccess)
@@ -727,8 +722,7 @@ internal partial class ExpressionBinder {
         }
         if !(callableType is FunctionTypeSymbol) &&
             callableType.ClrType is {} importedDelegateClr &&
-            ClrTypeUtilities
-            .IsDelegateType(importedDelegateClr) {
+            ClrTypeUtilities.IsDelegateType(importedDelegateClr) {
             result = BuildDelegateMemberInvocation(ce, memberLoad, callableType, functionType, arguments)
             return true
         }
@@ -826,8 +820,7 @@ internal partial class ExpressionBinder {
         let BindInvocation = func (receiver BoundExpression) BoundExpression {
             if !(delegateType is FunctionTypeSymbol) &&
                 delegateType.ClrType is {} delegateClr &&
-                ClrTypeUtilities
-                .IsDelegateType(delegateClr) {
+                ClrTypeUtilities.IsDelegateType(delegateClr) {
                 if !overloads.TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
                     return BoundErrorExpression(syntax)
                 }
@@ -1636,8 +1629,7 @@ internal partial class ExpressionBinder {
                 ) &&
                     !nonVirtualBaseCall &&
                     !ClrMemberVisibility.IsVisible(best, CanAccessInternalsOf(best.DeclaringType)) &&
-                    ClrMemberVisibility
-                    .IsVisibleFromDerived(best, CanAccessInternalsOf(best.DeclaringType)) {
+                    ClrMemberVisibility.IsVisibleFromDerived(best, CanAccessInternalsOf(best.DeclaringType)) {
                     Diagnostics.ReportProtectedMemberInaccessible(
                         ce.Identifier.Location,
                         methodName,
@@ -1894,9 +1886,7 @@ internal partial class ExpressionBinder {
         // same-compilation/open arguments that cannot yet be closed.
         if receiver.Type is ImportedTypeSymbol symbolicImportedReceiver &&
             symbolicImportedReceiver.OpenDefinition != nil &&
-            !symbolicImportedReceiver
-            .TypeArguments
-            .IsDefaultOrEmpty {
+            !symbolicImportedReceiver.TypeArguments.IsDefaultOrEmpty {
             let reifiedReceiver Type? = symbolicImportedReceiver.ReifyClosedClrType()
             if reifiedReceiver != nil && !reifiedReceiver.ContainsGenericParameters {
                 receiverClrType = reifiedReceiver
@@ -1966,9 +1956,7 @@ internal partial class ExpressionBinder {
             // receiver's symbolic hierarchy instead of conflicting erasures.
             if receiver.Type is ImportedTypeSymbol &&
                 arguments[i].Type is FunctionTypeSymbol functionType &&
-                functionType
-                .ParameterTypes
-                .Any(TypeSymbol.RequiresSymbolicProjection) {
+                functionType.ParameterTypes.Any(TypeSymbol.RequiresSymbolicProjection) {
                 deferredInferenceArgs[i + 1] = true
             }
             argTypes[i + 1] = t
@@ -2209,9 +2197,7 @@ internal partial class ExpressionBinder {
         // The retry runs only after the unlifted shape has already failed, so
         // extensions that legitimately match the underlying type keep binding
         // exactly as before.
-        if resolution.Outcome == ClrOverloadResolution
-            .ResolutionOutcome
-            .NoneApplicable &&
+        if resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.NoneApplicable &&
             receiver.Type is NullableTypeSymbol &&
             NullableLifting.GetEffectiveClrType(receiver.Type) is {} liftedReceiverClrType && !ClrTypeUtilities.AreSame(
             liftedReceiverClrType,
@@ -2645,8 +2631,7 @@ internal partial class ExpressionBinder {
                 ) {
                     targetFunctionType = symbolicTarget
                 } else if TypeSymbol.ContainsTypeParameter(literal.FunctionType) ||
-                    TypeSymbol
-                    .ContainsSameCompilationUserType(literal.FunctionType) {
+                    TypeSymbol.ContainsSameCompilationUserType(literal.FunctionType) {
                     // Issue #1502 (ctor path): no method-generic recovery applies
                     // (this is a constructor call, or a non-generic/erasure-free
                     // method), yet the literal's bound function type already
@@ -2723,8 +2708,7 @@ internal partial class ExpressionBinder {
                 if literalFnType != nil &&
                     literalFnType.ReturnType != TypeSymbol.Void &&
                     literalFnType.ReturnType != TypeSymbol.Error &&
-                    MemberLookup
-                    .TryGetLambdaTargetFunctionType(
+                    MemberLookup.TryGetLambdaTargetFunctionType(
                     ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex]),
                     out var targetFunctionType
                 ) &&
@@ -2732,8 +2716,10 @@ internal partial class ExpressionBinder {
                     targetFunctionType.ReturnType != TypeSymbol.Error &&
                     targetFunctionType.Arity == literalFnType.Arity &&
                     !object.ReferenceEquals(literalFnType.ReturnType, targetFunctionType.ReturnType) &&
-                    ConversionClassifier
-                    .IsNumericReturnWidening(literalFnType.ReturnType, targetFunctionType.ReturnType) {
+                    ConversionClassifier.IsNumericReturnWidening(
+                    literalFnType.ReturnType,
+                    targetFunctionType.ReturnType
+                ) {
                     rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType)
                 }
             }
@@ -2949,8 +2935,7 @@ internal partial class ExpressionBinder {
         if !TypeMemberModel.TryGetPropertyWithOwner(ifaceSym, propName, out var prop, out var propOwner) ||
             prop == nil ||
             prop.IsStatic ||
-            prop
-            .IsIndexer {
+            prop.IsIndexer {
             if syntax.IsPropertyWrite && syntax.Value is {} valueSyntax {
                 let _ = BindExpression(valueSyntax)
             }
@@ -4840,18 +4825,10 @@ internal partial class ExpressionBinder {
         /// These are the "worst"-ranked conversions and are the loose applicability
         /// that lets a same-named BCL instance method shadow an exact user extension.
         private func IsDelegateReshapingConversion(kind ClrOverloadResolution.ImplicitConversionKind) bool {
-            return kind == ClrOverloadResolution
-                .ImplicitConversionKind
-                .LambdaToVoidDelegate ||
-                kind == ClrOverloadResolution
-                .ImplicitConversionKind
-                .DelegateReturnCovariance ||
-                kind == ClrOverloadResolution
-                .ImplicitConversionKind
-                .DelegateStructuralMatch ||
-                kind == ClrOverloadResolution
-                .ImplicitConversionKind
-                .DelegateReturnNumericWidening
+            return kind == ClrOverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate ||
+                kind == ClrOverloadResolution.ImplicitConversionKind.DelegateReturnCovariance ||
+                kind == ClrOverloadResolution.ImplicitConversionKind.DelegateStructuralMatch ||
+                kind == ClrOverloadResolution.ImplicitConversionKind.DelegateReturnNumericWidening
         }
 
         /// Issue #2193: classifies each supplied argument against the corresponding

@@ -313,9 +313,7 @@ internal partial class MethodBodyEmitter {
         // emit strategy before this branch is entered with malformed
         // assumptions.
         if tp.TargetType is NullableTypeSymbol nullableTarget &&
-            nullableTarget
-            .UnderlyingType
-            ?.ClrType is {IsValueType: true} {
+            nullableTarget.UnderlyingType?.ClrType is {IsValueType: true} {
             throw InvalidOperationException(
                 "Type-pattern emit does not support a Nullable<T> target type ('${tp.TargetType.Name}') over a value type. " +
                     "Per ECMA-335 the CLR boxes Nullable<T> as a boxed T (or null), so 'isinst Nullable<T>' " +
@@ -423,9 +421,7 @@ internal partial class MethodBodyEmitter {
                     this.il.OpCode(ILOpCode.Call)
                     this.il.Token(this.outer.memberRefs.GetNullableGetValueMemberRefForUserValueType(nullableValueType))
                 } else {
-                    let underlyingClr = nullableValueType
-                        .UnderlyingType
-                        .ClrType ??
+                    let underlyingClr = nullableValueType.UnderlyingType.ClrType ??
                         throw InvalidOperationException(
                         "Nullable property-pattern input '$nullableValueType' has no CLR underlying type."
                     )
@@ -579,11 +575,7 @@ internal partial class MethodBodyEmitter {
                     .outer
                     .userTokens
                     .ResolveUserPropertyAccessorToken(getterContainer, field.Property!!, wantSetter: false)
-            } else if this
-                .outer
-                .cache
-                .PropertyAccessorHandles
-                .TryGetValue(field.Property!!, out var handles) &&
+            } else if this.outer.cache.PropertyAccessorHandles.TryGetValue(field.Property!!, out var handles) &&
                 (handles.Getter != nil) {
                 getterHandle = handles.Getter!!
             } else if declaringStruct?.ClrType != nil {

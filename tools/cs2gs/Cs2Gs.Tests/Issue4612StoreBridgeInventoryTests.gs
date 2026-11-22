@@ -319,11 +319,8 @@ open class Issue4612StoreBridgeInventoryTests {
             } else {
                 site
             }
-            for var node GSharpSyntaxNode? = expression.Parent;
-                node != nil &&
-                !(node is GSharpStatementSyntax);
-                node = node!!
-                .Parent {
+            for var node GSharpSyntaxNode? = expression.Parent; node != nil &&
+                !(node is GSharpStatementSyntax); node = node!!.Parent {
                 if node is GSharpCallExpressionSyntax invocation &&
                     (invocation.Identifier.Text is "ReportStoreBridge" or "ReportForgivenStoreBridge") {
                     return invocation.Arguments.Count > 2 && invocation.Arguments[2] == expression

@@ -200,12 +200,8 @@ shared class NullableLifting {
             (nullable?.UnderlyingType is TupleTypeSymbol and {ClrType: nil}) ||
             (
             nullable?.UnderlyingType is ImportedTypeSymbol imported &&
-                imported
-                .OpenDefinition
-                ?.IsValueType == true &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty
+                imported.OpenDefinition?.IsValueType == true &&
+                !imported.TypeArguments.IsDefaultOrEmpty
         ) ||
             (nullable?.UnderlyingType is TypeParameterSymbol tp && tp.HasValueTypeConstraint)
     }

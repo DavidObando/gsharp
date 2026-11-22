@@ -29,13 +29,9 @@ open class Issue4985NarrowedExpressionAssignmentTests {
         Assert.Contains(
             result.Diagnostics,
             (d Diagnostic) -> d.Id == expectedDiagnosticId &&
-                d
-                .Location
-                .StartLine +
+                d.Location.StartLine +
                 1 == expectedLine &&
-                d
-                .Location
-                .StartCharacter +
+                d.Location.StartCharacter +
                 1 == expectedCharacter
         )
     }
