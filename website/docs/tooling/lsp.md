@@ -99,7 +99,7 @@ The quick fixes come from the code-fix providers of `GSharp.Core` (ADR-0227) and
 | --- | --- | --- |
 | `GS0273` (`'null' is not a literal in G#.`) | The name `null`. | `Use 'nil'` (preferred). |
 | `GS0125` (`Variable 'new' doesn't exist.`) | `new T(...)` where `T(...)` constructs a reference type. | `Remove 'new'` (preferred). A value type needs `T{...}` and gets no fix. |
-| `GS0127` (`Variable 'x' is read-only ...`) | An assignment to a `let` local or field declared in the same file. | `Change 'let' to 'var'` (preferred for a local). |
+| `GS0127` (`Variable 'x' is read-only ...`) | A `let` local assignment, or an unqualified `let` field assignment across the compilation. Qualified writes such as `c.N = 1` and inline-struct instance fields get no fix. | `Change 'let' to 'var'` (preferred for a local). |
 | `GS0125`, `GS0130` on `or`, `and`, `not` | The C#/Python words in an expression. | `Use '\|\|'`, `Use '&&'` (preferred), `Use '!'`. |
 
 The nil-related quick fixes:

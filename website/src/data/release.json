@@ -1,8 +1,8 @@
 {
-  "version": "0.5.212",
+  "version": "0.5.767",
   "docsVersion": "0.5",
-  "tag": "v0.5.212",
-  "sourceCommit": "242d8777c778db4272103c9dcefd6d63609e10ee",
-  "publishedAt": "2026-10-22T01:07:10Z",
+  "tag": "v0.5.767",
+  "sourceCommit": "30dcc01a948ce5f876e73f715461a6896bc950d3",
+  "publishedAt": "2026-11-21T20:36:46Z",
   "sdk": ".NET 10 SDK"
 }

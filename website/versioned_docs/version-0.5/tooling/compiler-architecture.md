@@ -61,6 +61,16 @@ The emitter produces separate namespace/type metadata for each package. The pack
 
 This is why SDK builds pass the complete reference assembly closure through `/r:<path>` arguments and why direct `gsc` usage should do the same for non-trivial projects.
 
+## Thread safety for library hosts
+
+A host that uses `GSharp.Core` as a library must obey these rules ([ADR-0223](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0223-compiler-as-library-surface.md) D5):
+
+- A host can query one `Compilation` from more than one thread. Diagnostics, the global scope, and the bound program take the compilation's build gate, so concurrent first readers wait for one bind. Do not call `Emit` on one compilation from two threads at the same time.
+- `SyntaxTree` and `SourceText` objects do not change after `Parse` and `From`. Threads can share them.
+- Concurrent `Compilation` objects — including compilations with different `AssemblyName` values — can share one `ReferenceResolver` ([#6068](https://github.com/DavidObando/gsharp/issues/6068), [#6070](https://github.com/DavidObando/gsharp/issues/6070)). Each compilation passes its own consumer assembly name explicitly into binding and emit instead of mutating `ReferenceResolver.CurrentAssemblyName`.
+- Do not call `ReferenceResolver.Dispose()` while a compilation runs in the process. It clears caches that all compilations in the process use.
+- Do not change process-wide state, such as the `GSHARP_SDK_TOOLS_DIR` variable, while a compilation runs.
+
 ## Portable PDBs
 
 When debug information is enabled, `ReflectionMetadataEmitter` collaborates with `PortablePdbEmitter`. The PDB records document rows, SHA-256 hashes of raw source bytes, sequence points, local scopes, local variables, embedded source, Source Link, compilation options, and PE debug-directory data.
