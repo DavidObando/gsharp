@@ -2765,6 +2765,9 @@ internal partial class ExpressionBinder {
     /// whose receiver is the enclosing method's `this` parameter.
     private func BindBaseInterfaceCallExpression(syntax BaseInterfaceCallExpressionSyntax) BoundExpression {
         let frame = CallCandidateRecorder.Begin(syntax)
+        // ADR-0225 D6.5: the overload and argument reports of this call depend on its candidate set.
+        let callDiagnostics = Diagnostics
+        let callFramePushed = callDiagnostics.PushCallFrame(syntax, PrefixCallKind.Member)
         try {
             var bound = BindBaseInterfaceCallExpressionCore(syntax)
             if verifyCallArgumentsAfterConversions != nil &&
@@ -2781,6 +2784,7 @@ internal partial class ExpressionBinder {
             return bound
         } finally {
             CallCandidateRecorder.End(frame)
+            callDiagnostics.PopCallFrame(callFramePushed)
         }
     }
 
@@ -3344,6 +3348,9 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         let callSyntax SyntaxNode = syntaxOverride ?? ce
         let frame = CallCandidateRecorder.Begin(callSyntax)
+        // ADR-0225 D6.5: the overload and argument reports of this call depend on its candidate set.
+        let callDiagnostics = Diagnostics
+        let callFramePushed = callDiagnostics.PushCallFrame(callSyntax, PrefixCallKind.Member)
         try {
             var bound = BindBaseClassCallCore(ce, baseLocation, explicitBaseType, selectorLocation, callSyntax)
             if verifyCallArgumentsAfterConversions != nil {
@@ -3358,6 +3365,7 @@ internal partial class ExpressionBinder {
             return bound
         } finally {
             CallCandidateRecorder.End(frame)
+            callDiagnostics.PopCallFrame(callFramePushed)
         }
     }
 

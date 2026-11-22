@@ -86,6 +86,11 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         if syntax.Arms.Length == 0 {
+            // ADR-0225: a switch expression that is open at the cut can still get its arms.
+            let emptyPushed = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.IsOpen(syntax),
+                PrefixPremise.RestOfStatement
+            )
             if ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType) {
                 ExhaustivenessAnalyzer.AnalyzeSwitchExpression(
                     syntax.SwitchKeyword.Location,
@@ -97,6 +102,7 @@ internal partial class ExpressionBinder {
             } else {
                 Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location)
             }
+            Diagnostics.PopPremiseIf(emptyPushed)
             return BoundErrorExpression(nil)
         }
         var hasDefault = false
@@ -314,15 +320,23 @@ internal partial class ExpressionBinder {
             }
             return BoundSwitchExpression(nil, discriminant, voidArms.MoveToImmutable(), TypeSymbol.Void)
         }
+        // ADR-0225: a switch expression that is open at the cut can still get the missing arms. Without a
+        // target type, a later arm can also change the result type of the arms.
+        let isOpen = PrefixBindingContext.IsOpen(syntax)
+        let missingPushed = Diagnostics.PushPremiseIf(isOpen, PrefixPremise.RestOfStatement)
         if !hasCatchAll && !ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType) {
             Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location)
         }
+        Diagnostics.PopPremiseIf(missingPushed)
+        let resultTypePushed = Diagnostics.PushPremiseIf(isOpen && targetType == nil, PrefixPremise.RestOfStatement)
         var resultType = ComputeSwitchExpressionResultType(boundArmBuilders, targetType)
+
         if !binderCtx.ValidateSourceNullableResult(
             resultType,
             syntax.SwitchKeyword.Location,
             boundArmBuilders.Select((arm) -> arm.Result.Type).Append(targetType ?? TypeSymbol.Error)
         ) {
+            Diagnostics.PopPremiseIf(resultTypePushed)
             if deferOnFailure {
                 Diagnostics.TruncateTo(sourceNullableDiagnosticMark)
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
@@ -401,11 +415,13 @@ internal partial class ExpressionBinder {
         // unify without a target — suppress the GS0179 diagnostics and return a
         // syntax-carrying placeholder so the caller can re-bind against the
         // resolved parameter type.
+        Diagnostics.PopPremiseIf(resultTypePushed)
         if anyArmFailed && deferOnFailure {
             Diagnostics.TruncateTo(diagMark)
             Diagnostics.RestoreSuppressionsTo(suppressionMark)
             return BoundErrorExpression(syntax)
         }
+        let exhaustivenessPushed = Diagnostics.PushPremiseIf(isOpen, PrefixPremise.RestOfStatement)
         ExhaustivenessAnalyzer.AnalyzeSwitchExpression(
             syntax.SwitchKeyword.Location,
             switchType,
@@ -413,6 +429,7 @@ internal partial class ExpressionBinder {
             $scope.GetDeclaredStructs(),
             Diagnostics
         )
+        Diagnostics.PopPremiseIf(exhaustivenessPushed)
         return BoundSwitchExpression(nil, discriminant, boundArms, resultType)
     }
 

@@ -3006,7 +3006,10 @@ class CSharpTypeMapper {
         if evidenceIndex.TryGetValue(shapeKey, out var evidence) {
             for (propertyTypes, acceptsNil) in evidence {
                 for var index = 0; index < merged.Count; index++ {
-                    merged[index] = MergeAnonymousNullability(merged[index], propertyTypes[index])
+                    merged[index] = NormalizeAnonymousProjectedStorage(
+                        propertyTypes[index],
+                        MergeAnonymousNullability(merged[index], propertyTypes[index])
+                    )
                     if (acceptsNil[index]) {
                         merged[index] = WithNullable(merged[index], true)!!
                     }
@@ -4177,10 +4180,24 @@ class CSharpTypeMapper {
             return result
         }
 
+        private func ShouldWidenObliviousAnonymousStoragePosition(type ITypeSymbol?) bool ->
+        CanAnnotateNullableReferenceInGSharp(type) &&
+            type!!.NullableAnnotation == Microsoft
+            .CodeAnalysis
+            .NullableAnnotation
+            .None
+
         private func NormalizeAnonymousProjectedStorage(symbol ITypeSymbol?, mapped GTypeReference) GTypeReference {
+            var symbol = symbol
+            if symbol is INamedTypeSymbol{
+                OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                TypeArguments: {Length: 1}
+            } nullableValue {
+                symbol = nullableValue.TypeArguments[0]
+            }
             if symbol is IArrayTypeSymbol arraySymbol && mapped is ArrayTypeReference array {
                 var element = NormalizeAnonymousProjectedStorage(arraySymbol.ElementType, array.ElementType)
-                if CanAnnotateNullableReferenceInGSharp(arraySymbol.ElementType) {
+                if ShouldWidenObliviousAnonymousStoragePosition(arraySymbol.ElementType) {
                     // The self-migrated helper return is promoted, but this storage is non-null.
                     element = WithNullable(element, true)!!
                 }
@@ -4199,7 +4216,7 @@ class CSharpTypeMapper {
                         .Select(
                         (element IFieldSymbol, index int32) -> {
                             let normalized = NormalizeAnonymousProjectedStorage(element.Type, tuple.ElementTypes[index])
-                            return if CanAnnotateNullableReferenceInGSharp(element.Type) {
+                            return if ShouldWidenObliviousAnonymousStoragePosition(element.Type) {
                                 WithNullable(normalized, true)!!
                             } else {
                                 normalized
@@ -4230,7 +4247,7 @@ class CSharpTypeMapper {
                         .Select(
                         (argument ITypeSymbol, index int32) -> {
                             let normalized = NormalizeAnonymousProjectedStorage(argument, named.TypeArguments[index])
-                            return if CanAnnotateNullableReferenceInGSharp(argument) &&
+                            return if ShouldWidenObliviousAnonymousStoragePosition(argument) &&
                                 (
                                 index >= namedSymbol
                                     .TypeParameters
@@ -4516,7 +4533,19 @@ class CSharpTypeMapper {
         }
 
         private func MergeAnonymousNullability(mapped GTypeReference, symbol ITypeSymbol?) GTypeReference {
+            var symbol = symbol
+            let nullableValueWrapper = symbol is INamedTypeSymbol{
+                OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                TypeArguments: {Length: 1}
+            }
+            if symbol is INamedTypeSymbol{
+                OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                TypeArguments: {Length: 1}
+            } nullableValue {
+                symbol = nullableValue.TypeArguments[0]
+            }
             let nullable = mapped.IsNullable ||
+                nullableValueWrapper ||
                 (
                 symbol!!.NullableAnnotation == Microsoft
                     .CodeAnalysis

@@ -4037,6 +4037,9 @@ internal partial class ExpressionBinder {
         preArgumentsNarrowing StatementBinder.NarrowingBindSnapshot = default(StatementBinder.NarrowingBindSnapshot)
     ) BoundExpression {
         let frame = CallCandidateRecorder.Begin(ce, ownerType)
+        // ADR-0225 D6.5: the overload and argument reports of this call depend on its candidate set.
+        let callDiagnostics = Diagnostics
+        let callFramePushed = callDiagnostics.PushCallFrame(ce, PrefixCallKind.Member)
         try {
             var bound = BindUserTypeStaticCallCore(ownerType, ce, preboundArguments, preArgumentsNarrowing)
             if verifyCallArgumentsAfterConversions != nil {
@@ -4051,6 +4054,7 @@ internal partial class ExpressionBinder {
             return bound
         } finally {
             CallCandidateRecorder.End(frame)
+            callDiagnostics.PopCallFrame(callFramePushed)
         }
     }
 
