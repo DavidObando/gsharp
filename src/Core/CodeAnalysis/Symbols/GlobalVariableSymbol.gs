@@ -50,6 +50,10 @@ class GlobalVariableSymbol : VariableSymbol {
         private set;
     }
 
+    /// Returns `true` when this top-level variable must stay in an entry-point
+    /// local slot instead of being hoisted to a `<Program>` static field (#3215, #6169).
+    internal prop RequiresEntryPointLocalStorage bool -> Type is ByRefTypeSymbol || TypeSymbol.IsByRefLike(Type)
+
     /// Marks this global as a compile-time constant and records its value.
     /// @param value The compile-time constant value.
     func SetConstantValue(value object?) {

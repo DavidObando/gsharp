@@ -230,6 +230,12 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     (collectByRefLikeLocals && TypeSymbol.IsByRefLike(local.Type))
             ) {
                 Locals.Add(local)
+            } else if collectByRefLikeLocals && variable is GlobalVariableSymbol global && TypeSymbol.IsByRefLike(
+                global.Type
+            ) {
+                // ADR-0228 / #6169: top-level by-ref-like bindings live in
+                // <Main>$ locals and are never hoisted into state-machine fields.
+                Locals.Add(global)
             }
         }
     }
@@ -663,7 +669,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     if vd.Initializer is {} initializer {
                         collector.VisitExpression(initializer)
                     }
-                    let isInteresting = vd.Variable is LocalVariableSymbol && interesting.Contains(vd.Variable)
+                    let isInteresting = interesting.Contains(vd.Variable)
                     let selfRead = isInteresting && collector.Reads.Contains(vd.Variable)
                     let killTarget VariableSymbol? = if isInteresting && !selfRead {
                         vd.Variable

@@ -313,13 +313,15 @@ func f() {
 
     @Fact
     func RefStruct_AsTopLevelGlobal_Reports_GS0219() {
-        // A top-level variable is emitted as a heap-rooted static field, which the
-        // CLR forbids for a by-ref-like type. Applies to imported ref structs ...
+        // In a library compilation (no entry point), a top-level variable
+        // has no executable entry-point local storage, so by-ref-like types
+        // remain rejected with GS0219 (alongside GS0285). Applies to imported
+        // ref structs ...
         let imported = `
 import System
 var s ReadOnlySpan[int32] = []int32{1, 2, 3}
 `
-        Assert.Contains(Bind(imported), (d Diagnostic) -> d.Id == "GS0219")
+        Assert.Contains(BindLibrary(imported), (d Diagnostic) -> d.Id == "GS0219")
         // ... and to user-declared ones.
         let user = `
 package P
@@ -328,7 +330,34 @@ ref struct Acc {
 }
 var a Acc = Acc{Total: 1}
 `
-        Assert.Contains(Bind(user), (d Diagnostic) -> d.Id == "GS0219")
+        Assert.Contains(BindLibrary(user), (d Diagnostic) -> d.Id == "GS0219")
+    }
+
+    @Fact
+    func RefStruct_AsTopLevelExecutableBinding_IsPermitted() {
+        // ADR-0228 / issue #6169: in an executable compilation, top-level
+        // by-ref-like bindings live in entry-point local slots instead of
+        // <Program> static fields. Applies to imported spans/aliases ...
+        let imported = `
+import System
+let view readonly span[byte] = u8"hello"
+var s ReadOnlySpan[int32] = []int32{1, 2, 3}
+Console.WriteLine(view.Length + s.Length)
+`
+        let importedDiagnostics = Bind(imported)
+        Assert.DoesNotContain(importedDiagnostics, (d Diagnostic) -> d.IsError)
+        // ... and to user-declared ref structs.
+        let user = `
+package P
+import System
+ref struct Acc {
+    var Total int32
+}
+var a Acc = Acc{Total: 1}
+Console.WriteLine(a.Total)
+`
+        let userDiagnostics = Bind(user)
+        Assert.DoesNotContain(userDiagnostics, (d Diagnostic) -> d.IsError)
     }
 
     // ADR-0056 §1/§2: reading a `ReadOnlySpan[T]` element auto-dereferences the
@@ -504,9 +533,9 @@ func f() {
 
         // Binds declarations and function bodies without executing them. Used when
         // binder diagnostics, rather than runtime behavior, are the test subject.
-        private func Bind(source string) ImmutableArray[Diagnostic] {
+        private func Bind(source string, isLibrary bool = false) ImmutableArray[Diagnostic] {
             let tree = SyntaxTree.Parse(SourceText.From(source))
-            let compilation = Compilation(tree)
+            let compilation = Compilation(tree){IsLibrary = isLibrary}
             let program = Binder.BindProgram(compilation.GlobalScope, compilation.References)
             return tree
                 .Diagnostics
@@ -514,6 +543,8 @@ func f() {
                 .Concat(program.Diagnostics)
                 .ToImmutableArray()
         }
+
+        private func BindLibrary(source string) ImmutableArray[Diagnostic] -> Bind(source, isLibrary: true)
 
         private func BindProgram(source string) BoundProgram {
             let tree = SyntaxTree.Parse(SourceText.From(source))
