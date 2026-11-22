@@ -152,7 +152,7 @@ internal class BinderContext {
         receiverSyntax SyntaxNode? = nil
     ) {
         var failed ImmutableArray[BoundExpression].Builder? = nil
-        let error = bound as BoundErrorExpression
+        let error = FailedCallError(bound)
         if callArguments is {Count: > 0} table {
             for argument in arguments {
                 if !table.Remove(ArgumentValue(argument), out var argumentBound) {
@@ -174,6 +174,24 @@ internal class BinderContext {
             error.FailedReceiver = receiver
             error.FailedReceiverSyntax = receiverSyntax
         }
+    }
+
+    /// The error of a failed call, through the wrappers a call bind can put around it: a block that
+    /// saves a native-slice receiver, a conversion, a suspending call's logical operand.
+    private func FailedCallError(bound BoundExpression) BoundErrorExpression? {
+        var node BoundExpression? = bound
+        for var depth = 0; depth < 8 && node != nil; depth++ {
+            if node is BoundErrorExpression error {
+                return error
+            }
+            node = switch node {
+                case logical is BoundExpression{LogicalCompletionOperand: {} operand}: operand
+                case block is BoundBlockExpression: block.Expression
+                case conversion is BoundConversionExpression: conversion.Expression
+                default: default(BoundExpression?)
+            }
+        }
+        return nil
     }
 
     private func ArgumentValue(argument ExpressionSyntax) ExpressionSyntax -> switch argument {

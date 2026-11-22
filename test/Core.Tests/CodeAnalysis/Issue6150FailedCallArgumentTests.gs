@@ -195,6 +195,38 @@ open class Issue6150FailedCallArgumentTests {
     }
 
     @Fact
+    func FailedNativeSliceCall_ArgumentAndReceiverAnswer() {
+        // A call on a native slice saves the receiver in a block around the call.
+        let (model, tree, compilation) = CreateModel(
+            "package P\n\nfunc F() {\n    let x = 1\n    let s = slice[int32]{1, 2}\n    let k = s.Missing(x)\n}\n"
+        )
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let x = Assert.Single(Names(tree, "x"))
+        Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(x).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(x).Type)
+        let s = Assert.Single(Names(tree, "s"))
+        Assert.Equal("s", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(s).Symbol).Name)
+    }
+
+    @Theory
+    @InlineData("let k = (f!!)(x, 2)", true) // arity
+    @InlineData("let k = (f)(x, 2)", false) // a nullable callee fails before the arguments bind
+    func FailedIndirectCall_CalleeAndArgumentsAnswer(statement string, argumentsBound bool) {
+        let (model, tree, compilation) = CreateModel(
+            "package P\n\nfunc F(f ((int32) -> int32)?) {\n    let x = 1\n    " + statement + "\n}\n"
+        )
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let callee = Assert.Single(Names(tree, "f"))
+        Assert.Equal("f", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(callee).Symbol).Name)
+        Assert.IsType[NullableTypeSymbol](model.GetTypeInfo(callee).Type)
+        if argumentsBound {
+            let x = Assert.Single(Names(tree, "x"))
+            Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(x).Symbol).Name)
+            Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(x).Type)
+        }
+    }
+
+    @Fact
     func Diagnostics_AreUnchangedByTheIndex() {
         let source = "package P\n\nfunc Use(v int32) int32 -> v\n\nfunc F() {\n    let x = 1\n    let k = Use(x, 2)\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "issue6150.gs"))
