@@ -2381,10 +2381,10 @@ internal partial class DeclarationBinder {
                     }
                     let writeAccessor PropertyAccessorSyntax? = setAccessor ?? initAccessor
                     if getAccessor?.AccessibilityModifier != nil {
-                        getterAccessibility = resolveAccessibility(getAccessor!!.AccessibilityModifier)
+                        getterAccessibility = resolveAccessibility(getAccessor.AccessibilityModifier)
                     }
                     if writeAccessor?.AccessibilityModifier != nil {
-                        setterAccessibility = resolveAccessibility(writeAccessor!!.AccessibilityModifier)
+                        setterAccessibility = resolveAccessibility(writeAccessor.AccessibilityModifier)
                     }
                     hasGetter = getAccessor != nil || propSyntax.Accessors.IsDefaultOrEmpty
                     hasSetter = writeAccessor != nil
@@ -3653,10 +3653,10 @@ internal partial class DeclarationBinder {
                     )
                     let writeAccessor = setAccessor ?? initAccessor
                     if getAccessor?.AccessibilityModifier != nil {
-                        getterAccessibility = resolveAccessibility(getAccessor!!.AccessibilityModifier)
+                        getterAccessibility = resolveAccessibility(getAccessor.AccessibilityModifier)
                     }
                     if writeAccessor?.AccessibilityModifier != nil {
-                        setterAccessibility = resolveAccessibility(writeAccessor!!.AccessibilityModifier)
+                        setterAccessibility = resolveAccessibility(writeAccessor.AccessibilityModifier)
                     }
                     // Issue #946: `init` is instance-only; reject it on a static
                     // property declared inside a `shared` block (ADR-0053).

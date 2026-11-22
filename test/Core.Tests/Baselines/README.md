@@ -1,5 +1,13 @@
 # IL byte-identical baseline (PR-0 gate)
 
+The 0.5.767 bootstrap SDK update changes only the
+`samples/WebsiteReleaseContracts.gs` hash and its `AssemblyRef` digest.
+The bundled `Gsharp.Extensions` reference changes from `1.0.0.0` to
+`0.5.767.0`. The test's extension DLL is byte-identical to the published SDK
+package copy. All other reference rows and table digests, including complete
+method bodies, are unchanged. The complete sample inventory, null entries,
+hashing policy, and reference-selection policy remain unchanged.
+
 This directory holds `refactoring-baseline.json`, the committed SHA-256 digest
 for every fixture compiled by
 `test/Core.Tests/CodeAnalysis/Emit/RefactoringBaselineTests.gs`.

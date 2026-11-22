@@ -239,8 +239,8 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 "a borrowed write cannot survive suspension; evaluate the value before selecting the borrow"
             )
         }
-        if node?.Type is TupleTypeSymbol && ManagedReferenceOrigins.IsScopedHandle(node!!) {
-            this.Report(node!!, "a scoped managed-reference value cannot be stored in an aggregate")
+        if node?.Type is TupleTypeSymbol && ManagedReferenceOrigins.IsScopedHandle(node) {
+            this.Report(node, "a scoped managed-reference value cannot be stored in an aggregate")
         }
         base.VisitExpression(node)
     }

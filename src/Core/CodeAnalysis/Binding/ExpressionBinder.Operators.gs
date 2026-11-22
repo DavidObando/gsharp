@@ -3884,7 +3884,7 @@ internal partial class ExpressionBinder {
                 case staticCall is BoundImportedCallExpression: staticCall.Function.Method
                 default: default(MethodInfo?)
             }
-            return method?.ReturnType is {IsValueType: false} && ClrNullability.GetReturnTypeSymbol(method!!) is not(
+            return method?.ReturnType is {IsValueType: false} && ClrNullability.GetReturnTypeSymbol(method) is not(
                 NullableTypeSymbol or PlatformTypeSymbol
             )
         }

@@ -297,7 +297,7 @@ internal partial class OverloadResolver {
         }
         let current = getCurrentFunction()
         if current?.ThisParameter != nil {
-            return current!!.ThisParameter!!
+            return current.ThisParameter
         }
         return Scope.TryLookupSymbol("this") as ParameterSymbol
     }

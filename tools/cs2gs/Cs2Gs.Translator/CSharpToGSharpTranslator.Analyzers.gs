@@ -2774,7 +2774,7 @@ partial class CSharpToGSharpTranslator {
             private func RoslynTypeMetadataName(type INamedTypeSymbol?) string? -> if type?.ContainingNamespace is {
                 IsGlobalNamespace: false
             } ns {
-                "${ns.ToDisplayString()}.${type!!.Name}"
+                "${ns.ToDisplayString()}.${type.Name}"
             } else {
                 type?.Name
             }

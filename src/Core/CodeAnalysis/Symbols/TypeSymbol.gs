@@ -329,7 +329,7 @@ open partial class TypeSymbol : Symbol {
             if unwrapped is StructSymbol && unwrapped.IsRefStruct == true {
                 return true
             }
-            return unwrapped?.ClrType != nil && ClrTypeUtilities.IsByRefLike(unwrapped!!.ClrType)
+            return unwrapped?.ClrType != nil && ClrTypeUtilities.IsByRefLike(unwrapped.ClrType)
         }
 
         /// ADR-0122 / issue #1014. Returns the pointee (element) type when

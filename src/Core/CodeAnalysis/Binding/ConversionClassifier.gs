@@ -1614,11 +1614,11 @@ internal class ConversionClassifier {
                 (
                 allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
                     expression.Type,
-                    type!!,
+                    type,
                     convMethod
                 )
             ) {
-                return BoundClrConversionCallExpression(nil, expression, convMethod, type!!)
+                return BoundClrConversionCallExpression(nil, expression, convMethod, type)
             }
             if expression.Type is {} sourceType &&
                 type is {} targetType &&
@@ -1785,11 +1785,11 @@ internal class ConversionClassifier {
                 (
                 allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
                     expression.Type,
-                    type!!,
+                    type,
                     projectionConvMethod
                 )
             ) {
-                return BoundClrConversionCallExpression(nil, expression, projectionConvMethod, type!!)
+                return BoundClrConversionCallExpression(nil, expression, projectionConvMethod, type)
             }
             // Issue #3218: a nullable annotation over a reference-like target
             // (e.g. an imported method's `System.Uri?` parameter) is
@@ -5296,7 +5296,7 @@ internal class ConversionClassifier {
                 if slot.TargetField != nil {
                     initializedFields.Add(slot.TargetField)
                 } else if slot.TargetProperty?.BackingField != nil {
-                    initializedFields.Add(slot.TargetProperty!!.BackingField!!)
+                    initializedFields.Add(slot.TargetProperty.BackingField!!)
                 }
             }
             for field in userType.Fields {

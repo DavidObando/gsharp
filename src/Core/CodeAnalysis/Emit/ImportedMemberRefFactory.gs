@@ -1086,7 +1086,7 @@ internal class ImportedMemberRefFactory {
         // single MemberRef serves both the lift (issue #1298) and the
         // null-conditional (issue #1475) sites.
         if nullableOfUserVt?.UnderlyingType is EnumSymbol {
-            return this.GetNullableCtorMemberRefForUserEnum(nullableOfUserVt!!)
+            return this.GetNullableCtorMemberRefForUserEnum(nullableOfUserVt)
         }
         if nullableOfUserVt == nil || !NullableLifting.RequiresSymbolicNullableGetValue(nullableOfUserVt) ||
             nullableOfUserVt.UnderlyingType is TypeParameterSymbol {

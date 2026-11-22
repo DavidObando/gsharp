@@ -45,8 +45,8 @@ shared class TestDiscoveryComputer {
         if syntaxTree?.Root == nil {
             return items
         }
-        let namespaceName = ComputeNamespace(syntaxTree!!)
-        for member in syntaxTree!!.Root.Members {
+        let namespaceName = ComputeNamespace(syntaxTree)
+        for member in syntaxTree.Root.Members {
             switch member {
                 case func_ is FunctionDeclarationSyntax when IsTest(func_) {
                     items.Add(CreateItem(uri, func_.Identifier, (name string) -> name))

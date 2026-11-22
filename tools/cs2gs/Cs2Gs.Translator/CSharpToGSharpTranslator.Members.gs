@@ -1701,8 +1701,8 @@ partial class CSharpToGSharpTranslator {
             // Shapes G# cannot spell as a partial method (ADR-0192 §F), as in
             // IsEmittablePartialMethodPair.
             if definition.IsExtensionMethod ||
-                implementation!!.IsExtern ||
-                implementation!!
+                implementation.IsExtern ||
+                implementation
                 .ExplicitInterfaceImplementations
                 .Length > 0 ||
                 (

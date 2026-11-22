@@ -8805,7 +8805,7 @@ internal shared class ClrOverloadResolution {
                 case typeParam is TypeParameterSymbol {
                     let classConstraint = typeParam.ClassConstraint
                     if classConstraint?.ClrType != nil && string.Equals(
-                        classConstraint!!.ClrType!!.FullName,
+                        classConstraint.ClrType.FullName,
                         constraint.FullName,
                         StringComparison.Ordinal
                     ) {

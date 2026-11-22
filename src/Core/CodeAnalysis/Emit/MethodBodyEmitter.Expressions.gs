@@ -1818,7 +1818,7 @@ internal partial class MethodBodyEmitter {
             // (possibly MLC-backed) inner value type. See MethodBodyEmitter.Conversions.
             if !NullableLifting.TryConstructNullable(this.outer.emitCtx.References, innerClr, out var nullableClr) {
                 throw InvalidOperationException(
-                    "Cannot construct Nullable<${innerClr!!.FullName}>: System.Nullable`1 is not resolvable in the reference set."
+                    "Cannot construct Nullable<${innerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set."
                 )
             }
             let nullableInnerArg = nullableClr.GetGenericArguments()[0]

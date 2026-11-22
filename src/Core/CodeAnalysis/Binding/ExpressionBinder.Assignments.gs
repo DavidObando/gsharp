@@ -349,7 +349,7 @@ internal partial class ExpressionBinder {
             (
             receiver is BoundVariableExpression bve && fn?.ThisParameter != nil && object.ReferenceEquals(
                 bve.Variable,
-                fn!!.ThisParameter
+                fn.ThisParameter
             )
         )
         return inInitContext && receiverIsThis
@@ -473,7 +473,7 @@ internal partial class ExpressionBinder {
     /// @returns `true` when the receiver is `this`.
     private func ReceiverVariableIsThis(variable VariableSymbol) bool {
         let fn = this.function
-        return fn?.ThisParameter != nil && object.ReferenceEquals(variable, fn!!.ThisParameter)
+        return fn?.ThisParameter != nil && object.ReferenceEquals(variable, fn.ThisParameter)
     }
 
     /// Issue #1132: returns `true` when a member write through
@@ -656,7 +656,7 @@ internal partial class ExpressionBinder {
             return false
         }
         return receiver == nil ||
-            (receiver is BoundVariableExpression bve && object.ReferenceEquals(bve.Variable, fn!!.ThisParameter))
+            (receiver is BoundVariableExpression bve && object.ReferenceEquals(bve.Variable, fn.ThisParameter))
     }
 
     private func BindObjectInitializerAssignment(
@@ -1238,14 +1238,14 @@ internal partial class ExpressionBinder {
             assignmentReceiverType?.ClrType != nil {
             let clrReceiverType = assignmentReceiverType.ClrType
             let fieldName = syntax.FieldIdentifier.ValueText
-            var instanceMember MemberInfo? = SafeGetVisibleInstanceProperty(clrReceiverType!!, fieldName)
+            var instanceMember MemberInfo? = SafeGetVisibleInstanceProperty(clrReceiverType, fieldName)
             if instanceMember is PropertyInfo prop && prop.GetIndexParameters().Length != 0 {
                 instanceMember = nil
             }
-            instanceMember ??= SafeGetVisibleInstanceField(clrReceiverType!!, fieldName)
+            instanceMember ??= SafeGetVisibleInstanceField(clrReceiverType, fieldName)
             if instanceMember == nil {
                 if TryReportProtectedClrInstanceMemberWrite(
-                    clrReceiverType!!,
+                    clrReceiverType,
                     fieldName,
                     assignmentReceiver,
                     syntax.FieldIdentifier.Location
@@ -1267,7 +1267,7 @@ internal partial class ExpressionBinder {
                 .IsReadOnlyValueReference(assignmentReceiver) {
                 if !RefCapabilities.IsReadOnlyValueReference(assignmentReceiver) &&
                     TryReportProtectedClrInstanceMemberWrite(
-                    clrReceiverType!!,
+                    clrReceiverType,
                     fieldName,
                     assignmentReceiver,
                     syntax.FieldIdentifier.Location
@@ -2052,7 +2052,7 @@ internal partial class ExpressionBinder {
             let effThis = GetEffectiveThisParameter()
             if effThis?.Type is StructSymbol thisStruct &&
                 GetInheritedClrBaseType(thisStruct) is Type inheritedBaseClr {
-                let inheritedReceiver = BoundVariableExpression(nil, effThis!!)
+                let inheritedReceiver = BoundVariableExpression(nil, effThis)
                 let inheritedEventInfo EventInfo? = if isEventOperator {
                     TryGetInheritedClrEvent(inheritedBaseClr, name, inheritedReceiver)
                 } else {

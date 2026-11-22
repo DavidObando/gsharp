@@ -39,7 +39,7 @@ internal partial class ExpressionBinder {
         if receiver?.Type == nil {
             return false
         }
-        let extCandidates = $scope.TryLookupExtensionFunctions(receiver!!.Type, methodName)
+        let extCandidates = $scope.TryLookupExtensionFunctions(receiver.Type, methodName)
         if extCandidates.IsDefaultOrEmpty {
             return false
         }
@@ -95,7 +95,7 @@ internal partial class ExpressionBinder {
         if receiver?.Type == nil || clrBest == nil || argTypes == nil {
             return false
         }
-        let extCandidates = $scope.TryLookupExtensionFunctions(receiver!!.Type, methodName)
+        let extCandidates = $scope.TryLookupExtensionFunctions(receiver.Type, methodName)
         if extCandidates.IsDefaultOrEmpty {
             return false
         }

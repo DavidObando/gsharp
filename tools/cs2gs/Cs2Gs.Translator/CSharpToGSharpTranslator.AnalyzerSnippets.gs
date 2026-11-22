@@ -104,7 +104,7 @@ partial class CSharpToGSharpTranslator {
             // namespace collapse — is re-reported HERE so it lands in the
             // migration's own diagnostics. Bridge sites retain their inner
             // source positions; other notices are attributed to the call site.
-            for inner in result!!.Diagnostics {
+            for inner in result.Diagnostics {
                 if inner.Severity == TranslationSeverity.Info {
                     continue
                 }
@@ -153,7 +153,7 @@ partial class CSharpToGSharpTranslator {
                     DiagnosticId = AnalyzerSnippetDiagnosticId
                 }
             )
-            translated = LiteralExpression.String(result!!.GsWithMarkers!!)
+            translated = LiteralExpression.String(result.GsWithMarkers!!)
             return true
         }
 

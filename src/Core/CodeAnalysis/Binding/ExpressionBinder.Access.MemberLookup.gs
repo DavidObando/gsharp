@@ -765,13 +765,13 @@ internal partial class ExpressionBinder {
                     RequiresSymbolicTupleElementInvocation(tupleType, tupleIndex) ||
                         RequiresDeclaredNameTupleElementInvocation(ce.Identifier.ValueText, tupleType, tupleIndex) ||
                         !StatementBinder
-                        .GetTupleElementCallableParameterNames(receiver!!, tupleIndex).IsDefaultOrEmpty
+                        .GetTupleElementCallableParameterNames(receiver, tupleIndex).IsDefaultOrEmpty
                 ) {
                     let resolvedTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(tupleType))
                     let resolvedReceiver = if object.ReferenceEquals(resolvedTuple, tupleType) {
-                        receiver!!
+                        receiver
                     } else {
-                        conversions.BindConversion(ce.Location, receiver!!, resolvedTuple)
+                        conversions.BindConversion(ce.Location, receiver, resolvedTuple)
                     }
                     let tupleElement = BoundTupleElementAccessExpression(
                         nil,
@@ -7044,7 +7044,7 @@ internal partial class ExpressionBinder {
         /// cs2gs output depended on it; #4356 fixed cs2gs and deleted it, along
         /// with its twin in (cref:TryGetUserInstanceMemberReceiverType).
         private func CanBindClrInstanceMember(receiver BoundExpression?) bool {
-            return receiver?.Type?.ClrType != nil && !(receiver!!.Type is NullableTypeSymbol)
+            return receiver?.Type?.ClrType != nil && !(receiver.Type is NullableTypeSymbol)
         }
 
         /// Returns the G#-declared class or struct whose instance members a
@@ -7215,7 +7215,7 @@ internal partial class ExpressionBinder {
                             // ADR-0193 Phase 2: merged, like every sibling
                             // indexer read (`GetClrPropertyTypeSymbol`).
                             var projected TypeSymbol? = MemberLookup.GetClrMemberValueTypeSymbol(
-                                openIndexer!!,
+                                openIndexer,
                                 openDefinition,
                                 target.TypeArguments
                             )
@@ -7326,13 +7326,13 @@ internal partial class ExpressionBinder {
                 let openMember MemberInfo? = switch closedMember {
                     case _ is PropertyInfo: (
                         ClrTypeUtilities.SafeGetProperty(
-                            symbolicReceiver.OpenDefinition!!,
+                            symbolicReceiver.OpenDefinition,
                             closedMember.Name,
                             staticFlags
                         ) as MemberInfo?
                     )
                     case _ is FieldInfo: (
-                        symbolicReceiver.OpenDefinition!!.GetField(closedMember.Name, staticFlags) as MemberInfo?
+                        symbolicReceiver.OpenDefinition.GetField(closedMember.Name, staticFlags) as MemberInfo?
                     )
                     default: nil
                 }
@@ -7626,7 +7626,8 @@ internal partial class ExpressionBinder {
         ) TypeSymbol {
             if type is TypeParameterSymbol tp &&
                 constructedIface?.Definition != nil &&
-                !constructedIface.Definition!!
+                !constructedIface
+                .Definition
                 .TypeParameters
                 .IsDefaultOrEmpty &&
                 !constructedIface

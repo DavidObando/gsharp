@@ -385,10 +385,10 @@ internal partial class ExpressionBinder {
         if deferredIndices.Count == 0 || receiver?.Type == nil {
             return
         }
-        let candidates = MemberLookup.CollectSourceInstanceMethods(receiver!!.Type, methodName)
+        let candidates = MemberLookup.CollectSourceInstanceMethods(receiver.Type, methodName)
         if candidates.IsDefaultOrEmpty {
-            let receiverStruct = receiver!!.Type as StructSymbol
-            if (receiverStruct != nil || receiver!!.Type is InterfaceSymbol) &&
+            let receiverStruct = receiver.Type as StructSymbol
+            if (receiverStruct != nil || receiver.Type is InterfaceSymbol) &&
                 (
                 (
                     receiverStruct != nil && receiverStruct.GetHierarchy().Any(
@@ -396,7 +396,7 @@ internal partial class ExpressionBinder {
                     )
                 ) ||
                     (
-                    TypeMemberModel.TryGetPropertyWithOwner(receiver!!.Type, methodName, out var prop, out _) &&
+                    TypeMemberModel.TryGetPropertyWithOwner(receiver.Type, methodName, out var prop, out _) &&
                         prop != nil &&
                         prop.HasGetter
                 )
@@ -470,10 +470,10 @@ internal partial class ExpressionBinder {
         result = nil
         let symbolicReceiver = classSymbol.SymbolicReceiver
         if symbolicReceiver?.OpenDefinition == nil ||
-            symbolicReceiver!!
+            symbolicReceiver
             .TypeArguments
             .IsDefaultOrEmpty ||
-            !TryResolveOpenStaticMethod(symbolicReceiver!!.OpenDefinition, staticFn.Method, out var openMethod) {
+            !TryResolveOpenStaticMethod(symbolicReceiver.OpenDefinition, staticFn.Method, out var openMethod) {
             return false
         }
         let openParameters = openMethod.GetParameters()
@@ -482,8 +482,8 @@ internal partial class ExpressionBinder {
             // narrow symbolic path; fall back to the ordinary resolution.
             return false
         }
-        let openDef = symbolicReceiver!!.OpenDefinition
-        let symbolicArgs = symbolicReceiver!!.TypeArguments
+        let openDef = symbolicReceiver.OpenDefinition
+        let symbolicArgs = symbolicReceiver.TypeArguments
         let effectiveMethodTypeArgs = MemberLookup.MergeSymbolicAndClosedMethodTypeArgs(
             staticFn.Method,
             symbolicMethodTypeArgs
@@ -2307,7 +2307,7 @@ internal partial class ExpressionBinder {
         // receiver. The bound call keeps the original receiver expression.
         var effectiveReceiverType = receiver?.Type
         if receiver?.Type != nil &&
-            TryNormalizeSymbolicEnumerableReceiver(receiver!!.Type, out var normalizedReceiverType) {
+            TryNormalizeSymbolicEnumerableReceiver(receiver.Type, out var normalizedReceiverType) {
             effectiveReceiverType = normalizedReceiverType
         }
         if receiver == nil || effectiveReceiverType?.ClrType == nil {
@@ -2711,7 +2711,7 @@ internal partial class ExpressionBinder {
             if (
                 receiver?.Type is NullableTypeSymbol nullableRecvType &&
                     IsApplicableNullableUnderlyingCall(
-                    receiver!!,
+                    receiver,
                     nullableRecvType.UnderlyingType,
                     methodName,
                     arguments,
@@ -2721,9 +2721,9 @@ internal partial class ExpressionBinder {
                     typeArgSymbols
                 ) ||
                     receiver?.Type is TypeParameterSymbol nullableTpRecv &&
-                    !HasProvenNonNullTypeParameterReceiver(receiver!!, nullableTpRecv) &&
+                    !HasProvenNonNullTypeParameterReceiver(receiver, nullableTpRecv) &&
                     IsApplicableNullableUnderlyingCall(
-                    receiver!!,
+                    receiver,
                     nullableTpRecv,
                     methodName,
                     arguments,
@@ -2737,7 +2737,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportNilableReceiverCall(
                     ce.Location,
                     methodName,
-                    DescribeCallReceiver(receiver!!, effectiveReceiverSyntax, receiverStart)
+                    DescribeCallReceiver(receiver, effectiveReceiverSyntax, receiverStart)
                 )
             } else if !TryReportValueNullableByRefArgument(
                 ce,
@@ -2823,7 +2823,7 @@ internal partial class ExpressionBinder {
         // Issue #4924: the members of the target framework's declaration, not the host's.
         // `effectiveReceiverType.ClrType` is non-null here: the `ClrType == nil` branch
         // above returns unconditionally.
-        let receiverClrType = effectiveReceiverType!!.ClrType!!
+        let receiverClrType = effectiveReceiverType.ClrType!!
         if !$scope.References!!.TryGetMemberLookupType(receiverClrType, out var lookupType) {
             Diagnostics.ReportTargetFrameworkMemberUnavailable(
                 ce.Location,
@@ -2992,7 +2992,7 @@ internal partial class ExpressionBinder {
                     candidates,
                     i,
                     ce,
-                    effectiveReceiverType!!,
+                    effectiveReceiverType,
                     arguments[i].Type,
                     out var receiverProjectedArgumentType
                 ) {
@@ -3312,7 +3312,7 @@ internal partial class ExpressionBinder {
                             instSymbolicTypeArgs,
                             effectiveReceiverType
                         ) ??
-                            MemberLookup.GetClrReceiverProjectedReturnTypeSymbol(effectiveReceiverType!!, method) ??
+                            MemberLookup.GetClrReceiverProjectedReturnTypeSymbol(effectiveReceiverType, method) ??
                             MapClrMethodReturnType(method)
                         let instParameters = method.GetParameters()
                         let instMapping = resolution.ParameterMapping
@@ -3337,7 +3337,7 @@ internal partial class ExpressionBinder {
                             receiver?.Type,
                             out _
                         ) {
-                            effectiveReceiverType!!
+                            effectiveReceiverType
                         } else {
                             receiver?.Type
                         }

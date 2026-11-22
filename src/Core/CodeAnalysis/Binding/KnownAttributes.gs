@@ -45,7 +45,7 @@ internal shared class KnownAttributes {
     /// @param clrType The resolved attribute CLR type, or `null`.
     /// @returns `true` if the attribute is reserved for the compiler.
     func IsReservedForCompiler(clrType Type?) bool {
-        return clrType?.FullName != nil && ReservedForCompilerNames.Contains(clrType!!.FullName!!)
+        return clrType?.FullName != nil && ReservedForCompilerNames.Contains(clrType.FullName!!)
     }
 
     /// Returns `true` when [`attribute`](paramref) is

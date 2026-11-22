@@ -823,7 +823,7 @@ internal partial class ExpressionBinder {
         if importedBaseType?.ClrType is not Type importedBase {
             return false
         }
-        let importedBaseSymbol = CreateInheritedImportedClassSymbol(importedBaseType!!, syntax.LeftPart)
+        let importedBaseSymbol = CreateInheritedImportedClassSymbol(importedBaseType, syntax.LeftPart)
         if !TryResolveNestedTypeFromAccessorLeft(
             importedBaseSymbol,
             syntax.RightPart,
@@ -1952,7 +1952,7 @@ internal partial class ExpressionBinder {
         }
         let clrType = lookupType(name)
         if clrType?.ClrType != nil && !object.ReferenceEquals(clrType, TypeSymbol.Void) {
-            importedClassSymbol = $scope.CreateImportedClassSymbol(clrType!!.ClrType!!, leftName)
+            importedClassSymbol = $scope.CreateImportedClassSymbol(clrType.ClrType!!, leftName)
             return true
         }
         if $scope.TryLookupImportedClass(name, leftName, out var importedClass, out var ambiguity) {
@@ -2286,7 +2286,7 @@ internal partial class ExpressionBinder {
                 }
                 let importedBaseType = TypeMemberModel.GetNearestImportedBase(structSym)
                 if importedBaseType?.ClrType is Type importedBase {
-                    let importedBaseSymbol = CreateInheritedImportedClassSymbol(importedBaseType!!, nested.LeftPart)
+                    let importedBaseSymbol = CreateInheritedImportedClassSymbol(importedBaseType, nested.LeftPart)
                     if TryResolveNestedTypeFromAccessorLeft(
                         importedBaseSymbol,
                         nested.LeftPart,
@@ -3999,7 +3999,7 @@ internal partial class ExpressionBinder {
         }
         let inheritedImportedType = TypeMemberModel.GetNearestImportedBase(structSym)
         if inheritedImportedType?.ClrType is Type {
-            let imported = CreateInheritedImportedClassSymbol(inheritedImportedType!!, ne)
+            let imported = CreateInheritedImportedClassSymbol(inheritedImportedType, ne)
             return BindAccessorStep(receiver: nil, imported, ne)
         }
         Diagnostics.ReportUnableToFindMember(ne.Location, memberName)
@@ -4843,7 +4843,7 @@ internal partial class ExpressionBinder {
             TypeMemberModel.GetNearestImportedBase(structSym)
         }
         if inheritedImportedType?.ClrType is Type {
-            let imported = CreateInheritedImportedClassSymbol(inheritedImportedType!!, ce)
+            let imported = CreateInheritedImportedClassSymbol(inheritedImportedType, ce)
             return BindAccessorCall(receiver: nil, imported, ce)
         }
         Diagnostics.ReportUnableToFindMember(ce.Location, methodName)

@@ -67,7 +67,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 updated.Add(line)
             }
-            node!!.AttachedComments = updated
+            node.AttachedComments = updated
         }
 
         private func TranslateIndexer(node IndexerDeclarationSyntax)(Member GMember?, IsStatic bool) {
