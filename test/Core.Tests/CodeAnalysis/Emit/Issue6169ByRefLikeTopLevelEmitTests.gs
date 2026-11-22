@@ -3250,6 +3250,243 @@ run(0).GetAwaiter().GetResult()
 `)
         Assert.Empty(trySwitchNormalPatternAndGuardReseatSafe.Diagnostics)
         Assert.Equal("1\n", trySwitchNormalPatternAndGuardReseatSafe.Output)
+
+        let dataStructEqualityThrowsRetainsAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+data class Key {
+    var Id int32
+
+    override func Equals(obj object?) bool -> throw InvalidOperationException()
+    override func GetHashCode() int32 -> Id
+}
+
+async func run(a Key, b Key) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        p = &c.Value
+        let eq = a == b
+        p = &x
+        Console.WriteLine(eq)
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(Key{Id: 1}, Key{Id: 2}).GetAwaiter().GetResult()
+`)
+        Assert.Contains(dataStructEqualityThrowsRetainsAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            dataStructEqualityThrowsRetainsAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let nestedTrySwitchPropertyPatternGetterThrowsFinallyAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+class Probe {
+    prop Value int32 -> throw InvalidOperationException()
+}
+
+async func run(probe Probe) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        try {
+            switch probe {
+                case { Value: _ } { }
+            }
+        } finally {
+            p = &c.Value
+        }
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(Probe()).GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            nestedTrySwitchPropertyPatternGetterThrowsFinallyAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            nestedTrySwitchPropertyPatternGetterThrowsFinallyAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let typedCatchTerminatingFilterPreservesMismatchPathUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+func reseatAndThrow(fn() -> void) bool {
+    fn()
+    throw InvalidOperationException()
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        throw InvalidOperationException()
+    } catch (ex ArgumentException) when (reseatAndThrow(() -> { p = &x })) {
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            typedCatchTerminatingFilterPreservesMismatchPathUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            typedCatchTerminatingFilterPreservesMismatchPathUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let tryReturnPathAliasReachesFinallyAwaitUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var p = &c.Value
+    await Task.Delay(1)
+    try {
+        return
+    } finally {
+        Console.WriteLine(*p)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(tryReturnPathAliasReachesFinallyAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            tryReturnPathAliasReachesFinallyAwaitUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let nestedTryReturnPathWithFinallyAliasReachesOuterFinallyAwaitUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        try {
+            return
+        } finally {
+            p = &c.Value
+        }
+    } finally {
+        await Task.Delay(1)
+        Console.WriteLine(*p)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            nestedTryReturnPathWithFinallyAliasReachesOuterFinallyAwaitUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            nestedTryReturnPathWithFinallyAliasReachesOuterFinallyAwaitUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let tryReturnPathAliasReachesFinallyAfterSwitchUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        p = &c.Value
+        return
+    } finally {
+        await Task.Delay(1)
+        Console.WriteLine(*p)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            tryReturnPathAliasReachesFinallyAfterSwitchUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            tryReturnPathAliasReachesFinallyAfterSwitchUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let nonThrowingTrySkipsCatchAliasSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var p = default(*int32)
+    var outVal = 1
+    try {
+        outVal = 2
+    } catch {
+        p = &c.Value
+    }
+    await Task.Delay(1)
+    if outVal == 0 {
+        Console.WriteLine(*p)
+    } else {
+        Console.WriteLine(outVal)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(nonThrowingTrySkipsCatchAliasSafe.Diagnostics)
+        Assert.Equal("2\n", nonThrowingTrySkipsCatchAliasSafe.Output)
     }
 
     @Fact
