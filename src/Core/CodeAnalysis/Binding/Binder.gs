@@ -1237,7 +1237,13 @@ partial class Binder {
                 method.Declaration!!.Body
             )
             let body = child.statements.BindBlockStatement(method.Declaration!!.Body!!)
+            // ADR-0225: a label after the cut of an open body can still resolve a goto.
+            let labelsPushed = child.Diagnostics.PushPremiseIf(
+                PrefixBindingContext.IsOpen(method.Declaration!!.Body),
+                PrefixPremise.RestOfBody
+            )
             child.statements.FinalizeUserLabels()
+            child.Diagnostics.PopPremiseIf(labelsPushed)
             var lowered = Lowerer.Lower(body, classSymbol)
             if bindingParameterMap.Count > 0 {
                 let rebound = cast[BoundBlockStatement](
@@ -7535,7 +7541,13 @@ partial class Binder {
                 // Issue #1884: all TLS global statements share the synthesized
                 // entry point's label namespace, so undefined `goto` targets are
                 // only checked once every global statement has been bound.
+                // ADR-0225: a later top-level statement can define the label.
+                let labelsPushed = tlsBinder.Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.TopLevelStatementsCanFollow,
+                    PrefixPremise.RestOfBody
+                )
                 tlsBinder.statements.FinalizeUserLabels()
+                tlsBinder.Diagnostics.PopPremiseIf(labelsPushed)
                 // Forward the per-function binder's diagnostics back into the
                 // global diagnostic bag so callers see them on
                 // BoundGlobalScope.Diagnostics.
@@ -9082,7 +9094,15 @@ partial class Binder {
                         return
                     }
                 )
+                // ADR-0225: an open block, or a later part of the type, can still define the label.
+                let labelsPushed = binder.Diagnostics.PushPremiseIf(
+                    initBlocks.Any((b StaticInitializerBlockSyntax) -> PrefixBindingContext.IsOpen(b.Body)) ||
+                        structDeclaration != nil &&
+                        PrefixBindingContext.IsIncompleteType(structDeclaration),
+                    PrefixPremise.RestOfBody
+                )
                 binder.statements.FinalizeUserLabels()
+                binder.Diagnostics.PopPremiseIf(labelsPushed)
                 let combined = BoundBlockStatement(nil, boundBlocks)
                 ProtectedReceiverDiagnostics.Report(combined, context, binder.Diagnostics)
                 let lowered = Lowerer.Lower(combined, structSym)

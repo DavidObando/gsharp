@@ -588,10 +588,20 @@ internal class LambdaBinder {
         let savedFrame = EnterNestedFrame(syntax.Body)
         var body BoundStatement
         var hasInvalidGoto = false
+        // ADR-0225 D6.5: the calls in the body state their own premises.
+        let bodyDiagnostics = Diagnostics
+        let bodyFramePushed = bodyDiagnostics.PushCallFrame(syntax, PrefixCallKind.Body)
         try {
             body = bindBlockStatement(syntax.Body)
+            // ADR-0225: a label after the cut of an open body can still resolve a goto.
+            let labelsPushed = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.IsOpen(syntax.Body),
+                PrefixPremise.RestOfBody
+            )
             hasInvalidGoto = FinalizeNestedFrameLabels()
+            Diagnostics.PopPremiseIf(labelsPushed)
         } finally {
+            bodyDiagnostics.PopCallFrame(bodyFramePushed)
             binderCtx.NarrowedVariables.Clear()
             binderCtx.NarrowedVariables.AddRange(savedNarrowed)
             RestoreNestedFrame(savedFrame)
@@ -1667,6 +1677,9 @@ internal class LambdaBinder {
         let lambdaScope = Scope
         var boundBody BoundExpression
         var hasInvalidGoto = false
+        // ADR-0225 D6.5: the calls in the body state their own premises.
+        let bodyDiagnostics = Diagnostics
+        let bodyFramePushed = bodyDiagnostics.PushCallFrame(syntax, PrefixCallKind.Body)
         try {
             var bodyTargetType TypeSymbol? = contextualReturnType
             if bodyTargetType == TypeSymbol.Void {
@@ -1677,8 +1690,15 @@ internal class LambdaBinder {
                 "lambda binding has a body-expression callback",
                 expression: "bindLambdaBodyExpression"
             )(syntax.Body, bodyTargetType)
+            // ADR-0225: a label after the cut of an open body can still resolve a goto.
+            let labelsPushed = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.IsOpen(syntax.Body),
+                PrefixPremise.RestOfBody
+            )
             hasInvalidGoto = FinalizeNestedFrameLabels()
+            Diagnostics.PopPremiseIf(labelsPushed)
         } finally {
+            bodyDiagnostics.PopCallFrame(bodyFramePushed)
             binderCtx.NarrowedVariables.Clear()
             binderCtx.NarrowedVariables.AddRange(savedNarrowed)
             RestoreNestedFrame(savedFrame)

@@ -119,13 +119,33 @@ class PrefixBindResult {
         openConstructs ImmutableArray[OpenConstruct],
         symbolsInScope ImmutableArray[Symbol],
         compilation Compilation,
-        syntaxTree SyntaxTree
+        syntaxTree SyntaxTree,
+        host Compilation?,
+        hostIndex int32,
+        remainder PrefixRemainder
     ) {
         Diagnostics = diagnostics
         OpenConstructs = openConstructs
         Scope = symbolsInScope
         Compilation = compilation
         SyntaxTree = syntaxTree
+        Host = host
+        HostIndex = hostIndex
+        Remainder = remainder
+    }
+
+    // ADR-0225 D6.6: the compilation that the host bound, the index of the host's tree in it, and what
+    // follows the cut. A later bind reads them to reuse this result.
+    internal prop Host Compilation? {
+        get;
+    }
+
+    internal prop HostIndex int32 {
+        get;
+    }
+
+    internal prop Remainder PrefixRemainder {
+        get;
     }
 
     /// Gets the diagnostics of the prefix, in the order of (cref:Compilation.Compilation.GetDiagnostics).
