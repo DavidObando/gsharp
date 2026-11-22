@@ -9,6 +9,7 @@ $configPath = Join-Path $directory "VsixPublisher.exe.config"
 $smoke = Join-Path $directory "GSharp.PublisherAuthSmoke.exe"
 $smokeConfig = "$smoke.config"
 try {
+    # The copied vendor configuration supplies the runtime version-unification policy.
     Add-Type -TypeDefinition @'
 using System;
 using Microsoft.Identity.Client;
@@ -28,7 +29,7 @@ public static class PublisherAuthSmoke
 '@ -ReferencedAssemblies @(
         (Join-Path $directory "lib\Microsoft.Identity.Client.dll"),
         (Join-Path $directory "lib\Microsoft.IdentityModel.Abstractions.dll")
-    ) -OutputAssembly $smoke -OutputType ConsoleApplication
+    ) -OutputAssembly $smoke -OutputType ConsoleApplication -IgnoreWarnings
     Copy-Item $configPath $smokeConfig
     & $smoke
     if ($LASTEXITCODE -ne 0) {
