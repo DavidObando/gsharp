@@ -20,6 +20,11 @@ open class Issue6186TypeArgumentsOnNonGenericCallTests {
     @InlineData("let k = Use[Nope](x)", "GS0113 Nope|GS0148 [Nope]")
     @InlineData("let k = Use[int32](x)", "GS0148 [int32]")
     @InlineData("let k = Use[int32, string](x)", "GS0148 [int32, string]")
+    @InlineData("let k = Use[Nope]()", "GS0113 Nope|GS0148 [Nope]") // before the value-argument count
+    @InlineData("let k = Use[int32](x, x)", "GS0148 [int32]")
+    @InlineData("let k = c.M[int32]()", "GS0148 [int32]")
+    @InlineData("let k = C.S[Nope]()", "GS0113 Nope|GS0148 [Nope]")
+    @InlineData("let k = f[Nope]()", "GS0113 Nope|GS0148 [Nope]")
     @InlineData("let k = Over[int32](x)", "GS0148 [int32]") // an overload set without a generic candidate
     @InlineData("let k = c.M[int32](x)", "GS0148 [int32]") // an instance method
     @InlineData("let k = C.S[int32](x)", "GS0148 [int32]") // a static method

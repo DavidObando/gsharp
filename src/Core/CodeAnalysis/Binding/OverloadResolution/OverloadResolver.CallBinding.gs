@@ -2018,6 +2018,15 @@ internal partial class OverloadResolver {
             function = selected
         }
         reportObsoleteUseIfApplicable(syntax.Identifier.Location, function, function.Name)
+        // The type arguments are checked before the value arguments, as C# reports CS0308 (#6186).
+        if !function.IsGeneric && syntax.TypeArgumentList is {} unexpectedTypeArguments {
+            ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                function.Name,
+                typeArgumentsBound: !explicitOverloadTypeArguments.IsDefault
+            )
+            return BoundErrorExpression(nil)
+        }
         let isVariadic = function
             .Parameters
             .Length > 0 &&
@@ -2168,14 +2177,6 @@ internal partial class OverloadResolver {
             }
         }
         var hasErrors = false
-        if !function.IsGeneric && syntax.TypeArgumentList is {} unexpectedTypeArguments {
-            ReportTypeArgumentsOnNonGenericFunction(
-                unexpectedTypeArguments,
-                function.Name,
-                typeArgumentsBound: !explicitOverloadTypeArguments.IsDefault
-            )
-            return BoundErrorExpression(nil)
-        }
         // Phase 4.1 / ADR-0020: if the callee is generic, build the type
         // substitution either from the explicit `[T1, T2]` list at the call
         // site or by left-to-right inference from argument types matched

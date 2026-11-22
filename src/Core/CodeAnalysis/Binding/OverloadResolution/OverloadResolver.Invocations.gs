@@ -1874,6 +1874,11 @@ internal partial class OverloadResolver {
                 method.Accessibility
             )
         }
+        // The type arguments are checked before the value arguments, as C# reports CS0308 (#6186).
+        if !method.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, method.Name)
+            return BoundErrorExpression(nil)
+        }
         let parameterOffset = if method.ExplicitReceiverParameter == nil {
             0
         } else {
@@ -1993,10 +1998,6 @@ internal partial class OverloadResolver {
         // itself (and its bound body) are kept intact so runtime dispatch
         // through program.Functions[method] continues to work.
         var substitution Dictionary[TypeParameterSymbol, TypeSymbol]? = TryBuildReceiverSubstitution(receiver.Type)
-        if !method.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
-            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, method.Name)
-            return BoundErrorExpression(nil)
-        }
         // Issue #312 / ADR-0020: the method may declare its own generic
         // type-parameter list (`func M[T](...) T`). Resolve those type
         // arguments from an explicit `[T1, T2]` list at the call site or by

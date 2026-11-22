@@ -4301,6 +4301,11 @@ internal partial class ExpressionBinder {
                 }
                 arguments = rebound.ToImmutable()
             }
+            // The type arguments are checked before the value arguments, as C# reports CS0308 (#6186).
+            if !method.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
+                overloads.ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, method.Name)
+                return BoundErrorExpression(nil)
+            }
             // ADR-0101 follow-up / issue #812: a user-declared static method
             // may declare a trailing variadic parameter. Allow flexible
             // arity, infer the element type from trailing args (if generic),
@@ -4434,10 +4439,6 @@ internal partial class ExpressionBinder {
                 for var i = 0; i < count; i++ {
                     substitution[defParams[i]] = ownerTypeArguments[i]
                 }
-            }
-            if !method.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
-                overloads.ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, method.Name)
-                return BoundErrorExpression(nil)
             }
             // Issue #312 / ADR-0020: resolve a generic static method's own type
             // arguments from an explicit `[T1, T2]` list at the call site or by
