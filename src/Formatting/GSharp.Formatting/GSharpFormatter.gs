@@ -132,6 +132,7 @@ shared class GSharpFormatter {
         ) Doc {
             let completed = List[Doc]()
             let segment = List[Doc]()
+            let operandSeparators = List[int32]()
             var previous LayoutToken? = nil
             var separatorAlreadyEmitted = false
             var index = start
@@ -143,10 +144,13 @@ shared class GSharpFormatter {
                     GetBreakCount(previous, current, suppressLeadingBreak && index == start)
                 }
                 if breakCount > 0 {
-                    FlushSegment(completed, segment, groupSegments)
+                    FlushSegment(completed, segment, operandSeparators, groupSegments)
                     AddHardLines(completed, breakCount)
                     previous = nil
                 } else if previous != nil && !separatorAlreadyEmitted {
+                    if IsOperandSeparator(previous) {
+                        operandSeparators.Add(segment.Count)
+                    }
                     segment.Add(Separator(previous, current))
                 }
                 separatorAlreadyEmitted = false
@@ -163,15 +167,12 @@ shared class GSharpFormatter {
                 // follows it is the closing delimiter, and a break there leaves a
                 // stray space or a blank line in front of the brace.
                 if groupElements &&
-                    current
-                    .Token
-                    .Kind == SyntaxKind.CommaToken &&
+                    current.Token.Kind == SyntaxKind.CommaToken &&
                     index +
                     1 < end &&
-                    !matchingDelimiters
-                    .ContainsKey(index) {
+                    !matchingDelimiters.ContainsKey(index) {
                     segment.Add(Doc.Text(current.Text))
-                    FlushSegment(completed, segment, group: true)
+                    FlushSegment(completed, segment, operandSeparators, group: true)
                     completed.Add(Doc.Line)
                     previous = current
                     separatorAlreadyEmitted = true
@@ -185,7 +186,7 @@ shared class GSharpFormatter {
                             segment.Add(Doc.Text(" "))
                             segment.Add(Doc.Text(tokens[close].Text))
                         } else {
-                            FlushSegment(completed, segment, groupSegments)
+                            FlushSegment(completed, segment, operandSeparators, groupSegments)
                             let inner = BuildRange(index + 1, close, suppressLeadingBreak: true, groupSegments: true)
                             completed.Add(Doc.Nest(4, Doc.Concat(Doc.HardLine, inner)))
                             completed.Add(Doc.HardLine)
@@ -221,7 +222,7 @@ shared class GSharpFormatter {
                         // forcing a short `Console.WriteLine` prefix to break,
                         // while an over-wide short chain can still break at `.`.
                         if ShouldGroupMemberCallPrefix(current) {
-                            FlushSegment(completed, segment, group: true)
+                            FlushSegment(completed, segment, operandSeparators, group: true)
                         }
                         segment.Add(delimited)
                     }
@@ -231,7 +232,7 @@ shared class GSharpFormatter {
                 }
                 segment.Add(Doc.Text(current.Text))
                 if current.IsLineComment {
-                    FlushSegment(completed, segment, groupSegments)
+                    FlushSegment(completed, segment, operandSeparators, groupSegments)
                     completed.Add(Doc.HardLine)
                     previous = nil
                 } else {
@@ -239,7 +240,7 @@ shared class GSharpFormatter {
                 }
                 index++
             }
-            FlushSegment(completed, segment, groupSegments || groupElements)
+            FlushSegment(completed, segment, operandSeparators, groupSegments || groupElements)
             return Doc.Concat(completed)
         }
 
@@ -290,13 +291,9 @@ shared class GSharpFormatter {
             if IsContinuationBoundary(previous, current) {
                 return 0
             }
-            if previous
-                .Token
-                .Kind == SyntaxKind.CloseBraceToken &&
+            if previous.Token.Kind == SyntaxKind.CloseBraceToken &&
                 (
-                current
-                    .Token
-                    .Kind is SyntaxKind.ElseKeyword or
+                current.Token.Kind is SyntaxKind.ElseKeyword or
                     SyntaxKind.CatchKeyword or
                     SyntaxKind.FinallyKeyword or
                     SyntaxKind.WhileKeyword
@@ -346,9 +343,7 @@ shared class GSharpFormatter {
         // when their own tokens exceed the line budget.
         private func BuildMemberChains() {
             for var i = 0; i < tokens.Count; i++ {
-                if tokens[i]
-                    .Token
-                    .Kind is not(SyntaxKind.DotToken or SyntaxKind.QuestionDotToken) ||
+                if tokens[i].Token.Kind is not(SyntaxKind.DotToken or SyntaxKind.QuestionDotToken) ||
                     memberChains.ContainsKey(tokens[i].Token.Position) {
                     continue
                 }
@@ -381,9 +376,7 @@ shared class GSharpFormatter {
         }
 
         private func ShouldGroupMemberCallPrefix(token LayoutToken) bool {
-            if token
-                .Token
-                .Kind != SyntaxKind.OpenParenthesisToken ||
+            if token.Token.Kind != SyntaxKind.OpenParenthesisToken ||
                 !(token.Parent is CallExpressionSyntax{Parent: AccessorExpressionSyntax accessor}) {
                 return false
             }
@@ -397,11 +390,7 @@ shared class GSharpFormatter {
             if left == SyntaxKind.CommaToken {
                 return Doc.Line
             }
-            if left == SyntaxKind.PlusToken ||
-                left == SyntaxKind.AmpersandAmpersandToken ||
-                left == SyntaxKind.PipePipeToken ||
-                left == SyntaxKind.QuestionQuestionToken ||
-                IsPatternCombinator(previous) {
+            if IsOperandSeparator(previous) {
                 return Doc.Nest(4, Doc.Line)
             }
             // A header clause separator `;` behaves like `,`: a wrap point that
@@ -715,6 +704,12 @@ shared class GSharpFormatter {
                 )
             )
 
+            private func IsOperandSeparator(token LayoutToken) bool -> token.Token.Kind == SyntaxKind.PlusToken ||
+                token.Token.Kind == SyntaxKind.AmpersandAmpersandToken ||
+                token.Token.Kind == SyntaxKind.PipePipeToken ||
+                token.Token.Kind == SyntaxKind.QuestionQuestionToken ||
+                IsPatternCombinator(token)
+
             private func IsContinuationBoundary(
                 previous SyntaxKind,
                 current SyntaxKind
@@ -754,19 +749,11 @@ shared class GSharpFormatter {
             // newline-sensitive in LooksLikeCollectionInitializerBrace. Every
             // other collection shape may use the normal delimiter break.
             private func MustKeepFirstCollectionElementOnBraceLine(token LayoutToken) bool {
-                if token
-                    .Token
-                    .Kind != SyntaxKind.OpenBraceToken ||
+                if token.Token.Kind != SyntaxKind.OpenBraceToken ||
                     token.Parent is not CollectionInitializerExpressionSyntax initializer ||
                     initializer.Target is not CallExpressionSyntax call ||
-                    call
-                    .OpenParenthesisToken
-                    .Position == call
-                    .CloseParenthesisToken
-                    .Position ||
-                    initializer
-                    .Elements
-                    .Count != 1 {
+                    call.OpenParenthesisToken.Position == call.CloseParenthesisToken.Position ||
+                    initializer.Elements.Count != 1 {
                     return false
                 }
                 return (
@@ -801,9 +788,7 @@ shared class GSharpFormatter {
                 return (token.Token.Kind is SyntaxKind.BangToken or SyntaxKind.AtToken) ||
                     (
                     (
-                        token
-                            .Token
-                            .Kind is SyntaxKind.StarToken or
+                        token.Token.Kind is SyntaxKind.StarToken or
                             SyntaxKind.AmpersandToken or
                             SyntaxKind.EllipsisToken
                     ) &&
@@ -811,9 +796,7 @@ shared class GSharpFormatter {
                 )
             }
 
-            private func IsNullableMarker(token LayoutToken) bool -> token
-                .Token
-                .Kind == SyntaxKind.QuestionToken &&
+            private func IsNullableMarker(token LayoutToken) bool -> token.Token.Kind == SyntaxKind.QuestionToken &&
                 token.Parent is TypeClauseSyntax or
                 TypeParameterSyntax
 
@@ -825,16 +808,31 @@ shared class GSharpFormatter {
             // and `x? (y)` each re-parse as a conditional expression whose `:` is
             // missing, which is how gsfmt was rejecting its own output on 28 files
             // of the migrated tree and silently keeping the printer's layout.
-            private func IsCallNullableMarker(token LayoutToken) bool -> token
-                .Token
-                .Kind == SyntaxKind.QuestionToken &&
+            private func IsCallNullableMarker(token LayoutToken) bool -> token.Token.Kind == SyntaxKind.QuestionToken &&
                 token.Parent is CallExpressionSyntax
 
-            private func FlushSegment(completed List[Doc], segment List[Doc], group bool) {
+            private func FlushSegment(
+                completed List[Doc],
+                segment List[Doc],
+                operandSeparators List[int32],
+                group bool
+            ) {
                 if segment.Count == 0 {
                     return
                 }
-                let document = Doc.Concat(segment)
+                var document = Doc.Concat(segment)
+                if operandSeparators.Count > 0 {
+                    // Keep operand groups inside the enclosing line or list-element group.
+                    let operands = List[Doc]()
+                    var start = 0
+                    for separator in operandSeparators {
+                        operands.Add(Doc.Group(Doc.Concat(segment.GetRange(start, separator - start))))
+                        operands.Add(segment[separator])
+                        start = separator + 1
+                    }
+                    operands.Add(Doc.Group(Doc.Concat(segment.GetRange(start, segment.Count - start))))
+                    document = Doc.Concat(operands)
+                }
                 completed.Add(
                     if group {
                         Doc.Group(document)
@@ -843,6 +841,7 @@ shared class GSharpFormatter {
                     }
                 )
                 segment.Clear()
+                operandSeparators.Clear()
             }
 
             private func AddHardLines(completed List[Doc], count int32) {
@@ -939,9 +938,7 @@ shared class GSharpFormatter {
             return original
         }
         let localNames = imports.Select(
-            ($import ImportSyntax) -> $import
-                .AliasIdentifier
-                ?.ValueText ??
+            ($import ImportSyntax) -> $import.AliasIdentifier?.ValueText ??
                 (
                 if $import.Identifiers.Length == 0 {
                     string.Empty
@@ -973,12 +970,8 @@ shared class GSharpFormatter {
         let blockEnd = original.Lines[lastLine].SpanIncludingLineBreak.End
         if SyntaxTree.ParseTokens(original).Any(
             (token SyntaxToken) -> (token.Kind is SyntaxKind.CommentToken or SyntaxKind.DocumentationCommentToken) &&
-                token
-                .Span
-                .Start >= blockStart &&
-                token
-                .Span
-                .Start < blockEnd
+                token.Span.Start >= blockStart &&
+                token.Span.Start < blockEnd
         ) {
             return original
         }

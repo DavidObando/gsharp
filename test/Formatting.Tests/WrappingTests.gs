@@ -116,6 +116,42 @@ Compute(` + "$arguments" + `)
 `, result.Text!!.ToString(), StringComparison.Ordinal)
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Format_KeepsShortMemberChainsFlatWhenAConditionBreaks(negated bool) {
+        let operands = []string{
+            "from.ClrType.IsValueType",
+            "to.ClrType.IsValueType",
+            "from.ClrType.IsPointer",
+            "to.ClrType.IsPointer",
+            "from.ClrType.IsByRef",
+            "to.ClrType.IsByRef"
+        }
+        let prefix = if negated {
+            "!"
+        } else {
+            ""
+        }
+        let input = "func run(from Type, to Type) bool {\nreturn " + string.Join(
+            " && ",
+            operands.Select((operand string) -> prefix + operand)
+        ) +
+            "\n}\n"
+        let once = GSharpFormatter.Format(SourceText.From(input))
+        Assert.Empty(once.Diagnostics)
+        let formatted = once.Text!!.ToString()
+        Assert.Contains(" &&\n", formatted, StringComparison.Ordinal)
+        for operand in operands {
+            Assert.Contains(prefix + operand, formatted, StringComparison.Ordinal)
+        }
+        Assert.All(formatted.Split('\n'), (line string) -> Assert.True(line.Length <= MaxLineWidth, line))
+        let twice = GSharpFormatter.Format(once.Text!!)
+        Assert.Empty(twice.Diagnostics)
+        Assert.Equal(formatted, twice.Text!!.ToString())
+        Assert.False(twice.Changed)
+    }
+
     @Fact
     func Format_BreaksAPatternDisjunction() {
         // G# spells pattern `or`/`and` as contextual identifiers, not operator
