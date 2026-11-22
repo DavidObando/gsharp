@@ -6922,6 +6922,7 @@ partial class Binder {
             let parentScope = CreateRootScope(references, preprocessorSymbols)
             configureRoot?(parentScope)
             let binder = Binder(parentScope, function: nil)
+            binder.binderCtx.IsLibrary = isLibrary
             binder.binderCtx.SourceNullableConstraintDepth++
             binder.$scope.GetStructuralAdapterRegistry().ProtocolCoverage = nativeCoverage
             binder.ImportNativeProtocols(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
@@ -7374,6 +7375,7 @@ partial class Binder {
                 // types / functions remain visible while the new binder's own
                 // RootScope owns the `args` parameter declaration.
                 let tlsBinder = Binder(binder.$scope, synthesizedEntryPoint)
+                tlsBinder.binderCtx.IsLibrary = isLibrary
                 var previousPackage string? = nil
                 var previousTree SyntaxTree? = nil
                 var contextSet = false

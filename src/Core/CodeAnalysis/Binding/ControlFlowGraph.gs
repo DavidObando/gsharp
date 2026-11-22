@@ -265,6 +265,15 @@ class ControlFlowGraph {
         private let branches List[BasicBlockBranch] = List[BasicBlockBranch]()
         private let start BasicBlock = BasicBlock(isStart: true)
         private let end BasicBlock = BasicBlock(isStart: false)
+        private let preserveCompoundGotoTargets bool
+        private let externalEntryLabels IEnumerable[BoundLabel]?
+
+        init() { }
+
+        internal init(preserveCompoundGotoTargets bool, externalEntryLabels IEnumerable[BoundLabel]? = nil) {
+            this.preserveCompoundGotoTargets = preserveCompoundGotoTargets
+            this.externalEntryLabels = externalEntryLabels
+        }
 
         /// Builds a control flow graph from the provided list of basic blocks.
         /// @param blocks The list of basic blocks.
@@ -374,11 +383,72 @@ class ControlFlowGraph {
             let reachable = HashSet[BasicBlock]{start}
             let queue = Queue[BasicBlock]()
             queue.Enqueue(start)
+            let nestedLabelToBlock = Dictionary[BoundLabel, BasicBlock]()
+            if preserveCompoundGotoTargets {
+                for b in blocks {
+                    for stmt in b.Statements {
+                        if stmt is BoundTryStatement or BoundFixedStatement or BoundPatternSwitchStatement {
+                            let labelCollector = NestedGotoCollector()
+                            labelCollector.VisitStatement(stmt)
+                            for lbl in labelCollector.Labels {
+                                nestedLabelToBlock[lbl] = b
+                            }
+                        }
+                    }
+                }
+            }
+            if externalEntryLabels != nil {
+                for externalLabel in externalEntryLabels {
+                    if blockFromLabel.TryGetValue(externalLabel, out var targetBlock) && reachable.Add(targetBlock) {
+                        queue.Enqueue(targetBlock)
+                    } else if preserveCompoundGotoTargets && nestedLabelToBlock.TryGetValue(
+                        externalLabel,
+                        out var nestedBlock
+                    ) &&
+                        reachable.Add(nestedBlock) {
+                        queue.Enqueue(nestedBlock)
+                    }
+                }
+            }
             while queue.Count > 0 {
                 let block = queue.Dequeue()
                 for branch in block.Outgoing {
                     if reachable.Add(branch.To) {
                         queue.Enqueue(branch.To)
+                    }
+                }
+                if preserveCompoundGotoTargets {
+                    for stmt in block.Statements {
+                        if stmt is BoundGotoStatement gs {
+                            if nestedLabelToBlock.TryGetValue(gs.Label, out var nestedBlock) && reachable.Add(
+                                nestedBlock
+                            ) {
+                                queue.Enqueue(nestedBlock)
+                            }
+                        } else if stmt is BoundConditionalGotoStatement cgs {
+                            if nestedLabelToBlock.TryGetValue(cgs.Label, out var nestedBlock) && reachable.Add(
+                                nestedBlock
+                            ) {
+                                queue.Enqueue(nestedBlock)
+                            }
+                        }
+                        for targetLabel in CollectNestedGotoTargets(stmt) {
+                            if blockFromLabel.TryGetValue(targetLabel, out var targetBlock) && reachable.Add(
+                                targetBlock
+                            ) {
+                                queue.Enqueue(targetBlock)
+                            } else if nestedLabelToBlock.TryGetValue(targetLabel, out var nestedBlock) && reachable.Add(
+                                nestedBlock
+                            ) {
+                                queue.Enqueue(nestedBlock)
+                            }
+                        }
+                        if stmt is BoundReturnStatement or
+                            BoundThrowStatement or
+                            BoundRethrowStatement ||
+                            ControlFlowGraph.StatementDefinitelyReturns(stmt) || ControlFlowGraph.HasNeverValue(stmt) {
+                            break
+                        }
                     }
                 }
             }
@@ -433,6 +503,48 @@ class ControlFlowGraph {
                 throw InvalidOperationException("The Boolean negation operator must be available.")
             }
             return BoundUnaryExpression(nil, op, condition)
+        }
+
+        private class NestedGotoCollector : BoundTreeWalker {
+            prop Targets List[BoundLabel] {
+                get;
+            }
+            prop Labels List[BoundLabel] {
+                get;
+            }
+
+            init() {
+                Targets = List[BoundLabel]()
+                Labels = List[BoundLabel]()
+            }
+
+            override func VisitStatement(node BoundStatement?) {
+                if node is BoundLabelStatement ls {
+                    Labels.Add(ls.Label)
+                    return
+                }
+                if node is BoundGotoStatement gs {
+                    Targets.Add(gs.Label)
+                    return
+                }
+                if node is BoundConditionalGotoStatement cgs {
+                    Targets.Add(cgs.Label)
+                }
+                base.VisitStatement(node)
+            }
+        }
+
+        private func CollectNestedGotoTargets(statement BoundStatement) List[BoundLabel] {
+            if statement is BoundGotoStatement or BoundLabelStatement {
+                return List[BoundLabel]()
+            }
+            let collector = NestedGotoCollector()
+            if statement is BoundConditionalGotoStatement cgs {
+                collector.VisitExpression(cgs.Condition)
+            } else {
+                collector.VisitStatement(statement)
+            }
+            return collector.Targets
         }
 
         shared {
@@ -561,7 +673,21 @@ class ControlFlowGraph {
         /// Creates a control flow graph from the provided bound block statement.
         /// @param body The bound block statement.
         /// @returns The control flow graph.
-        func Create(body BoundBlockStatement) ControlFlowGraph -> Create(body, treatThrowsAsTerminators: false)
+        func Create(body BoundBlockStatement) ControlFlowGraph -> Create(
+            body,
+            treatThrowsAsTerminators: false,
+            preserveCompoundGotoTargets: false
+        )
+
+        internal func CreateWithCompoundGotoReachability(
+            body BoundBlockStatement,
+            externalEntryLabels IEnumerable[BoundLabel]? = nil
+        ) ControlFlowGraph -> Create(
+            body,
+            treatThrowsAsTerminators: false,
+            preserveCompoundGotoTargets: true,
+            externalEntryLabels
+        )
 
         /// Reports whether all paths in a bound block statement return or not.
         /// @param body The bound block statement.
@@ -672,10 +798,15 @@ class ControlFlowGraph {
             }
         }
 
-        private func Create(body BoundBlockStatement, treatThrowsAsTerminators bool) ControlFlowGraph {
+        private func Create(
+            body BoundBlockStatement,
+            treatThrowsAsTerminators bool,
+            preserveCompoundGotoTargets bool = false,
+            externalEntryLabels IEnumerable[BoundLabel]? = nil
+        ) ControlFlowGraph {
             let basicBlockBuilder = BasicBlockBuilder(treatThrowsAsTerminators)
             let blocks = basicBlockBuilder.Build(body)
-            let graphBuilder = GraphBuilder()
+            let graphBuilder = GraphBuilder(preserveCompoundGotoTargets, externalEntryLabels)
             return graphBuilder.Build(blocks)
         }
 

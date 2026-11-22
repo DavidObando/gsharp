@@ -2039,17 +2039,23 @@ shared class SpillSequenceSpiller {
                 "int32 equality operator exists for spill dispatch",
                 expression: "BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32)"
             )
+            let lastArmUnconditional = arms.Length > 0 &&
+                (switchExpr.Type != TypeSymbol.Void || arms.Any((arm BoundSwitchExpressionArm) -> arm.IsCatchAll))
             var firstArmResultDeclared = false
             for var i = 0; i < arms.Length; i++ {
                 let arm = arms[i]
-                let nextArmLabel = MakeLabel()
-                let isSelected = BoundBinaryExpression(
-                    nil,
-                    BoundVariableExpression(nil, armIndexLocal),
-                    eqOperator,
-                    BoundLiteralExpression(nil, i)
-                )
-                sideEffects.Add(BoundConditionalGotoStatement(nil, nextArmLabel, isSelected, jumpIfTrue: false))
+                let isUnconditionalLastArm = lastArmUnconditional && i == arms.Length - 1
+                var nextArmLabel BoundLabel? = nil
+                if !isUnconditionalLastArm {
+                    nextArmLabel = MakeLabel()
+                    let isSelected = BoundBinaryExpression(
+                        nil,
+                        BoundVariableExpression(nil, armIndexLocal),
+                        eqOperator,
+                        BoundLiteralExpression(nil, i)
+                    )
+                    sideEffects.Add(BoundConditionalGotoStatement(nil, nextArmLabel, isSelected, jumpIfTrue: false))
+                }
                 AppendSpilledSwitchExpressionArmResult(
                     arm.Result,
                     resultLocal,
@@ -2057,10 +2063,12 @@ shared class SpillSequenceSpiller {
                     locals,
                     sideEffects
                 )
-                if arm.Result.Type != TypeSymbol.Never {
+                if !isUnconditionalLastArm && arm.Result.Type != TypeSymbol.Never {
                     sideEffects.Add(BoundGotoStatement(nil, endLabel))
                 }
-                sideEffects.Add(BoundLabelStatement(nil, nextArmLabel))
+                if nextArmLabel != nil {
+                    sideEffects.Add(BoundLabelStatement(nil, nextArmLabel))
+                }
             }
             sideEffects.Add(BoundLabelStatement(nil, endLabel))
             if resultLocal == nil {

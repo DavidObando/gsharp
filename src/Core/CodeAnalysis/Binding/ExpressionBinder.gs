@@ -2874,6 +2874,30 @@ internal partial class ExpressionBinder {
         return BindVariableReference(name, location, suppressNotAVariable, suppressUndefinedVariable: false)
     }
 
+    private func TryRejectNonHoistedGlobalAccess(variable VariableSymbol, location TextLocation) bool {
+        // Issues #3215 / #6169: a top-level managed pointer (`*T`) or
+        // by-ref-like (`ref struct`) variable cannot be hoisted to a static
+        // field — it lives only as a local slot of the synthesized entry point
+        // (see PlanFieldRows). A declared function, method, or lambda body has
+        // no storage to reach it through; reject the reference with GS9004
+        // instead of failing deep inside emit.
+        if variable is GlobalVariableSymbol global &&
+            global.RequiresEntryPointLocalStorage &&
+            this.function?.IsTopLevelEntryPoint != true {
+            let kindDescription = if variable.Type is ByRefTypeSymbol {
+                "pointer variable '${variable.Name}' cannot be referenced from a function body; a managed pointer (*T)"
+            } else {
+                "by-ref-like variable '${variable.Name}' cannot be referenced from a function body; a 'ref struct'"
+            }
+            Diagnostics.ReportByRefCannotEscape(
+                location,
+                "the top-level $kindDescription cannot be stored in a global field"
+            )
+            return true
+        }
+        return false
+    }
+
     internal func BindVariableReference(
         name string,
         location TextLocation,
@@ -2918,21 +2942,7 @@ internal partial class ExpressionBinder {
                     Diagnostics.ReportMemberInaccessible(location, memberName, owner.Name, memberAccessibility)
                     return nil
                 }
-                // Issue #3215: a top-level `var p = &x` holds a managed pointer
-                // (`*T`). ECMA-335 forbids a byref field signature, so such a
-                // variable can never be hoisted to a static field — it lives
-                // only as a local slot of the synthesized entry point (see the
-                // matching PlanFieldRows carve-out). A declared function or
-                // method body therefore has no storage to reach it through;
-                // reject the reference with the byref-escape diagnostic instead
-                // of failing deep inside emit.
-                if variable is GlobalVariableSymbol &&
-                    variable.Type is ByRefTypeSymbol &&
-                    this.function is {IsTopLevelEntryPoint: false} {
-                    Diagnostics.ReportByRefCannotEscape(
-                        location,
-                        "the top-level pointer variable '$name' cannot be referenced from a function body; a managed pointer (*T) cannot be stored in a global field"
-                    )
+                if TryRejectNonHoistedGlobalAccess(variable, location) {
                     return nil
                 }
                 reportObsoleteUseIfApplicable(location, variable, variable.Name)

@@ -4196,7 +4196,16 @@ internal partial class ExpressionBinder {
 
     private func BindIndexAssignmentExpression(syntax IndexAssignmentExpressionSyntax) BoundExpression {
         let name = syntax.TargetIdentifier.ValueText
-        if $scope.TryLookupSymbol(name) is not VariableSymbol variable {
+        let variable VariableSymbol? = BindVariableReference(
+            name,
+            syntax.TargetIdentifier.Location,
+            suppressNotAVariable: true,
+            suppressUndefinedVariable: true
+        )
+        if variable == nil {
+            if $scope.TryLookupSymbol(name) is VariableSymbol {
+                return BoundErrorExpression(nil)
+            }
             // ADR-0156 Phase 2 (issue #3251): a bare indexed write
             // (`name[i] = v`) whose target is a top-level global declared by
             // a prior interactive submission. Every sibling lvalue shape
