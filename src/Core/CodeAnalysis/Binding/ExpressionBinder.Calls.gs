@@ -352,8 +352,10 @@ internal partial class ExpressionBinder {
         // reaches general expression binding. Guard defensively.
         if syntax.Target == nil {
             Diagnostics.ReportTypeNotCollectionInitializable(syntax.OpenBraceToken.Location, TypeSymbol.Error)
-            BindCollectionElementsForDiagnostics(syntax)
-            return BoundErrorExpression(nil)
+            // The elements keep their records for the semantic model (#6150).
+            let error = BoundErrorExpression(nil)
+            error.FailedArguments = BindCollectionElementValues(syntax)
+            return error
         }
         return BindCollectionInitializerSuffix(syntax, BindExpression(syntax.Target))
     }

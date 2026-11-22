@@ -260,6 +260,18 @@ open class Issue6150FailedCallArgumentTests {
     }
 
     @Fact
+    func FailedConstructorCallWithABracedMemberInitializer_ElementCallArgumentAnswers() {
+        // The member value is a target-less collection initializer, bound as an ordinary
+        // expression when the construction fails.
+        let source = "package P\n\nimport System.Collections.Generic\n\nclass Box {\n    var Items List[int32] = List[int32]()\n    init(v int32) { }\n}\n\nfunc Use(v int32) int32 -> v\n\nfunc F() {\n    let x = 1\n    let b = Box(1, 2) { Items = { Use(x, 2) } }\n}\n"
+        let (model, tree, compilation) = CreateModel(source)
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let x = Assert.Single(Names(tree, "x"))
+        Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(x).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(x).Type)
+    }
+
+    @Fact
     func FailedConstructorCallWithAnObjectInitializer_MemberValueAnswers() {
         let (model, tree, _) = CreateModel(
             "package P\n\nclass Box {\n    var N int32\n    init(v int32) { }\n}\n\nfunc F(k int32) {\n    let b = Box(1, 2) { N = k }\n}\n"
