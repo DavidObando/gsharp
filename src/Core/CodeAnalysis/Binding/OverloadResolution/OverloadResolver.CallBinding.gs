@@ -1604,6 +1604,14 @@ internal partial class OverloadResolver {
                 return BoundErrorExpression(nil)
             }
         }
+        // A callable variable has no type parameters (#6186). A variable that is not callable keeps
+        // its GS0131 below.
+        if symbol is VariableSymbol calleeVariable &&
+            syntax.TypeArgumentList is {} unexpectedTypeArguments &&
+            IsCallableValueType(narrowedCallTargetType ?? calleeVariable.Type) {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, calleeVariable.Name)
+            return BoundErrorExpression(nil)
+        }
         // ADR-0122 §9 / issues #1035 and #3523: invoking a function-pointer-
         // typed variable goes through the shared `calli` path. Implicit field
         // and property symbols must first become real member loads rather than
@@ -2160,6 +2168,14 @@ internal partial class OverloadResolver {
             }
         }
         var hasErrors = false
+        if !function.IsGeneric && syntax.TypeArgumentList is {} unexpectedTypeArguments {
+            ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                function.Name,
+                typeArgumentsBound: !explicitOverloadTypeArguments.IsDefault
+            )
+            return BoundErrorExpression(nil)
+        }
         // Phase 4.1 / ADR-0020: if the callee is generic, build the type
         // substitution either from the explicit `[T1, T2]` list at the call
         // site or by left-to-right inference from argument types matched
@@ -3148,6 +3164,43 @@ internal partial class OverloadResolver {
             return completeSuspendingCall(suspendingCall, function.Type, syntax.Location, function.Name)
         }
         return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType: nil, methodTypeArguments)
+    }
+
+    /// Gets whether a value of [`type`](paramref) can be called: a function type, a function
+    /// pointer or a delegate, also when nullable or a platform type.
+    /// @param type The type of the value.
+    /// @returns `true` when the value can be called.
+    private func IsCallableValueType(type TypeSymbol?) bool {
+        if type == nil {
+            return false
+        }
+        var callable = PlatformTypeSymbol.StripTopLevel(type)
+        if callable is NullableTypeSymbol nullable {
+            callable = nullable.UnderlyingType
+        }
+        return callable is FunctionTypeSymbol or
+            FunctionPointerTypeSymbol or
+            DelegateTypeSymbol ||
+            ClrTypeUtilities.IsDelegateType(callable.ClrType)
+    }
+
+    /// Reports a type-argument list on a call to a function that declares no type parameters
+    /// (#6186, C# CS0308). The binder binds each type argument first, so an undefined type name
+    /// gets its own diagnostic.
+    /// @param typeArgumentList The type-argument list of the call.
+    /// @param name The function name.
+    /// @param typeArgumentsBound Whether overload selection already bound the type arguments.
+    internal func ReportTypeArgumentsOnNonGenericFunction(
+        typeArgumentList TypeArgumentListSyntax,
+        name string,
+        typeArgumentsBound bool = false
+    ) {
+        if !typeArgumentsBound {
+            for argument in typeArgumentList.Arguments {
+                let _ = bindTypeClause(argument)
+            }
+        }
+        Diagnostics.ReportWrongTypeArgumentCount(typeArgumentList.Location, name, 0, typeArgumentList.Arguments.Count)
     }
 
     private func TryConstructConversionTarget(syntax CallExpressionSyntax, type TypeSymbol) TypeSymbol? {

@@ -693,6 +693,7 @@ internal partial class ExpressionBinder {
             result = BoundErrorExpression(nil)
             return true
         }
+        var bracketIsIndex = false
         if !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(callableType, out var functionType) {
             // Issue #3880: ADR-0020 commits `X.Member[i](args)` to a GENERIC
             // call site — a single bracketed simple name scans as a type clause
@@ -724,6 +725,13 @@ internal partial class ExpressionBinder {
             memberLoad = indexedValue
             lastSelectedCallablePropertyLoad = memberLoad
             callableType = indexedType
+            bracketIsIndex = true
+        }
+        // A callable member has no type parameters (#6186).
+        if !bracketIsIndex && ce.TypeArgumentList is {} unexpectedTypeArguments {
+            overloads.ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, methodName)
+            result = BoundErrorExpression(nil)
+            return true
         }
         if !(callableType is FunctionTypeSymbol) &&
             callableType.ClrType is {} importedDelegateClr &&

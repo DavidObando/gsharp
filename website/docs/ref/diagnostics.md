@@ -210,7 +210,7 @@ declaration.
 | GS0145 | Error | Variadic parameter is not the last parameter. | `func f(a ...int, b string)`. |
 | GS0146 | Error | Variadic parameter only allowed on top-level function declarations. | Variadic parameter on a closure or method. |
 | GS0147 | Error | Too few arguments for variadic function. | Calling a variadic function with fewer than the minimum required arguments. |
-| GS0148 | Error | Generic function has wrong number of type arguments. | `f[int, string]()` when `f` takes only one type parameter. |
+| GS0148 | Error | Generic function has wrong number of type arguments, or a non-generic function, method or function value has type arguments. | `f[int, string]()` when `f` takes only one type parameter; `g[int]()` when `g` takes none. |
 | GS0149 | Error | Type is not generic. | `int[string]` — `int` accepts no type arguments. |
 | GS0150 | Error | Type-parameter variance position violation. | A covariant type parameter used in a contravariant position. |
 | GS0151 | Error | Type argument inference failed. | The compiler could not infer a type argument from the call arguments. |

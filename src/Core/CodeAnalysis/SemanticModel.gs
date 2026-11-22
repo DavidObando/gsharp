@@ -583,10 +583,16 @@ partial class SemanticModel {
                 return
             }
             // The receiver of a member access or a call that did not bind keeps its own anchors
-            // (#6127, #6151), and so do the arguments of a call that did not bind (#6150).
+            // (#6127, #6151), and so do the arguments of a call that did not bind (#6150) and the
+            // operands of an operator expression that did not bind (#6187).
             if !error.FailedArguments.IsDefaultOrEmpty {
                 for argument in error.FailedArguments {
                     VisitExpression(argument)
+                }
+            }
+            if !error.FailedOperands.IsDefaultOrEmpty {
+                for operand in error.FailedOperands {
+                    VisitExpression(operand)
                 }
             }
             if error.FailedReceiver is {} receiver {

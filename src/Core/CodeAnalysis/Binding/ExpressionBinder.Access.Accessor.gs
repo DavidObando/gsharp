@@ -4435,6 +4435,10 @@ internal partial class ExpressionBinder {
                     substitution[defParams[i]] = ownerTypeArguments[i]
                 }
             }
+            if !method.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
+                overloads.ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, method.Name)
+                return BoundErrorExpression(nil)
+            }
             // Issue #312 / ADR-0020: resolve a generic static method's own type
             // arguments from an explicit `[T1, T2]` list at the call site or by
             // left-to-right inference from argument types.

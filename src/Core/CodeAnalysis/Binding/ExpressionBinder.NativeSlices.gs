@@ -430,7 +430,10 @@ internal partial class ExpressionBinder {
         var result BoundExpression? = TryBindCompoundBinaryOperation(binaryKind, read, value, valueSyntax.Location)
         if result == nil {
             Diagnostics.ReportUndefinedBinaryOperator(operation.Location, operation.Text, access.Type, value.Type)
-            return BoundErrorExpression(indexSyntax)
+            // The element access and the value keep their answers in the semantic model (#6187).
+            let failedCompound = BoundErrorExpression(indexSyntax)
+            failedCompound.KeepOperands(indexed, value)
+            return failedCompound
         }
         result = conversions.BindConversion(valueSyntax.Location, result, access.Type)
         let assignment = BoundIndirectAssignmentExpression(indexSyntax, addressRef, result)

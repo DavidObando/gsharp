@@ -1213,6 +1213,11 @@ internal partial class OverloadResolver {
         if callee is BoundErrorExpression {
             return callee
         }
+        // A function value has no type parameters (#6186).
+        if syntax.TypeArgumentList is {} unexpectedTypeArguments && IsCallableValueType(callee.Type) {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, calleeName)
+            return BoundErrorExpression(nil)
+        }
         var nullConditionalCallee BoundNullConditionalAccessExpression? = nil
         let assertions = Stack[BoundUnaryExpression]()
         var assertedCallee = callee
@@ -1507,6 +1512,10 @@ internal partial class OverloadResolver {
             }
             permutedArguments = padded.MoveToImmutable()
             Array.Resize(&permutedSyntax, fixedUserParamCount)
+        }
+        if !extension.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, extension.Name)
+            return BoundErrorExpression(nil)
         }
         // Issue #326: a generic extension function
         // `func (r R) Name[T](item T) T` resolves its type parameters either
@@ -1984,6 +1993,10 @@ internal partial class OverloadResolver {
         // itself (and its bound body) are kept intact so runtime dispatch
         // through program.Functions[method] continues to work.
         var substitution Dictionary[TypeParameterSymbol, TypeSymbol]? = TryBuildReceiverSubstitution(receiver.Type)
+        if !method.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, method.Name)
+            return BoundErrorExpression(nil)
+        }
         // Issue #312 / ADR-0020: the method may declare its own generic
         // type-parameter list (`func M[T](...) T`). Resolve those type
         // arguments from an explicit `[T1, T2]` list at the call site or by
