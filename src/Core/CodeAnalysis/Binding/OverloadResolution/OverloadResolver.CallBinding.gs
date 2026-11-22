@@ -1604,6 +1604,14 @@ internal partial class OverloadResolver {
                 return BoundErrorExpression(nil)
             }
         }
+        // Issue #6189: every path below calls the variable; a call that fails keeps its load for
+        // the semantic model, built as a call that binds builds it.
+        if symbol is VariableSymbol calleeVariable {
+            binderCtx.RecordCallCallee(
+                syntax,
+                () -> BuildFailedCalleeLoad(calleeVariable, syntax.Identifier, narrowedCallTargetType)
+            )
+        }
         // ADR-0122 §9 / issues #1035 and #3523: invoking a function-pointer-
         // typed variable goes through the shared `calli` path. Implicit field
         // and property symbols must first become real member loads rather than

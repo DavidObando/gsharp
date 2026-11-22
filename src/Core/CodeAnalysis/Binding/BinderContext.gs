@@ -95,6 +95,23 @@ internal class BinderContext {
     /// the binder synthesized over source expressions (the `Add` of a collection initializer).
     private var expectedArguments HashSet[SyntaxNode]?
 
+    /// Issue #6189: the callee of each call through a function value being bound, by the call's
+    /// syntax, built only when the call fails. (cref:CompleteCallSyntax) gives a call that failed its
+    /// callee, and forgets it either way.
+    private var callCallees Dictionary[CallExpressionSyntax, Func[BoundExpression?]]?
+
+    /// Remembers how to build the callee of [`call`](paramref), a call through a function value, so
+    /// a call that fails keeps it for the semantic model (#6189). The callee is built only when the
+    /// call fails, and must not report diagnostics; the last record of a call wins.
+    /// @param call The call.
+    /// @param callee Builds the callee's bound load, anchored at the call's identifier, or null.
+    internal func RecordCallCallee(call CallExpressionSyntax, callee Func[BoundExpression?]) {
+        let table = callCallees ??
+            Dictionary[CallExpressionSyntax, Func[BoundExpression?]](ReferenceEqualityComparer.Instance)
+        callCallees = table
+        table[call] = callee
+    }
+
     /// Declares the arguments of a call about to be bound, so they are recorded even when the call
     /// is not their syntax parent (a synthesized call over source expressions, #6150).
     /// @param arguments The call's argument list.
@@ -151,7 +168,8 @@ internal class BinderContext {
     /// @param syntax The expression the binder bound.
     /// @param bound Its bound node.
     internal func CompleteCallSyntax(syntax ExpressionSyntax, bound BoundExpression) {
-        if callArguments is not{Count: > 0} {
+        let hasCallees = callCallees is {Count: > 0}
+        if !hasCallees && callArguments is not{Count: > 0} {
             return
         }
         var terminal ExpressionSyntax = syntax
@@ -159,9 +177,28 @@ internal class BinderContext {
             terminal = accessor.RightPart
         }
         if terminal is CallExpressionSyntax call {
+            if hasCallees {
+                CompleteCallee(call, bound)
+            }
             CompleteCall(bound, call.Arguments)
         } else if terminal is BaseInterfaceCallExpressionSyntax baseCall {
             CompleteCall(bound, baseCall.Arguments)
+        }
+    }
+
+    /// Gives the error of a call through a function value that did not bind its callee (#6189), and
+    /// forgets the callee's record either way.
+    private func CompleteCallee(call CallExpressionSyntax, bound BoundExpression) {
+        if callCallees is not{} table || !table.Remove(call, out var callee) {
+            return
+        }
+        if BoundErrorExpression.FindFailedCall(bound) is {FailedCallee: nil} error &&
+            callee() is {} load &&
+            !(load is BoundErrorExpression) {
+            // A member load has no anchor of its own; the failed call is not in the tree, so its
+            // callee is not anchored later.
+            load.AnchorSyntax(call.Identifier)
+            error.FailedCallee = load
         }
     }
 

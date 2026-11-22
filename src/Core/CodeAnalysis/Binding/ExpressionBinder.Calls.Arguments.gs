@@ -617,6 +617,9 @@ internal partial class ExpressionBinder {
             return false
         }
         memberLoad = ApplyCallableMemberNarrowing(memberLoad)
+        // A call that fails keeps the member's load for the semantic model (#6189).
+        let calleeLoad = memberLoad
+        binderCtx.RecordCallCallee(ce, () -> calleeLoad)
         if matchedProperty != nil {
             lastSelectedCallablePropertyLoad = memberLoad
         }

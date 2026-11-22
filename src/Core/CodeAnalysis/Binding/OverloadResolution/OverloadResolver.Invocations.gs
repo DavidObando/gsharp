@@ -896,6 +896,28 @@ internal partial class OverloadResolver {
         }
     }
 
+    /// Builds the load of the callee of a call through a function value that failed, for the
+    /// semantic model only (#6189). The call has reported its error, so the diagnostics of the load
+    /// are dropped.
+    /// @param variable The callee variable.
+    /// @param identifier The callee name.
+    /// @param narrowedType The active narrowed type, or `null`.
+    /// @returns The callee load, or null when the load fails.
+    private func BuildFailedCalleeLoad(
+        variable VariableSymbol,
+        identifier SyntaxToken,
+        narrowedType TypeSymbol?
+    ) BoundExpression? {
+        let mark = Diagnostics.Count
+        let load = BuildCalleeLoad(variable, identifier, narrowedType)
+        Diagnostics.TruncateTo(mark)
+        return if load is BoundErrorExpression {
+            default(BoundExpression?)
+        } else {
+            load
+        }
+    }
+
     /// Issue #4943: loads a callee variable — a local, a parameter, or a bare
     /// implicit field/property — with its active narrowing applied through
     /// (cref:ExpressionBinder.BuildNarrowedRead), the single place that

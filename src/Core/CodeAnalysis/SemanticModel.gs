@@ -564,6 +564,22 @@ partial class SemanticModel {
             if node is BoundErrorExpression error {
                 RecordFailedCall(error)
             }
+            // A member function value called through a receiver (`c.G(x)`, `c.G?(x)`) is loaded
+            // without an anchor of its own and inherits the call's; its identifier answers the load
+            // (#6189).
+            if InheritedCalleeLoad(node) is {} memberCallee {
+                var terminal = memberCallee.Syntax
+                while terminal is AccessorExpressionSyntax segment {
+                    terminal = segment.RightPart
+                }
+                if terminal is CallExpressionSyntax{Callee: nil} call && object.ReferenceEquals(
+                    call.SyntaxTree,
+                    tree
+                ) &&
+                    !boundBySyntax.ContainsKey(call.Identifier) {
+                    boundBySyntax.Add(call.Identifier, memberCallee)
+                }
+            }
             // A variable declared at an identifier the symbol does not remember (an element of a
             // destructured lambda parameter or of a tuple `for`) is anchored by the declaration
             // node the binder built for it.
@@ -576,6 +592,37 @@ partial class SemanticModel {
                     SemanticModel.RecordDeclarations(symbol, tree, declaredBySyntax)
                 }
             }
+        }
+
+        /// Gets the delegate a call invokes when its load carries the call's own anchor: the target
+        /// of an indirect call, the receiver of a null-conditional invocation, or the receiver of a
+        /// delegate's `Invoke` called by the member's name.
+        private func InheritedCalleeLoad(node BoundNode) BoundExpression? {
+            let callee = switch node {
+                case indirect is BoundIndirectCallExpression: indirect.Target
+                case conditional is BoundNullConditionalAccessExpression: conditional.Receiver
+                case invoke is BoundImportedInstanceCallExpression when IsDelegateInvoke(invoke): invoke.Receiver
+                default: default(BoundExpression?)
+            }
+            return if callee != nil && callee.Syntax != nil && object.ReferenceEquals(callee.Syntax, node.Syntax) {
+                callee
+            } else {
+                default(BoundExpression?)
+            }
+        }
+
+        /// Gets whether [`invoke`](paramref) calls a delegate's `Invoke` through the name of the value
+        /// it invokes (`c.D(x)`), not through `Invoke` itself (`c.D.Invoke(x)`).
+        private func IsDelegateInvoke(invoke BoundImportedInstanceCallExpression) bool {
+            let delegateType = invoke.Receiver.Type?.ClrType
+            if invoke.Method.Name != "Invoke" || delegateType == nil || !ClrTypeUtilities.IsDelegateType(delegateType) {
+                return false
+            }
+            var terminal = invoke.Syntax
+            while terminal is AccessorExpressionSyntax segment {
+                terminal = segment.RightPart
+            }
+            return terminal is CallExpressionSyntax call && call.Identifier.ValueText != "Invoke"
         }
 
         private func RecordFailedCall(error BoundErrorExpression) {
@@ -598,6 +645,10 @@ partial class SemanticModel {
                     !boundBySyntax.ContainsKey(receiverSyntax) {
                     boundBySyntax.Add(receiverSyntax, receiver)
                 }
+            }
+            // The callee of a failed call through a function value is anchored at its identifier (#6189).
+            if error.FailedCallee is {} callee {
+                VisitExpression(callee)
             }
             if error.CallSyntax is {} callSyntax && !error.MemberGroup.IsDefaultOrEmpty && object.ReferenceEquals(
                 callSyntax.SyntaxTree,
