@@ -242,6 +242,29 @@ run(false).GetAwaiter().GetResult()
 `, "func-switch-returning-arm-safe", executable: true)
         IlVerifier.Verify(switchReturningSafeAssembly)
         Assert.Equal("1\n", fixture.Run(switchReturningSafeAssembly))
+
+        let tryReseatFinallySafeAssembly = fixture.Compile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        p = &x
+    } finally { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`, "func-try-reseat-finally-safe", executable: true)
+        IlVerifier.Verify(tryReseatFinallySafeAssembly)
+        Assert.Equal("1\n", fixture.Run(tryReseatFinallySafeAssembly))
     }
 
     shared {

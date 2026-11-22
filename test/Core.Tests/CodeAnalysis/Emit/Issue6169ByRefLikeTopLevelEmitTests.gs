@@ -529,6 +529,107 @@ run(false).GetAwaiter().GetResult()
 `)
         Assert.Empty(switchReturningArmSafe.Diagnostics)
         Assert.Equal("1\n", switchReturningArmSafe.Output)
+
+        let blockExprFalseBranchUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    let ignored = {
+        if flag {
+            p = &x
+        }
+        0
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(false).GetAwaiter().GetResult()
+`)
+        Assert.Contains(blockExprFalseBranchUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(blockExprFalseBranchUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let conditionalAddressBranchUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    let q = &(if flag { x } else { p = &x; x })
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(true).GetAwaiter().GetResult()
+`)
+        Assert.Contains(conditionalAddressBranchUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(conditionalAddressBranchUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let switchBreakArmUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    switch flag {
+        case true {
+            p = &c.Value
+            break
+        }
+        default { }
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(true).GetAwaiter().GetResult()
+`)
+        Assert.Contains(switchBreakArmUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(switchBreakArmUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let tryReseatFinallySafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        p = &x
+    } finally { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(tryReseatFinallySafe.Diagnostics)
+        Assert.Equal("1\n", tryReseatFinallySafe.Output)
     }
 
     @Fact
