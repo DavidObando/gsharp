@@ -250,6 +250,16 @@ open class Issue6150FailedCallArgumentTests {
     }
 
     @Fact
+    func FailedConstructorCallWithACollectionInitializer_ElementCallArgumentAnswers() {
+        let (model, tree, _) = CreateModel(
+            "package P\n\nimport System.Collections.Generic\n\nfunc Use(v int32) int32 -> v\n\nfunc F() {\n    let x = 1\n    let l = List[int32](1, \"s\") { Use(x, 2) }\n}\n"
+        )
+        let x = Assert.Single(Names(tree, "x"))
+        Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(x).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(x).Type)
+    }
+
+    @Fact
     func FailedConstructorCallWithAnObjectInitializer_MemberValueAnswers() {
         let (model, tree, _) = CreateModel(
             "package P\n\nclass Box {\n    var N int32\n    init(v int32) { }\n}\n\nfunc F(k int32) {\n    let b = Box(1, 2) { N = k }\n}\n"
