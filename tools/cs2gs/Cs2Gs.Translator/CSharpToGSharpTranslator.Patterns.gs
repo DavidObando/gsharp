@@ -315,7 +315,7 @@ partial class CSharpToGSharpTranslator {
                         .SemanticModel
                         .GetOperation(elementAccess) is IPropertyReferenceOperation propOp &&
                         this
-                        .CallNeedsHandlerCoordination(propOp.Arguments) {
+                        .CallRequiresHandlerBlock(elementAccess, propOp.Arguments) {
                         this.PredeclareBlockCallOutVariables(elementAccess.ArgumentList)
                         return this.TranslateWithCoordinatedHandlers(
                             elementAccess,
@@ -517,7 +517,7 @@ partial class CSharpToGSharpTranslator {
                         .SemanticModel
                         .GetOperation(elementBinding) is IPropertyReferenceOperation propOp &&
                         this
-                        .CallNeedsHandlerCoordination(propOp.Arguments) {
+                        .CallRequiresHandlerBlock(elementBinding, propOp.Arguments) {
                         this.PredeclareBlockCallOutVariables(elementBinding.ArgumentList)
                         return this.TranslateWithCoordinatedHandlers(
                             elementBinding,
@@ -5385,6 +5385,36 @@ partial class CSharpToGSharpTranslator {
                     isExtensionReceiverInArgs: false,
                     nullableThisExtension: false,
                     () -> {
+                        if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+                            let rhsTemp = this.NewSpillName()
+                            let rhsExpr = this.TranslateAssignmentValue(assignment)
+                            let rhsType GTypeReference? = if rhsExpr is LiteralExpression{Kind: LiteralKind.Null} ||
+                                rhsExpr is DefaultValueExpression ||
+                                rhsExpr is LambdaExpression {
+                                this.typeMapper.Map(
+                                    this.GetAssignmentTargetType(
+                                        leftElement,
+                                        this.context.GetSymbolInfo(leftElement).Symbol
+                                    ),
+                                    this.context,
+                                    assignment.Right.GetLocation()
+                                )
+                            } else {
+                                default(GTypeReference?)
+                            }
+                            return cast[GExpression](
+                                BlockExpression(
+                                    List[GStatement]{
+                                        LocalDeclarationStatement(BindingKind.Let, rhsTemp, rhsType, rhsExpr)
+                                    },
+                                    AssignmentExpression(
+                                        this.TranslateAssignmentTarget(leftElement),
+                                        IdentifierExpression(rhsTemp),
+                                        assignment.OperatorToken.Text
+                                    )
+                                )
+                            )
+                        }
                         var exprResult GExpression? = AssignmentExpression(
                             this.TranslateAssignmentTarget(leftElement),
                             this.TranslateAssignmentValue(assignment),

@@ -636,7 +636,7 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetOperation(creation) is IObjectCreationOperation creationOp &&
                 this
-                .CallNeedsHandlerCoordination(creationOp.Arguments) {
+                .CallRequiresHandlerBlock(creation, creationOp.Arguments) {
                 this.PredeclareBlockCallOutVariables(creation.ArgumentList)
                 return this.TranslateWithCoordinatedHandlers(
                     creation,

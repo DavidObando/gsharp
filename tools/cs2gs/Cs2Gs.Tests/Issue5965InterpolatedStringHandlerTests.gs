@@ -4,7 +4,14 @@
 
 package Cs2Gs.Tests
 
+import Cs2Gs.CodeModel.Printing
+import Cs2Gs.Translator
+import Cs2Gs.Translator.Loading
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
 import System
+import System.Diagnostics
+import System.IO
 import System.Text
 import Xunit
 
@@ -588,5 +595,320 @@ public static class ImportedApi {
     public static string CheckOblivious(string prefix, [InterpolatedStringHandlerArgument("prefix")] ObliviousHandler handler) => handler.Value;
 }
 `, strictIl: true, expectedOutput: "ORIG|ORIG2|5|77|H1+H2|<nil>|<obliv>|a=OUTER:N|U=ok|threw:1:2")
+    }
+
+    @Fact
+    func ReadonlyAncestorBoxedOutVarSpanLiteralConditionalExtAndDeferredNullRhs_RunLikeCSharp() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+using System.Runtime.CompilerServices;
+using System.Text;
+
+[InterpolatedStringHandler]
+public struct BoxableFirstHandler {
+    public string Value;
+    public BoxableFirstHandler(int literalLength, int formattedCount) { Value = "B1"; }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}
+
+[InterpolatedStringHandler]
+public ref struct BoxedForwardHandler {
+    public readonly object Captured;
+    public BoxedForwardHandler(int literalLength, int formattedCount, object first) {
+        Captured = first;
+    }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}
+
+[InterpolatedStringHandler]
+public ref struct OutForwardedHandler {
+    public readonly int Seen;
+    public OutForwardedHandler(int literalLength, int formattedCount, out int token, out bool valid) {
+        token = 42;
+        Seen = token;
+        valid = true;
+    }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}
+
+[InterpolatedStringHandler]
+public ref struct SpanLiteralHandler {
+    private readonly StringBuilder sb;
+    public SpanLiteralHandler(int literalLength, int formattedCount) {
+        sb = new StringBuilder();
+    }
+    public SpanLiteralHandler(int literalLength, int formattedCount, int seed) {
+        sb = new StringBuilder();
+    }
+    public SpanLiteralHandler(int literalLength, int formattedCount, bool upper) {
+        sb = new StringBuilder();
+    }
+    public void AppendLiteral(ReadOnlySpan<char> text) {
+        sb.Append(text);
+    }
+    public void AppendFormatted(int value) {
+        sb.Append(value);
+    }
+    public override string ToString() => sb.ToString();
+}
+
+[InterpolatedStringHandler]
+public struct DynamicHoleHandler {
+    private readonly StringBuilder sb;
+    public DynamicHoleHandler(int literalLength, int formattedCount) {
+        sb = new StringBuilder();
+    }
+    public void AppendLiteral(string text) { sb.Append(text); }
+    public void AppendFormatted(object? value) { sb.Append(value); }
+    public override string ToString() => sb.ToString();
+}
+
+public struct InnerCell {
+    public int Count;
+    public void Mutate([InterpolatedStringHandlerArgument("")] StructCellHandler handler) {
+        Count += handler.Delta;
+    }
+}
+
+[InterpolatedStringHandler]
+public ref struct StructCellHandler {
+    public readonly int Delta;
+    public StructCellHandler(int literalLength, int formattedCount, in InnerCell cell) {
+        Delta = cell.Count + 1;
+    }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}
+
+public struct OuterContainer {
+    public InnerCell Cell;
+}
+
+public static class RefExtHelpers {
+    public static int TouchExt(this Demo.PrivateTarget target, out int tag, [InterpolatedStringHandlerArgument("tag")] ref OutForwardedHandler handler) {
+        tag = handler.Seen + 1;
+        return target.BaseValue + tag;
+    }
+}
+
+public sealed class NullFlowTarget {
+    public static int AfterCalls, RhsCalls;
+    public void Log(int seed, [InterpolatedStringHandlerArgument("seed")] SpanLiteralHandler handler, int after) { }
+    public string this[bool upper, [InterpolatedStringHandlerArgument("upper")] SpanLiteralHandler handler] {
+        get => "";
+        set { }
+    }
+}
+
+public static class Demo {
+    public sealed class PrivateTarget { public int BaseValue = 10; }
+    private static int ReadInContainer(in OuterContainer container) {
+        container.Cell.Mutate($"{1}");
+        return container.Cell.Count;
+    }
+
+    private static bool CheckBoxedSame(object first, [InterpolatedStringHandlerArgument("first")] BoxedForwardHandler second) {
+        return ReferenceEquals(first, second.Captured);
+    }
+
+    private static string AcceptOut(out int x, [InterpolatedStringHandlerArgument("x")] OutForwardedHandler handler) {
+        x = 99;
+        return x + ":" + handler.Seen;
+    }
+
+    private static string AcceptDynamic(DynamicHoleHandler handler) => handler.ToString();
+    private static string AcceptSpanLiteral(SpanLiteralHandler handler) => handler.ToString();
+
+    private static int After() { NullFlowTarget.AfterCalls++; return 7; }
+    private static string TouchRhs() { NullFlowTarget.RhsCalls++; return "ok"; }
+
+    public static string Run() {
+        var container = new OuterContainer();
+        container.Cell.Count = 5;
+        var roCount = ReadInContainer(in container);
+
+        var sameBox = CheckBoxedSame((BoxableFirstHandler)$"{1}", $"{2}");
+
+        var outVarRes = AcceptOut(out var outCreated, $"{1}");
+        int existingOut = 0;
+        var outExistingRes = AcceptOut(out existingOut, $"{1}");
+
+        var spanLit = AcceptSpanLiteral($"lit-{9}");
+
+        dynamic dynVal = 123;
+        var dynRes = AcceptDynamic($"d={dynVal}");
+
+        PrivateTarget? maybeBoxed = new PrivateTarget();
+        var condExtRes = maybeBoxed?.TouchExt(out var condOut, $"{1}");
+
+        NullFlowTarget? target = null;
+        string nullCall = "no";
+        try {
+            target!.Log(1, $"{2}", After());
+        } catch (NullReferenceException) {
+            nullCall = "c:" + NullFlowTarget.AfterCalls;
+        }
+        string nullAssignStmt = "no";
+        try {
+            target![true, $"{1}"] = TouchRhs();
+        } catch (NullReferenceException) {
+            nullAssignStmt = "s:" + NullFlowTarget.RhsCalls;
+        }
+        string nullAssignExpr = "no";
+        try {
+            var ignored = target![true, $"{1}"] = TouchRhs();
+        } catch (NullReferenceException) {
+            nullAssignExpr = "e:" + NullFlowTarget.RhsCalls;
+        }
+
+        return roCount + "|" + container.Cell.Count + "|" + sameBox + "|" +
+            outVarRes + "|" + outExistingRes + "|" + spanLit + "|" + dynRes + "|" +
+            condExtRes + "|" + nullCall + "|" + nullAssignStmt + "|" + nullAssignExpr;
+    }
+}
+`, strictIl: true, expectedOutput: "5|5|True|99:42|99:42|lit-9|d=123|53|c:1|s:1|e:2")
+    }
+
+    @Fact
+    func TopLevelStatementsAndMain_AndUnsupportedCtorInitializerPlaceholder_BehaveAsDocumented() {
+        // 1. Top-level statements (Program.cs) with ref struct handler.
+        let topLevelSource = `
+using System;
+using System.Runtime.CompilerServices;
+using System.Text;
+
+Accept($"top={1}");
+var sb = new StringBuilder();
+sb.Append($",sb={2}");
+Console.Write(sb.ToString());
+
+static void Accept(TopHandler h) => Console.Write(h.ToString());
+
+[InterpolatedStringHandler]
+public ref struct TopHandler {
+    private readonly StringBuilder sb;
+    public TopHandler(int literalLength, int formattedCount) { sb = new StringBuilder(); }
+    public void AppendLiteral(string text) { sb.Append(text); }
+    public void AppendFormatted(int value) { sb.Append(value); }
+    public override string ToString() => sb.ToString();
+}
+`
+        let topProject = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("Program.cs", topLevelSource)},
+            outputKind: OutputKind.ConsoleApplication
+        )
+        Assert.True(topProject.BoundWithoutErrors)
+        let topDoc = topProject.Documents[0]
+        let topCtx = TranslationContext(topProject.Compilation, topDoc.SemanticModel, topDoc.FilePath)
+        let topPrinted = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(topDoc, topCtx))
+        Assert.DoesNotContain(topCtx.Diagnostics, (d TranslationDiagnostic) -> d.Severity != TranslationSeverity.Info)
+        Assert.Equal("top=1,sb=2", CompileAndRunTopLevel(topPrinted))
+
+        // 2. Explicit Main hoisted to top level with ref struct handler.
+        let mainSource = `
+using System;
+using System.Runtime.CompilerServices;
+using System.Text;
+
+[InterpolatedStringHandler]
+public ref struct MainHandler {
+    private readonly StringBuilder sb;
+    public MainHandler(int literalLength, int formattedCount) { sb = new StringBuilder(); }
+    public void AppendLiteral(string text) { sb.Append(text); }
+    public void AppendFormatted(int value) { sb.Append(value); }
+    public override string ToString() => sb.ToString();
+}
+
+public static class Program {
+    private static void Accept(MainHandler h) => Console.Write(h.ToString());
+    public static void Main() {
+        Accept($"main={7}");
+    }
+}
+`
+        let mainProject = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("Program.cs", mainSource)},
+            outputKind: OutputKind.ConsoleApplication
+        )
+        Assert.True(mainProject.BoundWithoutErrors)
+        let mainDoc = mainProject.Documents[0]
+        let mainCtx = TranslationContext(mainProject.Compilation, mainDoc.SemanticModel, mainDoc.FilePath)
+        let mainPrinted = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(mainDoc, mainCtx))
+        Assert.DoesNotContain(mainCtx.Diagnostics, (d TranslationDiagnostic) -> d.Severity != TranslationSeverity.Info)
+        Assert.Equal("main=7", CompileAndRunTopLevel(mainPrinted))
+
+        // 3. Coordinated handler inside : this(...) ctor initializer reports located unsupported diagnostic.
+        let ctorInitTree = CSharpSyntaxTree.ParseText(`
+using System.Runtime.CompilerServices;
+[InterpolatedStringHandler]
+public ref struct CtorInitHandler {
+    public CtorInitHandler(int literalLength, int formattedCount, int seed) { }
+    public void AppendFormatted(int value) { }
+}
+public sealed class CtorHolder {
+    public CtorHolder(int seed, [InterpolatedStringHandlerArgument("seed")] CtorInitHandler h) { }
+    public CtorHolder() : this(1, $"{2}") { }
+}
+`, path: "CtorInit.cs")
+        let ctorComp = CSharpCompilation.Create(
+            "CtorInitTest",
+            []SyntaxTree{ctorInitTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let ctorModel = ctorComp.GetSemanticModel(ctorInitTree)
+        let ctorCtx = TranslationContext(ctorComp, ctorModel, ctorInitTree.FilePath)
+        let _ = CSharpToGSharpTranslator().TranslateDocument(
+            LoadedDocument(ctorInitTree.FilePath, ctorInitTree, ctorModel),
+            ctorCtx
+        )
+        Assert.Contains(
+            ctorCtx.Diagnostics,
+            (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported && d.Message?.Contains(
+                "constructor initializer",
+                StringComparison.OrdinalIgnoreCase
+            ) == true
+        )
+    }
+
+    private func CompileAndRunTopLevel(printedProgram string) string {
+        let workDir = Path.Combine(AppContext.BaseDirectory, "issue-5965-toplevel", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(workDir)
+        try {
+            let gsPath = Path.Combine(workDir, "Program.gs")
+            let dllPath = Path.Combine(workDir, "Program.dll")
+            File.WriteAllText(gsPath, printedProgram)
+            let compilerPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"))
+            let (compileExit, compileOut) = RunDotnetProcess(
+                "\"$compilerPath\" /target:exe /out:\"$dllPath\" \"$gsPath\""
+            )
+            Assert.True(
+                compileExit == 0 && !compileOut.Contains("error", StringComparison.OrdinalIgnoreCase),
+                "gsc failed:\n" + compileOut + "\n\nTranslated:\n" + printedProgram
+            )
+            let (runExit, runOut) = RunDotnetProcess("\"$dllPath\"")
+            Assert.Equal(0, runExit)
+            return runOut
+        } finally {
+            if Directory.Exists(workDir) {
+                Directory.Delete(workDir, recursive: true)
+            }
+        }
+    }
+
+    private func RunDotnetProcess(arguments string)(Exit int32, Output string) {
+        let psi = ProcessStartInfo("dotnet", arguments){
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        }
+        using let process = Process.Start(psi)!!
+        let output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd()
+        process.WaitForExit()
+        return (process.ExitCode, output)
     }
 }

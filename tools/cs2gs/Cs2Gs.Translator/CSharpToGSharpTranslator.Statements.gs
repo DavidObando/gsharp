@@ -7858,14 +7858,46 @@ partial class CSharpToGSharpTranslator {
                             nullableThisExtension: false,
                             statements,
                             () -> {
-                                statements.Add(
-                                    AssignmentStatement(
-                                        this.TranslateAssignmentTarget(leftElement),
-                                        this.TranslateAssignmentValue(assignment),
-                                        assignment.OperatorToken.Text,
-                                        isVoid: isVoidAssignment
+                                if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+                                    let rhsExpr = this.TranslateAssignmentValue(assignment)
+                                    let rhsTemp = this.NewSpillName()
+                                    let rhsType GTypeReference? = if rhsExpr is LiteralExpression{
+                                        Kind: LiteralKind.Null
+                                    } ||
+                                        rhsExpr is DefaultValueExpression ||
+                                        rhsExpr is LambdaExpression {
+                                        this.typeMapper.Map(
+                                            this.GetAssignmentTargetType(
+                                                leftElement,
+                                                this.context.GetSymbolInfo(leftElement).Symbol
+                                            ),
+                                            this.context,
+                                            assignment.Right.GetLocation()
+                                        )
+                                    } else {
+                                        default(GTypeReference?)
+                                    }
+                                    statements.Add(
+                                        LocalDeclarationStatement(BindingKind.Let, rhsTemp, rhsType, rhsExpr)
                                     )
-                                )
+                                    statements.Add(
+                                        AssignmentStatement(
+                                            this.TranslateAssignmentTarget(leftElement),
+                                            IdentifierExpression(rhsTemp),
+                                            assignment.OperatorToken.Text,
+                                            isVoid: isVoidAssignment
+                                        )
+                                    )
+                                } else {
+                                    statements.Add(
+                                        AssignmentStatement(
+                                            this.TranslateAssignmentTarget(leftElement),
+                                            this.TranslateAssignmentValue(assignment),
+                                            assignment.OperatorToken.Text,
+                                            isVoid: isVoidAssignment
+                                        )
+                                    )
+                                }
                                 return LiteralExpression.Null()
                             }
                         )
