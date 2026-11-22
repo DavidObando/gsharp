@@ -56,7 +56,7 @@ internal class DocumentTranslationState {
         TupleAssignmentValues = Dictionary[TupleExpressionSyntax, GExpression]()
         HoistedExpressionValues = Dictionary[ExpressionSyntax, GExpression]()
         HoistedHandlerArguments = Dictionary[ArgumentSyntax, GExpression]()
-        HoistedHandlerReceivers = Dictionary[ExpressionSyntax, GExpression]()
+        HoistedHandlerReceivers = Dictionary[ExpressionSyntax, (Expr GExpression, AssertNonNull bool)]()
         PredeclaredOutDesignations = HashSet[SingleVariableDesignationSyntax]()
         GuardCapturedFieldReads = Dictionary[ExpressionSyntax, string]()
         StaticFieldInitializers = Dictionary[ISymbol, GExpression](SymbolEqualityComparer.Default)
@@ -254,7 +254,7 @@ internal class DocumentTranslationState {
         get;
     }
 
-    prop HoistedHandlerReceivers Dictionary[ExpressionSyntax, GExpression] {
+    prop HoistedHandlerReceivers Dictionary[ExpressionSyntax, (Expr GExpression, AssertNonNull bool)] {
         get;
     }
 

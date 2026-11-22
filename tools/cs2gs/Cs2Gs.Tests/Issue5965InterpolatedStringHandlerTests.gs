@@ -398,4 +398,195 @@ public static class Demo {
 }
 `, strictIl: true, expectedOutput: "a=1|b=2|c=3d=4|U:e=5|f=6|U:g=7=ok")
     }
+
+    @Fact
+    func ReviewEdgeCases_DelegatesArrayReceiversDeferredNullAllowNullTwoHandlersNestedAndParens_RunLikeCSharp() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
+using System.Text;
+using ImportedAllowNullLib;
+
+[InterpolatedStringHandler]
+public ref struct NestedHoleHandler {
+    public readonly string Text;
+    public NestedHoleHandler(int literalLength, int formattedCount, NestedOuterHandler outer) {
+        Text = outer.Tag + ":";
+    }
+    public NestedHoleHandler(int literalLength, int formattedCount) { Text = ""; }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}
+
+[InterpolatedStringHandler]
+public ref struct NestedOuterHandler {
+    public readonly string Tag;
+    private readonly StringBuilder sb;
+    public NestedOuterHandler(int literalLength, int formattedCount) {
+        Tag = "OUTER";
+        sb = new StringBuilder();
+    }
+    public void AppendLiteral(string text) { sb.Append(text); }
+    public void AppendFormatted([InterpolatedStringHandlerArgument("")] NestedHoleHandler nested) {
+        sb.Append(nested.Text).Append('N');
+    }
+    public override string ToString() => sb.ToString();
+}
+
+[InterpolatedStringHandler]
+public ref struct TwoStepHandler {
+    public readonly string Value;
+    public TwoStepHandler(int literalLength, int formattedCount) { Value = "H1"; }
+    public TwoStepHandler(int literalLength, int formattedCount, TwoStepHandler first) {
+        Value = first.Value + "+H2";
+    }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}
+
+[InterpolatedStringHandler]
+public ref struct AllowNullForwardedHandler {
+    public readonly string Value;
+    public AllowNullForwardedHandler(int literalLength, int formattedCount, [AllowNull] string prefix, out bool valid) {
+        Value = prefix ?? "<nil>";
+        valid = true;
+    }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}
+
+[InterpolatedStringHandler]
+public ref struct StructRecvHandler {
+    public readonly string LogText;
+    public StructRecvHandler(int literalLength, int formattedCount, in StructCell cell) {
+        LogText = "C" + cell.Count;
+    }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}
+
+public struct StructCell {
+    public int Count;
+    public void Mutate([InterpolatedStringHandlerArgument("")] StructRecvHandler handler) {
+        Count += handler.LogText.Length;
+    }
+}
+
+public static class StructExt {
+    public static int ReadIn(this in StructCell cell, [InterpolatedStringHandlerArgument("cell")] StructRecvHandler handler) {
+        return cell.Count;
+    }
+}
+
+public sealed class ParenHolder {
+    public string Last = "";
+    public string this[bool upper, [InterpolatedStringHandlerArgument("upper")] ParenTextHandler handler] {
+        get => handler.Text;
+        set => Last = handler.Text + "=" + value;
+    }
+}
+
+[InterpolatedStringHandler]
+public ref struct ParenTextHandler {
+    public readonly string Text;
+    public ParenTextHandler(int literalLength, int formattedCount, bool upper) {
+        Text = upper ? "U" : "L";
+    }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}
+
+public static class Demo {
+    private delegate string SinkDelegate(ref TwoStepHandler handler);
+    private static SinkDelegate? sink;
+    private static int nullSteps, parenHoles;
+    private static StructCell[] cells = new StructCell[1];
+    private static StructCell singleCell;
+    private static ParenHolder? nullTarget;
+
+    private static int ChangeSink() {
+        sink = (ref TwoStepHandler h) => "NEW";
+        return 1;
+    }
+
+    private static string AcceptTwo(TwoStepHandler first, [InterpolatedStringHandlerArgument("first")] TwoStepHandler second) {
+        return second.Value;
+    }
+
+    private static string AcceptAllowNull([AllowNull] string prefix, [InterpolatedStringHandlerArgument("prefix")] AllowNullForwardedHandler handler) {
+        return handler.Value;
+    }
+
+    private static string AcceptNested(NestedOuterHandler outer) => outer.ToString();
+
+    private static int TouchSingleCell() {
+        singleCell.Count = 77;
+        return 1;
+    }
+
+    private static int StepNull() {
+        nullSteps++;
+        return 5;
+    }
+
+    private static int ParenHole() {
+        parenHoles++;
+        return 9;
+    }
+
+    public static string Run() {
+        sink = (ref TwoStepHandler h) => "ORIG";
+        var d1 = sink($"{ChangeSink()}");
+        sink = (ref TwoStepHandler h) => "ORIG2";
+        var d2 = sink.Invoke($"{ChangeSink()}");
+
+        cells[0].Count = 3;
+        cells[0].Mutate($"{1}");
+
+        singleCell.Count = 10;
+        var inExt = singleCell.ReadIn($"{TouchSingleCell()}");
+
+        var two = AcceptTwo($"{1}", $"{2}");
+        string? nullableStr = null;
+        var allowNull = AcceptAllowNull(nullableStr, $"{1}");
+        var impAllowNull = ImportedApi.CheckOblivious(nullableStr, $"{1}");
+        var nested = AcceptNested($"a={$"b={1}"}");
+
+        var ph = new ParenHolder();
+        (ph[true, $"{ParenHole()}"]) = "ok";
+
+        string nullResult;
+        try {
+            nullTarget = null;
+            _ = nullTarget![ParenHole() > 0, $"{StepNull()}"];
+            nullResult = "no-throw";
+        } catch (NullReferenceException) {
+            nullResult = "threw:" + nullSteps + ":" + parenHoles;
+        }
+
+        return d1 + "|" + d2 + "|" + cells[0].Count + "|" + inExt + "|" + two + "|" +
+            allowNull + "|" + impAllowNull + "|" + nested + "|" + ph.Last + "|" + nullResult;
+    }
+}
+`, `
+#nullable disable
+using System.Runtime.CompilerServices;
+namespace ImportedAllowNullLib;
+[InterpolatedStringHandler]
+public ref struct ObliviousHandler {
+    public readonly string Value;
+    public ObliviousHandler(int literalLength, int formattedCount, string prefix, out bool valid) {
+        Value = prefix ?? "<obliv>";
+        valid = true;
+    }
+    public void AppendLiteral(string text) { }
+    public void AppendFormatted(int value) { }
+}
+public static class ImportedApi {
+    public static string CheckOblivious(string prefix, [InterpolatedStringHandlerArgument("prefix")] ObliviousHandler handler) => handler.Value;
+}
+`, strictIl: true, expectedOutput: "ORIG|ORIG2|5|77|H1+H2|<nil>|<obliv>|a=OUTER:N|U=ok|threw:1:2")
+    }
 }

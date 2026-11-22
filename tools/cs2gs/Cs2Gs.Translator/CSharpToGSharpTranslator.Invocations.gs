@@ -636,7 +636,11 @@ partial class CSharpToGSharpTranslator {
         private func TranslateStaticExtensionReceiver(receiverArgument IArgumentOperation?) GExpression? {
             let expression = (cast[ArgumentSyntax](receiverArgument!!.Syntax)).Expression
             if this.state.HoistedHandlerReceivers.TryGetValue(expression, out var hoistedReceiver) {
-                return hoistedReceiver
+                return if hoistedReceiver.AssertNonNull {
+                    EnsureNonNullAssertion(hoistedReceiver.Expr)
+                } else {
+                    hoistedReceiver.Expr
+                }
             }
             var translated GExpression? = this.TranslateExpression(expression)
             translated = this.ForgiveNullableReferenceValue(
@@ -11746,12 +11750,14 @@ partial class CSharpToGSharpTranslator {
                 expr GExpression,
                 parameter IParameterSymbol?,
                 sourceType ITypeSymbol?,
+                sourceSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
                 isRefAlias bool,
                 isReadOnlyAlias bool
             ) {
                 Expr = expr
                 Parameter = parameter
                 SourceType = sourceType
+                SourceSyntax = sourceSyntax
                 IsRefAlias = isRefAlias
                 IsReadOnlyAlias = isReadOnlyAlias
             }
@@ -11759,6 +11765,7 @@ partial class CSharpToGSharpTranslator {
             let Expr GExpression
             let Parameter IParameterSymbol?
             let SourceType ITypeSymbol?
+            let SourceSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
             let IsRefAlias bool
             let IsReadOnlyAlias bool
         }
@@ -11772,6 +11779,7 @@ partial class CSharpToGSharpTranslator {
             let IsSourceCallee bool
             var ReceiverExpr GExpression?
             var ReceiverType ITypeSymbol?
+            var ReceiverSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
             var ReceiverIsRefAlias bool
             var ReceiverIsReadOnlyAlias bool
             let Arguments Dictionary[int32, CallSiteCapturedArgument]
@@ -12004,9 +12012,20 @@ partial class CSharpToGSharpTranslator {
                 }
                 return true
             }
+            if targetMethod.MethodKind == MethodKind.DelegateInvoke {
+                if invocation.Expression is MemberAccessExpressionSyntax invokeMember &&
+                    invokeMember
+                    .Name
+                    .Identifier
+                    .ValueText == "Invoke" {
+                    receiverSyntax = invokeMember.Expression
+                } else if invocation.Expression is not MemberBindingExpressionSyntax {
+                    receiverSyntax = invocation.Expression
+                }
+                return true
+            }
             if !targetMethod.IsStatic &&
                 targetMethod.MethodKind != MethodKind.LocalFunction &&
-                targetMethod.MethodKind != MethodKind.DelegateInvoke &&
                 invocation.Expression is MemberAccessExpressionSyntax member &&
                 member.Expression is not BaseExpressionSyntax {
                 receiverSyntax = member.Expression
@@ -12041,6 +12060,7 @@ partial class CSharpToGSharpTranslator {
                         .RefKind == RefKind.RefReadOnlyParameter ||
                         !this.IsSymbolReassigned(paramRef.Parameter, this.state.CurrentBodyScope)
                     case fieldRef is IFieldReferenceOperation: fieldRef.Field.IsReadOnly
+                    case _ is IArrayElementReferenceOperation: false
                     case propRef is IPropertyReferenceOperation: propRef.Property.ReturnsByRefReadonly
                     case invRef is IInvocationOperation: invRef.TargetMethod.ReturnsByRefReadonly
                     default: true
@@ -12063,19 +12083,30 @@ partial class CSharpToGSharpTranslator {
 
         private func GetCapturedArgumentTempType(
             parameter IParameterSymbol?,
-            argumentSyntax ArgumentSyntax
+            site Microsoft.CodeAnalysis.SyntaxNode
         ) GTypeReference? {
             if parameter == nil {
                 return nil
             }
-            if this.TryGetEmittedNonNullGenericSlotType(
-                parameter,
-                argumentSyntax.GetLocation(),
-                out var nonNullSlotType
-            ) {
+            if parameter.IsParams {
+                let carrierType = this.typeMapper.Map(parameter.Type, this.context, site.GetLocation())
+                return this.PromoteIfUsedAsNullable(carrierType, parameter)
+            }
+            if this.TryGetEmittedNonNullGenericSlotType(parameter, site.GetLocation(), out var nonNullSlotType) {
                 return nonNullSlotType
             }
-            return this.typeMapper.Map(parameter.Type, this.context, argumentSyntax.GetLocation())
+            var mapped GTypeReference? = this.MapParameter(parameter, site, includeDefault: false).Type
+            let exprSyntax = (site as ArgumentSyntax)?.Expression ??
+                (site as Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax)
+            if mapped != nil &&
+                !mapped.IsNullable &&
+                parameter
+                .Type
+                .IsReferenceType &&
+                !this.TargetWillRemainNonNullableReference(parameter.Type, parameter, exprSyntax) {
+                mapped = MakeNullable(mapped)
+            }
+            return mapped
         }
 
         private func TranslateWithCoordinatedHandlers(
@@ -12131,9 +12162,11 @@ partial class CSharpToGSharpTranslator {
                     if receiverSyntax is ThisExpressionSyntax || receiverSyntax is BaseExpressionSyntax {
                         captures.ReceiverExpr = ThisExpression()
                         captures.ReceiverType = this.context.GetTypeInfo(receiverSyntax).Type
+                        captures.ReceiverSyntax = receiverSyntax
                     } else if receiverSymbol is not INamedTypeSymbol && receiverSymbol is not INamespaceSymbol {
                         let recvType = this.context.GetTypeInfo(receiverSyntax).Type
-                        let translatedRecv = this.TranslateReceiverWithNullForgiveness(receiverSyntax)!!
+                        let rawTranslatedRecv = this.TranslateExpression(receiverSyntax)!!
+                        let translatedRecv = WithoutNonNullAssertion(rawTranslatedRecv)!!
                         let recvName = this.NewSpillName()
                         if recvType?.IsValueType == true && this.CanCaptureValueTypeAsRefAlias(
                             receiverSyntax,
@@ -12170,20 +12203,32 @@ partial class CSharpToGSharpTranslator {
                                 )
                             )
                         } else {
+                            let recvTempType GTypeReference? = if IsNullOrSuppressedNull(receiverSyntax) &&
+                                recvType != nil {
+                                MakeNullable(this.typeMapper.Map(recvType, this.context, receiverSyntax.GetLocation()))
+                            } else {
+                                default(GTypeReference?)
+                            }
                             prologue.Add(
                                 LocalDeclarationStatement(
                                     BindingKind.Let,
                                     recvName,
-                                    type: nil,
+                                    type: recvTempType,
                                     initializer: translatedRecv
                                 )
                             )
                         }
                         let recvId = IdentifierExpression(recvName)
-                        this.state.HoistedHandlerReceivers[receiverSyntax] = recvId
+                        this
+                            .state
+                            .HoistedHandlerReceivers[receiverSyntax] = (
+                            recvId,
+                            rawTranslatedRecv is NonNullAssertionExpression
+                        )
                         addedReceivers.Add(receiverSyntax)
                         captures.ReceiverExpr = recvId
                         captures.ReceiverType = recvType
+                        captures.ReceiverSyntax = receiverSyntax
                     }
                 } else if this.state.ConditionalReceiverReplacement != nil {
                     captures.ReceiverExpr = this.state.ConditionalReceiverReplacement
@@ -12215,16 +12260,13 @@ partial class CSharpToGSharpTranslator {
                                     ThisExpression(),
                                     argOp.Parameter,
                                     argOp.Value.Type,
+                                    extRecvExpr,
                                     isRefAlias: false,
                                     isReadOnlyAlias: false
                                 )
                             } else {
                                 let extRecvType = this.context.GetTypeInfo(extRecvExpr).Type
-                                let translatedExtRecv = if nullableThisExtension {
-                                    this.TranslateExpression(extRecvExpr)!!
-                                } else {
-                                    this.TranslateReceiverWithNullForgiveness(extRecvExpr)!!
-                                }
+                                let translatedExtRecv = this.TranslateExpression(extRecvExpr)!!
                                 let extName = this.NewSpillName()
                                 let extRefKind = argOp.Parameter?.RefKind ?? RefKind.None
                                 if extRefKind == RefKind.Ref {
@@ -12243,35 +12285,89 @@ partial class CSharpToGSharpTranslator {
                                         )
                                     )
                                     let extId = IdentifierExpression(extName)
-                                    this.state.HoistedHandlerReceivers[extRecvExpr] = extId
+                                    this.state.HoistedHandlerReceivers[extRecvExpr] = (extId, false)
                                     addedReceivers.Add(extRecvExpr)
                                     captures.Arguments[0] = CallSiteCapturedArgument(
                                         extId,
                                         argOp.Parameter,
                                         extRecvType,
+                                        extRecvExpr,
                                         isRefAlias: true,
                                         isReadOnlyAlias: false
                                     )
-                                } else {
-                                    let tempType = if extRecvType != nil && argOp.Parameter != nil {
-                                        this.typeMapper.Map(
-                                            argOp.Parameter!!.Type,
-                                            this.context,
-                                            extRecvExpr.GetLocation()
-                                        )
-                                    } else {
-                                        default(GTypeReference?)
-                                    }
+                                } else if (extRefKind == RefKind.In || extRefKind == RefKind.RefReadOnlyParameter) &&
+                                    this.IsReadOnlyAddressableStorageOperation(argOp.Value) &&
+                                    argOp.Parameter != nil &&
+                                    SymbolEqualityComparer
+                                    .IncludeNullability
+                                    .Equals(argOp.Value.Type, argOp.Parameter!!.Type) {
+                                    let mappedExtType = this.typeMapper.Map(
+                                        argOp.Parameter!!.Type,
+                                        this.context,
+                                        extRecvExpr.GetLocation()
+                                    )
                                     prologue.Add(
-                                        LocalDeclarationStatement(BindingKind.Let, extName, tempType, translatedExtRecv)
+                                        LocalDeclarationStatement(
+                                            BindingKind.Let,
+                                            extName,
+                                            mappedExtType,
+                                            WithoutNonNullAssertion(translatedExtRecv),
+                                            isRefAlias: true,
+                                            isReadOnlyRefAlias: true
+                                        )
                                     )
                                     let extId = IdentifierExpression(extName)
-                                    this.state.HoistedHandlerReceivers[extRecvExpr] = extId
+                                    this.state.HoistedHandlerReceivers[extRecvExpr] = (extId, false)
                                     addedReceivers.Add(extRecvExpr)
                                     captures.Arguments[0] = CallSiteCapturedArgument(
                                         extId,
                                         argOp.Parameter,
                                         extRecvType,
+                                        extRecvExpr,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: true
+                                    )
+                                } else {
+                                    var tempType = if argOp.Parameter != nil {
+                                        this.GetCapturedArgumentTempType(argOp.Parameter, extRecvExpr)
+                                    } else {
+                                        default(GTypeReference?)
+                                    }
+                                    if !nullableThisExtension &&
+                                        tempType != nil &&
+                                        !tempType.IsNullable &&
+                                        (
+                                        IsNullOrSuppressedNull(extRecvExpr) ||
+                                            extRecvType?.NullableAnnotation == Microsoft
+                                            .CodeAnalysis
+                                            .NullableAnnotation
+                                            .Annotated ||
+                                            this.ReceiverIsNullableReferenceFieldOrProperty(extRecvExpr) ||
+                                            this.YieldsValueNilableBeyondItsCSharpType(extRecvExpr)
+                                    ) {
+                                        tempType = MakeNullable(tempType)
+                                    }
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Let,
+                                            extName,
+                                            tempType,
+                                            WithoutNonNullAssertion(translatedExtRecv)
+                                        )
+                                    )
+                                    let extId = IdentifierExpression(extName)
+                                    this
+                                        .state
+                                        .HoistedHandlerReceivers[extRecvExpr] = (
+                                        extId,
+                                        !nullableThisExtension && translatedExtRecv is NonNullAssertionExpression
+                                    )
+                                    addedReceivers.Add(extRecvExpr)
+                                    captures.Arguments[0] = CallSiteCapturedArgument(
+                                        extId,
+                                        argOp.Parameter,
+                                        extRecvType,
+                                        extRecvExpr,
                                         isRefAlias: false,
                                         isReadOnlyAlias: false
                                     )
@@ -12282,6 +12378,7 @@ partial class CSharpToGSharpTranslator {
                                 this.state.ConditionalReceiverReplacement!!,
                                 argOp.Parameter,
                                 argOp.Value.Type,
+                                nil,
                                 isRefAlias: false,
                                 isReadOnlyAlias: false
                             )
@@ -12301,6 +12398,14 @@ partial class CSharpToGSharpTranslator {
                         let adaptedHandler = this.AdaptHandlerValueForTargetParameter(handlerExpr, param)
                         this.state.HoistedHandlerArguments[argSyntax] = adaptedHandler
                         addedArguments.Add(argSyntax)
+                        captures.Arguments[i] = CallSiteCapturedArgument(
+                            handlerExpr,
+                            param,
+                            argOp.Value.Type ?? directHandlerOp!!.Type,
+                            argSyntax.Expression,
+                            isRefAlias: false,
+                            isReadOnlyAlias: false
+                        )
                         continue
                     }
                     let param = argOp.Parameter
@@ -12344,6 +12449,7 @@ partial class CSharpToGSharpTranslator {
                                 idExpr,
                                 param,
                                 argOp.Value.Type,
+                                argSyntax.Expression,
                                 isRefAlias: true,
                                 isReadOnlyAlias: false
                             )
@@ -12357,6 +12463,7 @@ partial class CSharpToGSharpTranslator {
                                 ThisExpression(),
                                 param,
                                 argOp.Value.Type,
+                                argSyntax.Expression,
                                 isRefAlias: true,
                                 isReadOnlyAlias: false
                             )
@@ -12380,6 +12487,7 @@ partial class CSharpToGSharpTranslator {
                                 idExpr,
                                 param,
                                 argOp.Value.Type,
+                                argSyntax.Expression,
                                 isRefAlias: true,
                                 isReadOnlyAlias: false
                             )
@@ -12408,6 +12516,7 @@ partial class CSharpToGSharpTranslator {
                                 idExpr,
                                 param,
                                 argOp.Value.Type,
+                                argSyntax.Expression,
                                 isRefAlias: true,
                                 isReadOnlyAlias: true
                             )
@@ -12431,6 +12540,7 @@ partial class CSharpToGSharpTranslator {
                                 idExpr,
                                 param,
                                 argOp.Value.Type,
+                                argSyntax.Expression,
                                 isRefAlias: true,
                                 isReadOnlyAlias: true
                             )
@@ -12456,6 +12566,7 @@ partial class CSharpToGSharpTranslator {
                                 idExpr,
                                 param,
                                 argOp.Value.Type,
+                                argSyntax.Expression,
                                 isRefAlias: true,
                                 isReadOnlyAlias: true
                             )
@@ -12479,6 +12590,7 @@ partial class CSharpToGSharpTranslator {
                                 idExpr,
                                 param,
                                 argOp.Value.Type,
+                                argSyntax.Expression,
                                 isRefAlias: false,
                                 isReadOnlyAlias: false
                             )
@@ -12499,6 +12611,7 @@ partial class CSharpToGSharpTranslator {
                             translatedArg,
                             param,
                             argOp.Value.Type,
+                            argSyntax.Expression,
                             isRefAlias: false,
                             isReadOnlyAlias: false
                         )
@@ -12511,13 +12624,14 @@ partial class CSharpToGSharpTranslator {
                     this.state.HoistedHandlerArguments[argSyntax] = argId
                     addedArguments.Add(argSyntax)
                     if i == 0 && isExtensionReceiverInArgs {
-                        this.state.HoistedHandlerReceivers[argSyntax.Expression] = argId
+                        this.state.HoistedHandlerReceivers[argSyntax.Expression] = (argId, false)
                         addedReceivers.Add(argSyntax.Expression)
                     }
                     captures.Arguments[i] = CallSiteCapturedArgument(
                         argId,
                         param,
                         argOp.Value.Type,
+                        argSyntax.Expression,
                         isRefAlias: false,
                         isReadOnlyAlias: false
                     )
@@ -12700,8 +12814,10 @@ partial class CSharpToGSharpTranslator {
                     return this.AdaptCapturedValueForConstructorParameter(
                         recvExpr,
                         captures?.ReceiverType,
+                        captures?.ReceiverSyntax,
                         ctorArg.Parameter,
-                        handlerOp.Syntax.GetLocation()
+                        handlerOp.Syntax.GetLocation(),
+                        isDeferredReceiver: true
                     )
                 }
                 if placeholder.PlaceholderKind == InterpolatedStringArgumentPlaceholderKind.CallsiteArgument {
@@ -12712,8 +12828,10 @@ partial class CSharpToGSharpTranslator {
                         return this.AdaptCapturedValueForConstructorParameter(
                             capturedArg.Expr,
                             capturedArg.SourceType,
+                            capturedArg.SourceSyntax,
                             ctorArg.Parameter,
-                            handlerOp.Syntax.GetLocation()
+                            handlerOp.Syntax.GetLocation(),
+                            isDeferredReceiver: false
                         )
                     }
                     // Fallback: check enclosing call operation for omitted DefaultValue argument.
@@ -12739,8 +12857,10 @@ partial class CSharpToGSharpTranslator {
                             return this.AdaptCapturedValueForConstructorParameter(
                                 defaultExpr!!,
                                 sourceArg.Parameter?.Type,
+                                nil,
                                 ctorArg.Parameter,
-                                handlerOp.Syntax.GetLocation()
+                                handlerOp.Syntax.GetLocation(),
+                                isDeferredReceiver: false
                             )
                         }
                     }
@@ -12782,8 +12902,10 @@ partial class CSharpToGSharpTranslator {
         private func AdaptCapturedValueForConstructorParameter(
             captured GExpression,
             sourceType ITypeSymbol?,
+            sourceSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             parameter IParameterSymbol?,
-            location Location
+            location Location,
+            isDeferredReceiver bool
         ) GExpression {
             if parameter == nil {
                 return captured
@@ -12820,21 +12942,42 @@ partial class CSharpToGSharpTranslator {
                 srcNum != dstNum {
                 result = this.CoerceOperandTo(result, parameter.Type, location)
             }
+            let sourceMayBeNull = sourceType?.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated ||
+                (
+                sourceSyntax != nil &&
+                    (
+                    this.YieldsValueNilableBeyondItsCSharpType(sourceSyntax) || this.IsTranslatorWidenedDeclaration(
+                        this.context.GetSymbolInfo(sourceSyntax).Symbol
+                    ) ||
+                        (
+                        isDeferredReceiver &&
+                            (
+                            this.ReceiverNeedsNullForgiveness(sourceSyntax, isDereferenceReceiver: true) ||
+                                this.ReceiverIsNullableReferenceFieldOrProperty(sourceSyntax)
+                        )
+                    )
+                )
+            )
             if parameter
                 .Type
                 .IsReferenceType &&
-                parameter
-                .Type
-                .NullableAnnotation != Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated &&
-                sourceType?.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated &&
-                !TranslatedExpressionIsStaticallyNonNull(result) {
-                result = EnsureNonNullAssertion(result)!!
+                sourceMayBeNull &&
+                !TranslatedExpressionIsStaticallyNonNull(result) &&
+                this
+                .TargetWillRemainNonNullableReference(parameter.Type, parameter, sourceSyntax) {
+                if isDeferredReceiver {
+                    let nonNullTarget = this.typeMapper.Map(
+                        parameter.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated),
+                        this.context,
+                        location
+                    )
+                    result = ConversionExpression(nonNullTarget, result, isCheckedReferenceCast: true)
+                } else {
+                    result = EnsureNonNullAssertion(result)!!
+                }
             }
             return result
         }
@@ -12872,9 +13015,38 @@ partial class CSharpToGSharpTranslator {
                     lastExplicit = idx
                 }
             }
-            for var i = startIndex; i <= lastExplicit; i++ {
-                let arg = appendCall.Arguments[i]
-                args.Add(this.TranslateHandlerAppendArgument(arg, appendOp)!!)
+            let appendCaptures = CallSiteHandlerCaptureState(!method.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            appendCaptures.ReceiverExpr = handlerId
+            appendCaptures.ReceiverType = appendCall.Instance?.Type
+            let nestedPrologue = List[GStatement]()
+            let previousCaptures = this.state.ActiveCallSiteHandlerCaptures
+            this.state.ActiveCallSiteHandlerCaptures = appendCaptures
+            try {
+                for var i = startIndex; i <= lastExplicit; i++ {
+                    let arg = appendCall.Arguments[i]
+                    if arg.ArgumentKind != ArgumentKind.DefaultValue && this.TryGetDirectHandlerCreation(
+                        arg.Value,
+                        out var nestedHandlerOp
+                    ) &&
+                        arg.Parameter != nil &&
+                        (
+                        arg.Parameter!!.RefKind == RefKind.Ref ||
+                            arg.Parameter!!.RefKind == RefKind.In ||
+                            arg.Parameter!!.RefKind == RefKind.RefReadOnlyParameter ||
+                            arg.Parameter!!.RefKind == RefKind.Out
+                    ) {
+                        let nestedExpr = this.EmitInterpolatedStringHandlerStatements(
+                            nestedHandlerOp!!,
+                            appendCaptures,
+                            nestedPrologue
+                        )
+                        args.Add(this.AdaptHandlerValueForTargetParameter(nestedExpr, arg.Parameter))
+                    } else {
+                        args.Add(this.TranslateHandlerAppendArgument(arg, appendOp)!!)
+                    }
+                }
+            } finally {
+                this.state.ActiveCallSiteHandlerCaptures = previousCaptures
             }
             var typeArguments IReadOnlyList[GTypeReference]? = nil
             if method.IsGenericMethod && !method.TypeArguments.IsDefaultOrEmpty && method.TypeArguments.All(
@@ -12892,7 +13064,12 @@ partial class CSharpToGSharpTranslator {
                     .Select((t ITypeSymbol) -> this.typeMapper.Map(t, this.context, appendOp.Syntax.GetLocation())!!)
                     .ToList()
             }
-            return InvocationExpression(target, args, typeArguments)
+            let callExpr = InvocationExpression(target, args, typeArguments)
+            return if nestedPrologue.Count == 0 {
+                callExpr
+            } else {
+                cast[GExpression](BlockExpression(nestedPrologue, callExpr))
+            }
         }
 
         private func AppendCallNeedsExplicitTypeArguments(

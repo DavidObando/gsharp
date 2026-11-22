@@ -3389,9 +3389,6 @@ partial class CSharpToGSharpTranslator {
             recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             translatedValue GExpression? = nil
         ) GExpression? {
-            if translatedValue == nil && this.state.HoistedHandlerReceivers.TryGetValue(recv, out var hoistedReceiver) {
-                return hoistedReceiver
-            }
             var translated GExpression? = translatedValue ?? this.TranslateExpression(recv)
             // Issue #3700: a `?.` / `?[` CONDITIONAL RECEIVER is null-guarded by
             // the seam that produced it, so an assertion there is at best

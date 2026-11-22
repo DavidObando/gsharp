@@ -7860,7 +7860,7 @@ partial class CSharpToGSharpTranslator {
                             () -> {
                                 statements.Add(
                                     AssignmentStatement(
-                                        this.TranslateAssignmentTarget(assignment.Left),
+                                        this.TranslateAssignmentTarget(leftElement),
                                         this.TranslateAssignmentValue(assignment),
                                         assignment.OperatorToken.Text,
                                         isVoid: isVoidAssignment

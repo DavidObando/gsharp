@@ -25,7 +25,11 @@ partial class CSharpToGSharpTranslator {
                 return hoistedValue
             }
             if this.state.HoistedHandlerReceivers.TryGetValue(expression!!, out var hoistedHandlerReceiver) {
-                return hoistedHandlerReceiver
+                return if hoistedHandlerReceiver.AssertNonNull {
+                    EnsureNonNullAssertion(hoistedHandlerReceiver.Expr)
+                } else {
+                    hoistedHandlerReceiver.Expr
+                }
             }
             // Issue #4262 follow-up (item 2): this exact read was rewritten by
             // EmitGuardedFieldLocalCaptures to reference the synthesized local
@@ -305,12 +309,7 @@ partial class CSharpToGSharpTranslator {
                     // Issue #4350: a multi-parameter user/CLR indexer
                     // (`slice[index, fromEnd]`) keeps EVERY argument, in source
                     // order; only the single-`int32` indexer shape is coerced.
-                    if !(
-                        elementAccess.Parent is AssignmentExpressionSyntax parentAssignment && object.ReferenceEquals(
-                            parentAssignment.Left,
-                            elementAccess
-                        )
-                    ) &&
+                    if !this.IsElementAssignmentTarget(elementAccess) &&
                         this
                         .context
                         .SemanticModel
@@ -512,12 +511,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case elementBinding is ElementBindingExpressionSyntax {
-                    if !(
-                        elementBinding.Parent is AssignmentExpressionSyntax parentAssignment && object.ReferenceEquals(
-                            parentAssignment.Left,
-                            elementBinding
-                        )
-                    ) &&
+                    if !this.IsElementAssignmentTarget(elementBinding) &&
                         this
                         .context
                         .SemanticModel
@@ -725,6 +719,17 @@ partial class CSharpToGSharpTranslator {
                 this.GSharpExpressionIsStaticallyNonNull(receiver) && !this.ConditionalIndexReceiverIsFlowNarrowed(
                 receiver,
                 requireRuntimeNonNullProof: true
+            )
+        }
+
+        private func IsElementAssignmentTarget(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            var current = node
+            while current.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized
+            }
+            return current.Parent is AssignmentExpressionSyntax parentAssignment && object.ReferenceEquals(
+                parentAssignment.Left,
+                current
             )
         }
 
@@ -5381,7 +5386,7 @@ partial class CSharpToGSharpTranslator {
                     nullableThisExtension: false,
                     () -> {
                         var exprResult GExpression? = AssignmentExpression(
-                            this.TranslateAssignmentTarget(assignment.Left),
+                            this.TranslateAssignmentTarget(leftElement),
                             this.TranslateAssignmentValue(assignment),
                             assignment.OperatorToken.Text
                         )
