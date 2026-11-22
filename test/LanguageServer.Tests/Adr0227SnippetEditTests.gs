@@ -5,6 +5,7 @@
 package GSharp.LanguageServer.Tests
 
 import GSharp.Core.CodeAnalysis.CodeFixes
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.LanguageServer
@@ -183,6 +184,116 @@ open class Adr0227SnippetEditTests {
         Assert.Equal(string.Empty, CodeActionComputer.EscapeSnippet(string.Empty))
     }
 
+    // ADR-0227 D5 (issue #6164): a client without tab stops gets placeholder text that binds.
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func PlainClient_GetsATargetTypedDefault_ThatBinds(documentChanges bool) {
+        let edit = Fix(CodeActionClientOptions{SupportsDocumentChanges: documentChanges}, "value", 0, 5)
+        let change = SingleEdit(edit)
+        Assert.IsNotType[SnippetTextEdit](change)
+        Assert.Equal("default /* TODO: value */", change.NewText)
+        AssertBindsWithoutErrors(change)
+    }
+
+    @Fact
+    func SnippetClient_GetsTheTabStop_ForTheSameFix() {
+        let edit = Fix(
+            CodeActionClientOptions{SupportsDocumentChanges: true, SupportsSnippetEdits: true},
+            "value",
+            0,
+            5
+        )
+        let change = Assert.IsType[SnippetTextEdit](SingleEdit(edit))
+        Assert.Equal("$${1:value}", change.Snippet.Value)
+        Assert.Equal("value", change.NewText)
+    }
+
+    @Fact
+    func PlainClient_KeepsAPlaceholderThatBinds() {
+        let edit = Fix(CodeActionClientOptions{SupportsDocumentChanges: true}, "nil", 0, 3)
+        let change = SingleEdit(edit)
+        Assert.Equal("nil", change.NewText)
+        AssertBindsWithoutErrors(change)
+    }
+
+    @Fact
+    func PlainClient_KeepsTheText_WhenNoDefaultBinds() {
+        // A placeholder in a type position: `default` does not parse there.
+        let edit = Fix(CodeActionClientOptions{SupportsDocumentChanges: true}, "cast[T](nil)", 5, 1)
+        Assert.Equal("cast[T](nil)", SingleEdit(edit).NewText)
+    }
+
+    @Fact
+    func PlaceholderDefault_LeavesOutTextThatWouldEndTheComment() {
+        Assert.Equal("default /* TODO: value */", CodeActionComputer.PlaceholderDefault("value"))
+        Assert.Equal("default /* TODO */", CodeActionComputer.PlaceholderDefault("a */ b"))
+        Assert.Equal("default /* TODO */", CodeActionComputer.PlaceholderDefault("a\nb"))
+        Assert.Equal("default /* TODO */", CodeActionComputer.PlaceholderDefault(string.Empty))
+    }
+
+    @Fact
+    func ReplacePlaceholders_MovesTheLaterPlaceholders() {
+        let tree = SyntaxTree.Parse(SourceText.From(Source, "a.gs"))
+        let first = Source.IndexOf("string?", StringComparison.Ordinal)
+        let second = Source.IndexOf("null", StringComparison.Ordinal)
+        let changes = FixChanges(
+            ImmutableArray.Create(
+                DocumentChanges(
+                    tree,
+                    ImmutableArray.Create(
+                        TextChange(TextSpan(first, 7), "int32"),
+                        TextChange(TextSpan(second, 4), "0 + n")
+                    ),
+                    ImmutableArray.Create(TextSpan(first, 5), TextSpan(second - 2 + 4, 1))
+                )
+            )
+        )
+        let replaced = CodeActionComputer.ReplacePlaceholders(changes, (t string) -> "<${t}>")!!
+        let document = Assert.Single(replaced.Documents)
+        Assert.Equal("<int32>", document.Changes[0].NewText)
+        Assert.Equal("0 + <n>", document.Changes[1].NewText)
+        let text = document.GetChangedText().ToString()
+        Assert.Equal("<int32>", text.Substring(document.Placeholders[0].Start, document.Placeholders[0].Length))
+        Assert.Equal("<n>", text.Substring(document.Placeholders[1].Start, document.Placeholders[1].Length))
+    }
+
+    private func SingleEdit(edit WorkspaceEdit) GSharp.LanguageServer.Protocol.TextEdit {
+        if edit.DocumentChanges != nil {
+            return Assert.Single(Assert.Single(edit.DocumentChanges).Edits)
+        }
+        return Assert.Single(edit.Changes!!.Values.Single())
+    }
+
+    // Applies the edit to the source and binds the result.
+    private func AssertBindsWithoutErrors(change GSharp.LanguageServer.Protocol.TextEdit) {
+        let text = SourceText.From(Source, "a.gs")
+        let start = text.Lines[cast[int32](change.Range.Start.Line)].Start + cast[int32](change.Range.Start.Character)
+        let end = text.Lines[cast[int32](change.Range.End.Line)].Start + cast[int32](change.Range.End.Character)
+        let edited = Source.Substring(0, start) + change.NewText + Source.Substring(end)
+        let errors = Compilation(SyntaxTree.Parse(SourceText.From(edited, "a.gs")))
+            .GetDiagnostics()
+            .Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError)
+            .ToList()
+        Assert.True(
+            errors.Count == 0,
+            "${edited}: ${string.Join("; ", errors.Select((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Message))}"
+        )
+    }
+
+    private func Fix(client CodeActionClientOptions, text string, start int32, length int32) WorkspaceEdit {
+        let content = LanguageServerTestHelpers.Content(Source).WithVersion(1)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = LanguageServerTestHelpers.PositionOf(Source, "null")
+        let registry = CodeFixRegistry()
+        registry.Add(PlaceholderProvider(text, start, length))
+        let action = CodeActionComputer
+            .ComputeCodeActions(uri, content, Range(at, at), nil, client, registry, default(CancellationToken))
+            .Single((a CommandOrCodeAction) -> a.CodeAction.Title == "Write a value")
+            .CodeAction
+        return action.Edit!!
+    }
+
     private func Fix(client CodeActionClientOptions) WorkspaceEdit {
         let content = LanguageServerTestHelpers.Content(Source).WithVersion(1)
         let uri = DocumentUri.From("file:///a.gs")!!
@@ -196,8 +307,21 @@ open class Adr0227SnippetEditTests {
         return action.Edit!!
     }
 
-    // Replaces `null` with text that has two placeholders and every character a snippet escapes.
+    // Replaces `null` with text that has two placeholders and every character a snippet escapes, or with
+    // the given text and one placeholder.
     private class PlaceholderProvider : GSharpCodeFixProvider {
+        private var text string? = nil
+        private var start int32 = 0
+        private var length int32 = 0
+
+        init() { }
+
+        init(text string, start int32, length int32) {
+            this.text = text
+            this.start = start
+            this.length = length
+        }
+
         override prop FixableDiagnosticIds System
             .Collections
             .Immutable
@@ -214,6 +338,11 @@ open class Adr0227SnippetEditTests {
                 "test.placeholder",
                 Applicability.HasPlaceholders,
                 (editor SyntaxEditor) -> {
+                    if text is {} given {
+                        editor.ReplaceToken(token, given)
+                        editor.MarkPlaceholder(start, length)
+                        return
+                    }
                     editor.ReplaceToken(token, Adr0227SnippetEditTests.FixText)
                     editor.MarkPlaceholder(0, 5)
                     editor.MarkPlaceholder(9, 2)
