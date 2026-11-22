@@ -3794,6 +3794,251 @@ Console.WriteLine(1)
 `)
         Assert.Empty(unreachableCatchWithAwaitSkipsSpanSafe.Diagnostics)
         Assert.Equal("1\n", unreachableCatchWithAwaitSkipsSpanSafe.Output)
+
+        let nativeRefAliasReadThrowsCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var ptr = default(*int32)
+    await Task.Delay(1)
+    var ref dst = *ptr
+    try {
+        let n = dst
+        Console.WriteLine(n)
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(nativeRefAliasReadThrowsCatchReadsUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(nativeRefAliasReadThrowsCatchReadsUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let nativeRefAliasWriteThrowsCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var ptr = default(*int32)
+    await Task.Delay(1)
+    var ref dst = *ptr
+    try {
+        dst = 1
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(nativeRefAliasWriteThrowsCatchReadsUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(nativeRefAliasWriteThrowsCatchReadsUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let nativeRefAliasWriteThrowsRetainsPointerAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    var ptr = default(*int32)
+    var ref dst = *ptr
+    try {
+        p = &c.Value
+        dst = 1
+        p = &x
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            nativeRefAliasWriteThrowsRetainsPointerAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            nativeRefAliasWriteThrowsRetainsPointerAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let outerFilterLivenessPreservedAcrossInnerFinallyOverwriteUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    await Task.Delay(1)
+    try {
+        try {
+            throw InvalidOperationException()
+        } finally {
+            c = Counter{Value: 99}
+        }
+    } catch when (c.Value == 42) { }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            outerFilterLivenessPreservedAcrossInnerFinallyOverwriteUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            outerFilterLivenessPreservedAcrossInnerFinallyOverwriteUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let outerCatchBodyAfterInnerFinallyOverwriteSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    await Task.Delay(1)
+    try {
+        try {
+            throw InvalidOperationException()
+        } finally {
+            c = Counter{Value: 99}
+        }
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(outerCatchBodyAfterInnerFinallyOverwriteSafe.Diagnostics)
+        Assert.Equal("99\n", outerCatchBodyAfterInnerFinallyOverwriteSafe.Output)
+
+        let outerCatchLivenessPropagatesThroughNonThrowingInnerFinallyUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    await Task.Delay(1)
+    try {
+        try {
+            throw InvalidOperationException()
+        } finally {
+            var marker = 0
+        }
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            outerCatchLivenessPropagatesThroughNonThrowingInnerFinallyUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            outerCatchLivenessPropagatesThroughNonThrowingInnerFinallyUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let throwingSwitchPatternCarriesHandlerLivenessUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+class Probe {
+    prop Value int32 -> throw InvalidOperationException()
+}
+
+async func run(probe Probe) Task {
+    var c = Counter{Value: 42}
+    await Task.Delay(1)
+    try {
+        switch probe {
+            case { Value: _ } { }
+        }
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run(Probe()).GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            throwingSwitchPatternCarriesHandlerLivenessUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            throwingSwitchPatternCarriesHandlerLivenessUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let throwingGuardSwitchExprSkipsPointerMutationSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(readPtr bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        let _ = switch 0 {
+            case _ when throw InvalidOperationException(): {
+                p = &c.Value
+                0
+            }
+            default: 0
+        }
+    } catch { }
+    await Task.Delay(1)
+    if readPtr {
+        Console.WriteLine(*p)
+    } else {
+        Console.WriteLine(1)
+    }
+}
+
+run(false).GetAwaiter().GetResult()
+`)
+        Assert.Empty(throwingGuardSwitchExprSkipsPointerMutationSafe.Diagnostics)
+        Assert.Equal("1\n", throwingGuardSwitchExprSkipsPointerMutationSafe.Output)
     }
 
     @Fact

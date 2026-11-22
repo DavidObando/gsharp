@@ -848,6 +848,52 @@ try {
 `, "top-level-round18-safe-controls", executable: true)
         IlVerifier.Verify(round18SafeControlsAssembly)
         Assert.Equal("caught-expr\ncaught-stmt\n", fixture.Run(round18SafeControlsAssembly))
+
+        let round19SafeControlsAssembly = fixture.Compile(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func checkRound19SafeControls(readPtr bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        let _ = switch 0 {
+            case _ when throw InvalidOperationException(): {
+                p = &c.Value
+                0
+            }
+            default: 0
+        }
+    } catch { }
+    await Task.Delay(1)
+    if readPtr {
+        Console.WriteLine(*p)
+    } else {
+        Console.WriteLine(1)
+    }
+
+    var c2 = Counter{Value: 42}
+    await Task.Delay(1)
+    try {
+        try {
+            throw InvalidOperationException()
+        } finally {
+            c2 = Counter{Value: 99}
+        }
+    } catch {
+        Console.WriteLine(c2.Value)
+    }
+}
+
+checkRound19SafeControls(false).GetAwaiter().GetResult()
+`, "top-level-round19-safe-controls", executable: true)
+        IlVerifier.Verify(round19SafeControlsAssembly)
+        Assert.Equal("1\n99\n", fixture.Run(round19SafeControlsAssembly))
     }
 
     shared {

@@ -420,6 +420,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     .ResolveTargets(node.Expression)
                 RefStructAsyncLivenessAnalyzer.SetPointsTo(node.Variable, resolved, pointsTo, exceptionalUnion: nil)
             }
+            if RefStructAsyncLivenessAnalyzer.IsIndirectRefAssignmentTarget(node.Variable) {
+                MergeExceptionalOverwrites(definitelyOverwritten)
+            }
             RecordOverwrite(node.Variable)
         }
 
@@ -3713,6 +3716,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 return
             }
             VisitExpression(node.Expression)
+            if exceptionalUnion != nil && RefStructAsyncLivenessAnalyzer.IsIndirectRefAssignmentTarget(node.Variable) {
+                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(exceptionalUnion, state)
+            }
         }
 
         protected override func VisitThrowExpression(node BoundThrowExpression) {
@@ -3879,25 +3885,34 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                             Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
                         }
                     }
-                    armCanMatch[i] = patCanMatch
-                    if arm.Guard != nil && patCanMatch {
-                        PointsToExpressionUpdater(
+                    if arm.Guard is {} armGuard && patCanMatch {
+                        let guardUpdater = PointsToExpressionUpdater(
                             armState,
                             interesting,
                             exceptionalUnion,
                             gotoExits,
                             returnUnion
-                        ).VisitExpression(arm.Guard)
+                        )
+                        guardUpdater.VisitExpression(armGuard)
+                        let guardNormal = guardUpdater.HasNormalExit && armGuard.Type != TypeSymbol.Never
+                        armCanMatch[i] = guardNormal
                         // Pattern match + guard evaluation can fail and continue to later arms.
-                        if patCanFail {
-                            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(fallthroughState, armState)
-                        } else {
-                            fallthroughState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(armState)
+                        if guardNormal {
+                            if patCanFail {
+                                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(fallthroughState, armState)
+                            } else {
+                                fallthroughState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(armState)
+                            }
+                        } else if !patCanFail {
+                            fallthroughReachable = false
                         }
-                    } else if !patCanFail {
-                        fallthroughReachable = false
-                        if arm.IsDefault && patCanMatch {
-                            hasUnconditionalDefault = true
+                    } else {
+                        armCanMatch[i] = patCanMatch
+                        if !patCanFail {
+                            fallthroughReachable = false
+                            if arm.IsDefault && patCanMatch {
+                                hasUnconditionalDefault = true
+                            }
                         }
                     }
                     armStates[i] = armState
@@ -4224,19 +4239,25 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
     }
 
+    private func IsIndirectRefAssignmentTarget(variable VariableSymbol) bool -> IsNativeRefAlias(variable) ||
+        (variable is ParameterSymbol param && param.RefKind != RefKind.None)
+
     private func ExpressionCannotThrow(expression BoundExpression?) bool {
         if expression == nil {
             return true
         }
         switch expression {
-            case BoundLiteralExpression, BoundDefaultExpression, BoundVariableExpression, BoundUtf8StringExpression {
+            case BoundLiteralExpression, BoundDefaultExpression, BoundUtf8StringExpression {
                 return true
+            }
+            case ve is BoundVariableExpression {
+                return !IsIndirectRefAssignmentTarget(ve.Variable)
             }
             case addr is BoundAddressOfExpression {
                 return AddressOperandCannotThrow(addr.Operand)
             }
             case assign is BoundAssignmentExpression {
-                return ExpressionCannotThrow(assign.Expression)
+                return !IsIndirectRefAssignmentTarget(assign.Variable) && ExpressionCannotThrow(assign.Expression)
             }
             case conv is BoundConversionExpression {
                 if !ExpressionCannotThrow(conv.Expression) || conv.IsChecked {
@@ -5983,7 +6004,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         escapingLabelLiveIn IReadOnlyDictionary[BoundLabel, HashSet[VariableSymbol]]? = nil,
         entryLabelPointsTo IReadOnlyDictionary[BoundLabel, Dictionary[VariableSymbol, HashSet[VariableSymbol]]]? = nil,
         exportedLabelLiveIn Dictionary[BoundLabel, HashSet[VariableSymbol]]? = nil,
-        externalEntryLabels IEnumerable[BoundLabel]? = nil
+        externalEntryLabels IEnumerable[BoundLabel]? = nil,
+        filterAmbientLive HashSet[VariableSymbol]? = nil
     ) HashSet[VariableSymbol] {
         let graph = ControlFlowGraph.CreateWithCompoundGotoReachability(
             Lowerer.Flatten(regionBody),
@@ -6119,7 +6141,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     nestedSwitchEntries,
                     nestedSwitchNormalStart,
                     roundNested,
-                    ambientLive
+                    ambientLive,
+                    filterAmbientLive
                 )
                 for entry in roundNested {
                     if !nestedSwitchLabels.TryGetValue(entry.Key, out var existing) ||
@@ -6159,7 +6182,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     nestedSwitchEntries,
                     nestedSwitchNormalStart,
                     exportedNestedSwitchLabels: nil,
-                    ambientLive
+                    ambientLive,
+                    filterAmbientLive
                 )
             }
         }
@@ -6223,7 +6247,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         ]? = nil,
         nestedSwitchNormalStart HashSet[BoundPatternSwitchStatement]? = nil,
         exportedNestedSwitchLabels Dictionary[BoundLabel, HashSet[VariableSymbol]]? = nil,
-        ambientLive HashSet[VariableSymbol]? = nil
+        ambientLive HashSet[VariableSymbol]? = nil,
+        filterAmbientLive HashSet[VariableSymbol]? = nil
     ) HashSet[VariableSymbol] {
         let live = HashSet[VariableSymbol](liveOut)
         for var i = block.Statements.Count - 1; i >= 0; i-- {
@@ -6248,7 +6273,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 nestedSwitchEntries,
                 nestedSwitchNormalStart,
                 exportedNestedSwitchLabels,
-                ambientLive
+                ambientLive,
+                filterAmbientLive
             )
             if canThrowToAmbient {
                 live.UnionWith(ambientLive!!)
@@ -6272,7 +6298,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         ]? = nil,
         nestedSwitchNormalStart HashSet[BoundPatternSwitchStatement]? = nil,
         exportedNestedSwitchLabels Dictionary[BoundLabel, HashSet[VariableSymbol]]? = nil,
-        ambientLive HashSet[VariableSymbol]? = nil
+        ambientLive HashSet[VariableSymbol]? = nil,
+        filterAmbientLive HashSet[VariableSymbol]? = nil
     ) {
         var aliasDependencies IReadOnlyDictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
         if stmtPointsTo != nil {
@@ -6409,7 +6436,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     diagnostics,
                     entryPointsTo,
                     escapingLabelLiveIn,
-                    ambientLive
+                    ambientLive,
+                    filterAmbientLive
                 )
             }
             case fixedStmt is BoundFixedStatement {
@@ -6420,7 +6448,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     diagnostics,
                     entryPointsTo,
                     escapingLabelLiveIn,
-                    ambientLive
+                    ambientLive,
+                    filterAmbientLive
                 )
             }
             case switchStmt is BoundPatternSwitchStatement {
@@ -6449,7 +6478,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                         extEntries,
                         allowNormalStart,
                         exportedNestedSwitchLabels,
-                        ambientLive
+                        ambientLive,
+                        filterAmbientLive
                     )
                 }
             }
@@ -6473,7 +6503,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         diagnostics ReportingContext?,
         entryPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil,
         escapingLabelLiveIn IReadOnlyDictionary[BoundLabel, HashSet[VariableSymbol]]? = nil,
-        ambientLive HashSet[VariableSymbol]? = nil
+        ambientLive HashSet[VariableSymbol]? = nil,
+        filterAmbientLive HashSet[VariableSymbol]? = nil
     ) {
         let afterTry = HashSet[VariableSymbol](live)
         let hasPointsTo = entryPointsTo != nil ||
@@ -6485,6 +6516,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         var finallyLiveIn HashSet[VariableSymbol]? = nil
         var innerEscapingLabels = escapingLabelLiveIn
         let outerAmbient = ambientLive ?? HashSet[VariableSymbol]()
+        let outerFilter = filterAmbientLive ?? HashSet[VariableSymbol]()
+        let finallyUnwindLiveIn = HashSet[VariableSymbol]()
         if tryStmt.FinallyBlock is {} finallyBlock {
             let finallyOut = HashSet[VariableSymbol](afterTry)
             let escapingTargets = HashSet[BoundLabel]()
@@ -6512,8 +6545,25 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 interesting,
                 diagnostics,
                 trySummary?.FinallyIn,
-                escapingLabelLiveIn
+                escapingLabelLiveIn,
+                filterAmbientLive: outerFilter
             )
+            if outerAmbient.Count > 0 {
+                // Outer catch bodies run after this finally unwinds, whereas outer
+                // catch-when filters execute in CLR EH pass 1 before finally runs.
+                let unwound = AnalyzeRegion(
+                    finallyBlock,
+                    outerAmbient,
+                    outerAmbient,
+                    interesting,
+                    diagnostics: nil,
+                    trySummary?.FinallyIn,
+                    escapingLabelLiveIn,
+                    filterAmbientLive: outerFilter
+                )
+                finallyUnwindLiveIn.UnionWith(unwound)
+            }
+            finallyUnwindLiveIn.UnionWith(outerFilter)
             if escapingTargets.Count > 0 && escapingLabelLiveIn != nil {
                 let transformed = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
                 for entry in escapingLabelLiveIn {
@@ -6525,7 +6575,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                             interesting,
                             diagnostics: nil,
                             trySummary?.FinallyIn,
-                            escapingLabelLiveIn
+                            escapingLabelLiveIn,
+                            filterAmbientLive: outerFilter
                         )
                     } else {
                         transformed[entry.Key] = entry.Value
@@ -6533,6 +6584,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 }
                 innerEscapingLabels = transformed
             }
+        } else {
+            finallyUnwindLiveIn.UnionWith(outerAmbient)
+            finallyUnwindLiveIn.UnionWith(outerFilter)
         }
         var dispatchReachable = MayThrowRegion(tryStmt.TryBlock)
         let catchFilterReachable = [tryStmt.CatchClauses.Length]bool
@@ -6558,14 +6612,11 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
         // Normal completion of the try body (or a catch clause) falls into
         // finally (if any); otherwise it falls to whatever's after the whole
-        // try statement.
+        // try statement. Uncaught exceptions unwind through finally to outerAmbient.
         let normalFallthrough = finallyLiveIn ?? afterTry
-        let catchAmbient = finallyLiveIn ?? outerAmbient
-        var subsequentCatchLive = if finallyLiveIn != nil {
-            HashSet[VariableSymbol](finallyLiveIn)
-        } else {
-            HashSet[VariableSymbol](outerAmbient)
-        }
+        let catchAmbient = finallyUnwindLiveIn
+        var subsequentCatchLive = HashSet[VariableSymbol](finallyUnwindLiveIn)
+        let tryFilterAmbient = HashSet[VariableSymbol](outerFilter)
         for var i = tryStmt.CatchClauses.Length - 1; i >= 0; i-- {
             if !catchFilterReachable[i] {
                 continue
@@ -6581,7 +6632,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     interesting,
                     diagnostics,
                     clauseEntry,
-                    innerEscapingLabels
+                    innerEscapingLabels,
+                    filterAmbientLive: outerFilter
                 )
             } else {
                 HashSet[VariableSymbol]()
@@ -6590,6 +6642,17 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             if clause.Filter is {} filter {
                 var filterEntry Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
                 trySummary?.FilterEntryPointsTo.TryGetValue(clause, out filterEntry)
+                let filterOwnLive = HashSet[VariableSymbol]()
+                ApplyExpression(
+                    filter,
+                    filterOwnLive,
+                    interesting,
+                    diagnostics: nil,
+                    tryStmt,
+                    filterEntry,
+                    innerEscapingLabels
+                )
+                tryFilterAmbient.UnionWith(filterOwnLive)
                 clauseEntryLive = HashSet[VariableSymbol](catchBodyLiveIn)
                 clauseEntryLive.UnionWith(subsequentCatchLive)
                 ApplyExpression(
@@ -6626,7 +6689,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             interesting,
             diagnostics,
             entryPointsTo,
-            innerEscapingLabels
+            innerEscapingLabels,
+            filterAmbientLive: tryFilterAmbient
         )
         live.Clear()
         live.UnionWith(tryLiveIn)
@@ -6643,7 +6707,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         diagnostics ReportingContext?,
         entryPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil,
         escapingLabelLiveIn IReadOnlyDictionary[BoundLabel, HashSet[VariableSymbol]]? = nil,
-        ambientLive HashSet[VariableSymbol]? = nil
+        ambientLive HashSet[VariableSymbol]? = nil,
+        filterAmbientLive HashSet[VariableSymbol]? = nil
     ) {
         let bodyLiveIn = AnalyzeRegion(
             fixedStmt.Body,
@@ -6652,7 +6717,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             interesting,
             diagnostics,
             entryPointsTo,
-            escapingLabelLiveIn
+            escapingLabelLiveIn,
+            filterAmbientLive: filterAmbientLive
         )
         bodyLiveIn.Remove(fixedStmt.PinnedVariable)
         bodyLiveIn.Remove(fixedStmt.PointerVariable)
@@ -6690,7 +6756,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         ]? = nil,
         allowNormalStart bool = true,
         exportedNestedSwitchLabels Dictionary[BoundLabel, HashSet[VariableSymbol]]? = nil,
-        ambientLive HashSet[VariableSymbol]? = nil
+        ambientLive HashSet[VariableSymbol]? = nil,
+        filterAmbientLive HashSet[VariableSymbol]? = nil
     ) {
         let afterSwitch = HashSet[VariableSymbol](live)
         let union = HashSet[VariableSymbol]()
@@ -6838,7 +6905,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     combinedLabels,
                     armLabelEntries,
                     armExported,
-                    allSwitchTargets
+                    allSwitchTargets,
+                    filterAmbientLive: filterAmbientLive
                 )
                 for entry in armExported {
                     if !combinedLabels.TryGetValue(entry.Key, out var existing) || !SetsEqual(existing, entry.Value) {
@@ -6873,7 +6941,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 combinedLabels,
                 armLabelEntries,
                 exportedLabelLiveIn: nil,
-                allSwitchTargets
+                allSwitchTargets,
+                filterAmbientLive: filterAmbientLive
             )
         }
         // Propagate liveness backward along the exact runtime dispatch chain:
@@ -6974,6 +7043,15 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     for v in patternCollector.Reads {
                         if !armBindings.Contains(v) || patternCollector.ContainsAwait {
                             stepLive.Add(v)
+                        }
+                    }
+                    if ambientLive != nil &&
+                        ambientLive.Count > 0 &&
+                        patternCollector.ExceptionalOverwrites is {} patExceptionalOver {
+                        for v in ambientLive {
+                            if !patExceptionalOver.Contains(v) {
+                                stepLive.Add(v)
+                            }
                         }
                     }
                     if patternCollector.ContainsAwait {
