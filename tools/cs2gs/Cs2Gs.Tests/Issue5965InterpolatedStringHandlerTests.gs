@@ -829,6 +829,57 @@ public ref struct CallerInfoHandler {
     public override string ToString() => sb.ToString();
 }
 
+[InterpolatedStringHandler]
+public struct OrdinaryStructHandler {
+    public readonly int Val;
+    public OrdinaryStructHandler(int literalLength, int formattedCount) { Val = literalLength + formattedCount; }
+    public void AppendFormatted(int v) { }
+}
+
+public sealed class OrdinaryHandlerHolder {
+    public string Log = "";
+    public int LastVal;
+    public int this[OrdinaryStructHandler h] {
+        get => LastVal + h.Val;
+        set { Log += "S:" + value; LastVal = value + h.Val; }
+    }
+}
+
+public sealed class UnqualifiedOutPropBox {
+    private int[] slots = new int[2];
+    private int idx;
+    private ref int Slot => ref slots[idx];
+    private int BumpIdx() { idx = 1; return 5; }
+    private static void WriteSlot(out int target, [InterpolatedStringHandlerArgument("target")] OutForwardedHandler h) {
+        target = 99 + h.Seen;
+    }
+    public string Run() {
+        WriteSlot(out Slot, $"{BumpIdx()}");
+        return slots[0] + ":" + slots[1];
+    }
+}
+
+public struct RefReadOnlyParamStruct {
+    public int Seed;
+    public long Run(ref int other) => Write(ref other, $"{1}") + WriteThis(ref this, $"{2}");
+    private static long Write(ref readonly int seed, [InterpolatedStringHandlerArgument("seed")] InIntHandler h) => seed + h.Seen;
+    private static int WriteThis(ref readonly RefReadOnlyParamStruct self, [InterpolatedStringHandlerArgument("self")] StructCellHandlerForRo h) => self.Seed + h.Delta;
+}
+
+[InterpolatedStringHandler]
+public ref struct InIntHandler {
+    public readonly int Seen;
+    public InIntHandler(int literalLength, int formattedCount, in int seed) { Seen = seed; }
+    public void AppendFormatted(int v) { }
+}
+
+[InterpolatedStringHandler]
+public ref struct StructCellHandlerForRo {
+    public readonly int Delta;
+    public StructCellHandlerForRo(int literalLength, int formattedCount, in RefReadOnlyParamStruct s) { Delta = s.Seed + 1; }
+    public void AppendFormatted(int v) { }
+}
+
 public static class ObliviousPromotedRefHelper {
     public static string Touch(ref string target, [InterpolatedStringHandlerArgument("target")] PromotedRefArgHandler h) {
         string prev = target;
@@ -857,6 +908,10 @@ public static class Demo {
     private static string? nullableField = "nf";
     private static int deconstructHoleCalls;
     private static int holeSawNextPair;
+    private static string ordSeq = "";
+
+    private static int TouchOrdHole() { ordSeq += "H"; return 1; }
+    private static int TouchOrdRhs() { ordSeq += "R"; return 10; }
 
     private static int ChangeGlobalCell() { globalDefCell.Value = 999; return 42; }
     private static int ChangeRefIdxSlot() { globalRefIdxCell.Index = 1; return 9; }
@@ -965,6 +1020,18 @@ public static class Demo {
         var deconstructOrderRes = AcceptWithDeconstruct($"{IncHoleBeforeDeconstruct()}", ((pa, pb) = NextPair())) +
             ":" + deconstructHoleCalls + ":" + holeSawNextPair;
 
+        var ordHolder = new OrdinaryHandlerHolder();
+        ordHolder[$"{TouchOrdHole()}"] = TouchOrdRhs();
+        int ca = 0, cb = 0;
+        ordHolder[$"{1}"] += ((ca, cb) = (2, 3)).Item1;
+        var ordExpr = ordHolder[$"{1}"] += ((ca, cb) = (4, 5)).Item2;
+        var ordCompoundRes = ordSeq + ":" + ordHolder.LastVal + ":" + ordExpr + ":" + ca + ":" + cb;
+
+        var unqualOutRes = new UnqualifiedOutPropBox().Run();
+        int roOther = 10;
+        var roStruct = new RefReadOnlyParamStruct { Seed = 20 };
+        var roRefArgRes = roStruct.Run(ref roOther);
+
         var refNonNullRes = AcceptRefNonNull(ref nullableField!, $"{8}");
 
         globalRefIdxCell = new RefIndexerCell { Index = 0, Slots = new int[2] };
@@ -1058,7 +1125,7 @@ public static class Demo {
             outVarRes + "|" + outExistingRes + "|" + spanLit + "|" + baseCtorSeen + "|" + ungatedRes + "|" +
             condExtRes + "|" + namedDelegateRes + "|" +
             afterFalseGated + "," + afterTrueGated + "|" + pairAfterFalse + "," + pairAfterTrue + "|" +
-            deconstructOrderRes + "|" + refNonNullRes + "|" + refIdxRes + "|" + refIdxRhsOrderRes + "|" + refCondRes + "|" + genCell.Total + "|" + genClassRes + "|" + byValExtRes + "|" + outerCastRes + "|" + inLongRes + "|" + paramsAppendRes + "|" + callerInfoRes + "|" +
+            deconstructOrderRes + "|" + ordCompoundRes + "|" + unqualOutRes + "|" + roRefArgRes + "|" + refNonNullRes + "|" + refIdxRes + "|" + refIdxRhsOrderRes + "|" + refCondRes + "|" + genCell.Total + "|" + genClassRes + "|" + byValExtRes + "|" + outerCastRes + "|" + inLongRes + "|" + paramsAppendRes + "|" + callerInfoRes + "|" +
             afterStmtPostInc + "," + valPostInc + "," + valPreInc + "," + valPostDec + "," + incNextCalls + "|" +
             nullPlain + "|" + nullCall + "|" + nullParams + "|" + nullAssignStmt + "|" + nullAssignExpr + "|" + nullConvStmt + "|" + nullConvExpr;
     }
@@ -1090,7 +1157,7 @@ public struct RefIndexerCell {
     public int[] Slots;
     public readonly ref int this[LibRefIdxHandler h] => ref Slots[Index];
 }
-`, strictIl: true, expectedOutput: "5|8|102|7:8:8|init->after:init:1|5|True|99:42|99:42|lit-9|55|4:5|53|3:7|10,12|0,2:20:21|5:30:31:1:2|nf:8|0:77|88:0:88|21:41|8|orig:123|repl|11:60|31|99|ab#3cd|1 + 2=3@True|12,12,14,13,5|pl:1|c:1|p:2|s:1|e:2|cs:1|ce:2")
+`, strictIl: true, expectedOutput: "5|8|102|7:8:8|init->after:init:1|5|True|99:42|99:42|lit-9|55|4:5|53|3:7|10,12|0,2:20:21|5:30:31:1:2|HR:22:21:4:5|141:0|61|nf:8|0:77|88:0:88|21:41|8|orig:123|repl|11:60|31|99|ab#3cd|1 + 2=3@True|12,12,14,13,5|pl:1|c:1|p:2|s:1|e:2|cs:1|ce:2")
     }
 
     @Fact
@@ -1328,6 +1395,71 @@ public ref struct TopRefLocal {
             topLocalCtx.Diagnostics,
             (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported && d.Message?.Contains(
                 "top-level",
+                StringComparison.OrdinalIgnoreCase
+            ) == true
+        )
+
+        // 6. Collection initializer Add(...) with receiver placeholder reports unsupported rather than using enclosing `this`.
+        let collInitTree = CSharpSyntaxTree.ParseText(`
+using System.Collections;
+using System.Runtime.CompilerServices;
+[InterpolatedStringHandler]
+public ref struct BagHandler {
+    public BagHandler(int literalLength, int formattedCount, Bag owner) { }
+    public void AppendFormatted(int v) { }
+}
+public sealed class Bag : IEnumerable {
+    public void Add([InterpolatedStringHandlerArgument("")] BagHandler h) { }
+    public Bag Make() => new Bag { $"{1}" };
+    public IEnumerator GetEnumerator() => null!;
+}
+`, path: "BagInit.cs")
+        let collComp = CSharpCompilation.Create(
+            "BagInitTest",
+            []SyntaxTree{collInitTree},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        let collModel = collComp.GetSemanticModel(collInitTree)
+        let collCtx = TranslationContext(collComp, collModel, collInitTree.FilePath)
+        let _ = CSharpToGSharpTranslator().TranslateDocument(
+            LoadedDocument(collInitTree.FilePath, collInitTree, collModel),
+            collCtx
+        )
+        Assert.Contains(
+            collCtx.Diagnostics,
+            (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported && d.Message?.Contains(
+                "receiver placeholder",
+                StringComparison.OrdinalIgnoreCase
+            ) == true
+        )
+
+        // 7. Top-level ref-returning coordinated handler call reports located unsupported diagnostic.
+        let topRefRetProject = CSharpProjectLoader.LoadInMemory([](string, source string){("Program.cs", `
+using System.Runtime.CompilerServices;
+var slots = new int[2];
+SetRefTop(ref SlotTop(slots, $"r={1}"));
+static ref int SlotTop(int[] arr, TopRefRetHandler h) => ref arr[0];
+static void SetRefTop(ref int slot) { slot = 77; }
+[InterpolatedStringHandler]
+public ref struct TopRefRetHandler {
+    public TopRefRetHandler(int literalLength, int formattedCount) { }
+    public void AppendLiteral(string t) { }
+    public void AppendFormatted(int v) { }
+}
+`)}, outputKind: OutputKind.ConsoleApplication)
+        Assert.True(topRefRetProject.BoundWithoutErrors)
+        let topRefRetDoc = topRefRetProject.Documents[0]
+        let topRefRetCtx = TranslationContext(
+            topRefRetProject.Compilation,
+            topRefRetDoc.SemanticModel,
+            topRefRetDoc.FilePath
+        )
+        let _ = CSharpToGSharpTranslator().TranslateDocument(topRefRetDoc, topRefRetCtx)
+        Assert.Contains(
+            topRefRetCtx.Diagnostics,
+            (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported && d.Message?.Contains(
+                "ref-returning",
                 StringComparison.OrdinalIgnoreCase
             ) == true
         )

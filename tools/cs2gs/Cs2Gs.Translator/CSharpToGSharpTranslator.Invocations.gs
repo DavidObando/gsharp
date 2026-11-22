@@ -12762,7 +12762,28 @@ partial class CSharpToGSharpTranslator {
                     this.CallContainsRefLikeHandler(operationArguments)
             ) {
                 let statements = block.Statements.ToList()
-                let returnsVoid = callSyntax is Microsoft
+                let callOp = this.context.SemanticModel.GetOperation(callSyntax)
+                let (returnsByRef, returnsByRefReadonly, refReturnType) = switch callOp {
+                    case inv is IInvocationOperation: (
+                        inv.TargetMethod.ReturnsByRef,
+                        inv.TargetMethod.ReturnsByRefReadonly,
+                        inv.TargetMethod.ReturnType
+                    )
+                    case prop is IPropertyReferenceOperation when !this.IsElementAssignmentTarget(callSyntax): (
+                        prop.Property.ReturnsByRef,
+                        prop.Property.ReturnsByRefReadonly,
+                        prop.Property.Type
+                    )
+                    default: (false, false, default(ITypeSymbol?))
+                }
+                if returnsByRef || returnsByRefReadonly {
+                    this.context.ReportUnsupported(
+                        callSyntax,
+                        "top-level ref-returning coordinated handler call has no canonical G# wrapper lambda (issue #5965)."
+                    )
+                }
+                let returnsVoid = !returnsByRef &&
+                    callSyntax is Microsoft
                     .CodeAnalysis
                     .CSharp
                     .Syntax
@@ -12777,13 +12798,24 @@ partial class CSharpToGSharpTranslator {
                         if returnsVoid {
                             cast[GStatement](ExpressionStatement(value, isVoid: true))
                         } else {
-                            cast[GStatement](ReturnStatement(value))
+                            cast[GStatement](ReturnStatement(value, isRef: returnsByRef))
                         }
                     )
                 }
+                let mappedRefReturnType = if returnsByRef && refReturnType != nil {
+                    this.typeMapper.Map(refReturnType, this.context, callSyntax.GetLocation())
+                } else {
+                    default(GTypeReference?)
+                }
                 return InvocationExpression(
                     ParenthesizedExpression(
-                        LambdaExpression(Array.Empty[Parameter](), blockBody: BlockStatement(statements))
+                        LambdaExpression(
+                            Array.Empty[Parameter](),
+                            blockBody: BlockStatement(statements),
+                            returnType: mappedRefReturnType,
+                            isFunctionLiteral: returnsByRef,
+                            isRefReturn: returnsByRef
+                        )
                     ),
                     Array.Empty[GExpression]()
                 )
@@ -13003,6 +13035,7 @@ partial class CSharpToGSharpTranslator {
                 for var idx = 0; idx < operationArguments.Length; idx++ {
                     if this.ArgumentContainsCoordinatedHandler(operationArguments[idx]) ||
                         this.ContainsRefLikeHandlerInSubtree(operationArguments[idx].Value) ||
+                        ContainsHandlerCreationOperation(operationArguments[idx].Value) ||
                         (
                         operationArguments[idx]
                             .Value
@@ -13288,6 +13321,11 @@ partial class CSharpToGSharpTranslator {
                             if refKind == RefKind.Out {
                                 let unwrappedOut = Unparenthesize(argSyntax.Expression)
                                 if unwrappedOut is IdentifierNameSyntax &&
+                                    this
+                                    .context
+                                    .GetSymbolInfo(unwrappedOut)
+                                    .Symbol is ILocalSymbol or
+                                    IParameterSymbol &&
                                     !(
                                     unwrappedOut is IdentifierNameSyntax{Identifier: {ValueText: "_"}} discardCheck &&
                                         this.IsTrueDiscard(discardCheck)
@@ -13381,7 +13419,31 @@ partial class CSharpToGSharpTranslator {
                             }
                             if refKind is RefKind.In or RefKind.RefReadOnlyParameter {
                                 let translatedInArg = this.TranslateArgumentValue(argSyntax)!!
-                                if translatedInArg is OutArgumentExpression{Keyword: "in"} inOut {
+                                if translatedInArg is OutArgumentExpression{Keyword: "in" or "ref", Name: "this"} ||
+                                    translatedInArg is UnaryExpression{
+                                    Operator: "in " or "&",
+                                    Operand: ThisExpression
+                                } {
+                                    let adaptedThis GExpression = if param != nil &&
+                                        !param
+                                        .ContainingSymbol
+                                        .DeclaringSyntaxReferences
+                                        .IsDefaultOrEmpty {
+                                        cast[GExpression](OutArgumentExpression("in", "this"))
+                                    } else {
+                                        ReadOnlyAddressOf(ThisExpression())
+                                    }
+                                    this.state.HoistedHandlerArguments[argSyntax] = adaptedThis
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        ThisExpression(),
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: false,
+                                        isReadOnlyAlias: true
+                                    )
+                                } else if translatedInArg is OutArgumentExpression{Keyword: "in" or "ref"} inOut {
                                     let refTemp = this.NewHandlerTempName()
                                     prologue.Add(
                                         LocalDeclarationStatement(
@@ -13404,7 +13466,7 @@ partial class CSharpToGSharpTranslator {
                                         isRefAlias: true,
                                         isReadOnlyAlias: true
                                     )
-                                } else if translatedInArg is UnaryExpression{Operator: "in "} inAddr {
+                                } else if translatedInArg is UnaryExpression{Operator: "in " or "&"} inAddr {
                                     let refTemp = this.NewHandlerTempName()
                                     prologue.Add(
                                         LocalDeclarationStatement(
@@ -13709,14 +13771,14 @@ partial class CSharpToGSharpTranslator {
                     return UnaryExpression("&", IdentifierExpression(validName!!))
                 }
                 if placeholder.PlaceholderKind == InterpolatedStringArgumentPlaceholderKind.CallsiteReceiver {
-                    if captures?.ReceiverExpr == nil && !this.IsInsideInstanceMember(handlerOp.Syntax) {
+                    if captures?.ReceiverExpr == nil {
                         this.context.ReportUnsupported(
                             handlerOp.Syntax,
                             "interpolated-string-handler receiver placeholder could not be resolved at this call site (issue #5965)."
                         )
                         return LiteralExpression.Null()
                     }
-                    let recvExpr = captures?.ReceiverExpr ?? ThisExpression()
+                    let recvExpr = captures!!.ReceiverExpr!!
                     return this.AdaptCapturedValueForConstructorParameter(
                         recvExpr,
                         captures?.ReceiverType,

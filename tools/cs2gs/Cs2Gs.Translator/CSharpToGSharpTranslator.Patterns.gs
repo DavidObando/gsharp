@@ -5476,7 +5476,10 @@ partial class CSharpToGSharpTranslator {
                         }
                         var exprResult GExpression? = AssignmentExpression(
                             this.TranslateAssignmentTarget(leftElement),
-                            this.TranslateAssignmentValue(assignment),
+                            this.TranslateWithLocalAssignmentSeam(
+                                assignment.Right,
+                                () -> this.TranslateAssignmentValue(assignment)!!
+                            ),
                             assignment.OperatorToken.Text
                         )
                         return exprResult!!
