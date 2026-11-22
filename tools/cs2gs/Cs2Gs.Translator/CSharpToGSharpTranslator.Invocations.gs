@@ -11816,12 +11816,14 @@ partial class CSharpToGSharpTranslator {
         }
 
         private class CallSiteHandlerCaptureState {
-            init(isSourceCallee bool) {
+            init(isSourceCallee bool, callSyntax Microsoft.CodeAnalysis.SyntaxNode) {
                 IsSourceCallee = isSourceCallee
+                CallSyntax = callSyntax
                 Arguments = Dictionary[int32, CallSiteCapturedArgument]()
             }
 
             let IsSourceCallee bool
+            let CallSyntax Microsoft.CodeAnalysis.SyntaxNode
             var ReceiverExpr GExpression?
             var ReceiverType ITypeSymbol?
             var ReceiverSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
@@ -12588,8 +12590,7 @@ partial class CSharpToGSharpTranslator {
             }
             if !targetMethod.IsStatic &&
                 targetMethod.MethodKind != MethodKind.LocalFunction &&
-                invocation.Expression is MemberAccessExpressionSyntax member &&
-                member.Expression is not BaseExpressionSyntax {
+                invocation.Expression is MemberAccessExpressionSyntax member {
                 receiverSyntax = member.Expression
             }
             return true
@@ -12842,7 +12843,7 @@ partial class CSharpToGSharpTranslator {
                 case propOp is IPropertyReferenceOperation: !propOp.Property.DeclaringSyntaxReferences.IsDefaultOrEmpty
                 default: false
             }
-            let captures = CallSiteHandlerCaptureState(isSourceCallee)
+            let captures = CallSiteHandlerCaptureState(isSourceCallee, callSyntax)
             let addedArguments = List[ArgumentSyntax]()
             let addedReceivers = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
             let previousCaptures = this.state.ActiveCallSiteHandlerCaptures
@@ -13021,7 +13022,16 @@ partial class CSharpToGSharpTranslator {
                             captures.ReceiverSyntax = receiverSyntax
                         }
                     }
-                } else if this.state.ConditionalReceiverReplacement != nil {
+                } else if this
+                    .state
+                    .ConditionalReceiverReplacement != nil &&
+                    (
+                    (
+                        callSyntax is InvocationExpressionSyntax invBind &&
+                            invBind.Expression is MemberBindingExpressionSyntax
+                    ) ||
+                        callSyntax is ElementBindingExpressionSyntax
+                ) {
                     captures.ReceiverExpr = this.state.ConditionalReceiverReplacement
                 } else if callSyntax is InvocationExpressionSyntax inv &&
                     (inv.Expression is IdentifierNameSyntax || inv.Expression is GenericNameSyntax) &&
@@ -13194,7 +13204,11 @@ partial class CSharpToGSharpTranslator {
                                     )
                                 }
                             }
-                        } else if this.state.ConditionalReceiverReplacement != nil {
+                        } else if this
+                            .state
+                            .ConditionalReceiverReplacement != nil &&
+                            callSyntax is InvocationExpressionSyntax extBind &&
+                            extBind.Expression is MemberBindingExpressionSyntax {
                             captures.Arguments[0] = CallSiteCapturedArgument(
                                 this.state.ConditionalReceiverReplacement!!,
                                 argOp.Parameter,
@@ -13634,7 +13648,20 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             let statements = List[GStatement]()
-            let captures = this.state.ActiveCallSiteHandlerCaptures as CallSiteHandlerCaptureState
+            var ownerCur IOperation? = handlerOp.Parent
+            while ownerCur is IConversionOperation or
+                IParenthesizedOperation or
+                IArrayInitializerOperation or
+                IArrayCreationOperation {
+                ownerCur = ownerCur?.Parent
+            }
+            let ownerCallSyntax = (ownerCur as IArgumentOperation)?.Parent?.Syntax
+            let activeCaptures = this.state.ActiveCallSiteHandlerCaptures as CallSiteHandlerCaptureState
+            let captures = if activeCaptures != nil && ownerCallSyntax == activeCaptures.CallSyntax {
+                activeCaptures
+            } else {
+                nil
+            }
             let handlerExpr = this.EmitInterpolatedStringHandlerStatements(handlerOp, captures, statements)
             return if statements.Count == 0 {
                 handlerExpr
@@ -14010,7 +14037,10 @@ partial class CSharpToGSharpTranslator {
                     lastExplicit = idx
                 }
             }
-            let appendCaptures = CallSiteHandlerCaptureState(!method.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            let appendCaptures = CallSiteHandlerCaptureState(
+                !method.DeclaringSyntaxReferences.IsDefaultOrEmpty,
+                appendCall.Syntax
+            )
             appendCaptures.ReceiverExpr = handlerId
             appendCaptures.ReceiverType = appendCall.Instance?.Type
             let nestedPrologue = List[GStatement]()

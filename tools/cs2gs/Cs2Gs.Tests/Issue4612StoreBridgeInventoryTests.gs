@@ -153,9 +153,11 @@ open class Issue4612StoreBridgeInventoryTests {
             expected.Remove("ForgiveInitializerElementValueCore")
             expected.Remove("RewriteRecordDeconstruction")
             expected.Remove("TranslateConversionCapturingAndPatternTest")
+            expected.Remove("TranslateStaticExtensionReceiver")
             expected.Remove("TryBridgeTupleValue")
             expected.Remove("TryGetSharedRecordPatternTypeGuard")
             expected["BuildPatternNarrowingReplacement"] = 4
+            expected["TranslateExpression"] = 1
             expected["TranslateRecursivePatternTest"] = 3
             expected["TryBuildNestedNegatedGuardHoist"] = 1
         }

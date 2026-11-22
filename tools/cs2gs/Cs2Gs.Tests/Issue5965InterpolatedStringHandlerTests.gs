@@ -12,6 +12,7 @@ import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Diagnostics
 import System.IO
+import System.Linq
 import System.Text
 import Xunit
 
@@ -880,6 +881,33 @@ public ref struct StructCellHandlerForRo {
     public void AppendFormatted(int v) { }
 }
 
+[InterpolatedStringHandler]
+public ref struct CondBaseReceiverHandler {
+    public readonly string Text;
+    public CondBaseReceiverHandler(int literalLength, int formattedCount, CondBaseHost host) {
+        Text = host.Tag + ":";
+    }
+    public void AppendFormatted(int v) { }
+}
+
+public class CondBaseHost {
+    public readonly string Tag;
+    public CondBaseHost(string tag) { Tag = tag; }
+    public string Log([InterpolatedStringHandlerArgument("")] CondBaseReceiverHandler h) => "D:" + h.Text + Tag;
+    public string BaseLog([InterpolatedStringHandlerArgument("")] CondBaseReceiverHandler h) => "B:" + h.Text + Tag;
+    public string Consume(string s) => Tag + "<-" + s;
+}
+
+public sealed class CondDerivedHost : CondBaseHost {
+    public CondDerivedHost() : base("self") { }
+    public new string BaseLog([InterpolatedStringHandlerArgument("")] CondBaseReceiverHandler h) => "NEW:" + h.Text + Tag;
+    public string Probe(CondBaseHost? other) {
+        var unqual = other?.Consume(Log($"{1}"));
+        var baseCall = base.BaseLog($"{2}");
+        return unqual + ";" + baseCall;
+    }
+}
+
 public static class ObliviousPromotedRefHelper {
     public static string Touch(ref string target, [InterpolatedStringHandlerArgument("target")] PromotedRefArgHandler h) {
         string prev = target;
@@ -1031,6 +1059,7 @@ public static class Demo {
         int roOther = 10;
         var roStruct = new RefReadOnlyParamStruct { Seed = 20 };
         var roRefArgRes = roStruct.Run(ref roOther);
+        var condBaseRes = new CondDerivedHost().Probe(new CondBaseHost("other"));
 
         var refNonNullRes = AcceptRefNonNull(ref nullableField!, $"{8}");
 
@@ -1125,7 +1154,7 @@ public static class Demo {
             outVarRes + "|" + outExistingRes + "|" + spanLit + "|" + baseCtorSeen + "|" + ungatedRes + "|" +
             condExtRes + "|" + namedDelegateRes + "|" +
             afterFalseGated + "," + afterTrueGated + "|" + pairAfterFalse + "," + pairAfterTrue + "|" +
-            deconstructOrderRes + "|" + ordCompoundRes + "|" + unqualOutRes + "|" + roRefArgRes + "|" + refNonNullRes + "|" + refIdxRes + "|" + refIdxRhsOrderRes + "|" + refCondRes + "|" + genCell.Total + "|" + genClassRes + "|" + byValExtRes + "|" + outerCastRes + "|" + inLongRes + "|" + paramsAppendRes + "|" + callerInfoRes + "|" +
+            deconstructOrderRes + "|" + ordCompoundRes + "|" + unqualOutRes + "|" + roRefArgRes + "|" + condBaseRes + "|" + refNonNullRes + "|" + refIdxRes + "|" + refIdxRhsOrderRes + "|" + refCondRes + "|" + genCell.Total + "|" + genClassRes + "|" + byValExtRes + "|" + outerCastRes + "|" + inLongRes + "|" + paramsAppendRes + "|" + callerInfoRes + "|" +
             afterStmtPostInc + "," + valPostInc + "," + valPreInc + "," + valPostDec + "," + incNextCalls + "|" +
             nullPlain + "|" + nullCall + "|" + nullParams + "|" + nullAssignStmt + "|" + nullAssignExpr + "|" + nullConvStmt + "|" + nullConvExpr;
     }
@@ -1157,7 +1186,7 @@ public struct RefIndexerCell {
     public int[] Slots;
     public readonly ref int this[LibRefIdxHandler h] => ref Slots[Index];
 }
-`, strictIl: true, expectedOutput: "5|8|102|7:8:8|init->after:init:1|5|True|99:42|99:42|lit-9|55|4:5|53|3:7|10,12|0,2:20:21|5:30:31:1:2|HR:22:21:4:5|141:0|61|nf:8|0:77|88:0:88|21:41|8|orig:123|repl|11:60|31|99|ab#3cd|1 + 2=3@True|12,12,14,13,5|pl:1|c:1|p:2|s:1|e:2|cs:1|ce:2")
+`, strictIl: true, expectedOutput: "5|8|102|7:8:8|init->after:init:1|5|True|99:42|99:42|lit-9|55|4:5|53|3:7|10,12|0,2:20:21|5:30:31:1:2|HR:22:21:4:5|141:0|61|other<-D:self:self;B:self:self|nf:8|0:77|88:0:88|21:41|8|orig:123|repl|11:60|31|99|ab#3cd|1 + 2=3@True|12,12,14,13,5|pl:1|c:1|p:2|s:1|e:2|cs:1|ce:2")
     }
 
     @Fact
@@ -1399,7 +1428,7 @@ public ref struct TopRefLocal {
             ) == true
         )
 
-        // 6. Collection initializer Add(...) with receiver placeholder reports unsupported rather than using enclosing `this`.
+        // 6. Collection initializer Add(...) with receiver placeholder reports unsupported rather than using enclosing `this` or an outer call's receiver.
         let collInitTree = CSharpSyntaxTree.ParseText(`
 using System.Collections;
 using System.Runtime.CompilerServices;
@@ -1410,7 +1439,9 @@ public ref struct BagHandler {
 }
 public sealed class Bag : IEnumerable {
     public void Add([InterpolatedStringHandlerArgument("")] BagHandler h) { }
+    public void Log([InterpolatedStringHandlerArgument("")] BagHandler h, Bag nested) { }
     public Bag Make() => new Bag { $"{1}" };
+    public void MakeNested(Bag bag) => bag.Log($"{1}", new Bag { $"{2}" });
     public IEnumerator GetEnumerator() => null!;
 }
 `, path: "BagInit.cs")
@@ -1426,12 +1457,14 @@ public sealed class Bag : IEnumerable {
             LoadedDocument(collInitTree.FilePath, collInitTree, collModel),
             collCtx
         )
-        Assert.Contains(
-            collCtx.Diagnostics,
-            (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported && d.Message?.Contains(
-                "receiver placeholder",
-                StringComparison.OrdinalIgnoreCase
-            ) == true
+        Assert.Equal(
+            2,
+            collCtx.Diagnostics.Count(
+                (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported && d.Message?.Contains(
+                    "receiver placeholder",
+                    StringComparison.OrdinalIgnoreCase
+                ) == true
+            )
         )
 
         // 7. Top-level ref-returning coordinated handler call reports located unsupported diagnostic.
