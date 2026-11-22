@@ -847,7 +847,11 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     let headerOutgoingGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
                     for entry in headerGotos {
                         if labelToArm.ContainsKey(entry.Key) {
-                            pendingArmLabelOver[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                            if !pendingArmLabelOver.TryGetValue(entry.Key, out var sink) {
+                                pendingArmLabelOver[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                            } else {
+                                sink.IntersectWith(entry.Value)
+                            }
                         } else {
                             headerOutgoingGotos[entry.Key] = HashSet[VariableSymbol](entry.Value)
                         }
@@ -1343,7 +1347,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 }
                 case cp is BoundConstantPattern {
                     let c = ReadAndAwaitCollector(interesting, entryPointsTo, entryOverwritten)
-                    c.VisitExpression(cp.Value)
+                    c.VisitPattern(cp)
                     return (c.definitelyOverwritten, HashSet[VariableSymbol](c.definitelyOverwritten), true, true)
                 }
                 case rp is BoundRelationalPattern {
@@ -1873,7 +1877,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                                 canTransfer = false
                             }
                             case th is BoundThrowStatement {
-                                stmtCollector.VisitExpression(th.Expression)
+                                stmtCollector.VisitStatement(th)
                                 canTransfer = false
                             }
                             case BoundRethrowStatement {
@@ -2067,7 +2071,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                                 }
                             }
                             case th is BoundThrowStatement {
-                                stmtCollector.VisitExpression(th.Expression)
+                                stmtCollector.VisitStatement(th)
                             }
                             case cgs is BoundConditionalGotoStatement {
                                 stmtCollector.VisitExpression(cgs.Condition)
@@ -2726,6 +2730,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             if patCanFail {
                 RefStructAsyncLivenessAnalyzer.UnionPointsToInto(pointsTo, unmatched)
+            }
+        }
+
+        protected override func VisitConstantPattern(node BoundConstantPattern) {
+            VisitExpression(node.Value)
+            if RefStructAsyncLivenessAnalyzer.ConstantPatternMayCallObjectEquals(node) {
+                MergeExceptionalOverwrites(definitelyOverwritten)
             }
         }
 
@@ -3862,6 +3873,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             case cp is BoundConstantPattern {
                 let s = ClonePointsTo(entryState)
                 PointsToExpressionUpdater(s, interesting, exceptionalUnion, gotoExits).VisitExpression(cp.Value)
+                if exceptionalUnion != nil && ConstantPatternMayCallObjectEquals(cp) {
+                    UnionPointsToInto(exceptionalUnion, s)
+                }
                 return (s, ClonePointsTo(s), true, true)
             }
             case rp is BoundRelationalPattern {
@@ -4144,6 +4158,23 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     }
                 }
                 return true
+            }
+            case unary is BoundUnaryExpression {
+                return (
+                    unary
+                        .Op
+                        .Kind == BoundUnaryOperatorKind.LogicalNegation ||
+                        unary
+                        .Op
+                        .Kind == BoundUnaryOperatorKind.OnesComplement ||
+                        unary
+                        .Op
+                        .Kind == BoundUnaryOperatorKind.Identity
+                ) &&
+                    ExpressionCannotThrow(unary.Operand)
+            }
+            case isExpr is BoundIsExpression {
+                return ExpressionCannotThrow(isExpr.Expression) && !PatternMayThrow(isExpr.Pattern)
             }
             case block is BoundBlockExpression {
                 for stmt in block.Statements {
@@ -4503,6 +4534,14 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
     }
 
+    private func ConstantPatternMayCallObjectEquals(cp BoundConstantPattern) bool {
+        let unwrapped = BoundConstantPattern.UnwrapInputConversion(cp.Type, cp.Value)
+        if unwrapped is BoundLiteralExpression literal && literal.Value == nil {
+            return false
+        }
+        return BoundConstantPattern.ClassifyTest(cp.Type, cp.Value) == ConstantPatternTestKind.ObjectEquals
+    }
+
     private func PatternMayThrow(pattern BoundPattern?) bool {
         if pattern == nil {
             return false
@@ -4512,7 +4551,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 return false
             }
             case cp is BoundConstantPattern {
-                return !ExpressionCannotThrow(cp.Value)
+                return !ExpressionCannotThrow(cp.Value) || ConstantPatternMayCallObjectEquals(cp)
             }
             case rp is BoundRelationalPattern {
                 return !ExpressionCannotThrow(rp.Test ?? rp.Value)
@@ -4661,6 +4700,66 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         return detector.Found
     }
 
+    private class FinallySummaryEntry {
+        init(
+            input Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+            exitState Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+            exceptionalUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+            hasNormalExit bool,
+            gotoExits Dictionary[BoundLabel, Dictionary[VariableSymbol, HashSet[VariableSymbol]]],
+            returnUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]]
+        ) {
+            Input = input
+            ExitState = exitState
+            ExceptionalUnion = exceptionalUnion
+            HasNormalExit = hasNormalExit
+            GotoExits = gotoExits
+            ReturnUnion = returnUnion
+        }
+
+        prop Input Dictionary[VariableSymbol, HashSet[VariableSymbol]] {
+            get;
+        }
+        prop ExitState Dictionary[VariableSymbol, HashSet[VariableSymbol]] {
+            get;
+        }
+        prop ExceptionalUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]] {
+            get;
+        }
+        prop HasNormalExit bool {
+            get;
+        }
+        prop GotoExits Dictionary[BoundLabel, Dictionary[VariableSymbol, HashSet[VariableSymbol]]] {
+            get;
+        }
+        prop ReturnUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]] {
+            get;
+        }
+    }
+
+    private func SummarizeFinallyRegion(
+        finallyBlock BoundStatement,
+        input Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+        interesting HashSet[VariableSymbol],
+        cache List[FinallySummaryEntry]
+    ) FinallySummaryEntry {
+        for entry in cache {
+            if PointsToEqual(entry.Input, input) {
+                return entry
+            }
+        }
+        let retUnion = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+        let (exitState, excUnion, hasNormal, gotoExits) = ComputeRegionPointsToSummary(
+            finallyBlock,
+            input,
+            interesting,
+            outReturnUnion: retUnion
+        )
+        let summary = FinallySummaryEntry(ClonePointsTo(input), exitState, excUnion, hasNormal, gotoExits, retUnion)
+        cache.Add(summary)
+        return summary
+    }
+
     private func ComputeTryPointsToSummary(
         tryStmt BoundTryStatement,
         entryPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]?,
@@ -4777,64 +4876,45 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         var finalHasNormalExit = afterTryHasNormalExit
         let outerReturnUnion = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
         if tryStmt.FinallyBlock is {} finallyBlock {
-            let finallyReturnUnion = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
-            let (_, finallyExceptional, _, finallyGotoExits) = ComputeRegionPointsToSummary(
-                finallyBlock,
-                finallyIn,
-                interesting,
-                outReturnUnion: finallyReturnUnion
-            )
-            UnionPointsToInto(outerReturnUnion, finallyReturnUnion)
+            // Reuse summaries for equivalent incoming alias maps so nested try/finally
+            // regions do not re-analyze identical states exponentially.
+            let finallyCache = List[FinallySummaryEntry]()
+            let finallyInSummary = SummarizeFinallyRegion(finallyBlock, finallyIn, interesting, finallyCache)
+            UnionPointsToInto(outerReturnUnion, finallyInSummary.ReturnUnion)
             if hasInnerReturn || innerReturnUnion.Count > 0 {
-                let (retFinallyExit, _, retFinallyHasNormalExit, _) = ComputeRegionPointsToSummary(
-                    finallyBlock,
-                    innerReturnUnion,
-                    interesting
-                )
-                if retFinallyHasNormalExit {
-                    UnionPointsToInto(outerReturnUnion, retFinallyExit)
+                let retSummary = SummarizeFinallyRegion(finallyBlock, innerReturnUnion, interesting, finallyCache)
+                if retSummary.HasNormalExit {
+                    UnionPointsToInto(outerReturnUnion, retSummary.ExitState)
                 }
             }
             let transformedExceptional = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
             if hasPendingException {
-                let (excFinallyExit, _, excFinallyHasNormalExit, _) = ComputeRegionPointsToSummary(
-                    finallyBlock,
-                    combinedExceptional,
-                    interesting
-                )
-                if excFinallyHasNormalExit {
-                    UnionPointsToInto(transformedExceptional, excFinallyExit)
+                let excSummary = SummarizeFinallyRegion(finallyBlock, combinedExceptional, interesting, finallyCache)
+                if excSummary.HasNormalExit {
+                    UnionPointsToInto(transformedExceptional, excSummary.ExitState)
                 }
             }
             combinedExceptional.Clear()
             UnionPointsToInto(combinedExceptional, transformedExceptional)
-            UnionPointsToInto(combinedExceptional, finallyExceptional)
+            UnionPointsToInto(combinedExceptional, finallyInSummary.ExceptionalUnion)
             // Keep unioned finallyIn for analyzing the finally body itself, but compute
             // the normal continuation after the try exclusively from reachable normal afterTry paths.
             if afterTryHasNormalExit {
-                let (normalFinallyExit, _, normalFinallyHasNormalExit, _) = ComputeRegionPointsToSummary(
-                    finallyBlock,
-                    afterTry,
-                    interesting
-                )
-                finalState = normalFinallyExit
-                finalHasNormalExit = normalFinallyHasNormalExit
+                let normalSummary = SummarizeFinallyRegion(finallyBlock, afterTry, interesting, finallyCache)
+                finalState = ClonePointsTo(normalSummary.ExitState)
+                finalHasNormalExit = normalSummary.HasNormalExit
             } else {
                 finalState = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
                 finalHasNormalExit = false
             }
             let transformedGotos = Dictionary[BoundLabel, Dictionary[VariableSymbol, HashSet[VariableSymbol]]]()
             for entry in outgoingGotos {
-                let (gotoFinallyExit, _, gotoFinallyHasNormalExit, _) = ComputeRegionPointsToSummary(
-                    finallyBlock,
-                    entry.Value,
-                    interesting
-                )
-                if gotoFinallyHasNormalExit {
-                    transformedGotos[entry.Key] = gotoFinallyExit
+                let gotoSummary = SummarizeFinallyRegion(finallyBlock, entry.Value, interesting, finallyCache)
+                if gotoSummary.HasNormalExit {
+                    transformedGotos[entry.Key] = ClonePointsTo(gotoSummary.ExitState)
                 }
             }
-            UnionGotoMapInto(transformedGotos, finallyGotoExits)
+            UnionGotoMapInto(transformedGotos, finallyInSummary.GotoExits)
             outgoingGotos.Clear()
             UnionGotoMapInto(outgoingGotos, transformedGotos)
         } else {
@@ -5491,6 +5571,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
         let outMap = Dictionary[ControlFlowGraph.BasicBlock, Dictionary[VariableSymbol, HashSet[VariableSymbol]]]()
         let blockCanTransfer = Dictionary[ControlFlowGraph.BasicBlock, bool]()
+        let blockIndex = Dictionary[ControlFlowGraph.BasicBlock, int]()
         let labelToBlock = Dictionary[BoundLabel, ControlFlowGraph.BasicBlock]()
         let nestedLabelToSwitch = Dictionary[
             BoundLabel,
@@ -5506,7 +5587,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             Dictionary[VariableSymbol, HashSet[VariableSymbol]]
         ]()
         let reachable = HashSet[ControlFlowGraph.BasicBlock]()
-        for b in graph.Blocks {
+        for var bi = 0; bi < graph.Blocks.Count; bi++ {
+            let b = graph.Blocks[bi]
+            blockIndex[b] = bi
             outMap[b] = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
             blockCanTransfer[b] = true
             for stmt in b.Statements {
@@ -5523,6 +5606,15 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     }
                 }
             }
+        }
+        let HasBackEdgeSuccessor = func (b ControlFlowGraph.BasicBlock) bool {
+            let idx = blockIndex[b]
+            for branch in b.Outgoing {
+                if !branch.To.IsEnd && blockIndex[branch.To] <= idx {
+                    return true
+                }
+            }
+            return false
         }
         let RouteNestedSwitchGoto = func (
             lbl BoundLabel,
@@ -5602,7 +5694,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 if !anyReachablePred && !hasNestedOnly {
                     continue
                 }
-                if reachable.Add(block) {
+                if reachable.Add(block) && HasBackEdgeSuccessor(block) {
                     changed = true
                 }
                 var blockActive = anyReachablePred
@@ -5680,11 +5772,15 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 }
                 if blockCanTransfer[block] != canTransfer {
                     blockCanTransfer[block] = canTransfer
-                    changed = true
+                    if HasBackEdgeSuccessor(block) {
+                        changed = true
+                    }
                 }
                 if !PointsToEqual(state, outMap[block]) {
                     outMap[block] = state
-                    changed = true
+                    if HasBackEdgeSuccessor(block) {
+                        changed = true
+                    }
                 }
             }
         }

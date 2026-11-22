@@ -3487,6 +3487,207 @@ run().GetAwaiter().GetResult()
 `)
         Assert.Empty(nonThrowingTrySkipsCatchAliasSafe.Diagnostics)
         Assert.Equal("2\n", nonThrowingTrySkipsCatchAliasSafe.Output)
+
+        let switchExternalAndHeaderGotoMergeIntersectsOverwritesUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    await Task.Delay(1)
+    if flag {
+        goto armLabel
+    }
+    switch ({
+        c = Counter{Value: 99}
+        goto armLabel
+        0
+    }) {
+        case 1 {
+            armLabel:
+            Console.WriteLine(c.Value)
+        }
+        default { }
+    }
+}
+
+run(true).GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            switchExternalAndHeaderGotoMergeIntersectsOverwritesUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            switchExternalAndHeaderGotoMergeIntersectsOverwritesUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let preconstructedThrowInBlockExpressionCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    let ex = InvalidOperationException()
+    await Task.Delay(1)
+    let _ = {
+        try {
+            throw ex
+        } catch {
+            Console.WriteLine(c.Value)
+        }
+        1
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            preconstructedThrowInBlockExpressionCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            preconstructedThrowInBlockExpressionCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let objectConstantPatternThrowsRetainsAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+class ThrowEq {
+    override func Equals(obj object?) bool -> throw InvalidOperationException()
+    override func GetHashCode() int32 -> 1
+}
+
+async func run(a object) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        p = &c.Value
+        let ok = a is 42
+        p = &x
+        Console.WriteLine(ok)
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(ThrowEq()).GetAwaiter().GetResult()
+`)
+        Assert.Contains(objectConstantPatternThrowsRetainsAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            objectConstantPatternThrowsRetainsAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let switchObjectConstantPatternThrowsIntoFinallyAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+class ThrowEq {
+    override func Equals(obj object?) bool -> throw InvalidOperationException()
+    override func GetHashCode() int32 -> 1
+}
+
+async func run(a object) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        try {
+            switch a {
+                case 42 { }
+            }
+        } finally {
+            p = &c.Value
+        }
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(ThrowEq()).GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            switchObjectConstantPatternThrowsIntoFinallyAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            switchObjectConstantPatternThrowsIntoFinallyAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let deepNestedTryFinallyCompletesLinearlySafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    Console.WriteLine(c.Value)
+    await Task.Delay(1)
+    try { Console.WriteLine(0) } finally {
+        try { Console.WriteLine(0) } finally {
+            try { Console.WriteLine(0) } finally {
+                try { Console.WriteLine(0) } finally {
+                    try { Console.WriteLine(0) } finally {
+                        try { Console.WriteLine(0) } finally {
+                            try { Console.WriteLine(0) } finally {
+                                try { Console.WriteLine(0) } finally {
+                                    try { Console.WriteLine(0) } finally {
+                                        try { Console.WriteLine(0) } finally {
+                                            try { Console.WriteLine(0) } finally {
+                                                try { Console.WriteLine(0) } finally {
+                                                    try { Console.WriteLine(0) } finally {
+                                                        try { Console.WriteLine(0) } finally {
+                                                            try { Console.WriteLine(0) } finally {
+                                                                try { Console.WriteLine(0) } finally {
+                                                                    try { Console.WriteLine(0) } finally {
+                                                                        try { Console.WriteLine(1) } finally { }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(deepNestedTryFinallyCompletesLinearlySafe.Diagnostics)
+        Assert.EndsWith("\n1\n", deepNestedTryFinallyCompletesLinearlySafe.Output)
     }
 
     @Fact
