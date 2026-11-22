@@ -16,8 +16,11 @@ enum AnalyzerScope {
 
     /// The analyzer registers only bound-node and bound-body actions, and what it reports from the
     /// actions on one function body depends only on that body and the compilation's declarations, not
-    /// on another body. Its messages and properties do not depend on where the body sits in the file:
-    /// a diagnostic of another body keeps its message when an edit before it moves its span. A
+    /// on another body. It reads the body from its context (the bound body or node and their syntax),
+    /// not through the owning symbol: a run on an edited body gives the symbol of the compilation before
+    /// the edit, whose declaration holds the old body (the declaration outside the body is the same).
+    /// Its messages and properties do not depend on where the body sits in the file: a diagnostic of
+    /// another body keeps its message when an edit before it moves its span. A
     /// diagnostic-delta check of an edit inside one body runs it on the edited body alone and keeps its
     /// earlier results for the other bodies. An analyzer that declares this scope and registers another
     /// kind of action counts as (cref:AnalyzerScope.Compilation).
