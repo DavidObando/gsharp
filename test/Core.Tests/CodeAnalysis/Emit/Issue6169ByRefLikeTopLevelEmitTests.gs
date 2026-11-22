@@ -2704,6 +2704,249 @@ run().GetAwaiter().GetResult()
 `)
         Assert.Empty(tryReseatAliasBeforeThrowCatchSafe.Diagnostics)
         Assert.Equal("1\n", tryReseatAliasBeforeThrowCatchSafe.Output)
+
+        let conversionUnboxingThrowsRetainsAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(value object) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        p = &c.Value
+        let n = int32(value)
+        p = &x
+        Console.WriteLine(n)
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run("bad").GetAwaiter().GetResult()
+`)
+        Assert.Contains(conversionUnboxingThrowsRetainsAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            conversionUnboxingThrowsRetainsAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let conversionUnboxingThrowsBlockExprCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(value object) Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    try {
+        let _ = {
+            let n = int32(value)
+            c = Counter{Value: n}
+            0
+        }
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run("bad").GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            conversionUnboxingThrowsBlockExprCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            conversionUnboxingThrowsBlockExprCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let wideningNumericConversionNonThrowingSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        p = &x
+        let wide int64 = int64(n)
+        if wide >= 0 {
+            throw InvalidOperationException()
+        }
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(5).GetAwaiter().GetResult()
+`)
+        Assert.Empty(wideningNumericConversionNonThrowingSafe.Diagnostics)
+        Assert.Equal("1\n", wideningNumericConversionNonThrowingSafe.Output)
+
+        let propertyPatternGetterThrowsInIsExprUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+class Probe {
+    prop Value int32 -> throw InvalidOperationException()
+}
+
+async func run(probe Probe) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        p = &c.Value
+        let ok = probe is { Value: _ }
+        p = &x
+        Console.WriteLine(ok)
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(Probe()).GetAwaiter().GetResult()
+`)
+        Assert.Contains(propertyPatternGetterThrowsInIsExprUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(propertyPatternGetterThrowsInIsExprUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let propertyPatternGetterThrowsInSwitchUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+class Probe {
+    prop Value int32 -> throw InvalidOperationException()
+}
+
+async func run(probe Probe) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        p = &c.Value
+        switch probe {
+            case { Value: _ } { }
+        }
+        p = &x
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(Probe()).GetAwaiter().GetResult()
+`)
+        Assert.Contains(propertyPatternGetterThrowsInSwitchUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(propertyPatternGetterThrowsInSwitchUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let propertyPatternGetterThrowsOverwriteCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+class Probe {
+    prop Value int32 -> throw InvalidOperationException()
+}
+
+async func run(probe Probe) Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    try {
+        let ok = probe is { Value: _ }
+        c = Counter{Value: 20}
+        Console.WriteLine(ok)
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run(Probe()).GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            propertyPatternGetterThrowsOverwriteCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            propertyPatternGetterThrowsOverwriteCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let handledCatchAllReseatBeforeFinallyAwaitSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        throw InvalidOperationException()
+    } catch {
+        p = &x
+    } finally {
+        await Task.Delay(1)
+        Console.WriteLine(*p)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(handledCatchAllReseatBeforeFinallyAwaitSafe.Diagnostics)
+        Assert.Equal("1\n", handledCatchAllReseatBeforeFinallyAwaitSafe.Output)
+
+        let typedCatchNotMatchedFinallyAwaitUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        throw InvalidOperationException()
+    } catch (ex ArgumentException) {
+        p = &x
+    } finally {
+        await Task.Delay(1)
+        Console.WriteLine(*p)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(typedCatchNotMatchedFinallyAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(typedCatchNotMatchedFinallyAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
     }
 
     @Fact

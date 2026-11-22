@@ -635,6 +635,44 @@ checkReseatBeforeThrow().GetAwaiter().GetResult()
 `, "top-level-block-try-overwrite-and-reseat-before-throw-safe", executable: true)
         IlVerifier.Verify(blockTryOverwriteAndReseatBeforeThrowAssembly)
         Assert.Equal("20,1\n", fixture.Run(blockTryOverwriteAndReseatBeforeThrowAssembly))
+
+        let handledCatchAllFinallyAndConversionSafeAssembly = fixture.Compile(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func checkHandledCatchAllAndWidening(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        throw InvalidOperationException()
+    } catch {
+        p = &x
+    } finally {
+        await Task.Delay(1)
+        Console.Write("${*p},")
+    }
+    var c2 = Counter{Value: 42}
+    var p2 = &c2.Value
+    try {
+        p2 = &x
+        let wide int64 = int64(n)
+        if wide >= 0 {
+            throw InvalidOperationException()
+        }
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p2)
+}
+
+checkHandledCatchAllAndWidening(5).GetAwaiter().GetResult()
+`, "top-level-handled-catch-all-finally-and-widening-safe", executable: true)
+        IlVerifier.Verify(handledCatchAllFinallyAndConversionSafeAssembly)
+        Assert.Equal("1,1\n", fixture.Run(handledCatchAllFinallyAndConversionSafeAssembly))
     }
 
     shared {

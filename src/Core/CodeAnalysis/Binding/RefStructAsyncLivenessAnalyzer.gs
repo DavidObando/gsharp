@@ -380,8 +380,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     BoundSwitchExpression or
                     BoundIsExpression or
                     BoundNullConditionalAccessExpression or
-                    BoundAssignmentExpression or
-                    BoundConversionExpression
+                    BoundAssignmentExpression
             ) &&
                 !(
                 node is BoundBinaryExpression bin &&
@@ -2728,6 +2727,15 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 RefStructAsyncLivenessAnalyzer.UnionPointsToInto(pointsTo, unmatched)
             }
         }
+
+        protected override func VisitPropertyPattern(node BoundPropertyPattern) {
+            for field in node.Fields {
+                if field.IsProperty || field.ClrMember is System.Reflection.PropertyInfo {
+                    MergeExceptionalOverwrites(definitelyOverwritten)
+                }
+                VisitPattern(field.Pattern)
+            }
+        }
     }
 
     /// Finds every async or iterator function-literal expression (lambda or
@@ -3061,8 +3069,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     BoundSwitchExpression or
                     BoundIsExpression or
                     BoundNullConditionalAccessExpression or
-                    BoundAssignmentExpression or
-                    BoundConversionExpression
+                    BoundAssignmentExpression
             ) &&
                 !(
                 node is BoundBinaryExpression bin &&
@@ -3741,6 +3748,10 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 let unmatched = ClonePointsTo(entryState)
                 var canMatch = true
                 for field in pp.Fields {
+                    if exceptionalUnion != nil &&
+                        (field.IsProperty || field.ClrMember is System.Reflection.PropertyInfo) {
+                        UnionPointsToInto(exceptionalUnion, matched)
+                    }
                     let (fm, fu, fMatch, fFail) = ApplyPatternPointsTo(
                         field.Pattern,
                         matched,
@@ -3915,6 +3926,28 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             case assign is BoundAssignmentExpression {
                 return ExpressionCannotThrow(assign.Expression)
+            }
+            case conv is BoundConversionExpression {
+                if !ExpressionCannotThrow(conv.Expression) || conv.IsChecked {
+                    return false
+                }
+                let convKind = Conversion.Classify(conv.Expression.Type, conv.Type)
+                if !convKind.Exists || convKind.RequiresPlatformNilCheck {
+                    return false
+                }
+                if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(conv.Expression.Type, conv.Type) {
+                    return true
+                }
+                if conv
+                    .Expression
+                    .Type == TypeSymbol.Null &&
+                    (conv.Type is PointerTypeSymbol || IsReferenceOwnerType(conv.Type)) {
+                    return true
+                }
+                let srcClr = conv.Expression.Type.ClrType?.FullName
+                let dstClr = conv.Type.ClrType?.FullName
+                return srcClr != nil && dstClr != nil && NumericWideningLattice.IsNumericPrimitive(srcClr) &&
+                    NumericWideningLattice.IsNumericPrimitive(dstClr)
             }
             case fieldAssign is BoundFieldAssignmentExpression {
                 return fieldAssign.Receiver != nil &&
@@ -4254,7 +4287,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             afterTryHasNormalExit = true
             UnionPointsToInto(afterTry, tryExit)
         }
-        let combinedExceptional = ClonePointsTo(exceptionalIn)
+        let combinedExceptional = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
         let outgoingGotos = Dictionary[BoundLabel, Dictionary[VariableSymbol, HashSet[VariableSymbol]]]()
         UnionGotoMapInto(outgoingGotos, tryGotoExits)
         let filterEntryPointsTo = Dictionary[BoundCatchClause, Dictionary[VariableSymbol, HashSet[VariableSymbol]]](
@@ -4297,20 +4330,19 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 handlerDispatchState.Clear()
             }
         }
+        UnionPointsToInto(combinedExceptional, handlerDispatchState)
         let finallyIn = ClonePointsTo(combinedExceptional)
-        UnionPointsToInto(finallyIn, handlerDispatchState)
         UnionPointsToInto(finallyIn, afterTry)
         UnionGotoExitsInto(finallyIn, outgoingGotos)
         var finalState = afterTry
         var finalHasNormalExit = afterTryHasNormalExit
         if tryStmt.FinallyBlock is {} finallyBlock {
-            let (finallyExit, finallyExceptional, _, finallyGotoExits) = ComputeRegionPointsToSummary(
+            let (_, finallyExceptional, _, finallyGotoExits) = ComputeRegionPointsToSummary(
                 finallyBlock,
                 finallyIn,
                 interesting
             )
             UnionPointsToInto(combinedExceptional, finallyExceptional)
-            UnionPointsToInto(combinedExceptional, handlerDispatchState)
             // Keep unioned finallyIn for analyzing the finally body itself, but compute
             // the normal continuation after the try exclusively from reachable normal afterTry paths.
             if afterTryHasNormalExit {
@@ -4340,7 +4372,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             outgoingGotos.Clear()
             UnionGotoMapInto(outgoingGotos, transformedGotos)
         } else {
-            UnionPointsToInto(combinedExceptional, handlerDispatchState)
+            // Uncaught exceptions from try/filters remain in combinedExceptional.
+
         }
         return TryPointsToSummary(
             filterEntryPointsTo,
