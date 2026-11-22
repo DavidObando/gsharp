@@ -249,6 +249,47 @@ await Task.Delay(1)
 `)
         Assert.Empty(safeBeforeAwait.Diagnostics)
         Assert.Equal("42\n", safeBeforeAwait.Output)
+
+        let branchedUnsafeFunc = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var p = &c.Value
+    await Task.Delay(1)
+    if flag {
+        Console.WriteLine(*p)
+    }
+}
+
+run(true).GetAwaiter().GetResult()
+`)
+        Assert.Contains(branchedUnsafeFunc.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(branchedUnsafeFunc.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let safeReseatedAfterAwait = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 42}
+var x = 1
+var p = &c.Value
+Console.WriteLine(*p)
+await Task.Delay(1)
+p = &x
+Console.WriteLine(*p)
+`)
+        Assert.Empty(safeReseatedAfterAwait.Diagnostics)
+        Assert.Equal("42\n1\n", safeReseatedAfterAwait.Output)
     }
 
     @Fact

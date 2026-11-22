@@ -154,6 +154,46 @@ Console.WriteLine(*p)
         Assert.NotEqual(0, aliasAwaitCode)
         Assert.Contains("GS0219", aliasAwaitOutput, StringComparison.Ordinal)
         Assert.DoesNotContain("GS9998", aliasAwaitOutput, StringComparison.Ordinal)
+
+        let (branchedAliasCode, branchedAliasOutput) = fixture.TryCompile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var p = &c.Value
+    await Task.Delay(1)
+    if flag {
+        Console.WriteLine(*p)
+    }
+}
+
+run(true).GetAwaiter().GetResult()
+`, "func-branched-ref-struct-alias-await", executable: true)
+        Assert.NotEqual(0, branchedAliasCode)
+        Assert.Contains("GS0219", branchedAliasOutput, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", branchedAliasOutput, StringComparison.Ordinal)
+
+        let reseatedAssembly = fixture.Compile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 42}
+var x = 1
+var p = &c.Value
+Console.WriteLine(*p)
+await Task.Delay(1)
+p = &x
+Console.WriteLine(*p)
+`, "top-level-reseated-alias-after-await", executable: true)
+        IlVerifier.Verify(reseatedAssembly)
+        Assert.Equal("42\n1\n", fixture.Run(reseatedAssembly))
     }
 
     shared {
