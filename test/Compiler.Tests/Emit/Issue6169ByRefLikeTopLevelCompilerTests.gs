@@ -426,6 +426,57 @@ switch n {
 `, "top-level-standalone-switch-and-terminating-branch-safe", executable: true)
         IlVerifier.Verify(standaloneSwitchAndTerminatingBranchSafeAssembly)
         Assert.Equal("42\n77\n", fixture.Run(standaloneSwitchAndTerminatingBranchSafeAssembly))
+
+        let filterAndImpossiblePatternSafeAssembly = fixture.Compile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func checkImpossiblePatterns(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    let r = switch n {
+        case not _ when ({
+            p = &c.Value
+            true
+        }): 0
+        default: 5
+    }
+    switch n {
+        case not _ when ({
+            p = &c.Value
+            true
+        }) { }
+        default { }
+    }
+    if n is _ or > ({
+        p = &c.Value
+        0
+    }) { }
+    await Task.Delay(1)
+    Console.WriteLine("${r},${*p}")
+}
+
+checkImpossiblePatterns(0).GetAwaiter().GetResult()
+
+var topC = Counter{Value: 10}
+await Task.Delay(1)
+try {
+    throw InvalidOperationException()
+} catch when ({
+    topC = Counter{Value: 88}
+    false
+}) { } catch {
+    Console.WriteLine(topC.Value)
+}
+`, "top-level-filter-and-impossible-pattern-safe", executable: true)
+        IlVerifier.Verify(filterAndImpossiblePatternSafeAssembly)
+        let filterAndImpossibleOutput = fixture.Run(filterAndImpossiblePatternSafeAssembly)
+        Assert.StartsWith("5,", filterAndImpossibleOutput)
+        Assert.EndsWith("\n88\n", filterAndImpossibleOutput)
     }
 
     shared {

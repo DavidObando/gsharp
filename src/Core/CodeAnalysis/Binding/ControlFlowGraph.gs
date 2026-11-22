@@ -490,12 +490,16 @@ class ControlFlowGraph {
         }
 
         private func CollectNestedGotoTargets(statement BoundStatement) List[BoundLabel] {
-            if statement is BoundTryStatement or BoundPatternSwitchStatement or BoundFixedStatement {
-                let collector = NestedGotoCollector()
-                collector.VisitStatement(statement)
-                return collector.Targets
+            if statement is BoundGotoStatement or BoundLabelStatement {
+                return List[BoundLabel]()
             }
-            return List[BoundLabel]()
+            let collector = NestedGotoCollector()
+            if statement is BoundConditionalGotoStatement cgs {
+                collector.VisitExpression(cgs.Condition)
+            } else {
+                collector.VisitStatement(statement)
+            }
+            return collector.Targets
         }
 
         shared {
