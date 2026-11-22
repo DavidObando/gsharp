@@ -30,6 +30,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - **Published 0.5.767 documentation** (Part of #6166). The default 0.5 snapshot uses the release tag, with matching installation instructions and independently verified downloads. Released native-feature guidance keeps stable fragment links and uses function-local span examples. Scrollable Markdown tables receive keyboard focus without adding tab stops to non-scrolling tables. The 0.4 and 0.3 snapshots and historical editor captures retain their original provenance.
 
+- Lower C# `[InterpolatedStringHandler]` conversions and handler-typed call arguments uniformly in `cs2gs` across both source and imported callees and handler types, preserving single-evaluation receiver and forwarded-argument capture, `ref`/`in` handler passing, `out bool` and `bool`-append short-circuiting, call-effect invalidation, and assignment-narrowing semantics while leaving ordinary string interpolations native. (Fixes #5965)
+
 ## 0.5.767 (November 21, 2026)
 
 This snapshot is grounded in [`v0.5.767`](https://github.com/DavidObando/gsharp/releases/tag/v0.5.767), commit `30dcc01a948ce5f876e73f715461a6896bc950d3`, published November 21, 2026 at 20:36:46 UTC. It includes the compiler, runtime and tooling changes recorded below, including nullable type-parameter restrictions and the code-fix service. The following entries preserve the tag's complete release history.
