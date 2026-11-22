@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Text
+import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.IO
@@ -150,6 +151,48 @@ open class SyntaxTree {
                 parser.DocumentationTokens
             )
             return syntaxTree
+        }
+
+        /// Parses [`text`](paramref) as one statement on its own (#6079). The statement's tree holds
+        /// the parse diagnostics, and positions are offsets into [`text`](paramref).
+        /// @param text The text of the statement, without a `package` declaration.
+        /// @returns The statement, or `null` when the text is not exactly one statement (a declaration,
+        /// several statements, or no statement).
+        func ParseStatement(text string) StatementSyntax? {
+            ArgumentNullException.ThrowIfNull(text, paramName: "text")
+            let tree = Parse(SourceText.From(text))
+            let members = tree.Root.Members
+            return if members.Length == 1 &&
+                tree
+                .Root
+                .FileAttributes
+                .IsDefaultOrEmpty &&
+                members[0] is GlobalStatementSyntax global {
+                global.Statement
+            } else {
+                default(StatementSyntax?)
+            }
+        }
+
+        /// Parses [`text`](paramref) as one expression on its own (#6079). The expression's tree holds
+        /// the parse diagnostics, and positions are offsets into [`text`](paramref).
+        /// @param text The text of the expression.
+        /// @returns The expression, or `null` when the text is not exactly one expression.
+        func ParseExpression(text string) ExpressionSyntax? {
+            ArgumentNullException.ThrowIfNull(text, paramName: "text")
+            let syntaxTree = SyntaxTree(SourceText.From(text))
+            let parser = Parser(syntaxTree)
+            let root = parser.ParseExpressionFragment(out var isSingleExpression)
+            syntaxTree.SetParseResult(root, parser.Diagnostics.ToImmutableArray(), parser.DocumentationTokens)
+            return if isSingleExpression &&
+                root
+                .Members
+                .Length == 1 &&
+                root.Members[0] is GlobalStatementSyntax{Statement: ExpressionStatementSyntax statement} {
+                statement.Expression
+            } else {
+                default(ExpressionSyntax?)
+            }
         }
 
         /// Parses [`source`](paramref)'s text as if it ended at [`cut`](paramref) (ADR-0225). The parser

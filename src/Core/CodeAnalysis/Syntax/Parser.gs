@@ -197,6 +197,26 @@ open partial class Parser {
         }
     }
 
+    /// Parses the tokens as one expression on its own (#6079). The root holds the expression as a
+    /// top-level expression statement, so that the expression has a parent in the tree.
+    /// @param isSingleExpression Set to `true` when the expression covers every token.
+    /// @returns A compilation unit with one member.
+    internal func ParseExpressionFragment(out isSingleExpression bool) CompilationUnitSyntax {
+        isSingleExpression = false
+        try {
+            let expression = ParseExpression()
+            isSingleExpression = Current.Kind == SyntaxKind.EndOfFileToken && expression.Span.Length > 0
+            let endOfFileToken = MatchToken(SyntaxKind.EndOfFileToken)
+            let member = GlobalStatementSyntax(syntaxTree, ExpressionStatementSyntax(syntaxTree, expression))
+            return CompilationUnitSyntax(syntaxTree, ImmutableArray.Create[MemberSyntax](member), endOfFileToken)
+        } catch (InsufficientExecutionStackException) {
+            Diagnostics.ReportNestingTooDeep(TextLocation(syntaxTree.Text, Current.Span))
+            isSingleExpression = false
+            let endOfFileToken = tokens[tokens.Length - 1]
+            return CompilationUnitSyntax(syntaxTree, ImmutableArray[MemberSyntax].Empty, endOfFileToken)
+        }
+    }
+
     private func ParseCompilationUnitCore() CompilationUnitSyntax {
         let package_ PackageSyntax? = ParsePackage()
         let imports = ParseImports()

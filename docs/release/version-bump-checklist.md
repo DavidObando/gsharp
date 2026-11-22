@@ -81,6 +81,8 @@ entry that no longer matches anything fails the check, so the list cannot rot.
 | Path | Version | Why it stays |
 |---|---|---|
 | `website/versioned_docs/*` | any | Released snapshots keep their own release's commands. The default snapshot's release-facing references are checked separately (above). |
+| `docs/adr/0208-narrowing-probe-corpus.md`, `docs/compiler-architecture-and-performance-study.md` | 0.5.212 | Historical probe and profiling evidence retains the compiler used for those measurements. |
+| `src/vscode-gsharp/src/test/projectLayout.test.ts` | 0.5.212 | Synthetic XML fixtures test project metadata without restoring the SDK. |
 | `src/vs-gsharp/templates/Project/*` | 0.3.159 | Placeholder. `BuildGSharpTemplates` in `src/vs-gsharp/src/VsGsharp/VsGsharp.csproj` overwrites the `Sdk` attribute with `Gsharp.NET.Sdk/$(NuGetPackageVersion)` when it builds the VSIX. |
 | `src/vs-gsharp/test/ProjectDebugFixtures/*` | 0.3.159 | Visual Studio debug fixtures pinned to a published SDK on purpose. |
 | `src/vs-gsharp/test/TestExplorerFixtures/*` | 0.3.159 | Test Explorer fixtures; `TestExplorerFixtureContractTests` asserts the pin. |

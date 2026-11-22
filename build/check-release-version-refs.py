@@ -65,6 +65,10 @@ DOWNLOADS = "website/static/downloads/"
 # Original assets and independently verified prior-cut bundles retain their provenance.
 # JSON is hashed with canonical LF, just as Git stores it.
 HISTORICAL_FILES = {
+    DOWNLOADS + "trail-0.5.212.zip":
+        "25fa37c2a1e6cd1d943319163406d43f80b40a104f46ff22d479d32cbaa15241",
+    DOWNLOADS + "concurrency-patterns-0.5.212.zip":
+        "bc226ae9bddc11fcd4d2ed670f8260ee1acbed3ffaee73c94883e20e6ef96903",
     "website/static/img/trail-editor.json":
         "15bf8041a8216375a72126080118c5344087e437682cc01d004a9a7fbdb0c942",
     "website/static/img/trail-completion.png":
@@ -105,6 +109,7 @@ class Tracked:
     it expands to VER. ``path`` may contain ``{D}``, the docs version.
     ``optional`` entries are checked only when the file exists: a snapshot
     cut after a page left ``website/docs`` no longer has that page.
+    ``first_only`` checks the latest release section without relabeling history.
     """
 
     path: str
@@ -112,6 +117,7 @@ class Tracked:
     minimum: int
     why: str
     optional: bool = False
+    first_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -146,10 +152,10 @@ TRACKED: tuple[Tracked, ...] = (
     Tracked("website/docs/release-notes.md", r"installation/download examples target \*\*({V})\*\*", 1,
             "release notes name the release the website installs"),
     Tracked("website/versioned_docs/version-{D}/release-notes.md", r"^## ({V}) \([^)]+\)$", 1,
-            "default snapshot release notes are headed by their release"),
+            "default snapshot release notes are headed by their release", first_only=True),
     Tracked("website/versioned_docs/version-{D}/release-notes.md",
             r"This snapshot is grounded in \[`v({V})`\]", 1,
-            "default snapshot names its source tag"),
+            "default snapshot names its source tag", first_only=True),
     Tracked("docs/docs-authoring.md", r"snapshot is based on `v({V})`", 1,
             "names the tag the default snapshot was refreshed from"),
     # Snapshots cut before the guide moved to docs/ keep their own copy.
@@ -171,6 +177,12 @@ TRACKED: tuple[Tracked, ...] = (
 )
 
 ALLOWED: tuple[Allowed, ...] = (
+    Allowed("docs/adr/0208-narrowing-probe-corpus.md", frozenset({"0.5.212"}),
+            "historical narrowing probe results were measured with this compiler"),
+    Allowed("docs/compiler-architecture-and-performance-study.md", frozenset({"0.5.212"}),
+            "historical profiling inputs and replay commands retain their measured compiler"),
+    Allowed("src/vscode-gsharp/src/test/projectLayout.test.ts", frozenset({"0.5.212"}),
+            "synthetic project-layout fixtures test XML metadata, not SDK restoration"),
     Allowed("website/versioned_docs/*", frozenset(),
             "released documentation snapshots keep the commands of their own release; "
             "the default snapshot's release-facing refs are TRACKED separately"),
@@ -360,6 +372,8 @@ def check(tree: Tree) -> list[str]:
             continue
         pattern = re.compile(entry.pattern.replace("{V}", VER), re.MULTILINE)
         matches = list(pattern.finditer(text))
+        if entry.first_only:
+            matches = matches[:1]
         if len(matches) < entry.minimum:
             problems.append(
                 f"{path}: expected at least {entry.minimum} match(es) of /{entry.pattern}/, "
