@@ -790,6 +790,155 @@ Console.WriteLine(view.Length)
 `)
         Assert.Contains(topLevelEscapingGotoAcrossAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
         Assert.DoesNotContain(topLevelEscapingGotoAcrossAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let switchStmtPatternMutateUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    switch n {
+        case > ({ p = &c.Value; 100 }) {
+            p = &x
+        }
+        default { }
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(1).GetAwaiter().GetResult()
+`)
+        Assert.Contains(switchStmtPatternMutateUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(switchStmtPatternMutateUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let switchExprPatternMutateUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    let r = switch n {
+        case > ({ p = &c.Value; 100 }): { p = &x; 1 }
+        default: 0
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p + r)
+}
+
+run(1).GetAwaiter().GetResult()
+`)
+        Assert.Contains(switchExprPatternMutateUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(switchExprPatternMutateUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let crossArmInteriorLabelGotoUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    switch n {
+        case 0 {
+            p = &c.Value
+            goto inner
+        }
+        default {
+            p = &x
+        inner:
+            Console.WriteLine("here")
+        }
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(0).GetAwaiter().GetResult()
+`)
+        Assert.Contains(crossArmInteriorLabelGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(crossArmInteriorLabelGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let crossArmInteriorLabelLivenessUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+switch Environment.GetCommandLineArgs().Length {
+    case 0 {
+        await Task.Delay(1)
+        goto useView
+    }
+    default {
+        Console.WriteLine("default")
+    useView:
+        Console.WriteLine(view.Length)
+    }
+}
+`)
+        Assert.Contains(crossArmInteriorLabelLivenessUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(crossArmInteriorLabelLivenessUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let crossArmBackwardJumpLivenessUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+switch Environment.GetCommandLineArgs().Length {
+    case 0 {
+        Console.WriteLine("arm0")
+    earlierUse:
+        Console.WriteLine(view.Length)
+    }
+    default {
+        await Task.Delay(1)
+        goto earlierUse
+    }
+}
+`)
+        Assert.Contains(crossArmBackwardJumpLivenessUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(crossArmBackwardJumpLivenessUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let nestedReseatBeforeReadSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    await Task.Delay(1)
+    let ignored = {
+        p = &x
+        Console.WriteLine(*p)
+        0
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(nestedReseatBeforeReadSafe.Diagnostics)
+        Assert.Equal("1\n", nestedReseatBeforeReadSafe.Output)
     }
 
     @Fact

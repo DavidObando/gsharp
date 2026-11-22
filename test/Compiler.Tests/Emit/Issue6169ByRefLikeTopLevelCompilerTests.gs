@@ -297,6 +297,30 @@ run().GetAwaiter().GetResult()
 `, "func-heap-owner-ref-struct-safe", executable: true)
         IlVerifier.Verify(heapOwnersSafeAssembly)
         Assert.Equal("11,33,44\n", fixture.Run(heapOwnersSafeAssembly))
+
+        let nestedReseatBeforeReadSafeAssembly = fixture.Compile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    await Task.Delay(1)
+    let ignored = {
+        p = &x
+        Console.WriteLine(*p)
+        0
+    }
+}
+
+run().GetAwaiter().GetResult()
+`, "func-nested-reseat-before-read-safe", executable: true)
+        IlVerifier.Verify(nestedReseatBeforeReadSafeAssembly)
+        Assert.Equal("1\n", fixture.Run(nestedReseatBeforeReadSafeAssembly))
     }
 
     shared {
