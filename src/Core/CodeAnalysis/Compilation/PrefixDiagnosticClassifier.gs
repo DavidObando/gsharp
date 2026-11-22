@@ -70,6 +70,20 @@ internal sealed class PrefixDiagnosticClassifier {
             WordContinuesAfterCut() {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.FutureDependent, "rest-of-statement")
         }
+        // A diagnostic of an expression that ends at the cut: a postfix continuation (`.Length` on the
+        // same or the next line, a call, an index, a binary operator) changes the expression. With kept
+        // text, that happens only when the host's text continues the expression after the cut.
+        if inPrefixText &&
+            diagnostic.PrefixFinality == DiagnosticFinality.Final &&
+            location
+            .Span
+            .Length > 0 &&
+            location
+            .Span
+            .End == prefixCut.Cut &&
+            !prefixParse.Contains(diagnostic) && ExpressionContinuesAfterCut() {
+            return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.FutureDependent, "rest-of-statement")
+        }
         // The tokens before the cut are the same in both parses. A parse diagnostic that the source tree
         // does not report there comes from the closing tokens at the cut.
         if inPrefixText && prefixParse.Contains(diagnostic) && location.Span.Start < prefixCut.Cut {
@@ -109,6 +123,23 @@ internal sealed class PrefixDiagnosticClassifier {
             }
         }
         return ClassifiedDiagnostic(diagnostic, diagnostic.PrefixFinality, diagnostic.PrefixReason)
+    }
+
+    private func ExpressionContinuesAfterCut() bool {
+        if prefixCut.Remainder == PrefixRemainder.Nothing {
+            return true
+        }
+        // The host's text continues the expression with a postfix or binary operator right after the cut,
+        // or with a member access that starts the next line.
+        let text = prefixCut.Text
+        var position = prefixCut.Cut
+        if position < text.Length && ".([?+-*/%&|^<>=!".IndexOf(text[position]) >= 0 {
+            return true
+        }
+        while position < text.Length && char.IsWhiteSpace(text[position]) {
+            position++
+        }
+        return position < text.Length && (text[position] == '.' || text[position] == '?')
     }
 
     private func WordContinuesAfterCut() bool {

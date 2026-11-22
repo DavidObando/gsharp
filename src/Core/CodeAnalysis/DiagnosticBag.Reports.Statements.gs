@@ -635,11 +635,19 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The text location of the offending arm.
     /// @param armType The arm result type.
     /// @param expectedType The expected result type.
+    /// @remarks ADR-0225 D6.5: a later conversion between the types can remove the report.
     func ReportSwitchExpressionArmTypeMismatch(
         location TextLocation,
         armType TypeSymbol,
         expectedType TypeSymbol
-    ) -> Report(location, DiagnosticDescriptors.SwitchExpressionArmTypeMismatch, expectedType, armType)
+    ) -> ReportConversion(
+        location,
+        DiagnosticDescriptors.SwitchExpressionArmTypeMismatch,
+        armType,
+        expectedType,
+        expectedType,
+        armType
+    )
 
     /// GS9003: Variable must be definitely assigned before being passed by ref.
     /// @param location The text location of the argument.

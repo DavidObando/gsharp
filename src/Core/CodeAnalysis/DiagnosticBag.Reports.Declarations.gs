@@ -441,12 +441,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The text location of the base-constructor argument list.
     /// @param baseTypeName The base type name.
     /// @param argumentCount The number of supplied arguments.
-    func ReportNoMatchingBaseConstructor(location TextLocation, baseTypeName string, argumentCount int32) -> Report(
-        location,
-        DiagnosticDescriptors.NoMatchingBaseConstructor,
-        baseTypeName,
-        argumentCount
-    )
+    func ReportNoMatchingBaseConstructor(
+        location TextLocation,
+        baseTypeName string,
+        argumentCount int32
+    ) -> ReportCallResolution(location, DiagnosticDescriptors.NoMatchingBaseConstructor, baseTypeName, argumentCount)
 
     /// Reports a class that declares both a Kotlin-style primary constructor and an explicit `init(...)`
     /// constructor (issue #306).
