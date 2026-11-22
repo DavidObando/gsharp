@@ -3890,9 +3890,12 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
     }
 
-    private func IsCatchAllExceptionType(type TypeSymbol?) bool -> type == nil ||
-        type.ClrType == typeof(System.Exception) ||
-        type.ClrType == typeof(System.Object)
+    private func IsCatchAllExceptionType(type TypeSymbol?) bool -> type == nil || type.ClrType?.IsSameAs(
+        typeof(System.Exception)
+    ) == true ||
+        type
+        .ClrType
+        ?.IsSameAs(typeof(System.Object)) == true
 
     private func AddressOperandCannotThrow(operand BoundExpression?) bool {
         switch operand {
