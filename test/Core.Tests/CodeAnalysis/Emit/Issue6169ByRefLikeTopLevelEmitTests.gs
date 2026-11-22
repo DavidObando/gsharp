@@ -3007,6 +3007,249 @@ run(1e30).GetAwaiter().GetResult()
             floatToDecimalConversionThrowsRetainsAliasUnsafe.Diagnostics,
             (d Diagnostic) -> d.Id == "GS9998"
         )
+
+        let addressOfOutOfBoundsRetainsAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var a = []int32{1}
+    var p = &c.Value
+    try {
+        let q = &a[99]
+        p = q
+        return
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(addressOfOutOfBoundsRetainsAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(addressOfOutOfBoundsRetainsAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let listPatternGetterThrowsRetainsAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Collections.Generic
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(items List[int32]) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        p = &c.Value
+        let ok = items is []
+        p = &x
+        Console.WriteLine(ok)
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(List[int32]()).GetAwaiter().GetResult()
+`)
+        Assert.Contains(listPatternGetterThrowsRetainsAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(listPatternGetterThrowsRetainsAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let listPatternIndexerGetterThrowsOverwriteCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Collections.Generic
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(items List[int32]) Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    try {
+        let ok = items is [1]
+        c = Counter{Value: 20}
+        Console.WriteLine(ok)
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run(List[int32]()).GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            listPatternIndexerGetterThrowsOverwriteCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            listPatternIndexerGetterThrowsOverwriteCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let innerFinallyAddsRefAliasPropagatesToOuterCatchUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        try {
+            throw InvalidOperationException()
+        } finally {
+            p = &c.Value
+        }
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            innerFinallyAddsRefAliasPropagatesToOuterCatchUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            innerFinallyAddsRefAliasPropagatesToOuterCatchUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let innerFinallyRemovesRefAliasClearedForOuterCatchSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        try {
+            throw InvalidOperationException()
+        } finally {
+            p = &x
+        }
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(innerFinallyRemovesRefAliasClearedForOuterCatchSafe.Diagnostics)
+        Assert.Equal("1\n", innerFinallyRemovesRefAliasClearedForOuterCatchSafe.Output)
+
+        let throwingFilterHandledByLaterCatchAllBeforeFinallySafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+func failFilter() bool {
+    throw InvalidOperationException()
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        throw InvalidOperationException()
+    } catch when (failFilter()) {
+        p = &x
+    } catch {
+        p = &x
+    } finally {
+        await Task.Delay(1)
+        Console.WriteLine(*p)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(throwingFilterHandledByLaterCatchAllBeforeFinallySafe.Diagnostics)
+        Assert.Equal("1\n", throwingFilterHandledByLaterCatchAllBeforeFinallySafe.Output)
+
+        let throwingFilterOverwriteHandledByLaterCatchAllBeforeFinallySafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+func failFilter() bool {
+    throw InvalidOperationException()
+}
+
+async func run() Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    try {
+        throw InvalidOperationException()
+    } catch when (failFilter()) {
+        c = Counter{Value: 20}
+    } catch {
+        c = Counter{Value: 30}
+    } finally {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(throwingFilterOverwriteHandledByLaterCatchAllBeforeFinallySafe.Diagnostics)
+        Assert.Equal("30\n", throwingFilterOverwriteHandledByLaterCatchAllBeforeFinallySafe.Output)
+
+        let trySwitchNormalPatternAndGuardReseatSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        switch n {
+            case 0 when true {
+                p = &x
+            }
+            default {
+                p = &x
+            }
+        }
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(0).GetAwaiter().GetResult()
+`)
+        Assert.Empty(trySwitchNormalPatternAndGuardReseatSafe.Diagnostics)
+        Assert.Equal("1\n", trySwitchNormalPatternAndGuardReseatSafe.Output)
     }
 
     @Fact

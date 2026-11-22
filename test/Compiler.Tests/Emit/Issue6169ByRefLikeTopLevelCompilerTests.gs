@@ -673,6 +673,68 @@ checkHandledCatchAllAndWidening(5).GetAwaiter().GetResult()
 `, "top-level-handled-catch-all-finally-and-widening-safe", executable: true)
         IlVerifier.Verify(handledCatchAllFinallyAndConversionSafeAssembly)
         Assert.Equal("1,1\n", fixture.Run(handledCatchAllFinallyAndConversionSafeAssembly))
+
+        let round15SafeControlsAssembly = fixture.Compile(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+func failFilter() bool {
+    throw InvalidOperationException()
+}
+
+async func checkRound15SafeControls(n int32) Task {
+    var c1 = Counter{Value: 42}
+    var x1 = 1
+    var p1 = &c1.Value
+    try {
+        try {
+            throw InvalidOperationException()
+        } finally {
+            p1 = &x1
+        }
+    } catch { }
+    await Task.Delay(1)
+    Console.Write("${*p1},")
+
+    var c2 = Counter{Value: 42}
+    var x2 = 2
+    var p2 = &c2.Value
+    try {
+        throw InvalidOperationException()
+    } catch when (failFilter()) {
+        p2 = &x2
+    } catch {
+        p2 = &x2
+    } finally {
+        await Task.Delay(1)
+        Console.Write("${*p2},")
+    }
+
+    var c3 = Counter{Value: 42}
+    var x3 = 3
+    var p3 = &c3.Value
+    try {
+        switch n {
+            case 0 when true {
+                p3 = &x3
+            }
+            default {
+                p3 = &x3
+            }
+        }
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p3)
+}
+
+checkRound15SafeControls(0).GetAwaiter().GetResult()
+`, "top-level-round15-safe-controls", executable: true)
+        IlVerifier.Verify(round15SafeControlsAssembly)
+        Assert.Equal("1,2,3\n", fixture.Run(round15SafeControlsAssembly))
     }
 
     shared {

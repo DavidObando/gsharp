@@ -1072,14 +1072,6 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                             }
                         }
                         if catchDispatchReachable {
-                            if filterExceptionalOver != nil {
-                                if !exceptionalFinallyInitialized {
-                                    exceptionalFinallyOver.UnionWith(filterExceptionalOver)
-                                    exceptionalFinallyInitialized = true
-                                } else {
-                                    exceptionalFinallyOver.IntersectWith(filterExceptionalOver)
-                                }
-                            }
                             if filterNormal {
                                 if catchBodyExceptionalOver != nil {
                                     if !exceptionalFinallyInitialized {
@@ -1113,11 +1105,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                                 } else {
                                     if filterNormal {
                                         catchDispatchOver.IntersectWith(catchBodyEntryOver)
+                                        if filterExceptionalOver != nil {
+                                            catchDispatchOver.IntersectWith(filterExceptionalOver)
+                                        }
                                     } else if filterExceptionalOver != nil {
                                         catchDispatchOver = HashSet[VariableSymbol](filterExceptionalOver)
-                                    }
-                                    if filterExceptionalOver != nil {
-                                        catchDispatchOver.IntersectWith(filterExceptionalOver)
+                                    } else {
+                                        catchDispatchReachable = false
                                     }
                                 }
                             } else if RefStructAsyncLivenessAnalyzer.IsCatchAllExceptionType(clause.ExceptionType) {
@@ -2736,6 +2730,18 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 VisitPattern(field.Pattern)
             }
         }
+
+        protected override func VisitListPattern(node BoundListPattern) {
+            if node.LengthProperty != nil {
+                MergeExceptionalOverwrites(definitelyOverwritten)
+            }
+            for element in node.Elements {
+                if node.IndexerProperty != nil && element is not BoundSlicePattern {
+                    MergeExceptionalOverwrites(definitelyOverwritten)
+                }
+                VisitPattern(element)
+            }
+        }
     }
 
     /// Finds every async or iterator function-literal expression (lambda or
@@ -3258,7 +3264,11 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     return ResolveTargets(ve)
                 }
                 case deref is BoundDereferenceExpression {
-                    return ResolveTargets(deref.Operand)
+                    let resolved = ResolveTargets(deref.Operand)
+                    if exceptionalUnion != nil {
+                        RefStructAsyncLivenessAnalyzer.UnionPointsToInto(exceptionalUnion, state)
+                    }
+                    return resolved
                 }
                 case conv is BoundConversionExpression {
                     return ResolveAddressedStorageTargets(conv.Expression)
@@ -3269,6 +3279,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     }
                     if RefStructAsyncLivenessAnalyzer.IsReferenceOwnerType(field.Receiver.Type) {
                         VisitExpression(field.Receiver)
+                        if exceptionalUnion != nil {
+                            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(exceptionalUnion, state)
+                        }
                         return HashSet[VariableSymbol]()
                     }
                     return ResolveAddressedStorageTargets(field.Receiver)
@@ -3279,9 +3292,28 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     }
                     if RefStructAsyncLivenessAnalyzer.IsReferenceOwnerType(clrField.Receiver.Type) {
                         VisitExpression(clrField.Receiver)
+                        if exceptionalUnion != nil {
+                            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(exceptionalUnion, state)
+                        }
                         return HashSet[VariableSymbol]()
                     }
                     return ResolveAddressedStorageTargets(clrField.Receiver)
+                }
+                case clrProp is BoundClrPropertyAccessExpression when RefCapabilities.IsRefReturningAccess(clrProp) {
+                    let resolved = if clrProp.Receiver != nil && !RefStructAsyncLivenessAnalyzer.IsReferenceOwnerType(
+                        clrProp.Receiver.Type
+                    ) {
+                        ResolveAddressedStorageTargets(clrProp.Receiver)
+                    } else {
+                        if clrProp.Receiver != nil {
+                            VisitExpression(clrProp.Receiver)
+                        }
+                        HashSet[VariableSymbol]()
+                    }
+                    if exceptionalUnion != nil {
+                        RefStructAsyncLivenessAnalyzer.UnionPointsToInto(exceptionalUnion, state)
+                    }
+                    return resolved
                 }
                 case tuple is BoundTupleElementAccessExpression {
                     return ResolveAddressedStorageTargets(tuple.Receiver)
@@ -3296,6 +3328,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     for indexExpr in idx.Indices {
                         VisitExpression(indexExpr)
                     }
+                    if exceptionalUnion != nil {
+                        RefStructAsyncLivenessAnalyzer.UnionPointsToInto(exceptionalUnion, state)
+                    }
                     return resolved
                 }
                 case clrIdx is BoundClrIndexExpression {
@@ -3307,6 +3342,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     }
                     for arg in clrIdx.Arguments {
                         VisitExpression(arg)
+                    }
+                    if exceptionalUnion != nil {
+                        RefStructAsyncLivenessAnalyzer.UnionPointsToInto(exceptionalUnion, state)
                     }
                     return resolved
                 }
@@ -3775,7 +3813,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 var matched = ClonePointsTo(entryState)
                 let unmatched = ClonePointsTo(entryState)
                 var canMatch = true
+                if exceptionalUnion != nil && lp.LengthProperty != nil {
+                    UnionPointsToInto(exceptionalUnion, matched)
+                }
                 for elem in lp.Elements {
+                    if exceptionalUnion != nil && lp.IndexerProperty != nil && elem is not BoundSlicePattern {
+                        UnionPointsToInto(exceptionalUnion, matched)
+                    }
                     let (em, eu, eMatch, eFail) = ApplyPatternPointsTo(
                         elem,
                         matched,
@@ -4285,6 +4329,66 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
     }
 
+    private func MayThrowRegion(statement BoundStatement?) bool {
+        if statement == nil {
+            return false
+        }
+        switch statement {
+            case block is BoundBlockStatement {
+                for stmt in block.Statements {
+                    if MayThrowRegion(stmt) {
+                        return true
+                    }
+                }
+                return false
+            }
+            case tryStmt is BoundTryStatement {
+                if tryStmt.FinallyBlock != nil && MayThrowRegion(tryStmt.FinallyBlock) {
+                    return true
+                }
+                var uncaught = MayThrowRegion(tryStmt.TryBlock)
+                for clause in tryStmt.CatchClauses {
+                    if !uncaught {
+                        break
+                    }
+                    if clause.Filter != nil && !ExpressionCannotThrow(clause.Filter) {
+                        if MayThrowRegion(clause.Body) {
+                            return true
+                        }
+                        continue
+                    }
+                    if MayThrowRegion(clause.Body) {
+                        return true
+                    }
+                    if clause.Filter == nil && IsCatchAllExceptionType(clause.ExceptionType) {
+                        uncaught = false
+                    }
+                }
+                return uncaught
+            }
+            case switchStmt is BoundPatternSwitchStatement {
+                if !ExpressionCannotThrow(switchStmt.Discriminant) {
+                    return true
+                }
+                for arm in switchStmt.Arms {
+                    if arm.Guard != nil && !ExpressionCannotThrow(arm.Guard) {
+                        return true
+                    }
+                    if MayThrowRegion(arm.Body) {
+                        return true
+                    }
+                }
+                return false
+            }
+            case fixedStmt is BoundFixedStatement {
+                return !ExpressionCannotThrow(fixedStmt.PinnedSource) || MayThrowRegion(fixedStmt.Body)
+            }
+            default {
+                return !StatementCannotThrow(statement)
+            }
+        }
+    }
+
     private func ComputeTryPointsToSummary(
         tryStmt BoundTryStatement,
         entryPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]?,
@@ -4312,21 +4416,26 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             ReferenceEqualityComparer.Instance
         )
         var handlerDispatchState = ClonePointsTo(exceptionalIn)
+        var tryDispatchMayThrow = MayThrowRegion(tryStmt.TryBlock)
+        var catchBodyMayThrow = false
         for clause in tryStmt.CatchClauses {
             filterEntryPointsTo[clause] = ClonePointsTo(handlerDispatchState)
             let catchIn = ClonePointsTo(handlerDispatchState)
             if clause.Filter is {} filter {
                 let filterExceptional = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
-                PointsToExpressionUpdater(catchIn, interesting, filterExceptional, outgoingGotos).VisitExpression(
-                    filter
-                )
-                UnionPointsToInto(combinedExceptional, filterExceptional)
+                let filterUpdater = PointsToExpressionUpdater(catchIn, interesting, filterExceptional, outgoingGotos)
+                filterUpdater.VisitExpression(filter)
                 // Filter evaluation can return false or throw, carrying mutations to later handlers and finally.
-                if IsCatchAllExceptionType(clause.ExceptionType) && ExpressionCannotThrow(filter) {
+                if !filterUpdater.HasNormalExit {
+                    handlerDispatchState = ClonePointsTo(filterExceptional)
+                } else if IsCatchAllExceptionType(clause.ExceptionType) && ExpressionCannotThrow(filter) {
                     handlerDispatchState = ClonePointsTo(catchIn)
                 } else {
                     UnionPointsToInto(handlerDispatchState, filterExceptional)
                     UnionPointsToInto(handlerDispatchState, catchIn)
+                }
+                if !filterUpdater.HasNormalExit {
+                    continue
                 }
             }
             catchEntryPointsTo[clause] = ClonePointsTo(catchIn)
@@ -4335,6 +4444,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 catchIn,
                 interesting
             )
+            if tryDispatchMayThrow && MayThrowRegion(clause.Body) {
+                catchBodyMayThrow = true
+            }
             if !clause.ExitsThroughFinally && catchHasNormalExit {
                 afterTryHasNormalExit = true
                 UnionPointsToInto(afterTry, catchExit)
@@ -4343,8 +4455,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             UnionGotoMapInto(outgoingGotos, catchGotoExits)
             if clause.Filter == nil && IsCatchAllExceptionType(clause.ExceptionType) {
                 handlerDispatchState.Clear()
+                tryDispatchMayThrow = false
             }
         }
+        let hasPendingException = combinedExceptional.Count > 0 ||
+            handlerDispatchState.Count > 0 ||
+            tryDispatchMayThrow ||
+            catchBodyMayThrow
         UnionPointsToInto(combinedExceptional, handlerDispatchState)
         let finallyIn = ClonePointsTo(combinedExceptional)
         UnionPointsToInto(finallyIn, afterTry)
@@ -4357,6 +4474,19 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 finallyIn,
                 interesting
             )
+            let transformedExceptional = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+            if hasPendingException {
+                let (excFinallyExit, _, excFinallyHasNormalExit, _) = ComputeRegionPointsToSummary(
+                    finallyBlock,
+                    combinedExceptional,
+                    interesting
+                )
+                if excFinallyHasNormalExit {
+                    UnionPointsToInto(transformedExceptional, excFinallyExit)
+                }
+            }
+            combinedExceptional.Clear()
+            UnionPointsToInto(combinedExceptional, transformedExceptional)
             UnionPointsToInto(combinedExceptional, finallyExceptional)
             // Keep unioned finallyIn for analyzing the finally body itself, but compute
             // the normal continuation after the try exclusively from reachable normal afterTry paths.
@@ -4558,12 +4688,6 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     )
                     patCanMatch = pcm
                     patCanFail = pcf
-                    if patCanMatch {
-                        UnionPointsToInto(combinedExceptional, matched)
-                    }
-                    if patCanFail {
-                        UnionPointsToInto(combinedExceptional, unmatched)
-                    }
                     armIn = if patCanMatch {
                         matched
                     } else {
@@ -4580,7 +4704,6 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     PointsToExpressionUpdater(armIn, interesting, combinedExceptional, headerGotos).VisitExpression(
                         arm.Guard
                     )
-                    UnionPointsToInto(combinedExceptional, armIn)
                     if patCanFail {
                         UnionPointsToInto(fallthroughState, armIn)
                     } else {
@@ -4610,7 +4733,6 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     headerOutgoingGotos[entry.Key] = sink
                 }
                 UnionPointsToInto(sink, entry.Value)
-                UnionPointsToInto(combinedExceptional, entry.Value)
             }
         }
         // Walk arm bodies in source order until cross-arm label entries (fallthrough
@@ -5303,6 +5425,12 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                             (block.Outgoing.Count == 1 || !object.ReferenceEquals(branch, block.Outgoing[0])) {
                             result.UnionWith(liveOutOfRegion)
                         }
+                    } else if lastStmt is BoundThrowStatement or
+                        BoundRethrowStatement ||
+                        (lastStmt != nil && ControlFlowGraph.HasNeverValue(lastStmt)) {
+                        // Exceptional exits transfer to enclosing handlers via `ambientLive`,
+                        // not to the region's normal continuation (`liveOutOfRegion`).
+
                     } else {
                         result.UnionWith(liveOutOfRegion)
                     }
