@@ -1920,6 +1920,14 @@ internal partial class OverloadResolver {
         // first declared overload; we now consult the overload-set store.
         var overloadSet = Scope.TryLookupFunctions(syntax.Identifier.ValueText)
         CallCandidateRecorder.RecordFunctions(overloadSet)
+        // No candidate has type parameters: the type arguments are wrong whatever the value
+        // arguments are (#6186).
+        if syntax.TypeArgumentList is {} unexpectedTypeArguments &&
+            !function.IsGeneric &&
+            !HasGenericCandidate(overloadSet) {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, function.Name)
+            return BoundErrorExpression(nil)
+        }
         var explicitOverloadTypeArguments = default(ImmutableArray[TypeSymbol])
         if overloadSet.Length > 1 {
             if syntax.TypeArgumentList != nil {
@@ -3183,6 +3191,21 @@ internal partial class OverloadResolver {
             FunctionPointerTypeSymbol or
             DelegateTypeSymbol ||
             ClrTypeUtilities.IsDelegateType(callable.ClrType)
+    }
+
+    /// Gets whether any of [`candidates`](paramref) declares type parameters.
+    /// @param candidates The candidate functions.
+    /// @returns `true` when a candidate is generic.
+    private func HasGenericCandidate(candidates ImmutableArray[FunctionSymbol]) bool {
+        if candidates.IsDefault {
+            return false
+        }
+        for candidate in candidates {
+            if candidate.IsGeneric {
+                return true
+            }
+        }
+        return false
     }
 
     /// Reports a type-argument list on a call to a function that declares no type parameters

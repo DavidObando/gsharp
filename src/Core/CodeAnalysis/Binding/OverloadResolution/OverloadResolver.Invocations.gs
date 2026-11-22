@@ -1413,6 +1413,11 @@ internal partial class OverloadResolver {
         ce CallExpressionSyntax,
         argumentNames ImmutableArray[string] = default(ImmutableArray[string])
     ) BoundExpression {
+        // The type arguments are checked before the value arguments, as C# reports CS0308 (#6186).
+        if !extension.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, extension.Name)
+            return BoundErrorExpression(nil)
+        }
         // The extension's first parameter is the receiver; user arguments line
         // up against parameters[1..].
         let userParamCount = extension.Parameters.Length - 1
@@ -1512,10 +1517,6 @@ internal partial class OverloadResolver {
             }
             permutedArguments = padded.MoveToImmutable()
             Array.Resize(&permutedSyntax, fixedUserParamCount)
-        }
-        if !extension.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
-            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, extension.Name)
-            return BoundErrorExpression(nil)
         }
         // Issue #326: a generic extension function
         // `func (r R) Name[T](item T) T` resolves its type parameters either

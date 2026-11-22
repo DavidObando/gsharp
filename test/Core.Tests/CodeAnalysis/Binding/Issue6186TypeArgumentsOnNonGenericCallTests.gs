@@ -25,6 +25,12 @@ open class Issue6186TypeArgumentsOnNonGenericCallTests {
     @InlineData("let k = c.M[int32]()", "GS0148 [int32]")
     @InlineData("let k = C.S[Nope]()", "GS0113 Nope|GS0148 [Nope]")
     @InlineData("let k = f[Nope]()", "GS0113 Nope|GS0148 [Nope]")
+    @InlineData("let k = Over[int32]()", "GS0148 [int32]") // before overload selection
+    @InlineData("let k = Over[Nope](x)", "GS0113 Nope|GS0148 [Nope]")
+    @InlineData("let k = c.O[int32]()", "GS0148 [int32]")
+    @InlineData("let k = C.SO[Nope](x)", "GS0113 Nope|GS0148 [Nope]")
+    @InlineData("let k = c.Ext[int32]()", "GS0148 [int32]")
+    @InlineData("let k = c.EO[int32]()", "GS0148 [int32]")
     @InlineData("let k = Over[int32](x)", "GS0148 [int32]") // an overload set without a generic candidate
     @InlineData("let k = c.M[int32](x)", "GS0148 [int32]") // an instance method
     @InlineData("let k = C.S[int32](x)", "GS0148 [int32]") // a static method
@@ -56,6 +62,16 @@ open class Issue6186TypeArgumentsOnNonGenericCallTests {
     @InlineData("let k = Use(x)")
     func TypeArgumentsThatMatchTheCallee_Bind(statement string) {
         Assert.Empty(Errors(Source(statement)))
+    }
+
+    @Theory
+    @InlineData("let ok = Type.FilterName[int32](nil, nil)") // an imported static delegate field
+    @InlineData(
+        "let ok = HttpClientHandler().ServerCertificateCustomValidationCallback[int32](nil, nil, nil, default)"
+    ) // an imported instance delegate property
+    func ImportedDelegateMembers_ReportTheArity(statement string) {
+        let source = "package P\n\nimport System\nimport System.Net.Http\n\nfunc F() {\n    " + statement + "\n}\n"
+        Assert.Contains("GS0148 [int32]", Errors(source))
     }
 
     @Fact

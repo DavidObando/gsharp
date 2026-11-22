@@ -30,6 +30,14 @@ internal partial class OverloadResolver {
     ) FunctionSymbol? {
         var overloads = overloads
         CallCandidateRecorder.RecordFunctions(overloads, receiverType)
+        // No candidate has type parameters: the type arguments are wrong whatever the value
+        // arguments are (#6186).
+        if ce.TypeArgumentList is {} unexpectedTypeArguments &&
+            !overloads.IsDefaultOrEmpty &&
+            !HasGenericCandidate(overloads) {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, methodName)
+            return nil
+        }
         if overloads.Length <= 1 {
             return if overloads.Length == 1 {
                 overloads[0]

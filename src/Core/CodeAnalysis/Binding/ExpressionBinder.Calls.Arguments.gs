@@ -1016,6 +1016,7 @@ internal partial class ExpressionBinder {
             )
             return true
         }
+        var bracketIsIndex = false
         if !ClrTypeUtilities.IsDelegateType(memberClrType) {
             // Issue #3880, the imported twin of the source-receiver recovery in
             // TryBindUserCallableMemberInvocation. `x.Callbacks[key]()` where
@@ -1047,6 +1048,13 @@ internal partial class ExpressionBinder {
             }
             delegateLoad = indexedValue
             memberClrType = indexedClrType
+            bracketIsIndex = true
+        }
+        // A delegate member has no type parameters (#6186).
+        if !bracketIsIndex && ce.TypeArgumentList is {} unexpectedTypeArguments {
+            overloads.ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, methodName)
+            result = BoundErrorExpression(nil)
+            return true
         }
         let effectiveMemberType = delegateLoad.Type
         if ce.NullableQuestionToken == nil && overloads.TryReportNullableDelegateReceiver(
@@ -1213,6 +1221,7 @@ internal partial class ExpressionBinder {
             )
             return true
         }
+        var bracketIsIndex = false
         if !ClrTypeUtilities.IsDelegateType(memberClrType) {
             // Static imports have the same Member[index](args) ambiguity as
             // instance members; reuse their index recovery before Invoke.
@@ -1237,6 +1246,13 @@ internal partial class ExpressionBinder {
             }
             delegateLoad = indexedValue
             memberClrType = indexedClrType
+            bracketIsIndex = true
+        }
+        // A delegate member has no type parameters (#6186).
+        if !bracketIsIndex && ce.TypeArgumentList is {} unexpectedTypeArguments {
+            overloads.ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, methodName)
+            result = BoundErrorExpression(nil)
+            return true
         }
         let effectiveMemberType = delegateLoad.Type
         if ce.NullableQuestionToken == nil && overloads.TryReportNullableDelegateReceiver(
