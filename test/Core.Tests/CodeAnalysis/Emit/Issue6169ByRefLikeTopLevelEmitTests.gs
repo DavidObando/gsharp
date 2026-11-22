@@ -2042,6 +2042,419 @@ run(0).GetAwaiter().GetResult()
 `)
         Assert.Contains(switchPatternEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
         Assert.DoesNotContain(switchPatternEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let earlyReturnBeforeOverwriteTryFinallyUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    try {
+        if flag {
+            return
+        }
+        c = Counter{Value: 20}
+    } catch when ({
+        c = Counter{Value: 42}
+        false
+    }) { } finally {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run(true).GetAwaiter().GetResult()
+`)
+        Assert.Contains(earlyReturnBeforeOverwriteTryFinallyUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            earlyReturnBeforeOverwriteTryFinallyUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let earlyReturnBeforeOverwriteBlockExprTryFinallyUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    let ignored = {
+        try {
+            if flag {
+                return
+            }
+            c = Counter{Value: 20}
+        } catch when ({
+            c = Counter{Value: 42}
+            false
+        }) { } finally {
+            Console.WriteLine(c.Value)
+        }
+        0
+    }
+}
+
+run(true).GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            earlyReturnBeforeOverwriteBlockExprTryFinallyUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            earlyReturnBeforeOverwriteBlockExprTryFinallyUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let earlyReturnAfterOverwriteTryFinallySafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 1}
+    await Task.Delay(1)
+    try {
+        if flag {
+            c = Counter{Value: 10}
+            return
+        }
+        c = Counter{Value: 20}
+    } catch when ({
+        c = Counter{Value: 42}
+        false
+    }) { } finally {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run(true).GetAwaiter().GetResult()
+`)
+        Assert.Empty(earlyReturnAfterOverwriteTryFinallySafe.Diagnostics)
+        Assert.Equal("10\n", earlyReturnAfterOverwriteTryFinallySafe.Output)
+
+        let escapingGotoBeforeOverwriteTryFinallyUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    try {
+        if flag {
+            goto done
+        }
+        c = Counter{Value: 20}
+    } catch when ({
+        c = Counter{Value: 42}
+        false
+    }) { } finally {
+        Console.WriteLine(c.Value)
+    }
+done:
+    Console.WriteLine("done")
+}
+
+run(true).GetAwaiter().GetResult()
+`)
+        Assert.Contains(escapingGotoBeforeOverwriteTryFinallyUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            escapingGotoBeforeOverwriteTryFinallyUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let isPatternEscapingGotoUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+await Task.Delay(1)
+let ignored = {
+    var inner = 1 is > ({
+        goto useView
+        0
+    })
+    return
+useView:
+    Console.WriteLine(view.Length)
+    0
+}
+`)
+        Assert.Contains(isPatternEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(isPatternEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let isOperandEscapingGotoUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+await Task.Delay(1)
+let ignored = {
+    var inner = ({
+        goto useView
+        1
+    }) is > 0
+    return
+useView:
+    Console.WriteLine(view.Length)
+    0
+}
+`)
+        Assert.Contains(isOperandEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(isOperandEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let switchExprDiscriminantEscapingGotoUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+await Task.Delay(1)
+let ignored = {
+    var inner = switch ({
+        goto useView
+        1
+    }) {
+        default: 0
+    }
+    return
+useView:
+    Console.WriteLine(view.Length)
+    0
+}
+`)
+        Assert.Contains(switchExprDiscriminantEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(switchExprDiscriminantEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let binaryPatternRightEscapingGotoUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+await Task.Delay(1)
+let ignored = {
+    var inner = 1 is (> 0 and < ({
+        goto useView
+        5
+    }))
+    return
+useView:
+    Console.WriteLine(view.Length)
+    0
+}
+`)
+        Assert.Contains(binaryPatternRightEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(binaryPatternRightEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let binaryPatternLeftEscapingGotoUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+await Task.Delay(1)
+let ignored = {
+    var inner = 1 is (> ({
+        goto useView
+        0
+    }) and < 5)
+    return
+useView:
+    Console.WriteLine(view.Length)
+    0
+}
+`)
+        Assert.Contains(binaryPatternLeftEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(binaryPatternLeftEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let isPatternEscapingGotoOverwrittenSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+await Task.Delay(1)
+let ignored = {
+    var inner = 1 is > ({
+        c = Counter{Value: 42}
+        goto useC
+        0
+    })
+    return
+useC:
+    Console.WriteLine(c.Value)
+    0
+}
+`)
+        Assert.Empty(isPatternEscapingGotoOverwrittenSafe.Diagnostics)
+        Assert.Equal("42\n", isPatternEscapingGotoOverwrittenSafe.Output)
+
+        let switchGuardToArmInteriorLabelAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    switch n {
+        case _ when ({
+            p = &c.Value
+            goto inner
+            true
+        }) {
+            return
+        inner:
+            await Task.Delay(1)
+            Console.WriteLine(*p)
+        }
+        default { }
+    }
+}
+
+run(0).GetAwaiter().GetResult()
+`)
+        Assert.Contains(switchGuardToArmInteriorLabelAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(switchGuardToArmInteriorLabelAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let switchPatternToArmInteriorLabelViewUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+async func run(n int32) Task {
+    let view readonly span[byte] = u8"hello"
+    switch n {
+        case > ({
+            goto inner
+            0
+        }) {
+            return
+        inner:
+            await Task.Delay(1)
+            Console.WriteLine(view.Length)
+        }
+        default { }
+    }
+}
+
+run(0).GetAwaiter().GetResult()
+`)
+        Assert.Contains(switchPatternToArmInteriorLabelViewUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(switchPatternToArmInteriorLabelViewUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let switchDiscriminantToArmInteriorLabelAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    switch ({
+        p = &c.Value
+        goto inner
+        n
+    }) {
+        case 0 {
+            return
+        inner:
+            await Task.Delay(1)
+            Console.WriteLine(*p)
+        }
+        default { }
+    }
+}
+
+run(0).GetAwaiter().GetResult()
+`)
+        Assert.Contains(switchDiscriminantToArmInteriorLabelAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            switchDiscriminantToArmInteriorLabelAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let switchDiscriminantToArmInteriorLabelViewUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+async func run(n int32) Task {
+    let view readonly span[byte] = u8"hello"
+    switch ({
+        goto inner
+        n
+    }) {
+        case 0 {
+            return
+        inner:
+            await Task.Delay(1)
+            Console.WriteLine(view.Length)
+        }
+        default { }
+    }
+}
+
+run(0).GetAwaiter().GetResult()
+`)
+        Assert.Contains(switchDiscriminantToArmInteriorLabelViewUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            switchDiscriminantToArmInteriorLabelViewUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let switchGuardToArmInteriorLabelOverwrittenSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(n int32) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    switch n {
+        case _ when ({
+            p = &x
+            goto inner
+            true
+        }) {
+            return
+        inner:
+            await Task.Delay(1)
+            Console.WriteLine(*p)
+        }
+        default { }
+    }
+}
+
+run(0).GetAwaiter().GetResult()
+`)
+        Assert.Empty(switchGuardToArmInteriorLabelOverwrittenSafe.Diagnostics)
+        Assert.Equal("1\n", switchGuardToArmInteriorLabelOverwrittenSafe.Output)
     }
 
     @Fact

@@ -383,10 +383,30 @@ class ControlFlowGraph {
             let reachable = HashSet[BasicBlock]{start}
             let queue = Queue[BasicBlock]()
             queue.Enqueue(start)
+            let nestedLabelToBlock = Dictionary[BoundLabel, BasicBlock]()
+            if preserveCompoundGotoTargets {
+                for b in blocks {
+                    for stmt in b.Statements {
+                        if stmt is BoundTryStatement or BoundFixedStatement or BoundPatternSwitchStatement {
+                            let labelCollector = NestedGotoCollector()
+                            labelCollector.VisitStatement(stmt)
+                            for lbl in labelCollector.Labels {
+                                nestedLabelToBlock[lbl] = b
+                            }
+                        }
+                    }
+                }
+            }
             if externalEntryLabels != nil {
                 for externalLabel in externalEntryLabels {
                     if blockFromLabel.TryGetValue(externalLabel, out var targetBlock) && reachable.Add(targetBlock) {
                         queue.Enqueue(targetBlock)
+                    } else if preserveCompoundGotoTargets && nestedLabelToBlock.TryGetValue(
+                        externalLabel,
+                        out var nestedBlock
+                    ) &&
+                        reachable.Add(nestedBlock) {
+                        queue.Enqueue(nestedBlock)
                     }
                 }
             }
@@ -399,11 +419,28 @@ class ControlFlowGraph {
                 }
                 if preserveCompoundGotoTargets {
                     for stmt in block.Statements {
+                        if stmt is BoundGotoStatement gs {
+                            if nestedLabelToBlock.TryGetValue(gs.Label, out var nestedBlock) && reachable.Add(
+                                nestedBlock
+                            ) {
+                                queue.Enqueue(nestedBlock)
+                            }
+                        } else if stmt is BoundConditionalGotoStatement cgs {
+                            if nestedLabelToBlock.TryGetValue(cgs.Label, out var nestedBlock) && reachable.Add(
+                                nestedBlock
+                            ) {
+                                queue.Enqueue(nestedBlock)
+                            }
+                        }
                         for targetLabel in CollectNestedGotoTargets(stmt) {
                             if blockFromLabel.TryGetValue(targetLabel, out var targetBlock) && reachable.Add(
                                 targetBlock
                             ) {
                                 queue.Enqueue(targetBlock)
+                            } else if nestedLabelToBlock.TryGetValue(targetLabel, out var nestedBlock) && reachable.Add(
+                                nestedBlock
+                            ) {
+                                queue.Enqueue(nestedBlock)
                             }
                         }
                         if stmt is BoundReturnStatement or
@@ -472,12 +509,20 @@ class ControlFlowGraph {
             prop Targets List[BoundLabel] {
                 get;
             }
+            prop Labels List[BoundLabel] {
+                get;
+            }
 
             init() {
                 Targets = List[BoundLabel]()
+                Labels = List[BoundLabel]()
             }
 
             override func VisitStatement(node BoundStatement?) {
+                if node is BoundLabelStatement ls {
+                    Labels.Add(ls.Label)
+                    return
+                }
                 if node is BoundGotoStatement gs {
                     Targets.Add(gs.Label)
                     return

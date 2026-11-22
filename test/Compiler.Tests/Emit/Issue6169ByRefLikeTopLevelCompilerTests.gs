@@ -526,6 +526,52 @@ checkThrowingAndFilterReseat(false).GetAwaiter().GetResult()
 `, "top-level-throwing-alias-and-filter-reseat-safe", executable: true)
         IlVerifier.Verify(throwingAliasAndFilterReseatSafeAssembly)
         Assert.Equal("1,1,1,7\n", fixture.Run(throwingAliasAndFilterReseatSafeAssembly))
+
+        let earlyReturnAndArmGotoSafeAssembly = fixture.Compile(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func checkEarlyReturnAndArmGoto(flag bool, n int32) Task {
+    var c = Counter{Value: 1}
+    await Task.Delay(1)
+    try {
+        if flag {
+            c = Counter{Value: 10}
+            return
+        }
+        c = Counter{Value: 20}
+    } catch when ({
+        c = Counter{Value: 42}
+        false
+    }) { } finally {
+        Console.Write("${c.Value},")
+    }
+    var x = 9
+    var p = &c.Value
+    switch n {
+        case _ when ({
+            p = &x
+            goto inner
+            true
+        }) {
+            return
+        inner:
+            await Task.Delay(1)
+            Console.WriteLine(*p)
+        }
+        default { }
+    }
+}
+
+checkEarlyReturnAndArmGoto(true, 0).GetAwaiter().GetResult()
+checkEarlyReturnAndArmGoto(false, 0).GetAwaiter().GetResult()
+`, "top-level-early-return-and-arm-goto-safe", executable: true)
+        IlVerifier.Verify(earlyReturnAndArmGotoSafeAssembly)
+        Assert.Equal("10,20,9\n", fixture.Run(earlyReturnAndArmGotoSafeAssembly))
     }
 
     shared {
