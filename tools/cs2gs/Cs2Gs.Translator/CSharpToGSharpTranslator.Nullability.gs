@@ -3779,7 +3779,7 @@ partial class CSharpToGSharpTranslator {
             if type == nil ||
                 type.IsNullable ||
                 field?.Type is not{IsReferenceType: true} ||
-                field!!
+                field
                 .Type
                 .NullableAnnotation == Microsoft
                 .CodeAnalysis
@@ -3787,7 +3787,7 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return type
             }
-            for property in field!!.ContainingType.GetMembers().OfType[IPropertySymbol]() {
+            for property in field.ContainingType.GetMembers().OfType[IPropertySymbol]() {
                 if !this.ShouldPromoteToNullableReference(property) {
                     continue
                 }

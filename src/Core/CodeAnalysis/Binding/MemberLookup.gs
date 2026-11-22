@@ -5796,12 +5796,12 @@ internal class MemberLookup {
                 }
                 if openEvent?.EventHandlerType != nil {
                     let mapped = MapOpenClrTypeToSymbolic(
-                        ClrNullability.GetSignatureType(openEvent!!),
+                        ClrNullability.GetSignatureType(openEvent),
                         openDefinition,
                         declaringTypeArguments
                     )
                     if mapped.ClrType?.ContainsGenericParameters != true {
-                        return ApplyEventDeclarationNullability(mapped, openEvent!!, openDefinition)
+                        return ApplyEventDeclarationNullability(mapped, openEvent, openDefinition)
                     }
                 }
             }
@@ -5849,11 +5849,11 @@ internal class MemberLookup {
             let projected = TupleElementNamesReader.ApplyNames(
                 ClrNullability.SymbolFromLayoutFlags(
                     ClrNullability.GetSignatureType(closedEvent),
-                    ClrNullability.GetSignatureType(openEvent!!),
-                    ClrNullability.ReadNullableFlags(openEvent!!, openDefinition)
+                    ClrNullability.GetSignatureType(openEvent),
+                    ClrNullability.ReadNullableFlags(openEvent, openDefinition)
                 ),
-                openEvent!!,
-                ClrNullability.GetSignatureType(openEvent!!)
+                openEvent,
+                ClrNullability.GetSignatureType(openEvent)
             )
             return if projected is NullableTypeSymbol nullableHandler {
                 nullableHandler.UnderlyingType
@@ -6583,7 +6583,7 @@ internal class MemberLookup {
             }
             let receiverOpenDefinition = imported.OpenDefinition ??
                 (
-                if imported.ClrType!!.IsGenericType {
+                if imported.ClrType.IsGenericType {
                     imported.ClrType!!.GetGenericTypeDefinition()
                 } else {
                     imported.ClrType!!

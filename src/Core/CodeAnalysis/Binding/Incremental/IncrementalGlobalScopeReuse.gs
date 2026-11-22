@@ -297,11 +297,11 @@ internal shared class IncrementalGlobalScopeReuse {
             }
             // Destructor (ADR-0068 / issue #698).
             let deinit = structSymbol.Deinitializer
-            if deinit?.Declaration != nil && deinit!!.Declaration.SyntaxTree == previousTree {
-                if !deinitMap.TryGetValue(deinit!!.Declaration, out var updated) {
+            if deinit?.Declaration != nil && deinit.Declaration.SyntaxTree == previousTree {
+                if !deinitMap.TryGetValue(deinit.Declaration, out var updated) {
                     return false
                 }
-                deinitsToRepoint.Add((deinit!!, updated))
+                deinitsToRepoint.Add((deinit, updated))
             }
             // Computed-property accessor bodies (ADR-0051), instance + static.
             for prop in EnumerateProperties(structSymbol) {

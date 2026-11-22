@@ -97,8 +97,9 @@ internal shared class DiagnosticDeltaCalculator {
         var bodyLocal = false
         var fallbackReason string? = nil
         var after = default(ImmutableArray[Diagnostic])
-        if options.BodyLocalBind && options.Analyzers.IsEmpty && changes.Documents.Length == 1 {
+        if options.BodyLocalBind && changes.Documents.Length == 1 {
             let local = BodyLocalDelta.TryCollect(
+                baseline,
                 compilation,
                 snapshot,
                 oldTrees[0],
@@ -195,6 +196,29 @@ internal shared class DiagnosticDeltaCalculator {
             all.AddRange(
                 GSharpAnalyzerDriver.Run(compilation, options.Analyzers, options.AnalyzerOptions, cancellationToken)
             )
+        }
+        return Filter(all, options)
+    }
+
+    /// Gets the diagnostics of a compilation and of the analyzers, after the host's filter, and the
+    /// analyzer run with the body that reported each of its diagnostics (issue #6165).
+    func Collect(
+        compilation Compilation,
+        options DeltaOptions,
+        cancellationToken CancellationToken,
+        out run AnalyzerRun?
+    ) ImmutableArray[Diagnostic] {
+        let all = List[Diagnostic](compilation.GetDiagnostics(cancellationToken))
+        run = nil
+        if !options.Analyzers.IsEmpty {
+            let recorded = GSharpAnalyzerDriver.RunRecordingOrigins(
+                compilation,
+                options.Analyzers,
+                options.AnalyzerOptions,
+                cancellationToken
+            )
+            all.AddRange(recorded.Diagnostics)
+            run = recorded
         }
         return Filter(all, options)
     }

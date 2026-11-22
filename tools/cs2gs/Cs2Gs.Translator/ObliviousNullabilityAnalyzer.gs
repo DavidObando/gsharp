@@ -1402,7 +1402,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         let sourceOwner = owner!!
         if source == nil &&
             (
-            symbol!!.DeclaringSyntaxReferences.Any(
+            symbol.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> sourceOwner.ContainsSyntaxTree(reference.SyntaxTree)
             ) ||
                 (
@@ -7325,7 +7325,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         ?.ContainingSymbol
         ?.OriginalDefinition
         .GetDocumentationCommentId() is {} ownerId {
-        ownerId + ":" + parameter!!.Ordinal.ToString()
+        ownerId + ":" + parameter.Ordinal.ToString()
     } else {
         default(string?)
     }

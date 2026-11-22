@@ -33,9 +33,9 @@ shared class AnalyzerProjectDetector {
         // than projected to null and filtered by OfType afterwards. The
         // migrated G# asserts a lambda result stored into a type-parameter
         // slot, so a null result would throw there.
-        return compilation!!
+        return compilation
             .SyntaxTrees
-            .Select((tree SyntaxTree) -> compilation!!.GetSemanticModel(tree))
+            .Select((tree SyntaxTree) -> compilation.GetSemanticModel(tree))
             .Any(
             (model SemanticModel) -> model
                 .SyntaxTree
@@ -89,8 +89,8 @@ shared class AnalyzerProjectDetector {
         if !DeclaresAnalyzerTestHarness(compilation) {
             return false
         }
-        for tree in compilation!!.SyntaxTrees {
-            let model = compilation!!.GetSemanticModel(tree)
+        for tree in compilation.SyntaxTrees {
+            let model = compilation.GetSemanticModel(tree)
             for creation in tree.GetRoot().DescendantNodes().OfType[BaseObjectCreationExpressionSyntax]() {
                 if model.GetTypeInfo(creation).Type is not INamedTypeSymbol created {
                     continue
@@ -99,7 +99,7 @@ shared class AnalyzerProjectDetector {
                     continue
                 }
                 let declaring IAssemblySymbol? = created.ContainingAssembly
-                if declaring == nil || SymbolEqualityComparer.Default.Equals(declaring, compilation!!.Assembly) ||
+                if declaring == nil || SymbolEqualityComparer.Default.Equals(declaring, compilation.Assembly) ||
                     IsRoslynAssembly(declaring) {
                     continue
                 }

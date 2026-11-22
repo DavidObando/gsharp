@@ -56,7 +56,8 @@ class DeltaOptions {
     /// Gets or sets a value that tells whether the check binds only the edited function body when
     /// the edit is confined to one (ADR-0227 D4). The result is the result of the full check: the
     /// check binds the whole compilation whenever the edit can change what anything outside the
-    /// body reports, and whenever (cref:Analyzers) is not empty. The default is `true`.
+    /// body reports, and whenever an analyzer of (cref:Analyzers) is not body-local in scope
+    /// (cref:AnalyzerScope.MemberBody, issue #6165). The default is `true`.
     prop BodyLocalBind bool {
         get -> bodyLocalBind
         set -> bodyLocalBind = value

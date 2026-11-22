@@ -164,7 +164,7 @@ internal partial class DeclarationBinder {
                         ?.IsInterface != true {
                         continue
                     }
-                    for slot in target.ClrType!!.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
+                    for slot in target.ClrType.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
                         if !slot.IsSpecialName && slot.Name == method.Name && MemberLookup.MethodMatchesClrSignature(
                             method,
                             slot
@@ -220,7 +220,7 @@ internal partial class DeclarationBinder {
                         ?.IsInterface != true {
                         continue
                     }
-                    for slot in target.ClrType!!.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
+                    for slot in target.ClrType.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
                         if !ExplicitClrPropertyMatches(property, target, slot) {
                             continue
                         }
@@ -277,7 +277,7 @@ internal partial class DeclarationBinder {
                         ?.IsInterface != true {
                         continue
                     }
-                    for slot in target.ClrType!!.GetEvents(BindingFlags.Public | BindingFlags.Instance) {
+                    for slot in target.ClrType.GetEvents(BindingFlags.Public | BindingFlags.Instance) {
                         if slot.Name != eventSymbol.Name ||
                             !ConformanceSignaturesEquivalent(
                             eventSymbol.Type,
@@ -301,7 +301,7 @@ internal partial class DeclarationBinder {
                         ?.IsInterface != true {
                         continue
                     }
-                    let targetClr = target.ClrType!!
+                    let targetClr = target.ClrType
                     var openInterface Type? = nil
                     var symbolicArgs = default(ImmutableArray[TypeSymbol])
                     let isSymbolic = MemberLookup.TryGetSymbolicClrGenericInterface(
@@ -344,7 +344,7 @@ internal partial class DeclarationBinder {
                         continue
                     }
                     for slot in ClrTypeUtilities.SafeGetProperties(
-                        target.ClrType!!,
+                        target.ClrType,
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
                     ) {
                         if (!property.HasGetter && !property.HasSetter) ||
@@ -377,7 +377,7 @@ internal partial class DeclarationBinder {
                         continue
                     }
                     for slot in ClrTypeUtilities.SafeGetEvents(
-                        target.ClrType!!,
+                        target.ClrType,
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
                     ) {
                         if (slot.AddMethod?.IsVirtual != true && slot.RemoveMethod?.IsVirtual != true) ||
@@ -2528,7 +2528,7 @@ internal partial class DeclarationBinder {
                 return false
             }
             for candidate in ClrTypeUtilities.SafeGetProperties(
-                importedBase!!.ClrType!!,
+                importedBase.ClrType,
                 BindingFlags.Public | BindingFlags.Instance
             ) {
                 let candidateParameters = candidate.GetIndexParameters()
@@ -2553,11 +2553,7 @@ internal partial class DeclarationBinder {
                 }
                 var parametersMatch = true
                 for var i = 0; i < interfaceProperty.Parameters.Length; i++ {
-                    var candidateParameterType = MemberLookup.GetIndexerParameterTypeSymbol(
-                        importedBase!!,
-                        candidate,
-                        i
-                    )
+                    var candidateParameterType = MemberLookup.GetIndexerParameterTypeSymbol(importedBase, candidate, i)
                     if candidateParameterType is ByRefTypeSymbol candidateParameterByRef {
                         candidateParameterType = candidateParameterByRef.PointeeType
                     }
@@ -2575,13 +2571,13 @@ internal partial class DeclarationBinder {
                 }
                 if parametersMatch &&
                     IsInterfacePropertyTypeCompatible(
-                    MemberLookup.GetClrPropertyTypeSymbol(importedBase!!, candidate),
+                    MemberLookup.GetClrPropertyTypeSymbol(importedBase, candidate),
                     interfaceProperty.Type,
                     interfaceProperty.HasSetter,
                     typeParameterMap
                 ) {
                     implementation = candidate
-                    containingType = MemberLookup.GetClrMemberDeclaringTypeSymbol(importedBase!!, candidate)
+                    containingType = MemberLookup.GetClrMemberDeclaringTypeSymbol(importedBase, candidate)
                     return true
                 }
             }

@@ -1025,11 +1025,11 @@ class CSharpTypeMapper {
         if location?.SourceTree == nil {
             return false
         }
-        let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
-        let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
+        let position = Math.Min(location.SourceSpan.Start, location.SourceTree!!.GetRoot().FullSpan.End - 1)
+        let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location.SourceTree) {
             context.SemanticModel
         } else {
-            TranslationContext.GetEffectiveSemanticModel(context.Compilation, location!!.SourceTree!!)
+            TranslationContext.GetEffectiveSemanticModel(context.Compilation, location.SourceTree!!)
         }
         return semanticModel
             .LookupNamespacesAndTypes(position, name: name)
@@ -1046,11 +1046,11 @@ class CSharpTypeMapper {
         if location?.SourceTree == nil {
             return false
         }
-        let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
-        let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
+        let position = Math.Min(location.SourceSpan.Start, location.SourceTree!!.GetRoot().FullSpan.End - 1)
+        let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location.SourceTree) {
             context.SemanticModel
         } else {
-            TranslationContext.GetEffectiveSemanticModel(context.Compilation, location!!.SourceTree!!)
+            TranslationContext.GetEffectiveSemanticModel(context.Compilation, location.SourceTree!!)
         }
         return semanticModel.LookupSymbols(position).Any(
             (symbol ISymbol) -> (
@@ -2555,13 +2555,13 @@ class CSharpTypeMapper {
         if location?.SourceTree == nil {
             return false
         }
-        let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
+        let position = Math.Min(location.SourceSpan.Start, location.SourceTree!!.GetRoot().FullSpan.End - 1)
         // Issue #3805: for a LINKED source, ask every linking project's
         // semantic model — the same lexical position, its own parse of the
         // file — so the answer does not depend on which project is being
         // translated. A location in some OTHER file is only the current
         // compilation's business.
-        for semanticModel in this.LinkedDocumentModels(context, location!!.SourceTree) {
+        for semanticModel in this.LinkedDocumentModels(context, location.SourceTree) {
             for symbol in semanticModel.LookupNamespacesAndTypes(position, name: named!!.Name) {
                 if symbol is INamedTypeSymbol candidate &&
                     candidate.Arity == named!!.Arity &&
@@ -2831,10 +2831,10 @@ class CSharpTypeMapper {
         if context?.Compilation == nil {
             return false
         }
-        if !object.ReferenceEquals(this.identityCriticalDelegatesCompilation, context!!.Compilation) {
-            this.identityCriticalDelegatesCompilation = context!!.Compilation
+        if !object.ReferenceEquals(this.identityCriticalDelegatesCompilation, context.Compilation) {
+            this.identityCriticalDelegatesCompilation = context.Compilation
             this.identityCriticalDelegates = IdentityCriticalDelegatesByCompilation.GetValue(
-                context!!.Compilation,
+                context.Compilation,
                 CollectIdentityCriticalDelegates
             )
         }
@@ -3596,7 +3596,7 @@ class CSharpTypeMapper {
                 named.ContainingNamespace is not{IsGlobalNamespace: false} containingNamespace {
                 return false
             }
-            let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
+            let position = Math.Min(location.SourceSpan.Start, location.SourceTree!!.GetRoot().FullSpan.End - 1)
             let currentNamespace INamespaceSymbol? = context
                 .SemanticModel
                 .GetEnclosingSymbol(position)

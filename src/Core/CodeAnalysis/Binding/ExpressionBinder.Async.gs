@@ -1670,11 +1670,11 @@ internal partial class ExpressionBinder {
                 return nil
             }
             let shape = AwaitableShape.Resolve(importedAwaitable.ClrType)
-            if shape?.AwaiterType == nil || !shape!!.AwaiterType.IsConstructedGenericType {
+            if shape?.AwaiterType == nil || !shape.AwaiterType.IsConstructedGenericType {
                 return nil
             }
-            let awaiterOpen = shape!!.AwaiterType.GetGenericTypeDefinition()
-            return ImportedTypeSymbol.GetConstructed(shape!!.AwaiterType, awaiterOpen, importedAwaitable.TypeArguments)
+            let awaiterOpen = shape.AwaiterType.GetGenericTypeDefinition()
+            return ImportedTypeSymbol.GetConstructed(shape.AwaiterType, awaiterOpen, importedAwaitable.TypeArguments)
         }
     }
 }

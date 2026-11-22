@@ -1218,10 +1218,10 @@ internal partial class MethodBodyEmitter {
             this.il.OpCode(ILOpCode.Conv_i2)
         } else if resultType == TypeSymbol.UInt16 || resultType == TypeSymbol.Char {
             this.il.OpCode(ILOpCode.Conv_u2)
-        } else if resultType?.ClrType != nil && resultType.ClrType!!.IsEnum {
+        } else if resultType?.ClrType != nil && resultType.ClrType.IsEnum {
             // Resolve the enum's underlying integral type and truncate
             // if it is narrower than i4.
-            let underlying = Enum.GetUnderlyingType(resultType.ClrType!!)
+            let underlying = Enum.GetUnderlyingType(resultType.ClrType)
             let underlyingFull = underlying.FullName
             if underlyingFull == "System.SByte" {
                 this.il.OpCode(ILOpCode.Conv_i1)

@@ -483,7 +483,7 @@ internal class SignatureEncoder {
             // The reified signature retains the original nested Var/MVar slots.
             this.EncodeFunctionTypeSymbol(encoder, fn)
         } else if type?.ClrType != nil {
-            this.EncodeClrType(encoder, type!!.ClrType)
+            this.EncodeClrType(encoder, type.ClrType)
         } else if type is MapTypeSymbol openMap {
             // Issue #1481: a `map[K, V]` whose erased CLR form is unavailable
             // because a key or value is (or structurally contains) an in-scope

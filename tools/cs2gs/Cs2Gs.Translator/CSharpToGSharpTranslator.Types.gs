@@ -4061,7 +4061,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 if delegateType?.DelegateInvokeMethod is {Parameters: {Length: > 0}} invoke {
                     let rawRangeType = invoke.OriginalDefinition.Parameters[0].Type
-                    return this.SubstituteProjectedContainingTypeParameter(delegateType!!, rawRangeType) ??
+                    return this.SubstituteProjectedContainingTypeParameter(delegateType, rawRangeType) ??
                         invoke
                         .Parameters[0]
                         .Type

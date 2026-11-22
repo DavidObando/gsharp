@@ -44,6 +44,11 @@ class GSharpAnalyzerDriver {
         (Owner GSharpDiagnosticAnalyzer, Id string)
     ]()
     private var suppressions DiagnosticSuppressionMap?
+    // Issue #6165: the function or field whose body the driver is dispatching, and for each report that
+    // entered the bag, in order, the dispatch that made it. An analyzer can report one Diagnostic object
+    // more than once, so the origin belongs to the occurrence, not to the object.
+    private var origin Symbol? = nil
+    private let origins List[Symbol?] = List[Symbol?]()
 
     private init(compilation Compilation, options AnalyzerOptions, cancellationToken CancellationToken) {
         this.compilation = compilation
@@ -52,15 +57,7 @@ class GSharpAnalyzerDriver {
     }
 
     private func RunCore(analyzers ImmutableArray[GSharpDiagnosticAnalyzer]) {
-        for analyzer in analyzers {
-            elapsed[analyzer] = Stopwatch()
-            supportedIds[analyzer] = Guarded(
-                analyzer,
-                () -> analyzer.SupportedDiagnostics.Select((d DiagnosticDescriptor) -> d.Id).ToImmutableHashSet()
-            ) ??
-                ImmutableHashSet[string].Empty
-            Guarded(analyzer, () -> analyzer.Initialize(AnalysisContext(registry, analyzer)))
-        }
+        InitializeAnalyzers(analyzers)
         for entry in registry.CompilationStartActions.ToArray() {
             let context = CompilationStartAnalysisContext(registry, entry.Owner, compilation, cancellationToken)
             Guarded(entry.Owner, () -> entry.Action(context))
@@ -76,6 +73,40 @@ class GSharpAnalyzerDriver {
         for entry in registry.CompilationEndActions.Concat(registry.CompilationActions) {
             let context = CompilationAnalysisContext(compilation, Sink(entry.Owner), cancellationToken)
             Guarded(entry.Owner, () -> entry.Action(context))
+        }
+    }
+
+    // Issue #6165: the actions of a run on one function body, when every analyzer is body-local.
+    private func RunOnBodyCore(
+        analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
+        function FunctionSymbol,
+        body BoundBlockStatement
+    ) bool {
+        InitializeAnalyzers(analyzers)
+        if !registry.IsBodyLocal(analyzers) {
+            return false
+        }
+        let provenance = ProvenanceTree(function, body)
+        if registry.BoundNodeActions.Count > 0 {
+            origin = function
+            DispatchingBoundTreeWalker(this, function, provenance is {} tree && IsGeneratedTree(tree)).Visit(body)
+            origin = nil
+        }
+        if registry.BoundBodyActions.Count > 0 {
+            DispatchBoundBody(function, body, provenance)
+        }
+        return true
+    }
+
+    private func InitializeAnalyzers(analyzers ImmutableArray[GSharpDiagnosticAnalyzer]) {
+        for analyzer in analyzers {
+            elapsed[analyzer] = Stopwatch()
+            supportedIds[analyzer] = Guarded(
+                analyzer,
+                () -> analyzer.SupportedDiagnostics.Select((d DiagnosticDescriptor) -> d.Id).ToImmutableHashSet()
+            ) ??
+                ImmutableHashSet[string].Empty
+            Guarded(analyzer, () -> analyzer.Initialize(AnalysisContext(registry, analyzer)))
         }
     }
 
@@ -127,7 +158,9 @@ class GSharpAnalyzerDriver {
             } else {
                 ProvenanceTree(function, body) is {} tree && IsGeneratedTree(tree)
             }
+            origin = function
             DispatchingBoundTreeWalker(this, function, isGenerated).Visit(body)
+            origin = nil
             dispatchedStatement |= object.ReferenceEquals(body, program.Statement)
         }
         if !dispatchedStatement {
@@ -163,6 +196,7 @@ class GSharpAnalyzerDriver {
 
     private func DispatchBoundBody(owner Symbol, body BoundNode, provenance SyntaxTree?) {
         let isGenerated = provenance is {} tree && IsGeneratedTree(tree)
+        origin = owner
         for entry in registry.BoundBodyActions {
             if SkipsGenerated(entry.Owner, isGenerated) {
                 continue
@@ -170,6 +204,7 @@ class GSharpAnalyzerDriver {
             let context = BoundBodyAnalysisContext(owner, body, compilation, Sink(entry.Owner), cancellationToken)
             Guarded(entry.Owner, () -> entry.Action(context))
         }
+        origin = nil
     }
 
     private func DispatchSemanticModels() {
@@ -207,7 +242,7 @@ class GSharpAnalyzerDriver {
         }
         if !supportedIds[owner].Contains(diagnostic.Id) {
             if reportedUnsupported.Add((owner, diagnostic.Id)) {
-                diagnostics.Report(
+                Record(
                     Diagnostic.Create(
                         DiagnosticDescriptors.AnalyzerUnsupportedDiagnosticId,
                         default(TextLocation),
@@ -239,7 +274,33 @@ class GSharpAnalyzerDriver {
         if suppressions!!.IsSuppressed(diagnostic) {
             return
         }
+        Record(diagnostic)
+    }
+
+    private func Record(diagnostic Diagnostic) {
+        let before = diagnostics.Count
         diagnostics.Report(diagnostic)
+        if diagnostics.Count > before {
+            origins.Add(origin)
+        }
+    }
+
+    private func Result() AnalyzerRun {
+        let produced = diagnostics.ToImmutableArray()
+        let sources = ImmutableArray.CreateBuilder[Symbol?](produced.Length)
+        // The bag keeps every report of the driver, in order. Were it to leave one out, no origin is
+        // known, and the body-local check falls back.
+        let aligned = produced.Length == origins.Count
+        for var i = 0; i < produced.Length; i++ {
+            sources.Add(
+                if aligned {
+                    origins[i]
+                } else {
+                    default(Symbol?)
+                }
+            )
+        }
+        return AnalyzerRun(produced, sources.MoveToImmutable())
     }
 
     private func Guarded(owner GSharpDiagnosticAnalyzer, action() -> void) -> Guarded[object?](
@@ -262,7 +323,7 @@ class GSharpAnalyzerDriver {
             rethrow
         } catch (ex Exception) when !(ex is OutOfMemoryException) && !(ex is StackOverflowException) {
             disabled.Add(owner)
-            diagnostics.Report(
+            Record(
                 Diagnostic.Create(
                     DiagnosticDescriptors.AnalyzerThrewException,
                     default(TextLocation),
@@ -277,7 +338,7 @@ class GSharpAnalyzerDriver {
             if options.TimeBudgetMilliseconds is {} budget && watch.ElapsedMilliseconds > int64(budget) && disabled.Add(
                 owner
             ) {
-                diagnostics.Report(
+                Record(
                     Diagnostic.Create(
                         DiagnosticDescriptors.AnalyzerExceededTimeBudget,
                         default(TextLocation),
@@ -407,6 +468,51 @@ class GSharpAnalyzerDriver {
             return driver.diagnostics.ToImmutableArray()
         }
 
+        // Issue #6165: a run that records, for each diagnostic, the function or field whose body's
+        // dispatch reported it.
+        internal func RunRecordingOrigins(
+            compilation Compilation,
+            analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
+            options AnalyzerOptions?,
+            cancellationToken CancellationToken
+        ) AnalyzerRun {
+            if analyzers.IsDefaultOrEmpty {
+                return AnalyzerRun(ImmutableArray[Diagnostic].Empty, ImmutableArray[Symbol?].Empty)
+            }
+            using let measurement = CompilationMeasurements.BeginPhase("analyzers")
+            let driver = GSharpAnalyzerDriver(compilation, options ?? AnalyzerOptions(), cancellationToken)
+            driver.RunCore(analyzers)
+            return driver.Result()
+        }
+
+        // Issue #6165: runs the analyzers on one function body, as a run over the compilation would
+        // dispatch them on it, with the given source suppressions. It returns `null` when an analyzer is
+        // not body-local in scope (AnalyzerScope.MemberBody).
+        internal func TryRunOnBody(
+            compilation Compilation,
+            analyzers ImmutableArray[GSharpDiagnosticAnalyzer],
+            options AnalyzerOptions?,
+            function FunctionSymbol,
+            body BoundBlockStatement,
+            suppressions DiagnosticSuppressionMap,
+            cancellationToken CancellationToken
+        ) AnalyzerRun? {
+            let driver = GSharpAnalyzerDriver(compilation, options ?? AnalyzerOptions(), cancellationToken)
+            driver.suppressions = suppressions
+            if !driver.RunOnBodyCore(analyzers, function, body) {
+                return nil
+            }
+            return driver.Result()
+        }
+
+        // Issue #6165: whether every analyzer is body-local in scope. It initializes the analyzers on a
+        // registry of its own.
+        internal func AreBodyLocal(analyzers ImmutableArray[GSharpDiagnosticAnalyzer], compilation Compilation) bool {
+            let driver = GSharpAnalyzerDriver(compilation, AnalyzerOptions(), default(CancellationToken))
+            driver.InitializeAnalyzers(analyzers)
+            return driver.diagnostics.Count == 0 && driver.registry.IsBodyLocal(analyzers)
+        }
+
         private func IsEntirelyGenerated(body BoundBlockStatement) bool {
             var sawTree = false
             for statement in body.Statements {
@@ -477,5 +583,22 @@ class GSharpAnalyzerDriver {
             .Text
             .FileName
             ?.EndsWith(".g.gs", StringComparison.OrdinalIgnoreCase) == true
+    }
+}
+
+/// The diagnostics of an analyzer run, and for each one the function or field whose body's dispatch
+/// reported it, or `null` (issue #6165).
+internal class AnalyzerRun {
+    init(diagnostics ImmutableArray[Diagnostic], origins ImmutableArray[Symbol?]) {
+        Diagnostics = diagnostics
+        Origins = origins
+    }
+
+    prop Diagnostics ImmutableArray[Diagnostic] {
+        get;
+    }
+
+    prop Origins ImmutableArray[Symbol?] {
+        get;
     }
 }

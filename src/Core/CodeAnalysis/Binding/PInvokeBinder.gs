@@ -688,7 +688,7 @@ internal shared class PInvokeBinder {
         if annotation?.Arguments == nil {
             return nil
         }
-        for arg in annotation!!.Arguments {
+        for arg in annotation.Arguments {
             if arg is NamedArgumentExpressionSyntax named && named.NameToken.ValueText == name {
                 return named
             }

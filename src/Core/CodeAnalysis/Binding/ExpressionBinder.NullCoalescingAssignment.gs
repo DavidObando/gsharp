@@ -577,11 +577,11 @@ internal partial class ExpressionBinder {
                             (
                             fieldAccess.Receiver is BoundVariableExpression rbve &&
                                 fn?.ThisParameter != nil &&
-                                object.ReferenceEquals(rbve.Variable, fn!!.ThisParameter)
+                                object.ReferenceEquals(rbve.Variable, fn.ThisParameter)
                         )
                         let declaredByThisType = fieldAccess.StructType == nil ||
                             fn?.ReceiverType == nil ||
-                            object.ReferenceEquals(fieldAccess.StructType, fn!!.ReceiverType)
+                            object.ReferenceEquals(fieldAccess.StructType, fn.ReceiverType)
                         if !inCtor || !receiverIsThis || !declaredByThisType {
                             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, fieldAccess.Field.Name)
                             return (nil, nil)
@@ -674,7 +674,7 @@ internal partial class ExpressionBinder {
                             (
                             propAccess.Receiver is BoundVariableExpression rbve &&
                                 fn?.ThisParameter != nil &&
-                                object.ReferenceEquals(rbve.Variable, fn!!.ThisParameter)
+                                object.ReferenceEquals(rbve.Variable, fn.ThisParameter)
                         )
                         if !inInitContext || !receiverIsThis {
                             Diagnostics.ReportInitOnlyPropertyAssignment(
@@ -942,7 +942,7 @@ internal partial class ExpressionBinder {
                         let inInitContext = fn != nil && (fn.Name == ".ctor" || fn.IsInitOnlySetter)
                         let receiverIsThis = userIdx.Receiver is BoundVariableExpression rbve &&
                             fn?.ThisParameter != nil &&
-                            object.ReferenceEquals(rbve.Variable, fn!!.ThisParameter)
+                            object.ReferenceEquals(rbve.Variable, fn.ThisParameter)
                         if !inInitContext || !receiverIsThis {
                             Diagnostics.ReportInitOnlyPropertyAssignment(syntax.OperatorToken.Location, "this[]")
                             return (nil, nil)

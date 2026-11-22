@@ -14,10 +14,16 @@ import System.Threading
 /// The diagnostics of a compilation before an edit, computed once and shared by the delta checks
 /// of one request (ADR-0227 D4).
 class DeltaBaseline {
-    internal init(compilation Compilation, options DeltaOptions, diagnostics ImmutableArray[Diagnostic]) {
+    internal init(
+        compilation Compilation,
+        options DeltaOptions,
+        diagnostics ImmutableArray[Diagnostic],
+        analyzerRun AnalyzerRun? = nil
+    ) {
         Compilation = compilation
         EffectiveOptions = options
         Diagnostics = diagnostics
+        AnalyzerRun = analyzerRun
     }
 
     /// Gets the compilation before the edit.
@@ -35,6 +41,12 @@ class DeltaBaseline {
 
     /// Gets the diagnostics before the edit, after the host's filter, in compilation order and then analyzer order.
     prop Diagnostics ImmutableArray[Diagnostic] {
+        get;
+    }
+
+    // Issue #6165: the analyzers' diagnostics before the host's filter, each with the body whose
+    // dispatch reported it, or `null` when no analyzer ran or the baseline was given its diagnostics.
+    internal prop AnalyzerRun AnalyzerRun? {
         get;
     }
 
@@ -60,16 +72,12 @@ class DeltaBaseline {
             // A snapshot: a later change to the caller's options must not change what the
             // baseline compares with.
             let effective = (options ?? DeltaOptions()).Snapshot()
-            return DeltaBaseline(
-                compilation,
-                effective,
-                if effective.SyntaxOnly {
-                    // A syntax-only check reads the parse diagnostics of the trees, not these.
-                    ImmutableArray[Diagnostic].Empty
-                } else {
-                    DiagnosticDeltaCalculator.Collect(compilation, effective, cancellationToken)
-                }
-            )
+            if effective.SyntaxOnly {
+                // A syntax-only check reads the parse diagnostics of the trees, not these.
+                return DeltaBaseline(compilation, effective, ImmutableArray[Diagnostic].Empty)
+            }
+            let diagnostics = DiagnosticDeltaCalculator.Collect(compilation, effective, cancellationToken, out var run)
+            return DeltaBaseline(compilation, effective, diagnostics, run)
         }
     }
 }

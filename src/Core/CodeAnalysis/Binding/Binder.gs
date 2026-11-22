@@ -16066,7 +16066,7 @@ partial class Binder {
             }
             let explicitMain = functions.FirstOrDefault((f FunctionSymbol) -> f.Name == "Main")
             if explicitMain?.Package != nil {
-                return explicitMain.Package!!
+                return explicitMain.Package
             }
             return if packagesInOrder.Count > 0 {
                 packagesInOrder[0]
