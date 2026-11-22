@@ -179,6 +179,37 @@ test('all current and released articles have intentional descriptions', () => {
   }
 });
 
+test('released native features retain legacy anchors without preview-only guidance', () => {
+  const sections = [
+    ['guide/types-and-values.md', 'Native protocols', 'native-protocols-next-adr-0205'],
+    ['ref/spec.md', 'UTF-8 span literals', 'utf-8-span-literals-next'],
+    ['ref/clr-interop.md', 'Native CLR span aliases', 'native-clr-span-aliases-next'],
+    ['ref/clr-interop.md', 'Native protocol contract boundary', 'native-protocol-contract-boundary-next'],
+    ['ref/diagnostics.md', 'Fixed-array ABI imports', 'fixed-array-abi-imports-next-adr-0210-f1'],
+    ['ref/diagnostics.md', 'Native protocols', 'native-protocols-next-adr-0205'],
+    ['ref/diagnostics.md', 'Native CLR span aliases', 'native-clr-span-aliases-next-adr-0211'],
+  ];
+  for (const directory of ['docs', `versioned_docs/version-${versions[0]}`]) {
+    for (const [page, title, anchor] of sections) {
+      const source = readFileSync(path.join(site, directory, page), 'utf8');
+      assert.doesNotMatch(source, new RegExp(`^#{2,3} ${title}[^\\n]*Next`, 'm'), `${directory}/${page}`);
+      assert.ok(source.includes(`{/* #${anchor} */}`), `${directory}/${page}: legacy ${anchor}`);
+    }
+    const guide = readFileSync(path.join(site, directory, 'guide/types-and-values.md'), 'utf8')
+      .split('## Native protocols')[1].split('```')[0];
+    assert.match(guide, /available in the published SDK/);
+    assert.doesNotMatch(guide, /development feature|0\.5\.212/);
+    const spec = readFileSync(path.join(site, directory, 'ref/spec.md'), 'utf8')
+      .split('### UTF-8 span literals')[1].split('### Byte-string literals')[0];
+    assert.match(spec, /available in the published SDK/);
+    assert.doesNotMatch(spec, /unreleased compiler feature/);
+    const matrix = readFileSync(path.join(site, directory, 'ref/feature-matrix.md'), 'utf8')
+      .split('\n').find((line) => line.startsWith('| Native protocols'));
+    assert.ok(matrix);
+    assert.doesNotMatch(matrix, /\(Next\)/);
+  }
+});
+
 test('ordinary documentation links retain their version', () => {
   for (const directory of [
     'docs',

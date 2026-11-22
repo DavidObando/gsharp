@@ -12,6 +12,31 @@ This page mirrors the authoritative diagnostic catalogue in [`docs/diagnostics.m
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
+## Imported attribute support gaps
+
+Attributes on referenced CLR types and members do not necessarily receive the same treatment as attributes on G# source declarations. For example, source `@Obsolete` can produce GS0204, but an imported `[Obsolete]` does not. Imported symbols do not populate the source-bound `Symbol.Attributes` collection; separate metadata readers provide selected attribute support.
+
+The following inventory accounts for the twelve families in [#5177](https://github.com/DavidObando/gsharp/issues/5177). These are acknowledged gaps, intentionally deferred during imported-metadata parity work, not new compatibility decisions. See the [canonical support inventory](https://github.com/DavidObando/gsharp/blob/main/docs/diagnostics.md#imported-attribute-support-gaps) for the accepted deferral and implementation references. This documentation does not enable them.
+
+Attribute names below omit the `Attribute` suffix.
+
+| Imported attribute | Current support and gap |
+| --- | --- |
+| `Obsolete` | No imported obsolete-use warning or error, including the attribute's error form. Source obsolete-use diagnostics remain supported. |
+| `RequiredMember` | Imported required fields and properties do not cause missing-initialization diagnostics when constructing their type. |
+| `SetsRequiredMembers` | Imported constructor annotations do not participate in required-member validation; that imported validation is itself missing. |
+| `CompilerFeatureRequired` | Partial: G# native-protocol import reads its own feature and storage markers. General C# required-feature enforcement is missing. |
+| `Dynamic` | The imported marker does not enable C# dynamic binding; the underlying CLR signature remains available. |
+| `ParamCollection` | Partial: an overload-check guard recognizes the imported marker, but CLR variadic expansion still requires a one-dimensional array marked `ParamArray`. Imported non-array params collections do not gain element expansion. |
+| `InlineArray` | The imported marker does not supply C# inline-array indexing or conversions. Ordinary CLR member access is separate. |
+| `Experimental` | No imported experimental-use diagnostics are produced from this marker. |
+| `OverloadResolutionPriority` | The imported priority does not affect overload selection. Other overload rules still apply. |
+| `CallerMemberName`, `CallerFilePath`, `CallerLineNumber`, `CallerArgumentExpression` | Omitting an optional imported argument uses its declared default, not the caller's member, path, line, or argument expression. |
+| `CollectionBuilder` | The imported marker does not select a custom collection builder. Other collection construction paths are separate. |
+| `DefaultMember` | The imported name does not select indexers. Indexed CLR properties are discovered separately, so imported indexers are not generally unsupported. |
+
+Source variadic collection carriers can emit `ParamCollection`; their source-call packing support does not establish imported params-collection support. Likewise, importing an attribute class for use in a source annotation does not establish support for its semantics on imported declarations. This table does not mean that all CLR attributes are ignored.
+
 <span id="persistent-managed-references-adr-0188"></span>
 
 ## Persistent managed references
@@ -21,6 +46,29 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 | GS0604 | Error | Invalid persistent-reference type, origin, permission, initialization, scoped escape, or suspension of a temporary borrow. | Use an admitted GC-owned location and compatible runtime; initialize non-null handles on every path, weaken permissions explicitly, and evaluate suspending values before borrowing. Unknown borrowed storage is never copied into a replacement location. |
 | GS0605 | Error | A rich anonymous field with an omitted type has no unambiguous heap-storable inferred type. | Add an explicit field type; `nil`, untyped lambdas/method groups, cycles, and ref-like values are not widened to `object`. |
 | GS0606 | Error | `adapt[I](source)` cannot produce a complete exact forwarding plan. | Supply an interface target and a non-null admitted source whose accessible public instance members exactly match every required slot. Static abstract/virtual members and operators require a separate design. |
+
+## Fixed-array ABI imports {/* #fixed-array-abi-imports-next-adr-0210-f1 */}
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0630 | Error | A marked fixed-array contract has an unsupported revision/unsafe boundary, missing/incompatible canonical owner, malformed shape, unreadable/ambiguous relationship metadata or contradictory element nullability. | Reference the matching SDK-owned V1 definitions and correct producer metadata. Lengths must be 0-32 with canonical balanced children and identical element positions. Interface/base clauses, type/method constraints and inherited public signatures retain receiver-projected annotations. Resolve contradictory paths to one fixed-bearing interface; do not substitute arrays or lookalike carriers. |
+
+This validates explicitly marked CLR contracts; it does not enable the planned
+value lowering of ordinary source `[N]T`.
+
+## Native protocols {/* #native-protocols-next-adr-0205 */}
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0629 | Error | Unsupported native protocol declaration, payload/signature/escape, absent required initialization, or unknown/invalid/incompatible canonical evidence. | Use the admitted nongeneric synchronous by-value core and exact accessible witnesses; initialize required storage, reference the canonical origin/contracts and matching implementation/ref metadata. Unknown evidence is not negative conformance. |
+
+## Native CLR span aliases {/* #native-clr-span-aliases-next-adr-0211 */}
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0631 | Error | Invalid native CLR span alias: wrong arity or element type, a shadowed readonly form, unavailable core-library span types, a nullable constructor target, or an unsupported allocation literal. | Use one heap-storable element type and a target core library providing CLR spans. If `span` is shadowed, use `System.ReadOnlySpan[T]` explicitly. Construct a non-nullable CLR span; use existing CLR span constructors, not native collection allocation syntax. |
+| GS0632 | Error | Invalid UTF-8 span literal, unsupported literal form, invalid decoded Unicode scalar, lossy source decoding, unavailable target span helpers, or a constant initializer. | Use adjacent lowercase `u8"..."`, valid text escapes, and a target core library with `RuntimeHelpers.CreateSpan` and readonly span slicing. Use literal-only `+` explicitly; the span value is not a metadata constant. |
+| GS0633 | Error | `'ref'` or `'out'` modifier on an indexer parameter. | Use `'in'` for a readonly-by-reference indexer parameter, or pass the parameter by value; `'ref'` and `'out'` are not valid on indexer parameters. |
 
 ## Severity levels
 
@@ -38,6 +86,7 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 |------|-----------------|--------|
 | `/nowarn:<ids>` | `<NoWarn>` | Suppress the listed warning IDs. Errors cannot be suppressed. |
 | `/warnaserror` | `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` | Promote every warning to an error. |
+| `/warnaserror-` | — | Disable global promotion. The last global enable or disable option wins; selected-ID settings remain unchanged. |
 | `/warnaserror+:<ids>` | `<WarningsAsErrors>` | Promote only the listed IDs to errors. |
 | `/warnaserror-:<ids>` | — | Exempt the listed IDs from a global `/warnaserror`. |
 
@@ -171,7 +220,7 @@ declaration.
 | GS0155 | Error | Cannot convert type. | Outside call-argument matching, no built-in or user-defined conversion exists; use a compatible value or an API that performs the transformation (for example, `Parse`/`TryParse` for text). |
 | GS0156 | Error | Cannot convert implicitly; explicit conversion exists. | `var x int32 = 3.14` — write `var x int32 = int32(3.14)` to apply the available explicit conversion. |
 | GS0157 | Error | Cannot find type (possibly missing import). | A package-qualified type name that resolves to nothing. |
-| GS0158 | Error | Cannot find member. | A field or property access that does not resolve. |
+| GS0158 | Error | Cannot resolve member access. | A field, property, or event access does not resolve, or its nullable receiver lacks valid non-null narrowing. |
 | GS0159 | Error | Cannot resolve function call. | A function name does not resolve, or its nullable receiver lacks valid non-null narrowing. |
 | GS0160 | Error | Ambiguous overload. | A call that matches more than one overload equally well. Generic candidates are filtered against their `where`-constraints; the constraint-disjoint case usually resolves to one candidate, but two candidates with mutually-incomparable constraint specificity remain ambiguous and report this code. |
 | GS0161 | Error | `copy`/`with` receiver is not a `data struct`. | `.copy(…)` used on a plain `struct`. |
@@ -345,7 +394,7 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS0622 | Error | A positional member follows a braced or content initializer in a composite literal. | Move positional members before composite elements so constructor arguments keep source evaluation order. |
 | GS0623 | Error | A data class or struct declares `PrintMembers(StringBuilder)` with a shape other than an instance, non-generic, synchronous (neither `async` nor `suspend`) method returning `bool` whose accessibility is `private` (a sealed type that starts the slot) or `protected`, marked `override` exactly when the type has an inherited slot. | A compatible `PrintMembers` replaces the synthesized one; remove it to use the synthesized print members, or fix its shape. |
 | GS0624 | Error | A guard leaves a `bool` initializer, or assignment/coalescing/ternary conversion hides the boolean in a nullable result. | Parenthesize the entire initializer to make the boundary explicit: `if let v = (a && b ? x : y)` or `if let v = (cached = a && b)`. |
-| GS0625 | Error | A `guard let` or `while let` has a `&&` guard after its bindings. | Only `if let` accepts a guard. Test the condition in a separate statement, or parenthesize the initializer if the `&&` belongs to it. |
+| GS0625 | _Retired_ | Previously: a `guard let` or `while let` had a `&&` guard after its bindings. | Both forms now accept an optional `&&` guard (#4968); this diagnostic is no longer emitted. |
 | GS0626 | Error | A top-level `\|\|` follows the bindings of an `if let`, `guard let` or `while let`. | Only `&&` introduces a guard. Parenthesize the initializer if the `\|\|` belongs to it. |
 | GS9001 | Error | Cannot take the address of a non-lvalue. | `&(1 + 2)` — the operand is a temporary expression. |
 | GS9002 | Error | Argument must be passed by `ref`. | A `ref` parameter called without the `ref` modifier. |
@@ -391,9 +440,13 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 
 ### Reference closure diagnostics (GS9100)
 
+`GS9100` remains advisory under global `/warnaserror` and SDK `TreatWarningsAsErrors`.
+Explicit `/warnaserror:GS9100` or `/gsdiag:GS9100=error` still rejects incomplete reference closure.
+Using unavailable types or members still produces ordinary binding errors.
+
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
-| GS9100 | **Warning** | One or more assemblies supplied via `/r:` depend (transitively) on assemblies that were not also supplied, so the reference set is not a complete transitive closure. The compiler degrades gracefully — members whose signatures live in the missing assemblies are skipped rather than aborting the build — but the affected members become invisible. The message names the missing assemblies. Add the missing package/project reference (the SDK passes `@(ReferencePathWithRefAssemblies)`, MSBuild's full transitive closure, so this normally only appears with a hand-rolled `/r:` set). Suppress with `/nowarn:GS9100`. | `gsc /r:LibAsmA.dll app.gs` where `LibAsmA.dll` references `DepAsmB.dll` and `DepAsmB.dll` is not also passed. |
+| GS9100 | **Warning** | One or more assemblies supplied via `/r:` depend (transitively) on assemblies that were not also supplied, so the reference set is not a complete transitive closure. The compiler degrades gracefully — members whose signatures live in the missing assemblies are skipped rather than aborting the build — but the affected members become invisible. The message names the missing assemblies. The SDK supplies selected compile references, resolved loose dependencies, and available runtime assets. Add the missing package/project reference when the program needs its metadata. Suppress with `/nowarn:GS9100`. | `gsc /r:LibAsmA.dll app.gs` where `LibAsmA.dll` references `DepAsmB.dll` and `DepAsmB.dll` is not also passed. |
 
 ### Analyzer host diagnostics (GS9300–GS9319, reserved)
 
@@ -411,6 +464,7 @@ passed via `/gsanalyzer:`.
 | GS9305 | Error | `@SuppressDiagnostic` was given an argument that is not a constant string shaped like a diagnostic ID, or no argument at all. |
 | GS9306 | Error | `@ExtensionOwner`, synthesized by cs2gs to preserve a migrated C# static extension class's CLR owner-type identity, was used outside the one shape it supports: a top-level extension function carrying a single `typeof(T)` argument naming a non-generic class declared in the same package. |
 | GS9307 | Error | `@Oblivious` / `@NullabilityEnabled` was written in a shape it does not support: with arguments, with a target specifier, or both annotations on the same declaration. Neither takes arguments; the nearest annotation decides whether the unadorned reference types written inside it are oblivious (`T!`). |
+| GS9308 | Warning | A code-fix provider threw while it registered fixes for a diagnostic. The provider gives no fix for that diagnostic; other providers are not affected (ADR-0227). |
 
 ### Source-generator host diagnostics (GS9200–GS9219)
 
@@ -639,7 +693,7 @@ Cause/fix examples:
 - **GS0624** also covers `if let v = cached = a && b` when `cached` is nullable:
   use `(cached = a && b)` to preserve the old value and body execution, or
   `(cached = a) && b` to select the new guard explicitly.
-- **GS0625** — `while let line = reader.ReadLine() && line.Length > 0 { … }`. Fix: test the condition at the start of the body (`if line.Length == 0 { break }`).
+- **GS0625** (_Retired_) — previously reported when `while let` or `guard let` had a `&&` guard; both forms now accept an optional `&&` guard (#4968).
 - **GS0626** — `if let v = maybe || fallback { … }`. Fix: if you meant a fallback value, write `maybe ?? fallback`; if the `||` belongs to the initializer, parenthesize it.
 
 ## Top-level-statement diagnostics (GS0285–GS0287)
@@ -653,6 +707,23 @@ entry point depends on.
 | GS0285 | Error | Top-level statements are not allowed in a library project. | A `.gsproj` with `<OutputType>Library</OutputType>` whose `.gs` source contains statements at the file root. Set `<OutputType>Exe</OutputType>` or move the statements into an explicit `func Main()`. Mirrors C# CS8805. |
 | GS0286 | Warning | Top-level statements should form a single contiguous block within a file. | A `.gs` file that interleaves declarations between top-level statements, e.g. `var x = 1; func helper() {}; var y = 2`. Both the C# style (TLS first, then decls) and the Go style (decls first, then TLS) are accepted; only interleaved layouts trigger the warning. |
 | GS0287 | Error | Top-level statements mix bare `return;` and `return <expr>;`. | TLS that contains both `return` (no value) and `return 0` — the synthesized `<Main>$` must have a single return type, so choose one shape. |
+
+## Entry-point diagnostics (GS0634)
+
+`gsc` reports this error only when it writes an executable with `/out:` and no other error stops the output. A `/gsdiag` severity override changes only the display; gsc still writes no executable. The language server does not know the project output type, so it does not report it. See issue #5623.
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0634 | Error | An executable (`/target:exe`, `<OutputType>Exe</OutputType>`) has no entry point: no `Main` function and no top-level statements. Mirrors C# CS5001. When a function differs from `Main` only in case, such as Go-style `func main()`, the message adds "Did you mean 'Main'?" and the diagnostic is on that function. | Rename `func main()` to `func Main()`, write top-level statements, or set `<OutputType>Library</OutputType>`. A test project gets an empty generated entry point from the SDK; set `<GenerateProgramFile>false</GenerateProgramFile>` if it declares its own. |
+
+## Constant floating-point conversion diagnostics (GS0635)
+
+gsc folds a constant `float32` or `float64` value that converts to an integer type, `char`, or an enum of one of these types. A value in range truncates toward zero. Run-time conversions of a value that is NaN or out of range give different results on .NET 10 and .NET 11, so such a constant needs an explicit `unchecked` context. See ADR-0219 and issue #5767.
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0635 | Error | A constant floating-point value that is NaN or out of the range of the target integer type converts outside an explicit `unchecked(...)` expression or `unchecked { }` block, for example `const a int8 = int8(300.5)`. The default context and `checked` both report it. Mirrors C# CS0221. | Correct the value, or write `unchecked(int8(300.5))` to accept the saturated value: the nearest bound of the type (`127` here), or `0` for NaN. |
+| GS0637 | Error | An `as` expression tests a target type that the operand's static type can never convert to via a reference, boxing, unboxing, wrapping, or null conversion (for example `42 as string` or `nuint(1) as int64?`). Mirrors C# CS0039. | Use a compatible operand or target type, or apply an explicit value conversion with `cast[T](x)` or `T(x)` when one exists. |
 
 ## Field declaration `var` / `let` requirement (GS0288)
 
@@ -1024,6 +1095,13 @@ Tuple
 of the same arity. Comparing tuples of different arities is an error rather
 than a constant `false`, matching C#.
 
+Element comparisons retain integer constant conversions, including nullable
+unsigned operands: `(value, 9) == (0, 9)` accepts `value uint32?`.
+Both operands run once, left before right, before element comparisons start.
+An incompatible element pair reports GS0129 at the tuple operator.
+Values read from tuple storage do not become constants.
+Constant recovery does not fold native-width conversions.
+
 | ID | Severity | Message | Example |
 |---|---|---|---|
 | GS0539 | Error | `Tuple equality requires operands of equal arity: '<left>' has arity <n> but '<right>' has arity <m>.` | `(1, 2) == (1, 2, 3)` |
@@ -1053,14 +1131,14 @@ parenthesized single element is an error because `(T)` is grouping, not a
 A
 variadic COLLECTION carrier (`...List[T]`, `...ReadOnlySpan[T]`) packs its
 expanded call-site arguments via the carrier's CLR construction form
-(`new List<T>(T[])`, the span's `T[]` constructor). When the element type is
-a same-compilation type whose CLR shape is still erased at bind time, no
-closed construction exists; use the array carrier (`...T`) instead, or pass
-an existing collection directly.
+(`new List<T>(T[])`, the span's `T[]` constructor). Source-declared elements
+and generic type parameters use symbolic constructor emission.
+GS0544 reports an unavailable carrier representation or supported constructor.
+Use the array carrier (`...T`) instead, or pass an existing collection directly.
 
 | ID | Severity | Message | Example |
 |---|---|---|---|
-| GS0544 | Error | `Variadic carrier '<carrier>' cannot be constructed over element type '<element>' at this call site; use an array carrier ('...T') or pass the collection directly.` | `func F(xs ...List[MyLocalClass])` called expanded |
+| GS0544 | Error | `Variadic carrier '<carrier>' cannot be constructed over element type '<element>' at this call site; use an array carrier ('...T') or pass the collection directly.` | Expanded List/span carrier without a supported constructor |
 
 ## Interpolated-string handler missing from the target framework (GS0545)
 
@@ -1136,32 +1214,32 @@ is not a spelling gsc accepts today (GS0157).
 
 | ID | Severity | Message | Example |
 |---|---|---|---|
-| GS0547 | Error | `Type '<name>' is ambiguous between imported '<first>' and imported '<second>'; it would bind '<chosen>' only because that import comes first. Spell the name qualified, or add an 'import Alias = Namespace.Type', to say which one you mean (issue #3734).` | `import Probe.Alpha` + `import Probe.Beta`, both exporting `Thing`, then a bare `Thing` |
-| GS0548 | Warning | `'chan[<T>]()' constructs a rendezvous channel (capacity 0): a send completes only when a receiver takes the value. Pass a capacity for a buffered channel, or use 'Chan.Unbounded[<T>]()' if an unbounded buffer was intended (ADR-0174 D12).` | `let ch = chan[int32]()` |
-| GS0549 | Error | `Cannot send on the receive-only channel type '<type>'; only a 'chan[T]' or 'out chan[T]' handle can send (ADR-0174 D2).` | `func f(ch in chan[int32]) { ch <- 1 }` |
-| GS0550 | Error | `Cannot receive from the send-only channel type '<type>'; only a 'chan[T]' or 'in chan[T]' handle can receive (ADR-0174 D2).` | `func f(ch out chan[int32]) { let v = <-ch }` |
-| GS0554 | Error | `'<form>' binds exactly <count>, not <actual>: a channel receive yields the element and an 'ok' flag (ADR-0174 D3).` | `let (v, ok, extra) = <-ch`; `for k, v in ch` |
-| GS0555 | Error | `'while let <name> = <expr>' binds the channel itself; receive from it with 'while let <name> = <-<expr>' to loop until the channel is closed (ADR-0174 D3).` | `while let v = ch { }` where `ch` is a `chan[int32]` |
-| GS0551 | Error | `'async let' starts a child of the enclosing 'scope', and there is none here; put it inside a 'scope' block (ADR-0174 D15).` | `async let user = fetch(id)` written outside any `scope` |
-| GS0559 | Warning | `'<name>' is never awaited, so its work is started and then cancelled at the end of the scope (ADR-0174 D15).` | `scope { async let user = fetch(id) }` with no `await user` |
-| GS0562 | Warning | `'<name>' is a rendezvous channel (capacity 0), so a batch operation on it degenerates to that many sequential transfers; give it a capacity to make batching pay (ADR-0174 D10).` | `let ch = chan[int32]()` then `await ch.ReceiveBatch(buffer, 1)` |
-| GS0569 | Error | `'<name>' is an 'async let' binding; read it with 'await <name>' so the suspension is visible (ADR-0174 D15).` | `async let user = fetch(id)` then `let copy = user` |
-| GS0574 | Error | `'await' makes '<name>' suspending, but its signature is fixed — inference stops at an entry point, an 'open'/'override'/interface member, an accessor, a constructor, an operator, an iterator, a function literal, and an 'unsafe' or 'fixed' body (ADR-0174 D4). Move the awaited work into a 'suspend func' or an 'async func' and call that from here; where the form allows it, declaring this one that way works too.` | `open func read() int32 { return await answer() }` |
-| GS0575 | Error | `Cannot 'await' in the body of a 'lock' statement: the monitor is thread-affine and reentrant, so a continuation that resumes on another thread would exit a lock it does not hold. Move the awaited work outside the 'lock' (ADR-0174 D4; C# spells the same rule CS1996).` | `lock o { v = await answer() }` |
-| GS0576 | Error | `Cannot 'await' inside a 'go' operand: the spawn takes the call, and an await nested in its arguments has no place to suspend. Bind the awaited value to a local first, then 'go' the call that uses it (ADR-0174 D5).` | `go consume(await fetch())` |
-| GS0577 | Error | `Type '<type>' has no member '<member>' of its own. '<member>' is declared by the interface '<interface>', which '<type>' implements explicitly, so it is not part of the type's own surface. Reach it through an interface-typed receiver instead (issue #4013).` | `map[string, int32]{}.Contains("k")` — `Contains` on `Dictionary<K, V>` is an explicit `ICollection<KeyValuePair<K, V>>` / `IDictionary` implementation |
-| GS0580 | Error | `Type parameter '<name>' does not carry the '<constraint>' constraint that type parameter '<parameter>' requires, so this instantiation is not valid for every '<name>'. Forward the constraint onto the declaration of '<name>' (issue #4037; C# spells the same rule CS0314).` | `class Unforwarded[T] : Handler[T]` where the imported `Handler<TOptions>` declares `where TOptions : SchemeOptions` |
+| GS0547 | Error | `Type '<name>' is ambiguous between imported '<first>' and imported '<second>'; it would bind '<chosen>' only because that import comes first. Spell the name qualified, or add an 'import Alias = Namespace.Type', to say which one you mean.` | `import Probe.Alpha` + `import Probe.Beta`, both exporting `Thing`, then a bare `Thing` |
+| GS0548 | Warning | `'chan[<T>]()' constructs a rendezvous channel (capacity 0): a send completes only when a receiver takes the value. Pass a capacity for a buffered channel, or use 'Chan.Unbounded[<T>]()' if an unbounded buffer was intended.` | `let ch = chan[int32]()` |
+| GS0549 | Error | `Cannot send on the receive-only channel type '<type>'; only a 'chan[T]' or 'out chan[T]' handle can send.` | `func f(ch in chan[int32]) { ch <- 1 }` |
+| GS0550 | Error | `Cannot receive from the send-only channel type '<type>'; only a 'chan[T]' or 'in chan[T]' handle can receive.` | `func f(ch out chan[int32]) { let v = <-ch }` |
+| GS0554 | Error | `'<form>' binds exactly <count>, not <actual>: a channel receive yields the element and an 'ok' flag.` | `let (v, ok, extra) = <-ch`; `for k, v in ch` |
+| GS0555 | Error | `'while let <name> = <expr>' binds the channel itself; receive from it with 'while let <name> = <-<expr>' to loop until the channel is closed.` | `while let v = ch { }` where `ch` is a `chan[int32]` |
+| GS0551 | Error | `'async let' starts a child of the enclosing 'scope', and there is none here; put it inside a 'scope' block.` | `async let user = fetch(id)` written outside any `scope` |
+| GS0559 | Warning | `'<name>' is never awaited, so its work is started and then cancelled at the end of the scope.` | `scope { async let user = fetch(id) }` with no `await user` |
+| GS0562 | Warning | `'<name>' is a rendezvous channel (capacity 0), so a batch operation on it degenerates to that many sequential transfers; give it a capacity to make batching pay.` | `let ch = chan[int32]()` then `await ch.ReceiveBatch(buffer, 1)` |
+| GS0569 | Error | `'<name>' is an 'async let' binding; read it with 'await <name>' so the suspension is visible.` | `async let user = fetch(id)` then `let copy = user` |
+| GS0574 | Error | `'await' makes '<name>' suspending, but its signature is fixed — inference stops at an entry point, an 'open'/'override'/interface member, an accessor, a constructor, an operator, an iterator, a function literal, and an 'unsafe' or 'fixed' body. Move the awaited work into a 'suspend func' or an 'async func' and call that from here; where the form allows it, declaring this one that way works too.` | `open func read() int32 { return await answer() }` |
+| GS0575 | Error | `Cannot 'await' in the body of a 'lock' statement: the monitor is thread-affine and reentrant, so a continuation that resumes on another thread would exit a lock it does not hold. Move the awaited work outside the 'lock' (C# spells the same rule CS1996).` | `lock o { v = await answer() }` |
+| GS0576 | Error | `Cannot 'await' inside a 'go' operand: the spawn takes the call, and an await nested in its arguments has no place to suspend. Bind the awaited value to a local first, then 'go' the call that uses it.` | `go consume(await fetch())` |
+| GS0577 | Error | `Type '<type>' has no member '<member>' of its own. '<member>' is declared by the interface '<interface>', which '<type>' implements explicitly, so it is not part of the type's own surface. Reach it through an interface-typed receiver instead.` | `map[string, int32]{}.Contains("k")` — `Contains` on `Dictionary<K, V>` is an explicit `ICollection<KeyValuePair<K, V>>` / `IDictionary` implementation |
+| GS0580 | Error | `Type parameter '<name>' does not carry the '<constraint>' constraint that type parameter '<parameter>' requires, so this instantiation is not valid for every '<name>'. Forward the constraint onto the declaration of '<name>' (C# spells the same rule CS0314).` | `class Unforwarded[T] : Handler[T]` where the imported `Handler<TOptions>` declares `where TOptions : SchemeOptions` |
 | GS0581 | Error | `Circular constraint dependency involving '<type-parameter>' and '<type-parameter>'. A type parameter cannot, directly or through a chain of type-parameter constraints, be constrained by itself.` | `class Cyc[A B, B A]` — `A` is constrained by `B`, which is constrained by `A` (C# spells the same rule CS0454) |
 | GS0582 | Error | `The <method-group-kind> '<name>' cannot be used as a value without a target delegate type. Invoke it with '(...)' or convert it to a delegate.` The kind distinguishes user/imported and instance/static/extension method groups. | `items.Add.ToString()` — `Add` is an imported instance method group, not a value |
-| GS0583 | Error | `Attribute '<name>' has no constructor that accepts the argument list (<argument types>). Change the arguments to match one of its constructors (issue #4097; C# spells the same rule CS1729 and CS1503).` | `@Many([]object{1})` where `ManyAttribute` declares only `ManyAttribute(Type[] values)` — before #4097 the whole attribute was dropped from the assembly with no diagnostic |
-| GS0584 | Error | `Constructor parameter '<name>' of user-defined attribute '<attribute>' has type '<type>', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (issue #4097; C# spells the same rule CS0181, and reports it on the attribute's declaration rather than on each use).` | `class BadAttribute(Value Widget) : Attribute` applied as `@Bad(nil)`, where `Widget` is a class — `csc` reports CS0181 on the same shape. Unreachable for this shape as of #4143: GS0585 now rejects the declaration before any use exists |
-| GS0585 | Error | `Attribute constructor parameter '<name>' has type '<type>', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (issue #4143; C# spells the same rule CS0181).` | `class BoxedAttribute(Value Holder) : Attribute` where `Holder` is an ordinary class — reported on the class's own declaration, even if the attribute is never applied anywhere |
-| GS0558 | Warning | `'<name>' is a suspending function; called from a function that neither suspends nor is 'async', it blocks the calling thread until it completes (ADR-0174 D4). Make the caller a 'suspend func' or an 'async func', or accept the block at a root such as the entry point.` | `suspend func take(ch chan[int32]) int32 { return <-ch }` then `func f(ch chan[int32]) int32 { return take(ch) }` |
-| GS0556 | Error | `A select arm's 'when' guard must be a 'bool'; '<type>' is not (ADR-0174 D8).` | `select { case <-ch when 1 { } }` |
-| GS0557 | Error | `'case cancelled' observes the ambient context, and there is none here; put the select inside a 'scope', or take a 'ctx Context' parameter (ADR-0174 D8).` | `select { case cancelled { } case <-ch { } }` written outside any `scope` |
-| GS0564 | Warning | `'<name>' is both sent to and received from by this select, so it can complete by talking to itself (ADR-0174 D8).` | `select { case ch <- 1 { } case <-ch { } }` |
-| GS0566 | Error | `'<retired form>' has been retired (ADR-0174); <guidance naming the replacement>` | `make(chan int32, 3)` (use `chan[int32](3)`), `close(ch)` (use `ch.Close()`) |
-| GS0567 | Error | `The 'chan T' type-clause spelling has been removed; use 'chan[<T>]' instead (ADR-0174 D2).` | `var ch chan int32` |
+| GS0583 | Error | `Attribute '<name>' has no constructor that accepts the argument list (<argument types>). Change the arguments to match one of its constructors (C# spells the same rule CS1729 and CS1503).` | `@Many([]object{1})` where `ManyAttribute` declares only `ManyAttribute(Type[] values)` — before #4097 the whole attribute was dropped from the assembly with no diagnostic |
+| GS0584 | Error | `Constructor parameter '<name>' of user-defined attribute '<attribute>' has type '<type>', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (C# spells the same rule CS0181, and reports it on the attribute's declaration rather than on each use).` | `class BadAttribute(Value Widget) : Attribute` applied as `@Bad(nil)`, where `Widget` is a class — `csc` reports CS0181 on the same shape. Unreachable for this shape as of #4143: GS0585 now rejects the declaration before any use exists |
+| GS0585 | Error | `Attribute constructor parameter '<name>' has type '<type>', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (C# spells the same rule CS0181).` | `class BoxedAttribute(Value Holder) : Attribute` where `Holder` is an ordinary class — reported on the class's own declaration, even if the attribute is never applied anywhere |
+| GS0558 | Warning | `'<name>' is a suspending function; called from a function that neither suspends nor is 'async', it blocks the calling thread until it completes. Make the caller a 'suspend func' or an 'async func', or accept the block at a root such as the entry point.` | `suspend func take(ch chan[int32]) int32 { return <-ch }` then `func f(ch chan[int32]) int32 { return take(ch) }` |
+| GS0556 | Error | `A select arm's 'when' guard must be a 'bool'; '<type>' is not.` | `select { case <-ch when 1 { } }` |
+| GS0557 | Error | `'case cancelled' observes the ambient context, and there is none here; put the select inside a 'scope', or take a 'ctx Context' parameter.` | `select { case cancelled { } case <-ch { } }` written outside any `scope` |
+| GS0564 | Warning | `'<name>' is both sent to and received from by this select, so it can complete by talking to itself.` | `select { case ch <- 1 { } case <-ch { } }` |
+| GS0566 | Error | `'<retired form>' has been retired; <guidance naming the replacement>` | `make(chan int32, 3)` (use `chan[int32](3)`), `close(ch)` (use `ch.Close()`) |
+| GS0567 | Error | `The 'chan T' type-clause spelling has been removed; use 'chan[<T>]' instead.` | `var ch chan int32` |
 
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
@@ -1176,7 +1254,7 @@ definite-assignment error rather than an unknown name.
 
 | ID | Severity | Message | Example |
 |---|---|---|---|
-| GS0532 | Error | `Pattern variable '<name>' is not definitely assigned here; it is only usable where its pattern is known to have matched — the right operand of '&&' (or of '\|\|' after a negated test), the branches selected by the condition, and the statements after an 'if' whose other branch always exits (ADR-0166, issue #3409).` | `if value is string s { }` followed by `s.Length`; `value is string s \|\| s.Length > 0` |
+| GS0532 | Error | `Pattern variable '<name>' is not definitely assigned here; it is only usable where its pattern is known to have matched — the right operand of '&&' (or of '\|\|' after a negated test), the branches selected by the condition, and the statements after an 'if' whose other branch always exits.` | `if value is string s { }` followed by `s.Length`; `value is string s \|\| s.Length > 0` |
 
 ## `null` identifier "did you mean nil?" diagnostic (GS0273)
 
@@ -2141,20 +2219,14 @@ nothing to pin; use the buffer directly as a `*T` pointer instead
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0508 | Error | A nullable sequence element uses a type parameter that is not constrained to `struct` or a reference type. |
+| GS0508 | Error | Historical iterator-only diagnostic; source nullable type parameters now use GS0641. |
 
-`sequence[T?]` needs one stable CLR element representation. Iterator return
-types are specialized into `class` and `struct` variants automatically.
-Other unconstrained sequence type positions still require an explicit
-`struct`, `class`, or base-class constraint.
-
-A call from another unconstrained generic context cannot select either
-specialized iterator variant. Constrain the enclosing type parameter to
-`struct`, `class`, or a base class. Named or explicit arguments do not resolve
-that call: in this case
-it reports GS0266, and a nullable value-type argument may instead report
-GS0152. G# rejects source overloads differentiated only by constraints with
-GS0264, even though iterator specialization synthesizes equivalent variants.
+`sequence[T?]` needs one stable CLR element representation.
+ADR-0224 applies the same source eligibility rule as other `T?` positions.
+The compiler no longer generates implicit reference/value iterator variants.
+Declare the appropriate constrained families explicitly.
+Use different names when their CLR signatures would otherwise collide.
+Source overloads differentiated only by constraints still report GS0264.
 
 ## P/Invoke interpreter boundary (GS0514, retired)
 
@@ -2289,7 +2361,7 @@ above retain their longer explanations and examples.
 | GS0422 | Error | A ref-kind parameter (`ref`/`out`/`in`) cannot appear on an `async`, `sequence`, or `async sequence` function. | `async func f(ref x int32) { }` — the state-machine rewriter cannot hoist a managed pointer into a field. Previously misfiled under GS0226. |
 | GS0423 | Error | Type does not implement a usable `GetEnumerator()` method and cannot be iterated with `for ... in`. | `for x in 42 { }` where `42`'s type has no usable `GetEnumerator()`. Previously misfiled under GS0268. |
 | GS0424 | Error | A ref-kind modifier (`ref`/`out`/`in`) is not legal on a primary-constructor parameter. | `class Vec(ref x int32) { }` — primary-constructor parameters materialize fields, and the CLR cannot store a managed pointer in a field. Previously misfiled under GS0241. |
-| GS0460 | Error | The operand of a `defer` statement is a call with one or more `ref`, `out`, or `in` arguments.  | |
+| GS0460 | Error | The operand of a `defer` or `go` statement is a call with one or more `ref`, `out`, or `in` arguments, including implicit `in`. | Pass values instead, or create and use the reference inside a `go` block. |
 | GS0461 | Error | A `lock` statement's operand is not a reference type.  | |
 | GS0462 | Error | A generic local function is not declared as a `let`-bound function literal.  | |
 | GS0463 | Error | A generic local function captures a variable from its enclosing scope.  | |
@@ -2324,10 +2396,16 @@ above retain their longer explanations and examples.
 | GS0496 | Error | A bare source type name is ambiguous between same-named types declared by multiple imported packages.  | |
 | GS0497 | Error | A function literal is an async iterator; declare a named async iterator and reference it instead.  | |
 | GS0498 | Error | A `goto` enters a `catch` or `finally` handler from outside that handler.  | |
+| GS0636 | Error | A `goto` enters a nested block from outside that block.  | |
+| GS0638 | Error | Cannot take the pointer value of a fixed-size buffer in movable storage outside a `fixed` statement; pin it with `fixed` or index an element directly (`name[i]`).  | |
+| GS0639 | Error | Lazy declaration dependencies exceed the available execution stack. | Reduce or split cross-declaration attribute dependencies. The compiler reports this error instead of terminating the process. |
+| GS0640 | Error | A property declaration has an initializer (`prop X T = value`). The `PropertyDecl` grammar has no initializer. | Declare a field (`var X T = value`) or assign the property in `init`. |
+| GS0641 | Error | A source annotation or nullable-producing operator requires `T?`, but `T` has no proven reference or nonnullable value kind. | Constrain the actual domain with `class`, `class?`, a sufficient reference-class bound, `struct`, or `unmanaged`. `notnull`, interface-only bounds, and a dependent parameter's bare class bound are insufficient. Use bare `T` for a complete nullable type argument. See ADR-0224. |
+| GS0642 | Error | A constructor initializer uses a target other than `base` after `:`. | Use `: base(args)` for a superclass constructor, or `convenience init() { init(args) }` for same-class chaining. |
 | GS0499 | Error | A field assignment targets a temporary struct value rather than writable storage.  | |
 | GS0500 | Error | A user-defined compound-assignment operator is not an instance method with exactly one parameter and no return value.  | |
 | GS0501 | Error | Imported metadata exposes multiple public parameterless members with the same name, so reflection lookup is ambiguous.  | |
-| GS0505 | Error | A call cannot choose between compiler-generated reference-type and value-type variants of a nullable iterator because the caller's type parameter is unconstrained.  | |
+| GS0505 | Error | Historical nullable-iterator specialization diagnostic. Unsupported source annotations now report GS0641. | |
 | GS9008 | Error | A pointer bound by `fixed` cannot be captured by a closure because the closure may outlive the pin. | A lambda inside `fixed p *int32 = xs` captures `p`. |
 
 ## Rethrow outside a catch handler (GS0570, GS0571)

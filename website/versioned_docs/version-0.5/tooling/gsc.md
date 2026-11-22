@@ -57,7 +57,7 @@ gsc @app.rsp
 | `/refout:<file>` | Emit a metadata-only reference assembly to `<file>` in the same compiler invocation. |
 | `/assemblyname:<name>` | Override the emitted assembly name. |
 | `/version:<string>` | Set the informational version stamped on the output assembly. |
-| `/target:exe` | Emit an executable assembly. This is the default target. |
+| `/target:exe` | Emit an executable assembly. This is the default target. With `/out:`, a program without top-level statements or a `Main` function is error GS0634. |
 | `/target:library`, `/target:lib`, `/target:dll` | Emit a library assembly. No `.runtimeconfig.json` is written for library targets. |
 | `/targetframework:<tfm>` | Set the target framework moniker. Used for executable runtime config and target-framework reference identity. |
 | `/tfm:<tfm>` | Alias for `/targetframework:<tfm>`. |
@@ -74,9 +74,10 @@ gsc @app.rsp
 | `/noimplicitimports` | Disable the implicit `System` import. |
 | `/no-implicit-imports` | Hyphenated alias for `/noimplicitimports`. |
 | `/nullability:platform-types` | Default: import annotated references as `T` / `T?`, and oblivious references as platform types displayed as `T!`. The display notation is not source syntax. |
-| `/nullability:enabled`, `/nullability:oblivious` | `enabled` reads oblivious imports as nullable (legacy). `oblivious` reads imports as platform types and marks this compilation's own declarations oblivious. Prefer the default for new projects. |
+| `/nullability:oblivious` | Reads imports as platform types and marks this compilation's own declarations oblivious (ADR-0186 §9). Prefer the default for new projects. |
 | `/nowarn:<ids>` | Suppress warning diagnostics with the listed comma- or semicolon-separated IDs. IDs may be canonical, such as `GS9100`, or numeric, such as `9100`; numeric forms normalize to `GS####`. |
-| `/warnaserror` | Promote all warnings to errors. |
+| `/warnaserror` | Promote warnings to errors, except advisory `GS9100`. `/warnaserror+` is an alias. |
+| `/warnaserror-` | Disable global warning promotion. The last global enable or disable option wins; selected-ID settings remain unchanged. |
 | `/warnaserror:<ids>` | Promote the listed warning IDs to errors. |
 | `/warnaserror+:<ids>` | Alias for promoting the listed warning IDs to errors. |
 | `/warnaserror-:<ids>` | Keep the listed IDs as warnings even when global `/warnaserror` is set. |
@@ -109,7 +110,11 @@ Unsupported values for `/target:<value>`, `/debug:<value>`, and boolean switches
 
 ## References and target frameworks
 
-Use `/r:<path>` or `/reference:<path>` for every reference assembly the program needs. The SDK passes the full `ReferencePathWithRefAssemblies` closure so `MetadataLoadContext` can resolve transitive reference identities. If direct `gsc` use omits needed transitive references, `gsc` may report advisory warning `GS9100` naming missing assemblies.
+Use `/r:<path>` or `/reference:<path>` for every reference assembly the program needs. The SDK supplies selected compile references, resolved loose dependencies, and available runtime assets so `MetadataLoadContext` can resolve their reference identities. Missing transitive references can produce advisory warning `GS9100`, including when the restored dependency graph does not contain them.
+
+`GS9100` remains advisory under global `/warnaserror` or `/warnaserror+`, including SDK `TreatWarningsAsErrors`. Explicit `/warnaserror:GS9100`, `/warnaserror+:GS9100`, or `/gsdiag:GS9100=error` returns a nonzero exit code before emission. `/nowarn:GS9100` suppresses the warning before warning promotion. Other warnings retain global promotion.
+
+An assembly mentioned only by a facade's type forwarders is not an eager reference-closure dependency. Missing optional forwarded surfaces do not produce `GS9100`. A reference that also uses that assembly in its type metadata still requires it. Using an unavailable forwarded type produces the ordinary binding error rather than silently accepting the missing type.
 
 ```bash
 gsc Program.gs /out:bin/App.dll /r:/path/to/System.Console.dll /tfm:net8.0
