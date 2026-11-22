@@ -3946,8 +3946,20 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 }
                 let srcClr = conv.Expression.Type.ClrType?.FullName
                 let dstClr = conv.Type.ClrType?.FullName
-                return srcClr != nil && dstClr != nil && NumericWideningLattice.IsNumericPrimitive(srcClr) &&
-                    NumericWideningLattice.IsNumericPrimitive(dstClr)
+                if srcClr == nil || dstClr == nil || !NumericWideningLattice.IsNumericPrimitive(srcClr) ||
+                    !NumericWideningLattice.IsNumericPrimitive(dstClr) {
+                    return false
+                }
+                if srcClr == "System.Decimal" && dstClr != "System.Decimal" {
+                    return false
+                }
+                if dstClr == "System.Decimal" && srcClr != "System.Decimal" && !NumericWideningLattice.IsWidening(
+                    srcClr,
+                    dstClr
+                ) {
+                    return false
+                }
+                return true
             }
             case fieldAssign is BoundFieldAssignmentExpression {
                 return fieldAssign.Receiver != nil &&

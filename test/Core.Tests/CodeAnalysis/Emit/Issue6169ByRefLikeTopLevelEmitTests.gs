@@ -2947,6 +2947,66 @@ run().GetAwaiter().GetResult()
 `)
         Assert.Contains(typedCatchNotMatchedFinallyAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
         Assert.DoesNotContain(typedCatchNotMatchedFinallyAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let decimalToIntConversionThrowsCatchReadsUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(d decimal) Task {
+    var c = Counter{Value: 10}
+    await Task.Delay(1)
+    try {
+        let n = int32(d)
+        c = Counter{Value: n}
+    } catch {
+        Console.WriteLine(c.Value)
+    }
+}
+
+run(decimal.MaxValue).GetAwaiter().GetResult()
+`)
+        Assert.Contains(decimalToIntConversionThrowsCatchReadsUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(
+            decimalToIntConversionThrowsCatchReadsUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let floatToDecimalConversionThrowsRetainsAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(f float64) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        p = &c.Value
+        let d = decimal(f)
+        p = &x
+        Console.WriteLine(d)
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(1e30).GetAwaiter().GetResult()
+`)
+        Assert.Contains(
+            floatToDecimalConversionThrowsRetainsAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            floatToDecimalConversionThrowsRetainsAliasUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
     }
 
     @Fact
