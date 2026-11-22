@@ -5423,13 +5423,17 @@ partial class CSharpToGSharpTranslator {
                     () -> {
                         if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
                             let rhsTemp = this.NewSpillName()
-                            let rhsExpr = this.TranslateAssignmentValue(assignment)
+                            let rhsPrologue = List[GStatement]()
+                            let rhsExpr = this.TranslateWithPrologueAssignments(
+                                assignment.Right,
+                                rhsPrologue,
+                                () -> this.TranslateAssignmentValue(assignment)
+                            )
                             let rhsType = this.GetCoordinatedElementAssignmentRhsType(leftElement, assignment, rhsExpr)
+                            rhsPrologue.Add(LocalDeclarationStatement(BindingKind.Let, rhsTemp, rhsType, rhsExpr))
                             return cast[GExpression](
                                 BlockExpression(
-                                    List[GStatement]{
-                                        LocalDeclarationStatement(BindingKind.Let, rhsTemp, rhsType, rhsExpr)
-                                    },
+                                    rhsPrologue,
                                     AssignmentExpression(
                                         this.TranslateAssignmentTarget(leftElement),
                                         IdentifierExpression(rhsTemp),

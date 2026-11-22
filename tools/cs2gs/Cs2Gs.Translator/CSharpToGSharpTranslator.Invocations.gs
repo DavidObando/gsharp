@@ -1212,6 +1212,19 @@ partial class CSharpToGSharpTranslator {
         ] -> arguments
             .Select((a ArgumentSyntax) -> this.TranslateArgument(a)!!).ToList()
 
+        private func IsCallerInfoParameter(parameter IParameterSymbol) bool -> parameter.GetAttributes().Any(
+            (attribute AttributeData) -> attribute
+                .AttributeClass
+                ?.ContainingNamespace
+                ?.ToDisplayString() == "System.Runtime.CompilerServices" &&
+                (
+                attribute.AttributeClass!!.Name is "CallerArgumentExpressionAttribute" or
+                    "CallerMemberNameAttribute" or
+                    "CallerFilePathAttribute" or
+                    "CallerLineNumberAttribute"
+            )
+        )
+
         private func TranslateArgumentsWithCallerInfo(
             callSyntax Microsoft.CodeAnalysis.SyntaxNode?,
             arguments Microsoft.CodeAnalysis.SeparatedSyntaxList[ArgumentSyntax],
@@ -1222,17 +1235,8 @@ partial class CSharpToGSharpTranslator {
                 return translated
             }
             for argument in operationArguments {
-                if argument.ArgumentKind == ArgumentKind.DefaultValue && argument.Parameter!!.GetAttributes().Any(
-                    (attribute AttributeData) -> attribute
-                        .AttributeClass
-                        ?.ContainingNamespace
-                        ?.ToDisplayString() == "System.Runtime.CompilerServices" &&
-                        (
-                        attribute.AttributeClass!!.Name is "CallerArgumentExpressionAttribute" or
-                            "CallerMemberNameAttribute" or
-                            "CallerFilePathAttribute" or
-                            "CallerLineNumberAttribute"
-                    )
+                if argument.ArgumentKind == ArgumentKind.DefaultValue && this.IsCallerInfoParameter(
+                    argument.Parameter!!
                 ) {
                     translated.Add(
                         NamedArgumentExpression(
@@ -2129,9 +2133,6 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateArgumentValue(argument ArgumentSyntax) GExpression? {
-            if this.state.HoistedHandlerArguments.TryGetValue(argument, out var hoistedHandlerArgument) {
-                return hoistedHandlerArgument
-            }
             let refKind = argument.RefKindKeyword.Kind()
             if refKind != Microsoft
                 .CodeAnalysis
@@ -2147,6 +2148,9 @@ partial class CSharpToGSharpTranslator {
                 // Issues #4422 and #6036: carry a dropped `!`, or a csc flow proof that
                 // gsc does not narrow, across as a statement-scoped suppression of GS0612.
                 this.state.PendingStatementSuppressions?.Add("GS0612")
+            }
+            if this.state.HoistedHandlerArguments.TryGetValue(argument, out var hoistedHandlerArgument) {
+                return hoistedHandlerArgument
             }
             if refKind == Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword {
                 if argument.Expression is DeclarationExpressionSyntax declaration {
@@ -12508,13 +12512,30 @@ partial class CSharpToGSharpTranslator {
             callSyntax Microsoft.CodeAnalysis.SyntaxNode,
             recvType ITypeSymbol?
         ) bool {
-            if recvType == nil || !recvType.IsValueType || recvType.IsReadOnly {
+            if recvType == nil || recvType.IsReferenceType || recvType.IsReadOnly {
                 return false
             }
             return switch this.context.SemanticModel.GetOperation(callSyntax) {
                 case inv is IInvocationOperation: !inv.TargetMethod.IsReadOnly
                 case propOp is IPropertyReferenceOperation: if this.IsElementAssignmentTarget(callSyntax) {
-                    propOp.Property.SetMethod?.IsReadOnly != true
+                    if propOp.Property.ReturnsByRef || propOp.Property.ReturnsByRefReadonly {
+                        propOp.Property.GetMethod?.IsReadOnly != true
+                    } else if propOp.Property.SetMethod != nil {
+                        let isCompoundOrIncDec = callSyntax.Parent is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .AssignmentExpressionSyntax assign &&
+                            !assign.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
+                            callSyntax.Parent is PostfixUnaryExpressionSyntax or
+                            PrefixUnaryExpressionSyntax
+                        !propOp
+                            .Property
+                            .SetMethod!!.IsReadOnly ||
+                            (isCompoundOrIncDec && propOp.Property.GetMethod?.IsReadOnly != true)
+                    } else {
+                        propOp.Property.GetMethod?.IsReadOnly != true
+                    }
                 } else {
                     propOp.Property.GetMethod?.IsReadOnly != true
                 }
@@ -12602,6 +12623,8 @@ partial class CSharpToGSharpTranslator {
                     this.IsOperationReadOnlyStorage(fieldRef.Instance!!)
             )
             case _ is IArrayElementReferenceOperation: false
+            case condOp is IConditionalOperation when condOp.IsRef: this.IsOperationReadOnlyStorage(condOp.WhenTrue) ||
+                (condOp.WhenFalse != nil && this.IsOperationReadOnlyStorage(condOp.WhenFalse!!))
             case propRef is IPropertyReferenceOperation: propRef.Property.ReturnsByRefReadonly
             case invRef is IInvocationOperation: invRef.TargetMethod.ReturnsByRefReadonly
             default: true
@@ -12612,7 +12635,7 @@ partial class CSharpToGSharpTranslator {
             out isReadOnly bool
         ) bool {
             isReadOnly = false
-            let op = this.context.SemanticModel.GetOperation(syntax)
+            let op = this.context.SemanticModel.GetOperation(Unparenthesize(syntax) ?? syntax)
             if op == nil {
                 return false
             }
@@ -12622,6 +12645,7 @@ partial class CSharpToGSharpTranslator {
                     IParameterReferenceOperation or
                     IFieldReferenceOperation or
                     IArrayElementReferenceOperation ||
+                    (op is IConditionalOperation condOp && condOp.IsRef) ||
                     (
                     op is IPropertyReferenceOperation propOp &&
                         (propOp.Property.ReturnsByRef || propOp.Property.ReturnsByRefReadonly)
@@ -12632,6 +12656,20 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             return false
+        }
+
+        private func TranslateWithPrologueAssignments(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            prologue List[GStatement],
+            translate() -> GExpression?
+        ) GExpression? {
+            let replacements = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            let embedded = this.HoistAssignmentsInOrder(expression, includeSelf: true, prologue, replacements)
+            try {
+                return translate()
+            } finally {
+                this.ReleaseHoistedAssignments(embedded, replacements)
+            }
         }
 
         private func GetCapturedArgumentTempType(
@@ -12760,10 +12798,23 @@ partial class CSharpToGSharpTranslator {
                         captures.ReceiverSyntax = receiverSyntax
                     } else if receiverSymbol is not INamedTypeSymbol && receiverSymbol is not INamespaceSymbol {
                         let recvType = this.context.GetTypeInfo(receiverSyntax).Type
-                        let rawTranslatedRecv = this.TranslateExpression(receiverSyntax)!!
+                        let rawTranslatedRecv = this.TranslateWithPrologueAssignments(
+                            receiverSyntax,
+                            prologue,
+                            () -> this.TranslateExpression(receiverSyntax)
+                        )!!
                         let translatedRecv = WithoutNonNullAssertion(rawTranslatedRecv)!!
                         let recvName = this.NewSpillName()
-                        if recvType?.IsValueType == true && this.CanCaptureValueTypeAsRefAlias(
+                        let canAliasReceiverStorage = recvType != nil &&
+                            !recvType.IsReferenceType &&
+                            !(
+                            rawTranslatedRecv is NonNullAssertionExpression &&
+                                recvType.NullableAnnotation == Microsoft
+                                .CodeAnalysis
+                                .NullableAnnotation
+                                .Annotated
+                        )
+                        if canAliasReceiverStorage && this.CanCaptureValueTypeAsRefAlias(
                             receiverSyntax,
                             out var isReadOnlyRecv
                         ) &&
@@ -12786,7 +12837,7 @@ partial class CSharpToGSharpTranslator {
                             )
                             captures.ReceiverIsRefAlias = !isReadOnlyRecv
                             captures.ReceiverIsReadOnlyAlias = isReadOnlyRecv
-                        } else if recvType?.IsValueType == true {
+                        } else if canAliasReceiverStorage {
                             prologue.Add(
                                 LocalDeclarationStatement(
                                     BindingKind.Var,
@@ -12836,7 +12887,17 @@ partial class CSharpToGSharpTranslator {
                 var lastCoordinatedIndex = -1
                 for var idx = 0; idx < operationArguments.Length; idx++ {
                     if this.ArgumentContainsCoordinatedHandler(operationArguments[idx]) ||
-                        this.ContainsRefLikeHandlerInSubtree(operationArguments[idx].Value) {
+                        this.ContainsRefLikeHandlerInSubtree(operationArguments[idx].Value) ||
+                        (
+                        operationArguments[idx]
+                            .Value
+                            .Syntax is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .ExpressionSyntax argValExpr &&
+                            CollectEmbeddedAssignments(argValExpr, includeSelf: true).Count > 0
+                    ) {
                         lastCoordinatedIndex = idx
                     }
                 }
@@ -12883,7 +12944,11 @@ partial class CSharpToGSharpTranslator {
                                 )
                             } else {
                                 let extRecvType = this.context.GetTypeInfo(extRecvExpr).Type
-                                let translatedExtRecv = this.TranslateExpression(extRecvExpr)!!
+                                let translatedExtRecv = this.TranslateWithPrologueAssignments(
+                                    extRecvExpr,
+                                    prologue,
+                                    () -> this.TranslateExpression(extRecvExpr)
+                                )!!
                                 let extName = this.NewSpillName()
                                 let extRefKind = argOp.Parameter?.RefKind ?? RefKind.None
                                 if extRefKind == RefKind.Ref {
@@ -13013,7 +13078,11 @@ partial class CSharpToGSharpTranslator {
                                 if elemArgSyntax == nil {
                                     continue
                                 }
-                                let translatedElem = this.TranslateArgumentValue(elemArgSyntax)!!
+                                let translatedElem = this.TranslateWithPrologueAssignments(
+                                    elemArgSyntax.Expression,
+                                    prologue,
+                                    () -> this.TranslateArgumentValue(elemArgSyntax)
+                                )!!
                                 if elemOp
                                     .ConstantValue
                                     .HasValue &&
@@ -13105,233 +13174,250 @@ partial class CSharpToGSharpTranslator {
                         }
                         continue
                     }
-                    if refKind == RefKind.Out {
-                        let unwrappedOut = Unparenthesize(argSyntax.Expression)
-                        if unwrappedOut is IdentifierNameSyntax &&
-                            !(
-                            unwrappedOut is IdentifierNameSyntax{Identifier: {ValueText: "_"}} discardCheck &&
-                                this.IsTrueDiscard(discardCheck)
-                        ) {
-                            captures.Arguments[i] = CallSiteCapturedArgument(
-                                this.TranslateExpression(unwrappedOut)!!,
-                                param,
-                                argOp.Value.Type,
-                                argSyntax.Expression,
-                                isRefAlias: true,
-                                isReadOnlyAlias: false
-                            )
-                        } else if unwrappedOut is ThisExpressionSyntax {
-                            captures.Arguments[i] = CallSiteCapturedArgument(
-                                ThisExpression(),
-                                param,
-                                argOp.Value.Type,
-                                argSyntax.Expression,
-                                isRefAlias: true,
-                                isReadOnlyAlias: false
-                            )
-                        } else if !(
-                            unwrappedOut is IdentifierNameSyntax{Identifier: {ValueText: "_"}} discardOut &&
-                                this.IsTrueDiscard(discardOut)
-                        ) {
-                            let outTemp = this.NewSpillName()
-                            let outTarget = WithoutNonNullAssertion(this.TranslateExpression(argSyntax.Expression))
-                            prologue.Add(
-                                LocalDeclarationStatement(
-                                    BindingKind.Var,
-                                    outTemp,
-                                    type: nil,
-                                    outTarget,
-                                    isRefAlias: true
-                                )
-                            )
-                            let idExpr = IdentifierExpression(outTemp)
-                            this.state.HoistedHandlerArguments[argSyntax] = UnaryExpression("&", idExpr)
-                            addedArguments.Add(argSyntax)
-                            captures.Arguments[i] = CallSiteCapturedArgument(
-                                idExpr,
-                                param,
-                                argOp.Value.Type,
-                                argSyntax.Expression,
-                                isRefAlias: true,
-                                isReadOnlyAlias: false
-                            )
-                        }
-                        continue
-                    }
-                    if refKind == RefKind.Ref {
-                        let unwrappedRef = Unparenthesize(argSyntax.Expression)
-                        if unwrappedRef is ThisExpressionSyntax {
-                            captures.Arguments[i] = CallSiteCapturedArgument(
-                                ThisExpression(),
-                                param,
-                                argOp.Value.Type,
-                                argSyntax.Expression,
-                                isRefAlias: true,
-                                isReadOnlyAlias: false
-                            )
-                        } else {
-                            let refTemp = this.NewSpillName()
-                            let refTarget = WithoutNonNullAssertion(this.TranslateExpression(argSyntax.Expression))
-                            prologue.Add(
-                                LocalDeclarationStatement(
-                                    BindingKind.Var,
-                                    refTemp,
-                                    type: nil,
-                                    refTarget,
-                                    isRefAlias: true
-                                )
-                            )
-                            let idExpr = IdentifierExpression(refTemp)
-                            this.state.HoistedHandlerArguments[argSyntax] = UnaryExpression("&", idExpr)
-                            addedArguments.Add(argSyntax)
-                            captures.Arguments[i] = CallSiteCapturedArgument(
-                                idExpr,
-                                param,
-                                argOp.Value.Type,
-                                argSyntax.Expression,
-                                isRefAlias: true,
-                                isReadOnlyAlias: false
-                            )
-                        }
-                        continue
-                    }
-                    if refKind is RefKind.In or RefKind.RefReadOnlyParameter {
-                        let translatedInArg = this.TranslateArgumentValue(argSyntax)!!
-                        if translatedInArg is OutArgumentExpression{Keyword: "in"} inOut {
-                            let refTemp = this.NewSpillName()
-                            prologue.Add(
-                                LocalDeclarationStatement(
-                                    BindingKind.Let,
-                                    refTemp,
-                                    type: nil,
-                                    IdentifierExpression(inOut.Name),
-                                    isRefAlias: true,
-                                    isReadOnlyRefAlias: true
-                                )
-                            )
-                            let idExpr = IdentifierExpression(refTemp)
-                            this.state.HoistedHandlerArguments[argSyntax] = OutArgumentExpression("in", refTemp)
-                            addedArguments.Add(argSyntax)
-                            captures.Arguments[i] = CallSiteCapturedArgument(
-                                idExpr,
-                                param,
-                                argOp.Value.Type,
-                                argSyntax.Expression,
-                                isRefAlias: true,
-                                isReadOnlyAlias: true
-                            )
-                        } else if translatedInArg is UnaryExpression{Operator: "in "} inAddr {
-                            let refTemp = this.NewSpillName()
-                            prologue.Add(
-                                LocalDeclarationStatement(
-                                    BindingKind.Let,
-                                    refTemp,
-                                    type: nil,
-                                    inAddr.Operand,
-                                    isRefAlias: true,
-                                    isReadOnlyRefAlias: true
-                                )
-                            )
-                            let idExpr = IdentifierExpression(refTemp)
-                            this.state.HoistedHandlerArguments[argSyntax] = UnaryExpression("in ", idExpr)
-                            addedArguments.Add(argSyntax)
-                            captures.Arguments[i] = CallSiteCapturedArgument(
-                                idExpr,
-                                param,
-                                argOp.Value.Type,
-                                argSyntax.Expression,
-                                isRefAlias: true,
-                                isReadOnlyAlias: true
-                            )
-                        } else if argSyntax.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None) &&
-                            this.IsReadOnlyAddressableStorageOperation(argOp.Value) &&
-                            translatedInArg is not NonNullAssertionExpression {
-                            let refTemp = this.NewSpillName()
-                            prologue.Add(
-                                LocalDeclarationStatement(
-                                    BindingKind.Let,
-                                    refTemp,
-                                    type: nil,
-                                    translatedInArg,
-                                    isRefAlias: true,
-                                    isReadOnlyRefAlias: true
-                                )
-                            )
-                            let idExpr = IdentifierExpression(refTemp)
-                            this.state.HoistedHandlerArguments[argSyntax] = idExpr
-                            addedArguments.Add(argSyntax)
-                            captures.Arguments[i] = CallSiteCapturedArgument(
-                                idExpr,
-                                param,
-                                argOp.Value.Type,
-                                argSyntax.Expression,
-                                isRefAlias: true,
-                                isReadOnlyAlias: true
-                            )
-                        } else {
-                            let valTemp = this.NewSpillName()
-                            let tempType = this.GetCapturedArgumentTempType(param, argSyntax)
-                            prologue.Add(LocalDeclarationStatement(BindingKind.Let, valTemp, tempType, translatedInArg))
-                            let idExpr = IdentifierExpression(valTemp)
-                            let adaptedIn GExpression = if param != nil &&
-                                !param
-                                .ContainingSymbol
-                                .DeclaringSyntaxReferences
-                                .IsDefaultOrEmpty {
-                                cast[GExpression](OutArgumentExpression("in", valTemp))
-                            } else {
-                                idExpr
+                    let _ = this.TranslateWithPrologueAssignments(
+                        argSyntax.Expression,
+                        prologue,
+                        () -> {
+                            if refKind == RefKind.Out {
+                                let unwrappedOut = Unparenthesize(argSyntax.Expression)
+                                if unwrappedOut is IdentifierNameSyntax &&
+                                    !(
+                                    unwrappedOut is IdentifierNameSyntax{Identifier: {ValueText: "_"}} discardCheck &&
+                                        this.IsTrueDiscard(discardCheck)
+                                ) {
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        this.TranslateExpression(unwrappedOut)!!,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: false
+                                    )
+                                } else if unwrappedOut is ThisExpressionSyntax {
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        ThisExpression(),
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: false
+                                    )
+                                } else if !(
+                                    unwrappedOut is IdentifierNameSyntax{Identifier: {ValueText: "_"}} discardOut &&
+                                        this.IsTrueDiscard(discardOut)
+                                ) {
+                                    let outTemp = this.NewSpillName()
+                                    let outTarget = WithoutNonNullAssertion(
+                                        this.TranslateExpression(argSyntax.Expression)
+                                    )
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Var,
+                                            outTemp,
+                                            type: nil,
+                                            outTarget,
+                                            isRefAlias: true
+                                        )
+                                    )
+                                    let idExpr = IdentifierExpression(outTemp)
+                                    this.state.HoistedHandlerArguments[argSyntax] = UnaryExpression("&", idExpr)
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: false
+                                    )
+                                }
+                                return nil
                             }
-                            this.state.HoistedHandlerArguments[argSyntax] = adaptedIn
+                            if refKind == RefKind.Ref {
+                                let unwrappedRef = Unparenthesize(argSyntax.Expression)
+                                if unwrappedRef is ThisExpressionSyntax {
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        ThisExpression(),
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: false
+                                    )
+                                } else {
+                                    let refTemp = this.NewSpillName()
+                                    let refTarget = WithoutNonNullAssertion(
+                                        this.TranslateExpression(argSyntax.Expression)
+                                    )
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Var,
+                                            refTemp,
+                                            type: nil,
+                                            refTarget,
+                                            isRefAlias: true
+                                        )
+                                    )
+                                    let idExpr = IdentifierExpression(refTemp)
+                                    this.state.HoistedHandlerArguments[argSyntax] = UnaryExpression("&", idExpr)
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: false
+                                    )
+                                }
+                                return nil
+                            }
+                            if refKind is RefKind.In or RefKind.RefReadOnlyParameter {
+                                let translatedInArg = this.TranslateArgumentValue(argSyntax)!!
+                                if translatedInArg is OutArgumentExpression{Keyword: "in"} inOut {
+                                    let refTemp = this.NewSpillName()
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Let,
+                                            refTemp,
+                                            type: nil,
+                                            IdentifierExpression(inOut.Name),
+                                            isRefAlias: true,
+                                            isReadOnlyRefAlias: true
+                                        )
+                                    )
+                                    let idExpr = IdentifierExpression(refTemp)
+                                    this.state.HoistedHandlerArguments[argSyntax] = OutArgumentExpression("in", refTemp)
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: true
+                                    )
+                                } else if translatedInArg is UnaryExpression{Operator: "in "} inAddr {
+                                    let refTemp = this.NewSpillName()
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Let,
+                                            refTemp,
+                                            type: nil,
+                                            inAddr.Operand,
+                                            isRefAlias: true,
+                                            isReadOnlyRefAlias: true
+                                        )
+                                    )
+                                    let idExpr = IdentifierExpression(refTemp)
+                                    this.state.HoistedHandlerArguments[argSyntax] = UnaryExpression("in ", idExpr)
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: true
+                                    )
+                                } else if argSyntax.RefKindKeyword.IsKind(
+                                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.None
+                                ) &&
+                                    this.IsReadOnlyAddressableStorageOperation(argOp.Value) &&
+                                    translatedInArg is not NonNullAssertionExpression {
+                                    let refTemp = this.NewSpillName()
+                                    prologue.Add(
+                                        LocalDeclarationStatement(
+                                            BindingKind.Let,
+                                            refTemp,
+                                            type: nil,
+                                            translatedInArg,
+                                            isRefAlias: true,
+                                            isReadOnlyRefAlias: true
+                                        )
+                                    )
+                                    let idExpr = IdentifierExpression(refTemp)
+                                    this.state.HoistedHandlerArguments[argSyntax] = idExpr
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: true,
+                                        isReadOnlyAlias: true
+                                    )
+                                } else {
+                                    let valTemp = this.NewSpillName()
+                                    let tempType = this.GetCapturedArgumentTempType(param, argSyntax)
+                                    prologue.Add(
+                                        LocalDeclarationStatement(BindingKind.Let, valTemp, tempType, translatedInArg)
+                                    )
+                                    let idExpr = IdentifierExpression(valTemp)
+                                    let adaptedIn GExpression = if param != nil &&
+                                        !param
+                                        .ContainingSymbol
+                                        .DeclaringSyntaxReferences
+                                        .IsDefaultOrEmpty {
+                                        cast[GExpression](OutArgumentExpression("in", valTemp))
+                                    } else {
+                                        idExpr
+                                    }
+                                    this.state.HoistedHandlerArguments[argSyntax] = adaptedIn
+                                    addedArguments.Add(argSyntax)
+                                    captures.Arguments[i] = CallSiteCapturedArgument(
+                                        idExpr,
+                                        param,
+                                        argOp.Value.Type,
+                                        argSyntax.Expression,
+                                        isRefAlias: false,
+                                        isReadOnlyAlias: false
+                                    )
+                                }
+                                return nil
+                            }
+                            let translatedArg = if i == 0 && isExtensionReceiverInArgs {
+                                this.TranslateStaticExtensionReceiver(argOp)!!
+                            } else {
+                                this.TranslateArgumentValue(argSyntax)!!
+                            }
+                            if argOp
+                                .Value
+                                .ConstantValue
+                                .HasValue &&
+                                (translatedArg is LiteralExpression || translatedArg is TypeExpression) {
+                                captures.Arguments[i] = CallSiteCapturedArgument(
+                                    translatedArg,
+                                    param,
+                                    argOp.Value.Type,
+                                    argSyntax.Expression,
+                                    isRefAlias: false,
+                                    isReadOnlyAlias: false
+                                )
+                                return nil
+                            }
+                            let argTemp = this.NewSpillName()
+                            let argTempType = this.GetCapturedArgumentTempType(param, argSyntax)
+                            prologue.Add(
+                                LocalDeclarationStatement(BindingKind.Let, argTemp, argTempType, translatedArg)
+                            )
+                            let argId = IdentifierExpression(argTemp)
+                            this.state.HoistedHandlerArguments[argSyntax] = argId
                             addedArguments.Add(argSyntax)
+                            if i == 0 && isExtensionReceiverInArgs {
+                                this.state.HoistedHandlerReceivers[argSyntax.Expression] = (argId, false)
+                                addedReceivers.Add(argSyntax.Expression)
+                            }
                             captures.Arguments[i] = CallSiteCapturedArgument(
-                                idExpr,
+                                argId,
                                 param,
                                 argOp.Value.Type,
                                 argSyntax.Expression,
                                 isRefAlias: false,
                                 isReadOnlyAlias: false
                             )
+                            return nil
                         }
-                        continue
-                    }
-                    let translatedArg = if i == 0 && isExtensionReceiverInArgs {
-                        this.TranslateStaticExtensionReceiver(argOp)!!
-                    } else {
-                        this.TranslateArgumentValue(argSyntax)!!
-                    }
-                    if argOp
-                        .Value
-                        .ConstantValue
-                        .HasValue &&
-                        (translatedArg is LiteralExpression || translatedArg is TypeExpression) {
-                        captures.Arguments[i] = CallSiteCapturedArgument(
-                            translatedArg,
-                            param,
-                            argOp.Value.Type,
-                            argSyntax.Expression,
-                            isRefAlias: false,
-                            isReadOnlyAlias: false
-                        )
-                        continue
-                    }
-                    let argTemp = this.NewSpillName()
-                    let argTempType = this.GetCapturedArgumentTempType(param, argSyntax)
-                    prologue.Add(LocalDeclarationStatement(BindingKind.Let, argTemp, argTempType, translatedArg))
-                    let argId = IdentifierExpression(argTemp)
-                    this.state.HoistedHandlerArguments[argSyntax] = argId
-                    addedArguments.Add(argSyntax)
-                    if i == 0 && isExtensionReceiverInArgs {
-                        this.state.HoistedHandlerReceivers[argSyntax.Expression] = (argId, false)
-                        addedReceivers.Add(argSyntax.Expression)
-                    }
-                    captures.Arguments[i] = CallSiteCapturedArgument(
-                        argId,
-                        param,
-                        argOp.Value.Type,
-                        argSyntax.Expression,
-                        isRefAlias: false,
-                        isReadOnlyAlias: false
                     )
                 }
                 return translateCall()
@@ -13800,6 +13886,25 @@ partial class CSharpToGSharpTranslator {
                         }
                     } else {
                         args.Add(this.TranslateHandlerAppendArgument(arg, appendOp)!!)
+                    }
+                }
+                for var i = lastExplicit + 1; i < appendCall.Arguments.Length; i++ {
+                    let arg = appendCall.Arguments[i]
+                    if arg.ArgumentKind == ArgumentKind.DefaultValue &&
+                        arg.Parameter != nil &&
+                        this
+                        .IsCallerInfoParameter(arg.Parameter!!) {
+                        args.Add(
+                            NamedArgumentExpression(
+                                this.EmittedName(arg.Parameter, arg.Parameter!!.Name),
+                                this.TranslateOperationDefaultArgument(
+                                    appendOp.Syntax,
+                                    arg,
+                                    "caller information",
+                                    coerceToParameterType: false
+                                )
+                            )
+                        )
                     }
                 }
             } finally {

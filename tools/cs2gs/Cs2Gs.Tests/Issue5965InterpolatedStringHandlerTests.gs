@@ -604,6 +604,7 @@ public static class ImportedApi {
 using System;
 using System.Runtime.CompilerServices;
 using System.Text;
+using RefIdxLib;
 
 [InterpolatedStringHandler]
 public struct BoxableFirstHandler {
@@ -769,10 +770,30 @@ public ref struct GatedIncHandler {
 public ref struct PromotedRefArgHandler {
     private readonly StringBuilder sb;
     public PromotedRefArgHandler(int literalLength, int formattedCount, ref string tag) {
+        if (tag == null) tag = null;
         sb = new StringBuilder();
         sb.Append(tag ?? "nil").Append(':');
     }
     public void AppendFormatted(int value) { sb.Append(value); }
+    public override string ToString() => sb.ToString();
+}
+
+public interface ILogMutator {
+    void Log(SpanLiteralHandler h);
+}
+
+public struct GenericMutatorCell : ILogMutator {
+    public int Total;
+    public void Log(SpanLiteralHandler h) { Total += h.ToString().Length; }
+}
+
+[InterpolatedStringHandler]
+public ref struct CallerInfoHandler {
+    private readonly StringBuilder sb;
+    public CallerInfoHandler(int literalLength, int formattedCount) { sb = new StringBuilder(); }
+    public void AppendFormatted(int value, [CallerArgumentExpression("value")] string expr = "", [CallerLineNumber] int line = 0) {
+        sb.Append(expr).Append('=').Append(value).Append('@').Append(line > 0);
+    }
     public override string ToString() => sb.ToString();
 }
 
@@ -798,10 +819,21 @@ public static class Demo {
     private static int ungatedCounter;
     private static int nextPairCalls;
     private static DefCopyCell globalDefCell;
+    private static RefIndexerCell globalRefIdxCell;
     private static int postIncSeedCounter;
     private static string postIncObserved = "";
+    private static string? nullableField = "nf";
+    private static int deconstructHoleCalls;
+    private static int holeSawNextPair;
 
     private static int ChangeGlobalCell() { globalDefCell.Value = 999; return 42; }
+    private static int ChangeRefIdxSlot() { globalRefIdxCell.Index = 1; return 9; }
+    private static void WriteRefIndexer(in RefIndexerCell c) { c[$"{ChangeRefIdxSlot()}"] = 77; }
+    private static void ProbeGenericMutating<T>(ref T receiver) where T : ILogMutator { receiver.Log($"{123}"); }
+    private static string AcceptRefNonNull(ref string s, SpanLiteralHandler h) { s = s + ":" + h.ToString(); return s; }
+    private static string AcceptCallerInfo(CallerInfoHandler h) => h.ToString();
+    private static int IncHoleBeforeDeconstruct() { deconstructHoleCalls++; holeSawNextPair = nextPairCalls; return 5; }
+    private static string AcceptWithDeconstruct(SpanLiteralHandler h, (int A, int B) pair) => h.ToString() + ":" + pair.A + ":" + pair.B;
     private static string ReadPostIncSeed(int seed) { postIncObserved = seed + ":" + postIncSeedCounter; return postIncObserved; }
     private static void StmtPostIncSeed(int seed, [InterpolatedStringHandlerArgument("seed")] SpanLiteralHandler h) {
         postIncObserved = seed + ":" + postIncSeedCounter + ":" + h.ToString();
@@ -885,6 +917,28 @@ public static class Demo {
         AcceptGated(true, $"{0}{((pa, pb) = NextPair())}");
         string pairAfterTrue = nextPairCalls + ":" + pa + ":" + pb;
 
+        var deconstructOrderRes = AcceptWithDeconstruct($"{IncHoleBeforeDeconstruct()}", ((pa, pb) = NextPair())) +
+            ":" + deconstructHoleCalls + ":" + holeSawNextPair;
+
+        var refNonNullRes = AcceptRefNonNull(ref nullableField!, $"{8}");
+
+        globalRefIdxCell = new RefIndexerCell { Index = 0, Slots = new int[2] };
+        WriteRefIndexer(in globalRefIdxCell);
+        var refIdxRes = globalRefIdxCell.Slots[0] + ":" + globalRefIdxCell.Slots[1];
+
+        var condLeft = new InnerCell { Count = 10 };
+        var condRight = new InnerCell { Count = 20 };
+        bool chooseLeft = true;
+        (chooseLeft ? ref condLeft : ref condRight).Mutate($"{1}");
+        chooseLeft = false;
+        (chooseLeft ? ref condLeft : ref condRight).Mutate($"{1}");
+        var refCondRes = condLeft.Count + ":" + condRight.Count;
+
+        var genCell = new GenericMutatorCell { Total = 5 };
+        ProbeGenericMutating(ref genCell);
+
+        var callerInfoRes = AcceptCallerInfo($"{1 + 2}");
+
         var incHolder = new IncDecIndexerHolder();
         incHolder[true, $"{incHolder.Next()}"]++;
         int afterStmtPostInc = incHolder[true, $"{0}"];
@@ -942,11 +996,27 @@ public static class Demo {
             outVarRes + "|" + outExistingRes + "|" + spanLit + "|" + baseCtorSeen + "|" + ungatedRes + "|" +
             condExtRes + "|" + namedDelegateRes + "|" +
             afterFalseGated + "," + afterTrueGated + "|" + pairAfterFalse + "," + pairAfterTrue + "|" +
+            deconstructOrderRes + "|" + refNonNullRes + "|" + refIdxRes + "|" + refCondRes + "|" + genCell.Total + "|" + callerInfoRes + "|" +
             afterStmtPostInc + "," + valPostInc + "," + valPreInc + "," + valPostDec + "," + incNextCalls + "|" +
             nullPlain + "|" + nullCall + "|" + nullParams + "|" + nullAssignStmt + "|" + nullAssignExpr + "|" + nullConvStmt + "|" + nullConvExpr;
     }
 }
-`, strictIl: true, expectedOutput: "5|8|102|7:8:8|init->after:init:1|5|True|99:42|99:42|lit-9|55|4:5|53|3:7|10,12|0,2:20:21|12,12,14,13,5|pl:1|c:1|p:2|s:1|e:2|cs:1|ce:2")
+`, library: `
+using System.Runtime.CompilerServices;
+namespace RefIdxLib;
+
+[InterpolatedStringHandler]
+public ref struct LibRefIdxHandler {
+    public LibRefIdxHandler(int literalLength, int formattedCount) { }
+    public void AppendFormatted(int value) { }
+}
+
+public struct RefIndexerCell {
+    public int Index;
+    public int[] Slots;
+    public readonly ref int this[LibRefIdxHandler h] => ref Slots[Index];
+}
+`, strictIl: true, expectedOutput: "5|8|102|7:8:8|init->after:init:1|5|True|99:42|99:42|lit-9|55|4:5|53|3:7|10,12|0,2:20:21|5:30:31:1:2|nf:8|0:77|21:41|8|1 + 2=3@True|12,12,14,13,5|pl:1|c:1|p:2|s:1|e:2|cs:1|ce:2")
     }
 
     @Fact

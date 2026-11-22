@@ -7862,7 +7862,11 @@ partial class CSharpToGSharpTranslator {
                             statements,
                             () -> {
                                 if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
-                                    let rhsExpr = this.TranslateAssignmentValue(assignment)
+                                    let rhsExpr = this.TranslateWithPrologueAssignments(
+                                        assignment.Right,
+                                        statements,
+                                        () -> this.TranslateAssignmentValue(assignment)
+                                    )
                                     let rhsTemp = this.NewSpillName()
                                     let rhsType = this.GetCoordinatedElementAssignmentRhsType(
                                         leftElement,

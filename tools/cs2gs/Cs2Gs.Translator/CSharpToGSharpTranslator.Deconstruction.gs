@@ -3142,7 +3142,7 @@ partial class CSharpToGSharpTranslator {
         private func CollectHoistableAssignments(expression ExpressionSyntax?, includeSelf bool) List[
             AssignmentExpressionSyntax
         ] -> CollectEmbeddedAssignments(expression, includeSelf).Where(
-            (a AssignmentExpressionSyntax) -> !this.IsInInterpolatedStringHandlerHole(a, expression)
+            (a AssignmentExpressionSyntax) -> !this.IsInCoordinatedHandlerCallOrHole(a, expression)
         )
             .ToList()
 
