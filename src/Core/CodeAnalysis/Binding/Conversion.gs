@@ -2329,24 +2329,12 @@ class Conversion {
             }
             if from?.ClrType != nil &&
                 to?.ClrType != nil &&
-                !from
-                .ClrType
-                .IsValueType &&
-                !to
-                .ClrType
-                .IsValueType &&
-                !from
-                .ClrType
-                .IsPointer &&
-                !to
-                .ClrType
-                .IsPointer &&
-                !from
-                .ClrType
-                .IsByRef &&
-                !to
-                .ClrType
-                .IsByRef &&
+                !from.ClrType.IsValueType &&
+                !to.ClrType.IsValueType &&
+                !from.ClrType.IsPointer &&
+                !to.ClrType.IsPointer &&
+                !from.ClrType.IsByRef &&
+                !to.ClrType.IsByRef &&
                 ClrTypeUtilities.IsAssignableByName(to.ClrType, from.ClrType) {
                 return Conversion.Implicit
             }
