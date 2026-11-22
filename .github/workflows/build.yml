@@ -874,6 +874,10 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Verify packaged Visual Studio publisher dependencies
+        shell: powershell
+        run: ./build/test-vsix-publisher.ps1
+
       - name: Verify generated assets
         shell: pwsh
         run: ./src/vs-gsharp/scripts/Sync-SharedAssets.ps1 -Check
@@ -1442,19 +1446,8 @@ jobs:
           if ($LASTEXITCODE -eq 0) { exit 0 }
           if ($LASTEXITCODE -ne 1) { throw "Marketplace query failed with exit code $LASTEXITCODE." }
 
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $installPath = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VSSDK `
-            -property installationPath
-          if (-not $installPath) {
-            throw "Visual Studio SDK installation not found."
-          }
-
-          $publisher = Join-Path $installPath `
-            "VSSDK\VisualStudioIntegration\Tools\Bin\VsixPublisher.exe"
-          if (-not (Test-Path $publisher)) {
-            throw "VsixPublisher.exe not found at $publisher."
-          }
+          $publisher = & ./build/get-vsix-publisher.ps1 `
+            -Destination (Join-Path $env:RUNNER_TEMP "gsharp-vsix-publisher")
 
           & $publisher publish `
             -payload "$PWD\vsix\GSharp.VisualStudio.vsix" `
