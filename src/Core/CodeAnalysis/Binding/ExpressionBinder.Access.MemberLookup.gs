@@ -779,13 +779,15 @@ internal partial class ExpressionBinder {
                         resolvedTuple,
                         tupleIndex
                     )
-                    return overloads.BindIndirectCallExpression(
+                    let tupleCall = overloads.BindIndirectCallExpression(
                         ce,
                         tupleElement,
                         ce.Identifier.ValueText,
                         ce.Identifier.Location,
                         nullSafeInvocation: "?(...)"
                     )
+                    binderCtx.CompleteCall(tupleCall, ce.Arguments, receiver, receiverSyntax)
+                    return tupleCall
                 }
                 let callResult = BindAccessorCall(receiver, classSymbol, ce, receiverSyntax, receiverStart)
                 CheckValueTaskGetAwaiterGetResult(callResult, ce)
@@ -5653,6 +5655,9 @@ internal partial class ExpressionBinder {
         try {
             let result = BindTypeParameterStaticAccessorStepCore(tpSym, leftName, rightPart)
             RecordStaticTypeQualifier(result, tpSym, rightPart)
+            if rightPart is CallExpressionSyntax call {
+                binderCtx.CompleteCall(result, call.Arguments)
+            }
             CallCandidateRecorder.Stamp(frame, result)
             return result
         } finally {

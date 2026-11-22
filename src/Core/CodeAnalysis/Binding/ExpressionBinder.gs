@@ -1428,6 +1428,8 @@ internal partial class ExpressionBinder {
             // ADR-0169: guarantee the dispatch-level anchor (see the canBeVoid
             // overload for the BoundErrorExpression exemption rationale).
             let result = BindExpressionWithTargetTypeCore(syntax, targetType)
+            binderCtx.CompleteCallSyntax(syntax, result)
+            binderCtx.RecordCallArgument(syntax, result)
             expressionBindStep++
             let exitStep = expressionBindStep
             if !(result is BoundErrorExpression) {
@@ -1644,6 +1646,8 @@ internal partial class ExpressionBinder {
             // Issue #2620: discard context must reach wrappers and tail-if arms,
             // not merely suppress the final void-result check.
             let result = BindExpressionpublic(syntax, canBeVoid)
+            binderCtx.CompleteCallSyntax(syntax, result)
+            binderCtx.RecordCallArgument(syntax, result)
             if !canBeVoid && result.Type == TypeSymbol.Void {
                 Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
                 return BoundErrorExpression(nil)

@@ -3139,13 +3139,20 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func CollectHoistableAssignments(expression ExpressionSyntax?, includeSelf bool) List[
+            AssignmentExpressionSyntax
+        ] -> CollectEmbeddedAssignments(expression, includeSelf).Where(
+            (a AssignmentExpressionSyntax) -> !this.IsInCoordinatedHandlerCallOrHole(a, expression)
+        )
+            .ToList()
+
         private func HoistAssignmentsInOrder(
             expression ExpressionSyntax?,
             includeSelf bool,
             statements List[GStatement],
             replacements List[ExpressionSyntax]
         ) List[AssignmentExpressionSyntax] {
-            let embedded = this.CollectEmbeddedAssignments(expression, includeSelf)
+            let embedded = this.CollectHoistableAssignments(expression, includeSelf)
             for node in embedded {
                 this.HoistPrecedingEvaluationOperands(expression, node, statements, replacements)
                 statements.AddRange(this.FlattenChainedAssignment(node))
@@ -3166,7 +3173,7 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func RequiresLocalAssignmentSeam(expression ExpressionSyntax) bool -> this.CollectEmbeddedAssignments(
+        private func RequiresLocalAssignmentSeam(expression ExpressionSyntax) bool -> this.CollectHoistableAssignments(
             expression,
             includeSelf: true
         )
@@ -4838,6 +4845,15 @@ partial class CSharpToGSharpTranslator {
             var candidate string
             do {
                 candidate = "__spill${this.state.SpillCounter}"
+                this.state.SpillCounter++
+            } while !this.TryClaimSynthesizedLocalName(candidate)
+            return candidate
+        }
+
+        private func NewHandlerTempName() string {
+            var candidate string
+            do {
+                candidate = "__handler${this.state.SpillCounter}"
                 this.state.SpillCounter++
             } while !this.TryClaimSynthesizedLocalName(candidate)
             return candidate

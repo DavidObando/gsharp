@@ -1522,6 +1522,7 @@ internal partial class ExpressionBinder {
         receiverStart int32? = nil
     ) BoundExpression {
         let frame = CallCandidateRecorder.Begin(ce, receiver?.Type ?? classSymbol?.SymbolicReceiver)
+        binderCtx.ExpectCallArguments(ce.Arguments)
         // ADR-0225 D6.5: the overload and argument reports of this call depend on its candidate set.
         let callDiagnostics = Diagnostics
         let callFramePushed = callDiagnostics.PushCallFrame(ce, PrefixCallKind.Member)
@@ -1535,6 +1536,7 @@ internal partial class ExpressionBinder {
                 ) ??
                     bound
             }
+            binderCtx.CompleteCall(bound, ce.Arguments, receiver, receiverSyntax)
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {

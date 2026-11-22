@@ -89,15 +89,56 @@ internal class BindingServices {
         return declaration?.Body
     }
 
-    /// Gets or sets a value that tells whether a call-effect traversal of this pass asked whether its root
-    /// takes a sequence: the summary it computed or cached depends on the root (ADR-0227 D4).
-    var EnumerationEffectsDependOnRoot bool
+    /// Issue #5326: cached call-effect summaries by original function symbol, direct and
+    /// virtual/interface-inclusive. Issue #6162: a summary can depend on whether the root of the
+    /// traversal that computes it takes a sequence, so each answer has a cache of its own.
+    private let directSummaries Dictionary[FunctionSymbol, CallEffectSummary] = Dictionary[
+        FunctionSymbol,
+        CallEffectSummary
+    ](ReferenceEqualityComparer.Instance)
+    private let directSummariesUnderSequenceRoot Dictionary[FunctionSymbol, CallEffectSummary] = Dictionary[
+        FunctionSymbol,
+        CallEffectSummary
+    ](ReferenceEqualityComparer.Instance)
+    private let overridesSummaries Dictionary[FunctionSymbol, CallEffectSummary] = Dictionary[
+        FunctionSymbol,
+        CallEffectSummary
+    ](ReferenceEqualityComparer.Instance)
+    private let overridesSummariesUnderSequenceRoot Dictionary[FunctionSymbol, CallEffectSummary] = Dictionary[
+        FunctionSymbol,
+        CallEffectSummary
+    ](ReferenceEqualityComparer.Instance)
 
-    /// Issue #5326: cached direct call-effect summaries by original function symbol.
-    var CachedCallEffectSummaries Dictionary[FunctionSymbol, CallEffectSummary]?
+    /// Gets the cache of the call-effect summaries computed under a root with the given answer
+    /// (issue #6162).
+    /// @param includeOverrides Whether the summaries include the overrides and implementations.
+    /// @param rootTakesSequence Whether the root of the traversal takes a sequence.
+    /// @returns The cache.
+    func CallEffectSummaryCache(includeOverrides bool, rootTakesSequence bool) Dictionary[
+        FunctionSymbol,
+        CallEffectSummary
+    ] {
+        if includeOverrides {
+            return if rootTakesSequence {
+                overridesSummariesUnderSequenceRoot
+            } else {
+                overridesSummaries
+            }
+        }
+        return if rootTakesSequence {
+            directSummariesUnderSequenceRoot
+        } else {
+            directSummaries
+        }
+    }
 
-    /// Issue #5326: cached virtual/interface-inclusive call-effect summaries by original function symbol.
-    var CachedCallEffectSummariesWithOverrides Dictionary[FunctionSymbol, CallEffectSummary]?
+    /// Clears every cached call-effect summary.
+    func ClearCallEffectSummaries() {
+        directSummaries.Clear()
+        directSummariesUnderSequenceRoot.Clear()
+        overridesSummaries.Clear()
+        overridesSummariesUnderSequenceRoot.Clear()
+    }
 
     /// Issue #5326: per-compilation index of declared methods by name in declaration order.
     var CachedMethodsByName Dictionary[string, ImmutableArray[FunctionSymbol]]?

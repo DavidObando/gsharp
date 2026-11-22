@@ -263,9 +263,9 @@ open class Adr0227BuiltInFixTests {
     }
 
     @Fact
-    func NullConditionalAccess_WhereTheModelHasNoAnswer_FallsBackToTheSyntax() {
-        // The semantic model answers nothing inside a function literal, or in an argument of a call
-        // that fails too; the receiver's declaration then decides.
+    func NullConditionalAccess_InAFunctionLiteralAndInAFailedCallArgument_GetsTheFix() {
+        // The semantic model answers the receiver inside a function literal (#6149) and in an
+        // argument of a call that fails too (#6150).
         let sources = []string{
             "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C?) {\n    let f = () -> c.N\n}\n",
             "package P\n\nclass C {\n    var N int32\n}\n\nfunc Use(v int32) int32 -> v\n\nfunc F(c C?) int32 {\n    return Use(c.N)\n}\n"
@@ -286,8 +286,7 @@ open class Adr0227BuiltInFixTests {
 
     @Fact
     func LetField_BareAssignmentInAFunctionLiteral_BecomesVar() {
-        // The semantic model answers nothing inside a function literal; the name GS0127 gives is
-        // looked up at the assignment.
+        // The assignment inside a function literal answers the field it writes (#6149).
         VerifyFix(
             "package P\n\nclass C {\n    let N int32 = 1\n\n    func Set() {\n        let f = func() { N = 2 }\n        f()\n    }\n}\n",
             "GS0127",

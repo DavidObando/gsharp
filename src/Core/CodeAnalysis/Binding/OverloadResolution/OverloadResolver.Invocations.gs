@@ -1126,6 +1126,18 @@ internal partial class OverloadResolver {
         calleeName string,
         calleeLocation TextLocation
     ) BoundExpression {
+        let bound = BindNullConditionalIndirectCallExpressionCore(syntax, callee, calleeName, calleeLocation)
+        // A failed call keeps its callee and arguments for the semantic model (#6150, #6151).
+        binderCtx.CompleteCall(bound, syntax.Arguments, IndirectCallee(callee))
+        return bound
+    }
+
+    private func BindNullConditionalIndirectCallExpressionCore(
+        syntax CallExpressionSyntax,
+        callee BoundExpression,
+        calleeName string,
+        calleeLocation TextLocation
+    ) BoundExpression {
         var callee = callee
         if callee is BoundErrorExpression {
             return callee
@@ -1169,6 +1181,28 @@ internal partial class OverloadResolver {
     }
 
     internal func BindIndirectCallExpression(
+        syntax CallExpressionSyntax,
+        callee BoundExpression,
+        calleeName string,
+        calleeLocation TextLocation,
+        nullSafeInvocation string?
+    ) BoundExpression {
+        let bound = BindIndirectCallExpressionCore(syntax, callee, calleeName, calleeLocation, nullSafeInvocation)
+        // A failed call keeps its callee and arguments for the semantic model (#6150, #6151).
+        binderCtx.CompleteCall(bound, syntax.Arguments, IndirectCallee(callee))
+        return bound
+    }
+
+    /// The callee of an indirect call as the semantic model should answer it, or null for a callee
+    /// the binder synthesized (a null-conditional capture, a tuple element read), whose caller
+    /// completes the call with the source receiver.
+    private func IndirectCallee(callee BoundExpression) BoundExpression? -> if callee.Syntax == nil {
+        default(BoundExpression?)
+    } else {
+        callee
+    }
+
+    private func BindIndirectCallExpressionCore(
         syntax CallExpressionSyntax,
         callee BoundExpression,
         calleeName string,

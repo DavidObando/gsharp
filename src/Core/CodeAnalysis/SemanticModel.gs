@@ -432,7 +432,11 @@ partial class SemanticModel {
         private let logicalCompletions Dictionary[BoundExpression, BoundExpression?]
         private let staticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?]
         private let failedCalls Dictionary[SyntaxNode, BoundErrorExpression]
-        private var literalDepth int32
+        // A failed call can be reached as an inner failed call and as a failed argument of the call
+        // around it; each is walked once, so nested failures stay linear.
+        private let walkedFailures HashSet[BoundErrorExpression] = HashSet[BoundErrorExpression](
+            ReferenceEqualityComparer.Instance
+        )
 
         init(
             tree SyntaxTree,
@@ -466,8 +470,8 @@ partial class SemanticModel {
             Record(node)
             base.VisitExpression(node)
             // The walker treats a function literal as a leaf. Its body is walked here for the
-            // declarations it holds (a literal's parameters and locals), not for anchoring: syntax
-            // inside a literal keeps answering no bound node.
+            // declarations it holds (a literal's parameters and locals) and for anchoring: syntax
+            // inside a literal answers its bound node as in a function body (#6149).
             if node is BoundFunctionLiteralExpression literal {
                 // A function literal declares its function (#6079). The bound literal has no syntax of its
                 // own; its body block does.
@@ -486,9 +490,21 @@ partial class SemanticModel {
                 for parameter in literal.Function.Parameters {
                     SemanticModel.RecordDeclarations(parameter, tree, declaredBySyntax)
                 }
-                literalDepth++
-                VisitStatement(literal.Body)
-                literalDepth--
+                // The body of an expression-bodied literal (`() -> c.N`) is a block whose statements
+                // (a `return`, or an expression statement and a `return` for a void body) the binder
+                // anchors at the expression. The expression answers, not those statements, so they
+                // are walked without being recorded; their children are recorded as usual.
+                if literal.Body is BoundBlockStatement{Syntax: ExpressionSyntax bodySyntax} block {
+                    for statement in block.Statements {
+                        if object.ReferenceEquals(statement.Syntax, bodySyntax) {
+                            base.VisitStatement(statement)
+                        } else {
+                            VisitStatement(statement)
+                        }
+                    }
+                } else {
+                    VisitStatement(literal.Body)
+                }
             }
         }
 
@@ -511,12 +527,11 @@ partial class SemanticModel {
             if node == nil {
                 return
             }
-            if literalDepth == 0 && node.Syntax is {} syntax && object.ReferenceEquals(syntax.SyntaxTree, tree) &&
+            if node.Syntax is {} syntax && object.ReferenceEquals(syntax.SyntaxTree, tree) &&
                 !boundBySyntax.ContainsKey(syntax) {
                 boundBySyntax.Add(syntax, node)
             }
-            if literalDepth == 0 &&
-                node is BoundExpression{LogicalCompletionOperand: {} operand} completion &&
+            if node is BoundExpression{LogicalCompletionOperand: {} operand} completion &&
                 operand.Syntax is {} origin &&
                 object
                 .ReferenceEquals(origin.SyntaxTree, tree) {
@@ -526,8 +541,7 @@ partial class SemanticModel {
                     logicalCompletions[operand] = nil
                 }
             }
-            if literalDepth == 0 &&
-                node is BoundExpression{StaticMemberSyntax: {} member, StaticQualifierType: not nil} expression &&
+            if node is BoundExpression{StaticMemberSyntax: {} member, StaticQualifierType: not nil} expression &&
                 object
                 .ReferenceEquals(member.SyntaxTree, tree) {
                 if !staticQualifierReads.TryGetValue(member, out var existing) {
@@ -537,8 +551,7 @@ partial class SemanticModel {
                     staticQualifierReads[member] = nil
                 }
             }
-            if literalDepth == 0 &&
-                node is BoundExpression{StaticQualifierSyntax: {} qualifier, StaticQualifierType: {} qualifierType} &&
+            if node is BoundExpression{StaticQualifierSyntax: {} qualifier, StaticQualifierType: {} qualifierType} &&
                 object
                 .ReferenceEquals(qualifier.SyntaxTree, tree) {
                 if !staticQualifierTypes.TryGetValue(qualifier, out var existingType) {
@@ -566,10 +579,19 @@ partial class SemanticModel {
         }
 
         private func RecordFailedCall(error BoundErrorExpression) {
-            // The receiver of a member access that did not bind keeps its own anchors (#6127).
+            if !walkedFailures.Add(error) {
+                return
+            }
+            // The receiver of a member access or a call that did not bind keeps its own anchors
+            // (#6127, #6151), and so do the arguments of a call that did not bind (#6150).
+            if !error.FailedArguments.IsDefaultOrEmpty {
+                for argument in error.FailedArguments {
+                    VisitExpression(argument)
+                }
+            }
             if error.FailedReceiver is {} receiver {
                 VisitExpression(receiver)
-                if literalDepth == 0 && error.FailedReceiverSyntax is {} receiverSyntax && object.ReferenceEquals(
+                if error.FailedReceiverSyntax is {} receiverSyntax && object.ReferenceEquals(
                     receiverSyntax.SyntaxTree,
                     tree
                 ) &&

@@ -24929,6 +24929,9 @@ partial class CSharpToGSharpTranslator {
         // A genuinely null oblivious key follows the existing `!!` bridge
         // policy and fails at runtime before the index operation.
         private func TranslateIndexArgumentWithNullForgiveness(argument ArgumentSyntax) GExpression? {
+            if this.state.HoistedHandlerArguments.TryGetValue(argument, out var hoistedHandlerArgument) {
+                return hoistedHandlerArgument
+            }
             let translated GExpression? = this.TranslateExpression(argument.Expression)
             // Issue #3564: a TUPLE-typed key whose G#-side elements are
             // promoted-nullable while the indexer's key tuple elements are not
