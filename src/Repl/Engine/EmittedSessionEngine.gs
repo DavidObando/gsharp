@@ -119,7 +119,7 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                     functions.Add(ReplSymbol(Display(fn, submission)))
                 }
                 for v in scope_.Variables {
-                    if !(v is GlobalVariableSymbol) || string.Equals(
+                    if v is not GlobalVariableSymbol gv || gv.RequiresEntryPointLocalStorage || string.Equals(
                         v.Name,
                         SubmissionImports.ResultFieldName,
                         StringComparison.Ordinal
