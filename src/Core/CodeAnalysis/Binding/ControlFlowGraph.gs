@@ -266,11 +266,13 @@ class ControlFlowGraph {
         private let start BasicBlock = BasicBlock(isStart: true)
         private let end BasicBlock = BasicBlock(isStart: false)
         private let preserveCompoundGotoTargets bool
+        private let externalEntryLabels IEnumerable[BoundLabel]?
 
         init() { }
 
-        internal init(preserveCompoundGotoTargets bool) {
+        internal init(preserveCompoundGotoTargets bool, externalEntryLabels IEnumerable[BoundLabel]? = nil) {
             this.preserveCompoundGotoTargets = preserveCompoundGotoTargets
+            this.externalEntryLabels = externalEntryLabels
         }
 
         /// Builds a control flow graph from the provided list of basic blocks.
@@ -381,6 +383,13 @@ class ControlFlowGraph {
             let reachable = HashSet[BasicBlock]{start}
             let queue = Queue[BasicBlock]()
             queue.Enqueue(start)
+            if externalEntryLabels != nil {
+                for externalLabel in externalEntryLabels {
+                    if blockFromLabel.TryGetValue(externalLabel, out var targetBlock) && reachable.Add(targetBlock) {
+                        queue.Enqueue(targetBlock)
+                    }
+                }
+            }
             while queue.Count > 0 {
                 let block = queue.Dequeue()
                 for branch in block.Outgoing {
@@ -621,10 +630,14 @@ class ControlFlowGraph {
             preserveCompoundGotoTargets: false
         )
 
-        internal func CreateWithCompoundGotoReachability(body BoundBlockStatement) ControlFlowGraph -> Create(
+        internal func CreateWithCompoundGotoReachability(
+            body BoundBlockStatement,
+            externalEntryLabels IEnumerable[BoundLabel]? = nil
+        ) ControlFlowGraph -> Create(
             body,
             treatThrowsAsTerminators: false,
-            preserveCompoundGotoTargets: true
+            preserveCompoundGotoTargets: true,
+            externalEntryLabels
         )
 
         /// Reports whether all paths in a bound block statement return or not.
@@ -739,11 +752,12 @@ class ControlFlowGraph {
         private func Create(
             body BoundBlockStatement,
             treatThrowsAsTerminators bool,
-            preserveCompoundGotoTargets bool = false
+            preserveCompoundGotoTargets bool = false,
+            externalEntryLabels IEnumerable[BoundLabel]? = nil
         ) ControlFlowGraph {
             let basicBlockBuilder = BasicBlockBuilder(treatThrowsAsTerminators)
             let blocks = basicBlockBuilder.Build(body)
-            let graphBuilder = GraphBuilder(preserveCompoundGotoTargets)
+            let graphBuilder = GraphBuilder(preserveCompoundGotoTargets, externalEntryLabels)
             return graphBuilder.Build(blocks)
         }
 

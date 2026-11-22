@@ -1037,6 +1037,177 @@ Console.WriteLine(r)
 `)
         Assert.Contains(switchGuardOverwriteInnerAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
         Assert.DoesNotContain(switchGuardOverwriteInnerAwaitUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let crossArmTerminatingPrefixLabelUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+switch Environment.GetCommandLineArgs().Length {
+    case 0 {
+        await Task.Delay(1)
+        goto useView
+    }
+    default {
+        return
+    useView:
+        Console.WriteLine(view.Length)
+    }
+}
+`)
+        Assert.Contains(crossArmTerminatingPrefixLabelUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(crossArmTerminatingPrefixLabelUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let catchFilterOverwriteSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+await Task.Delay(1)
+let ignored = {
+    try {
+        throw InvalidOperationException("boom")
+    } catch when ({
+        c = Counter{Value: 42}
+        true
+    }) {
+        Console.WriteLine(c.Value)
+    }
+    0
+}
+`)
+        Assert.Empty(catchFilterOverwriteSafe.Diagnostics)
+        Assert.Equal("42\n", catchFilterOverwriteSafe.Output)
+
+        let tryGotoFinallyOverwriteSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+await Task.Delay(1)
+let ignored = {
+    try {
+        goto useCounter
+    } finally {
+        c = Counter{Value: 42}
+    }
+useCounter:
+    Console.WriteLine(c.Value)
+    0
+}
+`)
+        Assert.Empty(tryGotoFinallyOverwriteSafe.Diagnostics)
+        Assert.Equal("42\n", tryGotoFinallyOverwriteSafe.Output)
+
+        let failedGuardAlwaysMatchExprSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let n = 1
+await Task.Delay(1)
+let r = switch n {
+    case _ when {
+        c = Counter{Value: 42}
+        false
+    }: 0
+    default: c.Value
+}
+Console.WriteLine(r)
+`)
+        Assert.Empty(failedGuardAlwaysMatchExprSafe.Diagnostics)
+        Assert.Equal("42\n", failedGuardAlwaysMatchExprSafe.Output)
+
+        let failedGuardAlwaysMatchBlockStmtSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let n = 1
+await Task.Delay(1)
+let ignored = {
+    switch n {
+        case _ when ({
+            c = Counter{Value: 42}
+            false
+        }) { }
+        default {
+            Console.WriteLine(c.Value)
+        }
+    }
+    0
+}
+`)
+        Assert.Empty(failedGuardAlwaysMatchBlockStmtSafe.Diagnostics)
+        Assert.Equal("42\n", failedGuardAlwaysMatchBlockStmtSafe.Output)
+
+        let switchGuardOverwriteReadBeforeAwaitResultSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let n = 1
+let r = switch n {
+    case 1 when {
+        c = Counter{Value: 42}
+        true
+    }: {
+        let m = c.Value
+        await Task.Delay(1)
+        m
+    }
+    default: 0
+}
+Console.WriteLine(r)
+`)
+        Assert.Empty(switchGuardOverwriteReadBeforeAwaitResultSafe.Diagnostics)
+        Assert.Equal("42\n", switchGuardOverwriteReadBeforeAwaitResultSafe.Output)
+
+        let switchPatternOverwriteReadBeforeAwaitGuardSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let n = 1
+let r = switch n {
+    case > ({
+        c = Counter{Value: 42}
+        0
+    }) when ({
+        let m = c.Value
+        await Task.Delay(1)
+        m > 0
+    }): 1
+    default: 0
+}
+Console.WriteLine(r)
+`)
+        Assert.Empty(switchPatternOverwriteReadBeforeAwaitGuardSafe.Diagnostics)
+        Assert.Equal("1\n", switchPatternOverwriteReadBeforeAwaitGuardSafe.Output)
     }
 
     @Fact

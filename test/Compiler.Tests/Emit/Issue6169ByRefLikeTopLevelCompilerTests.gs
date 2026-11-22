@@ -346,6 +346,49 @@ Console.WriteLine(r)
 `, "top-level-switch-guard-overwrite-safe", executable: true)
         IlVerifier.Verify(switchGuardOverwriteSafeAssembly)
         Assert.Equal("42\n", fixture.Run(switchGuardOverwriteSafeAssembly))
+
+        let switchOverwriteComplexPathsSafeAssembly = fixture.Compile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+let n = 1
+await Task.Delay(1)
+let r1 = switch n {
+    case _ when {
+        c = Counter{Value: 42}
+        false
+    }: 0
+    default: c.Value
+}
+let ignored = {
+    try {
+        goto useCounter
+    } finally {
+        c = Counter{Value: 7}
+    }
+useCounter:
+    Console.WriteLine("${r1},${c.Value}")
+    0
+}
+let r2 = switch n {
+    case 1 when {
+        c = Counter{Value: 99}
+        true
+    }: {
+        let m = c.Value
+        await Task.Delay(1)
+        m
+    }
+    default: 0
+}
+Console.WriteLine(r2)
+`, "top-level-switch-try-overwrite-paths-safe", executable: true)
+        IlVerifier.Verify(switchOverwriteComplexPathsSafeAssembly)
+        Assert.Equal("42,7\n99\n", fixture.Run(switchOverwriteComplexPathsSafeAssembly))
     }
 
     shared {
