@@ -6015,6 +6015,9 @@ partial class CSharpToGSharpTranslator {
         /// literal, retype the literal to the other operand's G# type; otherwise
         /// convert each C#-promoted operand to the common (promoted) type.
         private func TranslateBinaryExpression(binary BinaryExpressionSyntax) GExpression? {
+            if this.TryGetInterpolatedStringHandlerCreation(binary, out var handlerOp) {
+                return this.TranslateInterpolatedStringHandlerCreation(handlerOp!!)
+            }
             // ADR-0169 analyzer mode: the assignment-LHS conjunction idiom
             // rewrites to a write-node parent-kind check; standalone
             // comparisons against Roslyn members with no G# counterpart lower
@@ -6813,6 +6816,9 @@ partial class CSharpToGSharpTranslator {
 
         private func TranslateOutVarDesignation(single SingleVariableDesignationSyntax) GExpression {
             let name = this.EmittedName(single, single.Identifier)!!
+            if this.state.PredeclaredOutDesignations.Contains(single) {
+                return OutArgumentExpression("out", name)
+            }
             if this.context.GetDeclaredSymbol(single) is ILocalSymbol local &&
                 this
                 .OutDeclarationRequiresNullablePredeclaration(single, local) {
@@ -6884,8 +6890,15 @@ partial class CSharpToGSharpTranslator {
                 argument
                 .RefKindKeyword
                 .IsKind(SyntaxKind.OutKeyword) {
-                if argument.Parent is ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation} &&
-                    this.RequiresFunctionArgumentSpillSeam(invocation) {
+                if argument.Parent is BaseArgumentListSyntax{Parent: {} parent} &&
+                    (
+                    (
+                        parent is InvocationExpressionSyntax invocation && this.RequiresFunctionArgumentSpillSeam(
+                            invocation
+                        )
+                    ) ||
+                        this.CallNeedsHandlerCoordinationForSyntax(parent)
+                ) {
                     return true
                 }
                 return this.OutDeclarationRequiresNullablePredeclaration(single, local)
@@ -7788,6 +7801,7 @@ partial class CSharpToGSharpTranslator {
                 (
                 this.RequiresLocalAssignmentSeam(voidConditionalAccess.WhenNotNull) ||
                     this.ContainsFunctionArgumentSpillSeam(voidConditionalAccess.WhenNotNull) ||
+                    this.ContainsCallCoupledInterpolatedStringHandler(voidConditionalAccess.WhenNotNull) ||
                     this.ConditionalIndexNeedsRuntimeGuard(voidConditionalAccess)
             ) {
                 return this.TranslateVoidConditionalAccessWithLocalAssignmentSeam(voidConditionalAccess)
@@ -7827,6 +7841,37 @@ partial class CSharpToGSharpTranslator {
                         .Symbol is IEventSymbol
                     let isVoidAssignment = this.context.GetTypeInfo(assignment).Type?.SpecialType ==
                     SpecialType.System_Void || isEventSubscription
+                    if Unparenthesize(assignment.Left) is ElementAccessExpressionSyntax leftElement &&
+                        this
+                        .context
+                        .SemanticModel
+                        .GetOperation(leftElement) is IPropertyReferenceOperation propOp &&
+                        this
+                        .CallNeedsHandlerCoordination(propOp.Arguments) {
+                        this.PredeclareBlockCallOutVariables(leftElement.ArgumentList)
+                        let statements = List[GStatement]()
+                        let expr = this.BuildCoordinatedHandlerCall(
+                            leftElement,
+                            leftElement.Expression,
+                            propOp.Arguments,
+                            isExtensionReceiverInArgs: false,
+                            nullableThisExtension: false,
+                            statements,
+                            () -> {
+                                statements.Add(
+                                    AssignmentStatement(
+                                        this.TranslateAssignmentTarget(assignment.Left),
+                                        this.TranslateAssignmentValue(assignment),
+                                        assignment.OperatorToken.Text,
+                                        isVoid: isVoidAssignment
+                                    )
+                                )
+                                return LiteralExpression.Null()
+                            }
+                        )
+                        let _ = expr
+                        return BlockStatement(statements)
+                    }
                     return AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
                         this.TranslateAssignmentValue(assignment),

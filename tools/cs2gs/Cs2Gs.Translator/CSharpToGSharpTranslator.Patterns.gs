@@ -24,6 +24,9 @@ partial class CSharpToGSharpTranslator {
             if this.state.HoistedExpressionValues.TryGetValue(expression!!, out var hoistedValue) {
                 return hoistedValue
             }
+            if this.state.HoistedHandlerReceivers.TryGetValue(expression!!, out var hoistedHandlerReceiver) {
+                return hoistedHandlerReceiver
+            }
             // Issue #4262 follow-up (item 2): this exact read was rewritten by
             // EmitGuardedFieldLocalCaptures to reference the synthesized local
             // that already captured the field/property non-null (see
@@ -302,24 +305,29 @@ partial class CSharpToGSharpTranslator {
                     // Issue #4350: a multi-parameter user/CLR indexer
                     // (`slice[index, fromEnd]`) keeps EVERY argument, in source
                     // order; only the single-`int32` indexer shape is coerced.
-                    let indexedReceiver GExpression? = this.TranslateReceiverWithNullForgiveness(
-                        elementAccess.Expression
-                    )
-                    if elementAccess.ArgumentList.Arguments.Count > 1 {
-                        return IndexExpression(
-                            indexedReceiver,
-                            this.TranslateIndexArguments(elementAccess.ArgumentList)
+                    if !(
+                        elementAccess.Parent is AssignmentExpressionSyntax parentAssignment && object.ReferenceEquals(
+                            parentAssignment.Left,
+                            elementAccess
                         )
-                    }
-                    let index GExpression? = if elementAccess.ArgumentList.Arguments.Count > 0 {
-                        this.CoerceIndexToInt32(
+                    ) &&
+                        this
+                        .context
+                        .SemanticModel
+                        .GetOperation(elementAccess) is IPropertyReferenceOperation propOp &&
+                        this
+                        .CallNeedsHandlerCoordination(propOp.Arguments) {
+                        this.PredeclareBlockCallOutVariables(elementAccess.ArgumentList)
+                        return this.TranslateWithCoordinatedHandlers(
                             elementAccess,
-                            this.TranslateIndexArgumentWithNullForgiveness(elementAccess.ArgumentList.Arguments[0])
+                            elementAccess.Expression,
+                            propOp.Arguments,
+                            isExtensionReceiverInArgs: false,
+                            nullableThisExtension: false,
+                            () -> this.TranslateElementAccessCore(elementAccess)
                         )
-                    } else {
-                        cast[GExpression](IdentifierExpression("nil"))
                     }
-                    return IndexExpression(indexedReceiver, index)
+                    return this.TranslateElementAccessCore(elementAccess)
                 }
                 case simpleLambda is SimpleLambdaExpressionSyntax {
                     return this.TranslateLambda(simpleLambda)
@@ -379,6 +387,7 @@ partial class CSharpToGSharpTranslator {
                         )
                     }
                     if this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull) ||
+                        this.ContainsCallCoupledInterpolatedStringHandler(conditionalAccess.WhenNotNull) ||
                         (
                         this
                             .context
@@ -503,36 +512,29 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case elementBinding is ElementBindingExpressionSyntax {
-                    let bindingReceiver = if this
-                        .state
-                        .ConditionalElementReceivers
-                        .TryGetValue(elementBinding, out var elementReceiver) {
-                        elementReceiver
-                    } else {
-                        this.state.ConditionalReceiverReplacement ?? ConditionalReceiverExpression()
-                    }
-                    if elementBinding
-                        .ArgumentList
-                        .Arguments
-                        .Count == 1 &&
-                        elementBinding
-                        .ArgumentList
-                        .Arguments[0]
-                        .Expression is RangeExpressionSyntax conditionalRange {
-                        return this.TranslateRangeSlice(bindingReceiver, conditionalRange)
-                    }
-                    if elementBinding.ArgumentList.Arguments.Count > 1 {
-                        return IndexExpression(
-                            bindingReceiver,
-                            this.TranslateIndexArguments(elementBinding.ArgumentList)
+                    if !(
+                        elementBinding.Parent is AssignmentExpressionSyntax parentAssignment && object.ReferenceEquals(
+                            parentAssignment.Left,
+                            elementBinding
+                        )
+                    ) &&
+                        this
+                        .context
+                        .SemanticModel
+                        .GetOperation(elementBinding) is IPropertyReferenceOperation propOp &&
+                        this
+                        .CallNeedsHandlerCoordination(propOp.Arguments) {
+                        this.PredeclareBlockCallOutVariables(elementBinding.ArgumentList)
+                        return this.TranslateWithCoordinatedHandlers(
+                            elementBinding,
+                            nil,
+                            propOp.Arguments,
+                            isExtensionReceiverInArgs: false,
+                            nullableThisExtension: false,
+                            () -> this.TranslateElementBindingCore(elementBinding)
                         )
                     }
-                    let bindingIndex GExpression? = if elementBinding.ArgumentList.Arguments.Count > 0 {
-                        this.TranslateIndexArgumentWithNullForgiveness(elementBinding.ArgumentList.Arguments[0])
-                    } else {
-                        cast[GExpression](IdentifierExpression("nil"))
-                    }
-                    return IndexExpression(bindingReceiver, bindingIndex)
+                    return this.TranslateElementBindingCore(elementBinding)
                 }
                 case typeOf is TypeOfExpressionSyntax {
                     return TypeOfExpression(this.MapTypeOfOperand(typeOf.Type))
@@ -724,6 +726,52 @@ partial class CSharpToGSharpTranslator {
                 receiver,
                 requireRuntimeNonNullProof: true
             )
+        }
+
+        private func TranslateElementAccessCore(elementAccess ElementAccessExpressionSyntax) GExpression {
+            let indexedReceiver GExpression? = this.TranslateReceiverWithNullForgiveness(elementAccess.Expression)
+            if elementAccess.ArgumentList.Arguments.Count > 1 {
+                return IndexExpression(indexedReceiver, this.TranslateIndexArguments(elementAccess.ArgumentList))
+            }
+            let index GExpression? = if elementAccess.ArgumentList.Arguments.Count > 0 {
+                this.CoerceIndexToInt32(
+                    elementAccess,
+                    this.TranslateIndexArgumentWithNullForgiveness(elementAccess.ArgumentList.Arguments[0])
+                )
+            } else {
+                cast[GExpression](IdentifierExpression("nil"))
+            }
+            return IndexExpression(indexedReceiver, index)
+        }
+
+        private func TranslateElementBindingCore(elementBinding ElementBindingExpressionSyntax) GExpression {
+            let bindingReceiver = if this
+                .state
+                .ConditionalElementReceivers
+                .TryGetValue(elementBinding, out var elementReceiver) {
+                elementReceiver
+            } else {
+                this.state.ConditionalReceiverReplacement ?? ConditionalReceiverExpression()
+            }
+            if elementBinding
+                .ArgumentList
+                .Arguments
+                .Count == 1 &&
+                elementBinding
+                .ArgumentList
+                .Arguments[0]
+                .Expression is RangeExpressionSyntax conditionalRange {
+                return this.TranslateRangeSlice(bindingReceiver, conditionalRange)
+            }
+            if elementBinding.ArgumentList.Arguments.Count > 1 {
+                return IndexExpression(bindingReceiver, this.TranslateIndexArguments(elementBinding.ArgumentList))
+            }
+            let bindingIndex GExpression? = if elementBinding.ArgumentList.Arguments.Count > 0 {
+                this.TranslateIndexArgumentWithNullForgiveness(elementBinding.ArgumentList.Arguments[0])
+            } else {
+                cast[GExpression](IdentifierExpression("nil"))
+            }
+            return IndexExpression(bindingReceiver, bindingIndex)
         }
 
         private func BuildConditionalReceiverGuard(receiver GExpression?, staticallyNonNull bool) GExpression {
@@ -5316,6 +5364,30 @@ partial class CSharpToGSharpTranslator {
                 assignment.Left is IdentifierNameSyntax{Identifier: {ValueText: "_"}} discardTarget &&
                 this.IsTrueDiscard(discardTarget) {
                 return this.TranslateExpression(assignment.Right)
+            }
+            if Unparenthesize(assignment.Left) is ElementAccessExpressionSyntax leftElement &&
+                this
+                .context
+                .SemanticModel
+                .GetOperation(leftElement) is IPropertyReferenceOperation propOp &&
+                this
+                .CallNeedsHandlerCoordination(propOp.Arguments) {
+                this.PredeclareBlockCallOutVariables(leftElement.ArgumentList)
+                return this.TranslateWithCoordinatedHandlers(
+                    leftElement,
+                    leftElement.Expression,
+                    propOp.Arguments,
+                    isExtensionReceiverInArgs: false,
+                    nullableThisExtension: false,
+                    () -> {
+                        var exprResult GExpression? = AssignmentExpression(
+                            this.TranslateAssignmentTarget(assignment.Left),
+                            this.TranslateAssignmentValue(assignment),
+                            assignment.OperatorToken.Text
+                        )
+                        return exprResult!!
+                    }
+                )
             }
             var result GExpression? = AssignmentExpression(
                 this.TranslateAssignmentTarget(assignment.Left),

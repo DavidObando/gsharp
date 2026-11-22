@@ -3389,6 +3389,9 @@ partial class CSharpToGSharpTranslator {
             recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             translatedValue GExpression? = nil
         ) GExpression? {
+            if translatedValue == nil && this.state.HoistedHandlerReceivers.TryGetValue(recv, out var hoistedReceiver) {
+                return hoistedReceiver
+            }
             var translated GExpression? = translatedValue ?? this.TranslateExpression(recv)
             // Issue #3700: a `?.` / `?[` CONDITIONAL RECEIVER is null-guarded by
             // the seam that produced it, so an assertion there is at best
@@ -24930,6 +24933,9 @@ partial class CSharpToGSharpTranslator {
         // A genuinely null oblivious key follows the existing `!!` bridge
         // policy and fails at runtime before the index operation.
         private func TranslateIndexArgumentWithNullForgiveness(argument ArgumentSyntax) GExpression? {
+            if this.state.HoistedHandlerArguments.TryGetValue(argument, out var hoistedHandlerArgument) {
+                return hoistedHandlerArgument
+            }
             let translated GExpression? = this.TranslateExpression(argument.Expression)
             // Issue #3564: a TUPLE-typed key whose G#-side elements are
             // promoted-nullable while the indexer's key tuple elements are not

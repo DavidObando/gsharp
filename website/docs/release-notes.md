@@ -40,6 +40,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Lower C# `[InterpolatedStringHandler]` conversions and handler-typed call arguments uniformly in `cs2gs` across both source and imported callees and handler types, preserving single-evaluation receiver and forwarded-argument capture, `ref`/`in` handler passing, `out bool` and `bool`-append short-circuiting, call-effect invalidation, and assignment-narrowing semantics while leaving ordinary string interpolations native. (Fixes #5965)
+
 - Verify C# `params` method-group conversions (`List<T>`, arrays, `IEnumerable<T>`) through `cs2gs` with strict IL verification and confirm unknown method-group consumers preserve non-null element contracts. (Fixes #6001)
 
 - Gate `CSharpTypeMapper.NormalizeAnonymousProjectedStorage` widening on oblivious (`NullableAnnotation.None`) reference elements and type arguments, reconcile same-shape anonymous storage across mixed nullable/oblivious contexts in `MergeAnonymousShapeContracts` and `MergeAnonymousNullability` (unwrapping `Nullable<T>` wrappers), and project element nullability through `ApplyMappedArrayElementShape` and `Enumerable`/`Queryable` element-returning calls so `#nullable enable` non-null array, tuple, and generic type arguments—including enclosing type arguments on nested types such as `Dictionary[Alias, string].ValueCollection`—are preserved without spurious `GS0159` errors while keeping oblivious and explicit `T?` element contracts widened. (Fixes #6159)

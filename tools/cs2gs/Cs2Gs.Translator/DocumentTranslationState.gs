@@ -7,6 +7,7 @@ package Cs2Gs.Translator
 import Cs2Gs.CodeModel.Ast
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp.Syntax
+import Microsoft.CodeAnalysis.Operations
 import System
 import System.Collections.Generic
 import System.Runtime.CompilerServices
@@ -54,6 +55,9 @@ internal class DocumentTranslationState {
         AssignmentValues = Dictionary[AssignmentExpressionSyntax, GExpression]()
         TupleAssignmentValues = Dictionary[TupleExpressionSyntax, GExpression]()
         HoistedExpressionValues = Dictionary[ExpressionSyntax, GExpression]()
+        HoistedHandlerArguments = Dictionary[ArgumentSyntax, GExpression]()
+        HoistedHandlerReceivers = Dictionary[ExpressionSyntax, GExpression]()
+        PredeclaredOutDesignations = HashSet[SingleVariableDesignationSyntax]()
         GuardCapturedFieldReads = Dictionary[ExpressionSyntax, string]()
         StaticFieldInitializers = Dictionary[ISymbol, GExpression](SymbolEqualityComparer.Default)
         LiftedFieldInitializers = HashSet[ISymbol](SymbolEqualityComparer.Default)
@@ -243,6 +247,22 @@ internal class DocumentTranslationState {
     prop HoistedExpressionValues Dictionary[ExpressionSyntax, GExpression] {
         get;
     }
+
+    // Call-coupled interpolated-string-handler arguments and preceding captured
+    // call-site arguments/receivers (issue #5965).
+    prop HoistedHandlerArguments Dictionary[ArgumentSyntax, GExpression] {
+        get;
+    }
+
+    prop HoistedHandlerReceivers Dictionary[ExpressionSyntax, GExpression] {
+        get;
+    }
+
+    prop PredeclaredOutDesignations HashSet[SingleVariableDesignationSyntax] {
+        get;
+    }
+
+    prop ActiveCallSiteHandlerCaptures object?
 
     // Issue #4262 follow-up (item 2): C# reads of a field/property that an
     // early-return null guard earlier in the SAME block proves non-null,
