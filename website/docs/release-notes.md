@@ -42,6 +42,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - Verify C# `params` method-group conversions (`List<T>`, arrays, `IEnumerable<T>`) through `cs2gs` with strict IL verification and confirm unknown method-group consumers preserve non-null element contracts. (Fixes #6001)
 
+- Gate `CSharpTypeMapper.NormalizeAnonymousProjectedStorage` widening on oblivious (`NullableAnnotation.None`) reference elements and type arguments, reconcile same-shape anonymous storage across mixed nullable/oblivious contexts in `MergeAnonymousShapeContracts` and `MergeAnonymousNullability` (unwrapping `Nullable<T>` wrappers), and project element nullability through `ApplyMappedArrayElementShape` and `Enumerable`/`Queryable` element-returning calls so `#nullable enable` non-null array, tuple, and generic type arguments—including enclosing type arguments on nested types such as `Dictionary[Alias, string].ValueCollection`—are preserved without spurious `GS0159` errors while keeping oblivious and explicit `T?` element contracts widened. (Fixes #6159)
+
 - Keep constructor call parentheses on zero-argument generic collection initializers in `cs2gs` when the initializer is empty or begins with an identifier key (`Dictionary[K, V](){ key: value }`), preventing `gsc` from misparsing the brace as a struct literal (`GS0158` or silent property writes). (Fixes #6011)
 
 - Narrow nullable receivers and stable intermediate `?.` chain members when a conditional-access result is compared with `nil` (`!= nil`, `nil !=`, `== nil` else/early-exit branches, conditional expressions, `&&`/`||`, `is not nil`/non-nil patterns, method calls, and `?[]` indexers), while preserving side-effect invalidation when a getter, call, or index mutates the receiver. (Fixes #6042)
