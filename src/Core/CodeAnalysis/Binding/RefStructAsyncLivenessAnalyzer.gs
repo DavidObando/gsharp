@@ -137,12 +137,19 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     }
 
     private class ReportingContext {
-        init(diagnostics DiagnosticBag?) {
+        init(
+            diagnostics DiagnosticBag?,
+            aliasDependencies IReadOnlyDictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+        ) {
             Diagnostics = diagnostics
+            AliasDependencies = aliasDependencies
             Crossing = HashSet[VariableSymbol]()
         }
 
         prop Diagnostics DiagnosticBag? {
+            get;
+        }
+        prop AliasDependencies IReadOnlyDictionary[VariableSymbol, HashSet[VariableSymbol]]? {
             get;
         }
         prop Crossing HashSet[VariableSymbol] {
@@ -230,11 +237,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     (collectByRefLikeLocals && TypeSymbol.IsByRefLike(local.Type))
             ) {
                 Locals.Add(local)
-            } else if collectByRefLikeLocals && variable is GlobalVariableSymbol global && TypeSymbol.IsByRefLike(
-                global.Type
-            ) {
-                // ADR-0228 / #6169: top-level by-ref-like bindings live in
-                // <Main>$ locals and are never hoisted into state-machine fields.
+            } else if collectByRefLikeLocals &&
+                variable is GlobalVariableSymbol global &&
+                global
+                .RequiresEntryPointLocalStorage {
+                // ADR-0228 / #6169: top-level by-ref-like and managed-pointer
+                // globals live in <Main>$ locals (neither hoisted to state-machine
+                // fields nor reconstructed by RefInitializationHoister).
                 Locals.Add(global)
             }
         }
@@ -247,11 +256,16 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     /// function-literal bodies (a separate scope, opaque by design).
     private class ReadAndAwaitCollector : BoundTreeWalker {
         private let interesting HashSet[VariableSymbol]
+        private let aliasDependencies IReadOnlyDictionary[VariableSymbol, HashSet[VariableSymbol]]?
 
-        init(interesting HashSet[VariableSymbol]) {
+        init(
+            interesting HashSet[VariableSymbol],
+            aliasDependencies IReadOnlyDictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+        ) {
             Reads = HashSet[VariableSymbol]()
             PatternKills = HashSet[VariableSymbol]()
             this.interesting = interesting
+            this.aliasDependencies = aliasDependencies
         }
 
         prop Reads HashSet[VariableSymbol] {
@@ -267,14 +281,41 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             private set;
         }
 
+        private func RecordRead(variable VariableSymbol?) {
+            if variable == nil {
+                return
+            }
+            if interesting.Contains(variable) {
+                Reads.Add(variable)
+            }
+            if aliasDependencies != nil && aliasDependencies.TryGetValue(variable, out var dependencies) {
+                Reads.UnionWith(dependencies)
+            }
+        }
+
         override func VisitExpression(node BoundExpression?) {
             if node == nil {
                 return
             }
-            if node is BoundVariableExpression variableExpression && interesting.Contains(variableExpression.Variable) {
-                Reads.Add(variableExpression.Variable)
+            if node is BoundVariableExpression variableExpression {
+                RecordRead(variableExpression.Variable)
             }
             base.VisitExpression(node)
+        }
+
+        protected override func VisitIndexAssignmentExpression(node BoundIndexAssignmentExpression) {
+            RecordRead(node.Target)
+            base.VisitIndexAssignmentExpression(node)
+        }
+
+        protected override func VisitClrIndexAssignmentExpression(node BoundClrIndexAssignmentExpression) {
+            RecordRead(node.Target)
+            base.VisitClrIndexAssignmentExpression(node)
+        }
+
+        protected override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
+            RecordRead(node.Receiver)
+            base.VisitFieldAssignmentExpression(node)
         }
 
         protected override func VisitAwaitExpression(node BoundAwaitExpression) {
@@ -283,7 +324,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
 
         protected override func VisitSwitchExpression(node BoundSwitchExpression) {
-            let discrCollector = ReadAndAwaitCollector(interesting)
+            let discrCollector = ReadAndAwaitCollector(interesting, aliasDependencies)
             discrCollector.VisitExpression(node.Discriminant)
             Reads.UnionWith(discrCollector.Reads)
             PatternKills.UnionWith(discrCollector.PatternKills)
@@ -295,15 +336,15 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 let armBindings = HashSet[VariableSymbol]()
                 RefStructAsyncLivenessAnalyzer.CollectPatternBindings(arm.Pattern, interesting, armBindings)
                 switchPatternBindings.UnionWith(armBindings)
-                let patternCollector = ReadAndAwaitCollector(interesting)
+                let patternCollector = ReadAndAwaitCollector(interesting, aliasDependencies)
                 if arm.Pattern != nil {
                     patternCollector.VisitPattern(arm.Pattern)
                 }
-                let guardCollector = ReadAndAwaitCollector(interesting)
+                let guardCollector = ReadAndAwaitCollector(interesting, aliasDependencies)
                 if arm.Guard != nil {
                     guardCollector.VisitExpression(arm.Guard)
                 }
-                let resultCollector = ReadAndAwaitCollector(interesting)
+                let resultCollector = ReadAndAwaitCollector(interesting, aliasDependencies)
                 resultCollector.VisitExpression(arm.Result)
                 if patternCollector.ContainsAwait || guardCollector.ContainsAwait || resultCollector.ContainsAwait {
                     ContainsAwait = true
@@ -353,7 +394,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
 
         protected override func VisitIsExpression(node BoundIsExpression) {
-            let leftCollector = ReadAndAwaitCollector(interesting)
+            let leftCollector = ReadAndAwaitCollector(interesting, aliasDependencies)
             leftCollector.VisitExpression(node.Expression)
             Reads.UnionWith(leftCollector.Reads)
             PatternKills.UnionWith(leftCollector.PatternKills)
@@ -365,7 +406,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 isBindings.Add(node.InputVariable)
             }
             RefStructAsyncLivenessAnalyzer.CollectPatternBindings(node.Pattern, interesting, isBindings)
-            let patternCollector = ReadAndAwaitCollector(interesting)
+            let patternCollector = ReadAndAwaitCollector(interesting, aliasDependencies)
             patternCollector.VisitPattern(node.Pattern)
             if patternCollector.ContainsAwait {
                 ContainsAwait = true
@@ -504,7 +545,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     ) {
         let collector = InterestingLocalCollector(collectByRefLikeLocals)
         collector.VisitStatement(body)
-        let reporting = ReportingContext(diagnostics)
+        let reporting = ReportingContext(diagnostics, BuildAliasDependencies(body, collector.Locals))
         if collector.Locals.Count != 0 {
             AnalyzeRegion(
                 body,
@@ -533,10 +574,131 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 liveOutOfRegion: HashSet[VariableSymbol](),
                 ambientLive: HashSet[VariableSymbol](),
                 spilledCollector.Locals,
-                ReportingContext(diagnostics)
+                ReportingContext(diagnostics, BuildAliasDependencies(spilledBody, spilledCollector.Locals))
             )
         } catch (ex EmitDiagnosticException) {
             diagnostics.Report(Compilation.CreateInternalErrorDiagnostic(ex))
+        }
+    }
+
+    private class PointerAliasDependencyCollector : BoundTreeWalker {
+        init() {
+            Direct = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+        }
+
+        prop Direct Dictionary[VariableSymbol, HashSet[VariableSymbol]] {
+            get;
+        }
+
+        protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
+            if node.Initializer != nil &&
+                (
+                node.Variable.Type is ByRefTypeSymbol || RefStructAsyncLivenessAnalyzer.IsNativeRefAlias(node.Variable)
+            ) {
+                RecordDependencies(node.Variable, node.Initializer)
+            }
+            base.VisitVariableDeclaration(node)
+        }
+
+        protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
+            if node.Variable.Type is ByRefTypeSymbol || RefStructAsyncLivenessAnalyzer.IsNativeRefAlias(node.Variable) {
+                RecordDependencies(node.Variable, node.Expression)
+            }
+            base.VisitAssignmentExpression(node)
+        }
+
+        private func RecordDependencies(target VariableSymbol, expression BoundExpression) {
+            let collector = PointerTargetCollector()
+            collector.VisitExpression(expression)
+            if collector.Targets.Count == 0 {
+                return
+            }
+            if !Direct.TryGetValue(target, out var set) {
+                set = HashSet[VariableSymbol]()
+                Direct[target] = set
+            }
+            set.UnionWith(collector.Targets)
+        }
+    }
+
+    private class PointerTargetCollector : BoundTreeWalker {
+        init() {
+            Targets = HashSet[VariableSymbol]()
+        }
+
+        prop Targets HashSet[VariableSymbol] {
+            get;
+        }
+
+        override func VisitExpression(node BoundExpression?) {
+            if node is BoundVariableExpression variableExpression {
+                Targets.Add(variableExpression.Variable)
+            }
+            base.VisitExpression(node)
+        }
+
+        protected override func VisitIndexAssignmentExpression(node BoundIndexAssignmentExpression) {
+            if node.Target != nil {
+                Targets.Add(node.Target)
+            }
+            base.VisitIndexAssignmentExpression(node)
+        }
+
+        protected override func VisitClrIndexAssignmentExpression(node BoundClrIndexAssignmentExpression) {
+            if node.Target != nil {
+                Targets.Add(node.Target)
+            }
+            base.VisitClrIndexAssignmentExpression(node)
+        }
+
+        protected override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
+            if node.Receiver != nil {
+                Targets.Add(node.Receiver)
+            }
+            base.VisitFieldAssignmentExpression(node)
+        }
+    }
+
+    private func BuildAliasDependencies(
+        body BoundBlockStatement,
+        interesting HashSet[VariableSymbol]
+    ) IReadOnlyDictionary[VariableSymbol, HashSet[VariableSymbol]]? {
+        if interesting.Count == 0 {
+            return nil
+        }
+        let collector = PointerAliasDependencyCollector()
+        collector.VisitStatement(body)
+        if collector.Direct.Count == 0 {
+            return nil
+        }
+        let resolved = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+        for root in collector.Direct.Keys {
+            let visited = HashSet[VariableSymbol]()
+            let deps = HashSet[VariableSymbol]()
+            let stack = Stack[VariableSymbol]()
+            stack.Push(root)
+            while stack.Count > 0 {
+                let current = stack.Pop()
+                if !visited.Add(current) {
+                    continue
+                }
+                if !object.ReferenceEquals(current, root) && interesting.Contains(current) {
+                    deps.Add(current)
+                }
+                if collector.Direct.TryGetValue(current, out var nextTargets) {
+                    for next in nextTargets {
+                        stack.Push(next)
+                    }
+                }
+            }
+            if deps.Count > 0 {
+                resolved[root] = deps
+            }
+        }
+        return if resolved.Count == 0 {
+            default(IReadOnlyDictionary[VariableSymbol, HashSet[VariableSymbol]]?)
+        } else {
+            resolved
         }
     }
 
@@ -665,7 +827,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             case vd is BoundVariableDeclaration {
                 {
-                    let collector = ReadAndAwaitCollector(interesting)
+                    let collector = ReadAndAwaitCollector(interesting, diagnostics?.AliasDependencies)
                     if vd.Initializer is {} initializer {
                         collector.VisitExpression(initializer)
                     }
@@ -828,7 +990,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 let armBindings = HashSet[VariableSymbol]()
                 CollectPatternBindings(arm.Pattern, interesting, armBindings)
                 armLiveIn.ExceptWith(armBindings)
-                let patternCollector = ReadAndAwaitCollector(interesting)
+                let patternCollector = ReadAndAwaitCollector(interesting, diagnostics?.AliasDependencies)
                 patternCollector.VisitPattern(arm.Pattern)
                 for v in patternCollector.Reads {
                     if !armBindings.Contains(v) || patternCollector.ContainsAwait {
@@ -936,7 +1098,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         if expression == nil {
             return
         }
-        let collector = ReadAndAwaitCollector(interesting)
+        let collector = ReadAndAwaitCollector(interesting, diagnostics?.AliasDependencies)
         collector.VisitExpression(expression)
         var killTarget VariableSymbol? = nil
         if expression is BoundAssignmentExpression assign && interesting.Contains(assign.Variable) {
@@ -1038,6 +1200,11 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     location,
                     v.Name,
                     "a local live across $article '$suspensionKeyword' suspension point in $suspensionContext (it would require hoisting a managed pointer into the state machine)"
+                )
+            } else if v.Type is ByRefTypeSymbol {
+                bag.ReportByRefCannotEscape(
+                    location,
+                    "the top-level pointer variable '${v.Name}' cannot remain live across $article '$suspensionKeyword' suspension point; restructure the code so its value is no longer needed after the '$suspensionKeyword'"
                 )
             } else {
                 // Inference can renumber synthesized locals; keep their diagnostics tied to source, not spill ordinals.

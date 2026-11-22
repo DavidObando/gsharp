@@ -168,6 +168,87 @@ Console.WriteLine(view.Length)
 `)
         Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let writeIndexResult = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+var a = []int32{1, 2, 3}
+var s span[int32] = a
+await Task.Delay(1)
+s[0] = 99
+`)
+        Assert.Contains(writeIndexResult.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(writeIndexResult.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let writeFieldResult = EmittedOracle.Evaluate(`
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 42}
+await Task.Delay(1)
+c.Value = 99
+`)
+        Assert.Contains(writeFieldResult.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(writeFieldResult.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+    }
+
+    @Fact
+    func ByRefLike_PointerAliasAcrossAwait_ReportsGS0219_AndBeforeAwaitIsPermitted() {
+        let topLevelUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 42}
+var p = &c.Value
+await Task.Delay(1)
+Console.WriteLine(*p)
+`)
+        Assert.Contains(topLevelUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(topLevelUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let funcUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var p = &c.Value
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(funcUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(funcUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let safeBeforeAwait = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 42}
+var p = &c.Value
+Console.WriteLine(*p)
+await Task.Delay(1)
+`)
+        Assert.Empty(safeBeforeAwait.Diagnostics)
+        Assert.Equal("42\n", safeBeforeAwait.Output)
     }
 
     @Fact

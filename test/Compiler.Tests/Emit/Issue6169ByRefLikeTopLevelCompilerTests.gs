@@ -126,6 +126,34 @@ Console.WriteLine(view.Length)
         Assert.NotEqual(0, awaitCode)
         Assert.Contains("GS0219", awaitOutput, StringComparison.Ordinal)
         Assert.DoesNotContain("GS9998", awaitOutput, StringComparison.Ordinal)
+
+        let (writeAwaitCode, writeAwaitOutput) = fixture.TryCompile(`import System
+import System.Threading.Tasks
+
+var a = []int32{1, 2, 3}
+var s span[int32] = a
+await Task.Delay(1)
+s[0] = 99
+`, "top-level-span-write-await", executable: true)
+        Assert.NotEqual(0, writeAwaitCode)
+        Assert.Contains("GS0219", writeAwaitOutput, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", writeAwaitOutput, StringComparison.Ordinal)
+
+        let (aliasAwaitCode, aliasAwaitOutput) = fixture.TryCompile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 42}
+var p = &c.Value
+await Task.Delay(1)
+Console.WriteLine(*p)
+`, "top-level-ref-struct-alias-await", executable: true)
+        Assert.NotEqual(0, aliasAwaitCode)
+        Assert.Contains("GS0219", aliasAwaitOutput, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", aliasAwaitOutput, StringComparison.Ordinal)
     }
 
     shared {
