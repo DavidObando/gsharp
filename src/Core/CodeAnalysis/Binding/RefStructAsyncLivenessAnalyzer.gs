@@ -262,6 +262,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             Reads = HashSet[VariableSymbol]()
             PatternKills = HashSet[VariableSymbol]()
             InternalUnsafeVariables = HashSet[VariableSymbol]()
+            OutgoingGotoOverwrites = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
             HasNormalExit = true
             this.interesting = interesting
             this.pointsTo = RefStructAsyncLivenessAnalyzer.ClonePointsTo(aliasDependencies)
@@ -285,6 +286,10 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             get;
         }
 
+        prop OutgoingGotoOverwrites Dictionary[BoundLabel, HashSet[VariableSymbol]] {
+            get;
+        }
+
         prop ContainsAwait bool {
             get;
             private set;
@@ -293,6 +298,16 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         prop HasNormalExit bool {
             get;
             private set;
+        }
+
+        private func MergeOutgoingGotoOverwrites(source Dictionary[BoundLabel, HashSet[VariableSymbol]]) {
+            for entry in source {
+                if !OutgoingGotoOverwrites.TryGetValue(entry.Key, out var sink) {
+                    OutgoingGotoOverwrites[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                } else {
+                    sink.IntersectWith(entry.Value)
+                }
+            }
         }
 
         private func RecordRead(variable VariableSymbol?) {
@@ -333,11 +348,14 @@ internal shared class RefStructAsyncLivenessAnalyzer {
 
         protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
             if node.Initializer is {} initializer {
+                let prePts = RefStructAsyncLivenessAnalyzer.ClonePointsTo(pointsTo)
                 VisitExpression(initializer)
                 if node.Variable.Type is ByRefTypeSymbol || RefStructAsyncLivenessAnalyzer.IsNativeRefAlias(
                     node.Variable
                 ) {
-                    RefStructAsyncLivenessAnalyzer.UpdatePointsTo(node.Variable, initializer, pointsTo, interesting)
+                    let resolved = RefStructAsyncLivenessAnalyzer.PointsToExpressionUpdater(prePts, interesting)
+                        .ResolveTargets(initializer)
+                    RefStructAsyncLivenessAnalyzer.SetPointsTo(node.Variable, resolved, pointsTo, exceptionalUnion: nil)
                 }
                 RecordOverwrite(node.Variable, allowNativeRefAlias: true)
                 return
@@ -346,9 +364,12 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
 
         protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
+            let prePts = RefStructAsyncLivenessAnalyzer.ClonePointsTo(pointsTo)
             VisitExpression(node.Expression)
             if node.Variable.Type is ByRefTypeSymbol {
-                RefStructAsyncLivenessAnalyzer.UpdatePointsTo(node.Variable, node.Expression, pointsTo, interesting)
+                let resolved = RefStructAsyncLivenessAnalyzer.PointsToExpressionUpdater(prePts, interesting)
+                    .ResolveTargets(node.Expression)
+                RefStructAsyncLivenessAnalyzer.SetPointsTo(node.Variable, resolved, pointsTo, exceptionalUnion: nil)
             }
             RecordOverwrite(node.Variable)
         }
@@ -358,6 +379,11 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 return
             }
             if node is BoundGotoStatement gs {
+                if !OutgoingGotoOverwrites.TryGetValue(gs.Label, out var sink) {
+                    OutgoingGotoOverwrites[gs.Label] = HashSet[VariableSymbol](definitelyOverwritten)
+                } else {
+                    sink.IntersectWith(definitelyOverwritten)
+                }
                 if escapingLabelLiveIn != nil && escapingLabelLiveIn.TryGetValue(gs.Label, out var targetLive) {
                     for v in targetLive {
                         if !definitelyOverwritten.Contains(v) {
@@ -369,6 +395,11 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             if node is BoundConditionalGotoStatement cgs {
                 VisitExpression(cgs.Condition)
+                if !OutgoingGotoOverwrites.TryGetValue(cgs.Label, out var sink) {
+                    OutgoingGotoOverwrites[cgs.Label] = HashSet[VariableSymbol](definitelyOverwritten)
+                } else {
+                    sink.IntersectWith(definitelyOverwritten)
+                }
                 if escapingLabelLiveIn != nil && escapingLabelLiveIn.TryGetValue(cgs.Label, out var targetLive) {
                     for v in targetLive {
                         if !definitelyOverwritten.Contains(v) {
@@ -405,6 +436,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             Reads.UnionWith(falseCollector.Reads)
             InternalUnsafeVariables.UnionWith(trueCollector.InternalUnsafeVariables)
             InternalUnsafeVariables.UnionWith(falseCollector.InternalUnsafeVariables)
+            MergeOutgoingGotoOverwrites(trueCollector.OutgoingGotoOverwrites)
+            MergeOutgoingGotoOverwrites(falseCollector.OutgoingGotoOverwrites)
             if trueCollector.ContainsAwait || falseCollector.ContainsAwait {
                 ContainsAwait = true
             }
@@ -474,10 +507,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             branchCollector.VisitExpression(node.WhenNotNull)
             Reads.UnionWith(branchCollector.Reads)
             InternalUnsafeVariables.UnionWith(branchCollector.InternalUnsafeVariables)
+            MergeOutgoingGotoOverwrites(branchCollector.OutgoingGotoOverwrites)
             if branchCollector.ContainsAwait {
                 ContainsAwait = true
             }
-            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(pointsTo, branchCollector.pointsTo)
+            if branchCollector.HasNormalExit && node.WhenNotNull.Type != TypeSymbol.Never {
+                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(pointsTo, branchCollector.pointsTo)
+            }
         }
 
         protected override func VisitBinaryExpression(node BoundBinaryExpression) {
@@ -488,6 +524,10 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 BoundBinaryOperatorKind
                 .NullCoalesce {
                 VisitExpression(node.Left)
+                if !HasNormalExit || node.Left.Type == TypeSymbol.Never {
+                    HasNormalExit = false
+                    return
+                }
                 let rightCollector = ReadAndAwaitCollector(
                     interesting,
                     pointsTo,
@@ -497,10 +537,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 rightCollector.VisitExpression(node.Right)
                 Reads.UnionWith(rightCollector.Reads)
                 InternalUnsafeVariables.UnionWith(rightCollector.InternalUnsafeVariables)
+                MergeOutgoingGotoOverwrites(rightCollector.OutgoingGotoOverwrites)
                 if rightCollector.ContainsAwait {
                     ContainsAwait = true
                 }
-                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(pointsTo, rightCollector.pointsTo)
+                if rightCollector.HasNormalExit && node.Right.Type != TypeSymbol.Never {
+                    RefStructAsyncLivenessAnalyzer.UnionPointsToInto(pointsTo, rightCollector.pointsTo)
+                }
                 return
             }
             base.VisitBinaryExpression(node)
@@ -757,6 +800,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     }
                     var catchDispatchOver = HashSet[VariableSymbol](entryOverwritten)
                     var catchDispatchReachable = true
+                    var exceptionalFinallyInitialized = false
+                    let exceptionalFinallyOver = HashSet[VariableSymbol]()
                     let outgoingGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]](tryGotos)
                     for clause in tryStmt.CatchClauses {
                         var filterPts Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
@@ -777,6 +822,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                                 escapingLabelLiveIn
                             )
                             filterCollector.VisitExpression(filter)
+                            MergeOutgoingGotoOverwrites(filterCollector.OutgoingGotoOverwrites)
                             filterNormal = filterCollector.HasNormalExit
                             filterNonThrowing = filterNormal && RefStructAsyncLivenessAnalyzer.ExpressionCannotThrow(
                                 filter
@@ -813,6 +859,14 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                             }
                         }
                         if catchDispatchReachable {
+                            if filterNormal {
+                                if !exceptionalFinallyInitialized {
+                                    exceptionalFinallyOver.UnionWith(catchBodyEntryOver)
+                                    exceptionalFinallyInitialized = true
+                                } else {
+                                    exceptionalFinallyOver.IntersectWith(catchBodyEntryOver)
+                                }
+                            }
                             for entry in catchGotos {
                                 if !outgoingGotos.TryGetValue(entry.Key, out var sink) {
                                     outgoingGotos[entry.Key] = HashSet[VariableSymbol](entry.Value)
@@ -831,6 +885,14 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                             }
                         }
                     }
+                    if catchDispatchReachable {
+                        if !exceptionalFinallyInitialized {
+                            exceptionalFinallyOver.UnionWith(catchDispatchOver)
+                            exceptionalFinallyInitialized = true
+                        } else {
+                            exceptionalFinallyOver.IntersectWith(catchDispatchOver)
+                        }
+                    }
                     if tryStmt.FinallyBlock is {} finallyBlock {
                         let finallyBlockStmt = RefStructAsyncLivenessAnalyzer.EnsureBlock(finallyBlock)
                         let finallyInOver = if afterInitialized {
@@ -838,11 +900,22 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                         } else {
                             HashSet[VariableSymbol](entryOverwritten)
                         }
+                        let finallyAllPathsOver = HashSet[VariableSymbol]()
+                        if afterInitialized && exceptionalFinallyInitialized {
+                            finallyAllPathsOver.UnionWith(afterOver)
+                            finallyAllPathsOver.IntersectWith(exceptionalFinallyOver)
+                        } else if afterInitialized {
+                            finallyAllPathsOver.UnionWith(afterOver)
+                        } else if exceptionalFinallyInitialized {
+                            finallyAllPathsOver.UnionWith(exceptionalFinallyOver)
+                        } else {
+                            finallyAllPathsOver.UnionWith(entryOverwritten)
+                        }
                         let finallyGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
                         let (_, finallyNormal) = AnalyzeBlockStatementPrefix(
                             finallyBlockStmt,
                             trySummary.FinallyIn,
-                            catchDispatchOver,
+                            finallyAllPathsOver,
                             collectEffects,
                             entryLabelPointsTo: nil,
                             entryLabelOverwritten: nil,
@@ -1394,6 +1467,24 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                                 stmtCollector.VisitStatement(stmt)
                             }
                         }
+                        for entry in stmtCollector.OutgoingGotoOverwrites {
+                            if labelToBlock.TryGetValue(entry.Key, out var targetBlock) {
+                                if !pendingOverwrittenForBlock.TryGetValue(targetBlock, out var sink) {
+                                    pendingOverwrittenForBlock[targetBlock] = HashSet[VariableSymbol](entry.Value)
+                                    changed = true
+                                } else {
+                                    let prevCount = sink.Count
+                                    sink.IntersectWith(entry.Value)
+                                    if sink.Count != prevCount {
+                                        changed = true
+                                    }
+                                }
+                            } else if !compoundGotos.TryGetValue(entry.Key, out var sink) {
+                                compoundGotos[entry.Key] = HashSet[VariableSymbol](entry.Value)
+                            } else {
+                                sink.IntersectWith(entry.Value)
+                            }
+                        }
                         curOverwritten = HashSet[VariableSymbol](stmtCollector.definitelyOverwritten)
                         if !canTransfer || ControlFlowGraph.StatementDefinitelyReturns(stmt) ||
                             ControlFlowGraph.HasNeverValue(stmt) {
@@ -1611,12 +1702,17 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     )
                     let prevAwait = ContainsAwait
                     ContainsAwait = false
+                    let localBlockGotos = Dictionary[BoundLabel, HashSet[VariableSymbol]]()
                     let (exitOverwritten, hasNormalOverwritten) = AnalyzeBlockStatementPrefix(
                         blockStmt,
                         pointsTo,
                         definitelyOverwritten,
-                        collectEffects: true
+                        collectEffects: true,
+                        entryLabelPointsTo: nil,
+                        entryLabelOverwritten: nil,
+                        outGotoOverwrites: localBlockGotos
                     )
+                    MergeOutgoingGotoOverwrites(localBlockGotos)
                     let prefixHasAwait = ContainsAwait
                     ContainsAwait = prevAwait || prefixHasAwait
                     if hasNormalOverwritten {
@@ -1654,6 +1750,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     exprCollector.VisitExpression(node.Expression)
                     Reads.UnionWith(exprCollector.Reads)
                     InternalUnsafeVariables.UnionWith(exprCollector.InternalUnsafeVariables)
+                    MergeOutgoingGotoOverwrites(exprCollector.OutgoingGotoOverwrites)
                     if exprCollector.ContainsAwait {
                         ContainsAwait = true
                     }
@@ -1864,6 +1961,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 InternalUnsafeVariables.UnionWith(patternCollector.InternalUnsafeVariables)
                 InternalUnsafeVariables.UnionWith(guardCollector.InternalUnsafeVariables)
                 InternalUnsafeVariables.UnionWith(resultCollector.InternalUnsafeVariables)
+                MergeOutgoingGotoOverwrites(patternCollector.OutgoingGotoOverwrites)
+                MergeOutgoingGotoOverwrites(guardCollector.OutgoingGotoOverwrites)
+                MergeOutgoingGotoOverwrites(resultCollector.OutgoingGotoOverwrites)
                 if patternCollector.ContainsAwait || guardCollector.ContainsAwait || resultCollector.ContainsAwait {
                     ContainsAwait = true
                 }
@@ -2397,21 +2497,361 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             this.interesting = interesting
             this.exceptionalUnion = exceptionalUnion
             this.gotoExits = gotoExits
+            HasNormalExit = true
+        }
+
+        prop HasNormalExit bool {
+            get;
+            private set;
+        }
+
+        internal func ResolveTargets(expression BoundExpression?) HashSet[VariableSymbol] {
+            if expression == nil {
+                return HashSet[VariableSymbol]()
+            }
+            switch expression {
+                case ve is BoundVariableExpression {
+                    let resolved = HashSet[VariableSymbol]()
+                    if interesting.Contains(ve.Variable) &&
+                        (
+                        TypeSymbol.IsByRefLike(ve.Variable.Type) || RefStructAsyncLivenessAnalyzer.IsNativeRefAlias(
+                            ve.Variable
+                        )
+                    ) {
+                        resolved.Add(ve.Variable)
+                    }
+                    if state.TryGetValue(ve.Variable, out var transitive) {
+                        resolved.UnionWith(transitive)
+                    }
+                    return resolved
+                }
+                case conv is BoundConversionExpression {
+                    return ResolveTargets(conv.Expression)
+                }
+                case assign is BoundAssignmentExpression {
+                    let rhsTargets = ResolveTargets(assign.Expression)
+                    if assign.Variable.Type is ByRefTypeSymbol {
+                        RefStructAsyncLivenessAnalyzer.SetPointsTo(assign.Variable, rhsTargets, state, exceptionalUnion)
+                    }
+                    return rhsTargets
+                }
+                case addr is BoundAddressOfExpression {
+                    return ResolveAddressedStorageTargets(addr.Operand)
+                }
+                case deref is BoundDereferenceExpression {
+                    return ResolveAddressedStorageTargets(deref.Operand)
+                }
+                case cond is BoundConditionalExpression {
+                    return ResolveConditionalTargets(cond.Condition, cond.WhenTrue, cond.WhenFalse)
+                }
+                case condAddr is BoundConditionalAddressExpression {
+                    return ResolveConditionalTargets(
+                        condAddr.Condition,
+                        condAddr.WhenTrueOperand,
+                        condAddr.WhenFalseOperand
+                    )
+                }
+                case nc is BoundNullConditionalAccessExpression {
+                    VisitExpression(nc.Receiver)
+                    if !HasNormalExit || nc.Receiver.Type == TypeSymbol.Never {
+                        HasNormalExit = false
+                        return HashSet[VariableSymbol]()
+                    }
+                    let notNullState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+                    let notNullUpdater = PointsToExpressionUpdater(
+                        notNullState,
+                        interesting,
+                        exceptionalUnion,
+                        gotoExits
+                    )
+                    let notNullTargets = notNullUpdater.ResolveTargets(nc.WhenNotNull)
+                    if notNullUpdater.HasNormalExit && nc.WhenNotNull.Type != TypeSymbol.Never {
+                        RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, notNullState)
+                        return notNullTargets
+                    }
+                    return HashSet[VariableSymbol]()
+                }
+                case block is BoundBlockExpression {
+                    if !block.Statements.IsDefaultOrEmpty {
+                        let flattened = Lowerer.Flatten(BoundBlockStatement(nil, block.Statements))
+                        if ControlFlowGraph.CanCreate(flattened) {
+                            let (
+                                _,
+                                _,
+                                prefixExit,
+                                prefixExceptional,
+                                prefixHasNormalExit,
+                                prefixGotoExits
+                            ) = RefStructAsyncLivenessAnalyzer
+                                .ComputeGraphPointsTo(
+                                ControlFlowGraph.CreateWithCompoundGotoReachability(flattened),
+                                state,
+                                interesting
+                            )
+                            if exceptionalUnion != nil {
+                                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(exceptionalUnion, prefixExceptional)
+                            }
+                            if gotoExits != nil {
+                                RefStructAsyncLivenessAnalyzer.UnionGotoMapInto(gotoExits, prefixGotoExits)
+                            }
+                            state.Clear()
+                            if !prefixHasNormalExit {
+                                HasNormalExit = false
+                                return HashSet[VariableSymbol]()
+                            }
+                            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, prefixExit)
+                        } else {
+                            base.VisitBlockExpression(block)
+                            return CollectResolvedTargetsFromState(block.Expression)
+                        }
+                    }
+                    let tailTargets = ResolveTargets(block.Expression)
+                    if block.Expression.Type == TypeSymbol.Never {
+                        HasNormalExit = false
+                    }
+                    return tailTargets
+                }
+                case sw is BoundSwitchExpression {
+                    return ResolveSwitchTargets(sw)
+                }
+                case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
+                    let leftTargets = ResolveTargets(bin.Left)
+                    if !HasNormalExit || bin.Left.Type == TypeSymbol.Never {
+                        HasNormalExit = false
+                        return HashSet[VariableSymbol]()
+                    }
+                    let rightState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+                    let rightUpdater = PointsToExpressionUpdater(rightState, interesting, exceptionalUnion, gotoExits)
+                    let rightTargets = rightUpdater.ResolveTargets(bin.Right)
+                    let result = HashSet[VariableSymbol](leftTargets)
+                    if rightUpdater.HasNormalExit && bin.Right.Type != TypeSymbol.Never {
+                        RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, rightState)
+                        result.UnionWith(rightTargets)
+                    }
+                    return result
+                }
+                default {
+                    VisitExpression(expression)
+                    return CollectResolvedTargetsFromState(expression)
+                }
+            }
+        }
+
+        private func ResolveConditionalTargets(
+            condition BoundExpression,
+            whenTrue BoundExpression,
+            whenFalse BoundExpression
+        ) HashSet[VariableSymbol] {
+            VisitExpression(condition)
+            if !HasNormalExit || condition.Type == TypeSymbol.Never {
+                HasNormalExit = false
+                return HashSet[VariableSymbol]()
+            }
+            let trueState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+            let trueUpdater = PointsToExpressionUpdater(trueState, interesting, exceptionalUnion, gotoExits)
+            let trueTargets = trueUpdater.ResolveTargets(whenTrue)
+            let falseState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+            let falseUpdater = PointsToExpressionUpdater(falseState, interesting, exceptionalUnion, gotoExits)
+            let falseTargets = falseUpdater.ResolveTargets(whenFalse)
+            let trueNormal = trueUpdater.HasNormalExit && whenTrue.Type != TypeSymbol.Never
+            let falseNormal = falseUpdater.HasNormalExit && whenFalse.Type != TypeSymbol.Never
+            state.Clear()
+            let result = HashSet[VariableSymbol]()
+            if trueNormal {
+                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, trueState)
+                result.UnionWith(trueTargets)
+            }
+            if falseNormal {
+                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, falseState)
+                result.UnionWith(falseTargets)
+            }
+            HasNormalExit = trueNormal || falseNormal
+            return result
+        }
+
+        private func ResolveAddressedStorageTargets(operand BoundExpression?) HashSet[VariableSymbol] {
+            if operand == nil {
+                return HashSet[VariableSymbol]()
+            }
+            switch operand {
+                case ve is BoundVariableExpression {
+                    return ResolveTargets(ve)
+                }
+                case deref is BoundDereferenceExpression {
+                    return ResolveTargets(deref.Operand)
+                }
+                case conv is BoundConversionExpression {
+                    return ResolveAddressedStorageTargets(conv.Expression)
+                }
+                case field is BoundFieldAccessExpression {
+                    if field.Receiver == nil {
+                        return HashSet[VariableSymbol]()
+                    }
+                    if RefStructAsyncLivenessAnalyzer.IsReferenceOwnerType(field.Receiver.Type) {
+                        VisitExpression(field.Receiver)
+                        return HashSet[VariableSymbol]()
+                    }
+                    return ResolveAddressedStorageTargets(field.Receiver)
+                }
+                case clrField is BoundClrPropertyAccessExpression when clrField.Member is System.Reflection.FieldInfo {
+                    if clrField.Receiver == nil {
+                        return HashSet[VariableSymbol]()
+                    }
+                    if RefStructAsyncLivenessAnalyzer.IsReferenceOwnerType(clrField.Receiver.Type) {
+                        VisitExpression(clrField.Receiver)
+                        return HashSet[VariableSymbol]()
+                    }
+                    return ResolveAddressedStorageTargets(clrField.Receiver)
+                }
+                case tuple is BoundTupleElementAccessExpression {
+                    return ResolveAddressedStorageTargets(tuple.Receiver)
+                }
+                case idx is BoundIndexExpression {
+                    for indexExpr in idx.Indices {
+                        VisitExpression(indexExpr)
+                    }
+                    if idx.IsArrayBackedElementAccess {
+                        VisitExpression(idx.Target)
+                        return HashSet[VariableSymbol]()
+                    }
+                    return ResolveAddressedStorageTargets(idx.Target)
+                }
+                case clrIdx is BoundClrIndexExpression {
+                    for arg in clrIdx.Arguments {
+                        VisitExpression(arg)
+                    }
+                    if !RefCapabilities.IsRefReturningAccess(clrIdx) {
+                        VisitExpression(clrIdx.Target)
+                        return HashSet[VariableSymbol]()
+                    }
+                    return ResolveAddressedStorageTargets(clrIdx.Target)
+                }
+                case cond is BoundConditionalExpression {
+                    VisitExpression(cond.Condition)
+                    if !HasNormalExit || cond.Condition.Type == TypeSymbol.Never {
+                        HasNormalExit = false
+                        return HashSet[VariableSymbol]()
+                    }
+                    let trueState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+                    let trueUpdater = PointsToExpressionUpdater(trueState, interesting, exceptionalUnion, gotoExits)
+                    let trueTargets = trueUpdater.ResolveAddressedStorageTargets(cond.WhenTrue)
+                    let falseState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+                    let falseUpdater = PointsToExpressionUpdater(falseState, interesting, exceptionalUnion, gotoExits)
+                    let falseTargets = falseUpdater.ResolveAddressedStorageTargets(cond.WhenFalse)
+                    let trueNormal = trueUpdater.HasNormalExit && cond.WhenTrue.Type != TypeSymbol.Never
+                    let falseNormal = falseUpdater.HasNormalExit && cond.WhenFalse.Type != TypeSymbol.Never
+                    state.Clear()
+                    let result = HashSet[VariableSymbol]()
+                    if trueNormal {
+                        RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, trueState)
+                        result.UnionWith(trueTargets)
+                    }
+                    if falseNormal {
+                        RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, falseState)
+                        result.UnionWith(falseTargets)
+                    }
+                    HasNormalExit = trueNormal || falseNormal
+                    return result
+                }
+                case condAddr is BoundConditionalAddressExpression {
+                    VisitExpression(condAddr.Condition)
+                    if !HasNormalExit || condAddr.Condition.Type == TypeSymbol.Never {
+                        HasNormalExit = false
+                        return HashSet[VariableSymbol]()
+                    }
+                    let trueState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+                    let trueUpdater = PointsToExpressionUpdater(trueState, interesting, exceptionalUnion, gotoExits)
+                    let trueTargets = trueUpdater.ResolveAddressedStorageTargets(condAddr.WhenTrueOperand)
+                    let falseState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+                    let falseUpdater = PointsToExpressionUpdater(falseState, interesting, exceptionalUnion, gotoExits)
+                    let falseTargets = falseUpdater.ResolveAddressedStorageTargets(condAddr.WhenFalseOperand)
+                    let trueNormal = trueUpdater.HasNormalExit && condAddr.WhenTrueOperand.Type != TypeSymbol.Never
+                    let falseNormal = falseUpdater.HasNormalExit && condAddr.WhenFalseOperand.Type != TypeSymbol.Never
+                    state.Clear()
+                    let result = HashSet[VariableSymbol]()
+                    if trueNormal {
+                        RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, trueState)
+                        result.UnionWith(trueTargets)
+                    }
+                    if falseNormal {
+                        RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, falseState)
+                        result.UnionWith(falseTargets)
+                    }
+                    HasNormalExit = trueNormal || falseNormal
+                    return result
+                }
+                case block is BoundBlockExpression {
+                    if !block.Statements.IsDefaultOrEmpty {
+                        let flattened = Lowerer.Flatten(BoundBlockStatement(nil, block.Statements))
+                        if ControlFlowGraph.CanCreate(flattened) {
+                            let (
+                                _,
+                                _,
+                                prefixExit,
+                                prefixExceptional,
+                                prefixHasNormalExit,
+                                prefixGotoExits
+                            ) = RefStructAsyncLivenessAnalyzer
+                                .ComputeGraphPointsTo(
+                                ControlFlowGraph.CreateWithCompoundGotoReachability(flattened),
+                                state,
+                                interesting
+                            )
+                            if exceptionalUnion != nil {
+                                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(exceptionalUnion, prefixExceptional)
+                            }
+                            if gotoExits != nil {
+                                RefStructAsyncLivenessAnalyzer.UnionGotoMapInto(gotoExits, prefixGotoExits)
+                            }
+                            state.Clear()
+                            if !prefixHasNormalExit {
+                                HasNormalExit = false
+                                return HashSet[VariableSymbol]()
+                            }
+                            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, prefixExit)
+                        } else {
+                            base.VisitBlockExpression(block)
+                            return CollectResolvedTargetsFromState(block.Expression)
+                        }
+                    }
+                    return ResolveAddressedStorageTargets(block.Expression)
+                }
+                default {
+                    VisitExpression(operand)
+                    return HashSet[VariableSymbol]()
+                }
+            }
+        }
+
+        private func CollectResolvedTargetsFromState(expression BoundExpression?) HashSet[VariableSymbol] {
+            let collector = PointerTargetCollector()
+            collector.Visit(expression)
+            let resolved = HashSet[VariableSymbol]()
+            for referenced in collector.Targets {
+                if interesting.Contains(referenced) &&
+                    (
+                    TypeSymbol.IsByRefLike(referenced.Type) || RefStructAsyncLivenessAnalyzer.IsNativeRefAlias(
+                        referenced
+                    )
+                ) {
+                    resolved.Add(referenced)
+                }
+                if state.TryGetValue(referenced, out var transitive) {
+                    resolved.UnionWith(transitive)
+                }
+            }
+            return resolved
         }
 
         protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
             if node.Initializer is {} initializer {
-                VisitExpression(initializer)
                 if node.Variable.Type is ByRefTypeSymbol || RefStructAsyncLivenessAnalyzer.IsNativeRefAlias(
                     node.Variable
                 ) {
-                    RefStructAsyncLivenessAnalyzer.UpdatePointsTo(
-                        node.Variable,
-                        initializer,
-                        state,
-                        interesting,
-                        exceptionalUnion
-                    )
+                    let targets = ResolveTargets(initializer)
+                    RefStructAsyncLivenessAnalyzer.SetPointsTo(node.Variable, targets, state, exceptionalUnion)
+                } else {
+                    VisitExpression(initializer)
                 }
                 return
             }
@@ -2419,16 +2859,17 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
 
         protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
-            VisitExpression(node.Expression)
             if node.Variable.Type is ByRefTypeSymbol {
-                RefStructAsyncLivenessAnalyzer.UpdatePointsTo(
-                    node.Variable,
-                    node.Expression,
-                    state,
-                    interesting,
-                    exceptionalUnion
-                )
+                let targets = ResolveTargets(node.Expression)
+                RefStructAsyncLivenessAnalyzer.SetPointsTo(node.Variable, targets, state, exceptionalUnion)
+                return
             }
+            VisitExpression(node.Expression)
+        }
+
+        protected override func VisitThrowExpression(node BoundThrowExpression) {
+            base.VisitThrowExpression(node)
+            HasNormalExit = false
         }
 
         private func VisitConditionalPair(
@@ -2437,15 +2878,26 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             whenFalse BoundExpression
         ) {
             VisitExpression(condition)
+            if !HasNormalExit || condition.Type == TypeSymbol.Never {
+                HasNormalExit = false
+                return
+            }
             let whenTrueState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
-            PointsToExpressionUpdater(whenTrueState, interesting, exceptionalUnion, gotoExits).VisitExpression(whenTrue)
+            let trueUpdater = PointsToExpressionUpdater(whenTrueState, interesting, exceptionalUnion, gotoExits)
+            trueUpdater.VisitExpression(whenTrue)
             let whenFalseState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
-            PointsToExpressionUpdater(whenFalseState, interesting, exceptionalUnion, gotoExits).VisitExpression(
-                whenFalse
-            )
+            let falseUpdater = PointsToExpressionUpdater(whenFalseState, interesting, exceptionalUnion, gotoExits)
+            falseUpdater.VisitExpression(whenFalse)
+            let trueNormal = trueUpdater.HasNormalExit && whenTrue.Type != TypeSymbol.Never
+            let falseNormal = falseUpdater.HasNormalExit && whenFalse.Type != TypeSymbol.Never
             state.Clear()
-            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, whenTrueState)
-            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, whenFalseState)
+            if trueNormal {
+                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, whenTrueState)
+            }
+            if falseNormal {
+                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, whenFalseState)
+            }
+            HasNormalExit = trueNormal || falseNormal
         }
 
         protected override func VisitConditionalExpression(node BoundConditionalExpression) {
@@ -2458,11 +2910,16 @@ internal shared class RefStructAsyncLivenessAnalyzer {
 
         protected override func VisitNullConditionalAccessExpression(node BoundNullConditionalAccessExpression) {
             VisitExpression(node.Receiver)
+            if !HasNormalExit || node.Receiver.Type == TypeSymbol.Never {
+                HasNormalExit = false
+                return
+            }
             let whenNotNullState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
-            PointsToExpressionUpdater(whenNotNullState, interesting, exceptionalUnion, gotoExits).VisitExpression(
-                node.WhenNotNull
-            )
-            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, whenNotNullState)
+            let notNullUpdater = PointsToExpressionUpdater(whenNotNullState, interesting, exceptionalUnion, gotoExits)
+            notNullUpdater.VisitExpression(node.WhenNotNull)
+            if notNullUpdater.HasNormalExit && node.WhenNotNull.Type != TypeSymbol.Never {
+                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, whenNotNullState)
+            }
         }
 
         protected override func VisitBlockExpression(node BoundBlockExpression) {
@@ -2490,6 +2947,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     }
                     state.Clear()
                     if !prefixHasNormalExit {
+                        HasNormalExit = false
                         return
                     }
                     RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, prefixExit)
@@ -2499,12 +2957,20 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 }
             }
             VisitExpression(node.Expression)
+            if node.Expression.Type == TypeSymbol.Never {
+                HasNormalExit = false
+            }
         }
 
-        protected override func VisitSwitchExpression(node BoundSwitchExpression) {
+        private func ResolveSwitchTargets(node BoundSwitchExpression) HashSet[VariableSymbol] {
             VisitExpression(node.Discriminant)
+            if !HasNormalExit || node.Discriminant.Type == TypeSymbol.Never {
+                HasNormalExit = false
+                return HashSet[VariableSymbol]()
+            }
             var fallthroughState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
             let selectedExits = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+            let resultTargets = HashSet[VariableSymbol]()
             let armStates = [node.Arms.Length]Dictionary[VariableSymbol, HashSet[VariableSymbol]]
             let armCanMatch = [node.Arms.Length]bool
             var fallthroughReachable = true
@@ -2566,27 +3032,40 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     armStates[i] = armState
                 }
             }
+            var anyArmNormal = false
             for var i = 0; i < node.Arms.Length; i++ {
                 if !armCanMatch[i] {
                     continue
                 }
                 let armState = armStates[i]
-                PointsToExpressionUpdater(armState, interesting, exceptionalUnion, gotoExits).VisitExpression(
-                    node.Arms[i].Result
-                )
-                if node.Arms[i].Result.Type != TypeSymbol.Never {
+                let armUpdater = PointsToExpressionUpdater(armState, interesting, exceptionalUnion, gotoExits)
+                let armTargets = armUpdater.ResolveTargets(node.Arms[i].Result)
+                if armUpdater.HasNormalExit && node.Arms[i].Result.Type != TypeSymbol.Never {
+                    anyArmNormal = true
                     RefStructAsyncLivenessAnalyzer.UnionPointsToInto(selectedExits, armState)
+                    resultTargets.UnionWith(armTargets)
                 }
             }
             if !hasUnconditionalDefault && fallthroughReachable {
+                anyArmNormal = true
                 RefStructAsyncLivenessAnalyzer.UnionPointsToInto(selectedExits, fallthroughState)
             }
             state.Clear()
             RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, selectedExits)
+            HasNormalExit = anyArmNormal
+            return resultTargets
+        }
+
+        protected override func VisitSwitchExpression(node BoundSwitchExpression) {
+            let _ = ResolveSwitchTargets(node)
         }
 
         protected override func VisitIsExpression(node BoundIsExpression) {
             VisitExpression(node.Expression)
+            if !HasNormalExit || node.Expression.Type == TypeSymbol.Never {
+                HasNormalExit = false
+                return
+            }
             let (matched, unmatched, patCanMatch, patCanFail) = RefStructAsyncLivenessAnalyzer.ApplyPatternPointsTo(
                 node.Pattern,
                 state,
@@ -2611,11 +3090,16 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 BoundBinaryOperatorKind
                 .NullCoalesce {
                 VisitExpression(node.Left)
+                if !HasNormalExit || node.Left.Type == TypeSymbol.Never {
+                    HasNormalExit = false
+                    return
+                }
                 let rightState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
-                PointsToExpressionUpdater(rightState, interesting, exceptionalUnion, gotoExits).VisitExpression(
-                    node.Right
-                )
-                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, rightState)
+                let rightUpdater = PointsToExpressionUpdater(rightState, interesting, exceptionalUnion, gotoExits)
+                rightUpdater.VisitExpression(node.Right)
+                if rightUpdater.HasNormalExit && node.Right.Type != TypeSymbol.Never {
+                    RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, rightState)
+                }
                 return
             }
             base.VisitBinaryExpression(node)
@@ -2820,8 +3304,26 @@ internal shared class RefStructAsyncLivenessAnalyzer {
 
     private func IsCatchAllExceptionType(type TypeSymbol?) bool -> type == nil ||
         type.ClrType == typeof(System.Exception) ||
-        type.ClrType == typeof(System.Object) ||
-        (type.ClrType == nil && string.Equals(type.Name, "Exception", StringComparison.Ordinal))
+        type.ClrType == typeof(System.Object)
+
+    private func AddressOperandCannotThrow(operand BoundExpression?) bool {
+        switch operand {
+            case BoundVariableExpression{Variable: LocalVariableSymbol or ParameterSymbol} {
+                return true
+            }
+            case field is BoundFieldAccessExpression {
+                return field.Receiver != nil &&
+                    !IsReferenceOwnerType(field.Receiver.Type) &&
+                    AddressOperandCannotThrow(field.Receiver)
+            }
+            case tuple is BoundTupleElementAccessExpression {
+                return AddressOperandCannotThrow(tuple.Receiver)
+            }
+            default {
+                return false
+            }
+        }
+    }
 
     private func ExpressionCannotThrow(expression BoundExpression?) bool {
         if expression == nil {
@@ -2830,6 +3332,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         switch expression {
             case BoundLiteralExpression, BoundDefaultExpression, BoundVariableExpression, BoundUtf8StringExpression {
                 return true
+            }
+            case addr is BoundAddressOfExpression {
+                return AddressOperandCannotThrow(addr.Operand)
             }
             case assign is BoundAssignmentExpression {
                 return ExpressionCannotThrow(assign.Expression)
@@ -2931,27 +3436,20 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         return Binder.IsReferenceTypeForConstraint(current)
     }
 
-    private func UpdatePointsTo(
+    private func SetPointsTo(
         target VariableSymbol,
-        expression BoundExpression,
+        targets HashSet[VariableSymbol],
         state Dictionary[VariableSymbol, HashSet[VariableSymbol]],
-        interesting HashSet[VariableSymbol],
         exceptionalUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
     ) {
-        let collector = PointerTargetCollector()
-        collector.Visit(expression)
-        let resolved = HashSet[VariableSymbol]()
-        for referenced in collector.Targets {
-            if !object.ReferenceEquals(referenced, target) && interesting.Contains(referenced) &&
-                (TypeSymbol.IsByRefLike(referenced.Type) || IsNativeRefAlias(referenced)) {
-                resolved.Add(referenced)
-            }
-            if state.TryGetValue(referenced, out var transitive) {
-                resolved.UnionWith(transitive)
+        let filtered = HashSet[VariableSymbol]()
+        for item in targets {
+            if !object.ReferenceEquals(item, target) {
+                filtered.Add(item)
             }
         }
-        if resolved.Count > 0 {
-            state[target] = resolved
+        if filtered.Count > 0 {
+            state[target] = filtered
         } else {
             state.Remove(target)
         }
@@ -3177,7 +3675,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         let catchEntryPointsTo = Dictionary[BoundCatchClause, Dictionary[VariableSymbol, HashSet[VariableSymbol]]](
             ReferenceEqualityComparer.Instance
         )
-        let handlerDispatchState = ClonePointsTo(exceptionalIn)
+        var handlerDispatchState = ClonePointsTo(exceptionalIn)
         for clause in tryStmt.CatchClauses {
             filterEntryPointsTo[clause] = ClonePointsTo(handlerDispatchState)
             let catchIn = ClonePointsTo(handlerDispatchState)
@@ -3185,7 +3683,11 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 PointsToExpressionUpdater(catchIn, interesting, combinedExceptional).VisitExpression(filter)
                 UnionPointsToInto(combinedExceptional, catchIn)
                 // Filter evaluation can return false or throw, carrying mutations to later handlers and finally.
-                UnionPointsToInto(handlerDispatchState, catchIn)
+                if IsCatchAllExceptionType(clause.ExceptionType) && ExpressionCannotThrow(filter) {
+                    handlerDispatchState = ClonePointsTo(catchIn)
+                } else {
+                    UnionPointsToInto(handlerDispatchState, catchIn)
+                }
             }
             catchEntryPointsTo[clause] = ClonePointsTo(catchIn)
             let (catchExit, catchExceptional, catchHasNormalExit, catchGotoExits) = ComputeRegionPointsToSummary(
@@ -3503,14 +4005,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             case vd is BoundVariableDeclaration {
                 {
-                    if vd.Initializer is {} initializer {
-                        PointsToExpressionUpdater(state, interesting, exceptionalUnion, localGotos).VisitExpression(
-                            initializer
-                        )
-                        if vd.Variable.Type is ByRefTypeSymbol || IsNativeRefAlias(vd.Variable) {
-                            UpdatePointsTo(vd.Variable, initializer, state, interesting, exceptionalUnion)
-                        }
-                    }
+                    PointsToExpressionUpdater(state, interesting, exceptionalUnion, localGotos).VisitStatement(vd)
                     let changed = ForwardGotoExits(localGotos, pendingIncomingForBlock, labelToBlock, outGotoExits)
                     let falls = !ControlFlowGraph.HasNeverValue(statement)
                     return (falls, changed)

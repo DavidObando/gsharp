@@ -1629,6 +1629,267 @@ run(1).GetAwaiter().GetResult()
 `)
         Assert.Contains(crossArmGotoIntoImpossibleArmUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
         Assert.DoesNotContain(crossArmGotoIntoImpossibleArmUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let blockExprFinallyNormalTryUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+await Task.Delay(1)
+let ignored = {
+    try {
+        Console.WriteLine("ok")
+    } catch when ({
+        c = Counter{Value: 42}
+        false
+    }) { } finally {
+        Console.WriteLine(c.Value)
+    }
+    0
+}
+`)
+        Assert.Contains(blockExprFinallyNormalTryUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(blockExprFinallyNormalTryUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let nestedInitializerEscapingGotoUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+let view readonly span[byte] = u8"hello"
+await Task.Delay(1)
+let ignored = {
+    var inner = {
+        goto useView
+        0
+    }
+    return
+useView:
+    Console.WriteLine(view.Length)
+    0
+}
+`)
+        Assert.Contains(nestedInitializerEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(nestedInitializerEscapingGotoUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let nestedInitializerEscapingGotoOverwrittenSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+await Task.Delay(1)
+let ignored = {
+    var inner = {
+        c = Counter{Value: 42}
+        goto useC
+        0
+    }
+    return
+useC:
+    Console.WriteLine(c.Value)
+    0
+}
+`)
+        Assert.Empty(nestedInitializerEscapingGotoOverwrittenSafe.Diagnostics)
+        Assert.Equal("42\n", nestedInitializerEscapingGotoOverwrittenSafe.Output)
+
+        let sourceDefinedExceptionNamedExceptionSkippedUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+class Exception : System.Exception {
+}
+
+ref struct Counter {
+    var Value int32
+}
+
+var c = Counter{Value: 10}
+await Task.Delay(1)
+try {
+    throw System.InvalidOperationException()
+} catch (ex Exception) when ({
+    c = Counter{Value: 42}
+    false
+}) { } catch {
+    Console.WriteLine(c.Value)
+}
+`)
+        Assert.Contains(
+            sourceDefinedExceptionNamedExceptionSkippedUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS0219"
+        )
+        Assert.DoesNotContain(
+            sourceDefinedExceptionNamedExceptionSkippedUnsafe.Diagnostics,
+            (d Diagnostic) -> d.Id == "GS9998"
+        )
+
+        let conditionalResultBranchPointeeSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    var q = &(if flag {
+        *p
+    } else {
+        p = &c.Value
+        x
+    })
+    await Task.Delay(1)
+    Console.WriteLine(*q)
+}
+
+run(true).GetAwaiter().GetResult()
+`)
+        Assert.Empty(conditionalResultBranchPointeeSafe.Diagnostics)
+        Assert.Equal("1\n", conditionalResultBranchPointeeSafe.Output)
+
+        let conditionalExprBranchPointeeComp = Compilation(SyntaxTree.Parse(SourceText.From(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    var q = if flag {
+        p
+    } else {
+        p = &c.Value
+        (&x)
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*q)
+}
+
+run(true).GetAwaiter().GetResult()
+`)))
+        Assert.Empty(conditionalExprBranchPointeeComp.GetDiagnostics())
+
+        let throwingTernaryAliasSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    let _ = if flag {
+        throw InvalidOperationException()
+    } else {
+        p = &x
+        0
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run(false).GetAwaiter().GetResult()
+`)
+        Assert.Empty(throwingTernaryAliasSafe.Diagnostics)
+        Assert.Equal("1\n", throwingTernaryAliasSafe.Output)
+
+        let throwingNullCoalesceAliasSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(s string?) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    let _ = s ?? ({
+        p = &c.Value
+        throw InvalidOperationException()
+    })
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run("ok").GetAwaiter().GetResult()
+`)
+        // Note: runtime `*p` value across conditional `ref` re-seats (`s ?? ({ p = ... })`
+        // and `p = q` in `RefInitializationHoister`) is tracked separately in #6182.
+        Assert.Empty(throwingNullCoalesceAliasSafe.Diagnostics)
+
+        let declinedCatchAllFilterReseatAliasSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    var q = &x
+    try {
+        throw InvalidOperationException()
+    } catch when ({
+        p = q
+        false
+    }) { } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(declinedCatchAllFilterReseatAliasSafe.Diagnostics)
+
+        let declinedCatchAllFilterAddressReseatSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    try {
+        throw InvalidOperationException()
+    } catch when ({
+        p = &x
+        false
+    }) { } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(declinedCatchAllFilterAddressReseatSafe.Diagnostics)
+        Assert.Equal("1\n", declinedCatchAllFilterAddressReseatSafe.Output)
     }
 
     @Fact

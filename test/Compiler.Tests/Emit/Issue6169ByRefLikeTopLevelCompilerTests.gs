@@ -477,6 +477,46 @@ try {
         let filterAndImpossibleOutput = fixture.Run(filterAndImpossiblePatternSafeAssembly)
         Assert.StartsWith("5,", filterAndImpossibleOutput)
         Assert.EndsWith("\n88\n", filterAndImpossibleOutput)
+
+        let throwingAliasAndFilterReseatSafeAssembly = fixture.Compile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func checkThrowingAndFilterReseat(flag bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    let _ = if flag {
+        throw InvalidOperationException()
+    } else {
+        p = &x
+        0
+    }
+    p = &c.Value
+    try {
+        throw InvalidOperationException()
+    } catch when ({
+        p = &x
+        false
+    }) { } catch { }
+    var p2 = &x
+    var q2 = &(if !flag {
+        *p2
+    } else {
+        p2 = &c.Value
+        x
+    })
+    await Task.Delay(1)
+    Console.WriteLine("${*p},${*q2}")
+}
+
+checkThrowingAndFilterReseat(false).GetAwaiter().GetResult()
+`, "top-level-throwing-alias-and-filter-reseat-safe", executable: true)
+        IlVerifier.Verify(throwingAliasAndFilterReseatSafeAssembly)
+        Assert.Equal("1,1\n", fixture.Run(throwingAliasAndFilterReseatSafeAssembly))
     }
 
     shared {
