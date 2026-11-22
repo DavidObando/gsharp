@@ -11482,7 +11482,10 @@ internal partial class StatementBinder {
         if !TypeSymbol.IsByRefLike(elementType) {
             return
         }
-        if !isDiscard && (function == nil || function!!.IsTopLevelEntryPoint) {
+        // ADR-0228 / #6169: executable top-level bindings live in entry-point
+        // locals on <Main>$; only entry-point-less contexts (function == nil
+        // or library compilations) reject them with GS0219.
+        if !isDiscard && (function == nil || (function!!.IsTopLevelEntryPoint && binderCtx.IsLibrary)) {
             Diagnostics.ReportByRefLikeEscape(
                 identifier.Location,
                 elementType,

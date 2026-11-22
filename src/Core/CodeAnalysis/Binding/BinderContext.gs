@@ -271,6 +271,9 @@ internal class BinderContext {
         default: argument
     }
 
+    /// True when the active compilation targets a library (no executable entry point).
+    internal var IsLibrary bool
+
     internal var SourceNullableConstraintDepth int32
     internal let PendingSourceNullableAnnotations List[
         (Location TextLocation, Parameter TypeParameterSymbol, CanonicalParameter TypeParameterSymbol, IsOperator bool)

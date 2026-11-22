@@ -388,6 +388,8 @@ internal partial class ExpressionBinder {
                         implicitProp.StructType,
                         implicitProp.Property
                     )
+                } else if TryRejectNonHoistedGlobalAccess(variable, leftName.IdentifierToken.Location) {
+                    return BoundErrorExpression(nil)
                 } else {
                     // Preserve the name anchor when this fast path bypasses
                     // BindExpression, so semantic lookup sees the selected local.
