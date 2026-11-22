@@ -159,11 +159,11 @@ open class WorkspaceState {
     /// @param project The project to get references for.
     /// @returns The list of referenced (cref:ProjectState) instances.
     func GetReferencedProjects(project ProjectState?) IReadOnlyList[ProjectState] {
-        if project?.ProjectReferences == nil || project!!.ProjectReferences.Count == 0 {
+        if project?.ProjectReferences == nil || project.ProjectReferences.Count == 0 {
             return Array.Empty[ProjectState]()
         }
         let result = List[ProjectState]()
-        for refPath in project!!.ProjectReferences {
+        for refPath in project.ProjectReferences {
             let refProject ProjectState? = GetProject(refPath)
             if refProject != nil {
                 result.Add(refProject)

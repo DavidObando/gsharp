@@ -590,7 +590,7 @@ internal partial class MethodBodyEmitter {
                 getterHandle = this
                     .outer
                     .userTokens
-                    .ResolveUserPropertyAccessorToken(declaringStruct!!, field.Property!!, wantSetter: false)
+                    .ResolveUserPropertyAccessorToken(declaringStruct, field.Property!!, wantSetter: false)
             } else {
                 throw InvalidOperationException(
                     "Property pattern property '${field.Property!!.Name}' has no emitted getter."

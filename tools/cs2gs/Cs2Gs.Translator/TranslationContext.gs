@@ -540,9 +540,9 @@ class TranslationContext {
         }
         let key = (
             diagnostic.DiagnosticId,
-            location!!.SourceTree,
-            location!!.SourceSpan.Start,
-            location!!.SourceSpan.Length,
+            location.SourceTree,
+            location.SourceSpan.Start,
+            location.SourceSpan.Length,
             discriminator,
             if diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId {
                 diagnostic.Message

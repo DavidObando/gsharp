@@ -146,7 +146,7 @@ let found = Enumerable.Contains(s, 2)
     }
 
     private class SingleComparer[T] : IComparer[T] {
-        func Compare(x T?, y T?) int32 -> 0
+        func Compare(x T, y T) int32 -> 0
     }
 
     private shared class InferenceFixture {

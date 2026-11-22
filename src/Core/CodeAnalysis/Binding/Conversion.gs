@@ -1554,7 +1554,7 @@ class Conversion {
             // delegate types alike).
             if from is FunctionTypeSymbol fnSource &&
                 to?.ClrType != nil &&
-                IsFunctionToDelegateConvertible(fnSource, to.ClrType!!, to) {
+                IsFunctionToDelegateConvertible(fnSource, to.ClrType, to) {
                 return Conversion.Implicit
             }
             // ADR-0059 / issue #255: same rule for user-declared named delegate
@@ -1579,7 +1579,7 @@ class Conversion {
             // instance) and a named/generic CLR delegate value such as
             // `Func[string]`. At the IL level this is a plain reference upcast,
             // so EMIT needs no conversion opcode.
-            if to?.ClrType != nil && IsSystemDelegateBaseType(to.ClrType!!) {
+            if to?.ClrType != nil && IsSystemDelegateBaseType(to.ClrType) {
                 if from is FunctionTypeSymbol {
                     return Conversion.Implicit
                 }
@@ -2183,7 +2183,7 @@ class Conversion {
             // remain invariant, while IEnumerable/IReadOnlyList/
             // IReadOnlyCollection widen safely. This guard prevents CLR array
             // covariance from admitting any broader mutable conversion below.
-            if from is SliceTypeSymbol sliceForIface && to?.ClrType != nil && to.ClrType!!.IsInterface {
+            if from is SliceTypeSymbol sliceForIface && to?.ClrType != nil && to.ClrType.IsInterface {
                 if (sliceForIface.ClrType != nil && SliceImplementsInterface(sliceForIface, to)) ||
                     SliceConvertsToInterfaceSymbolically(sliceForIface, to) {
                     return Conversion.Implicit
@@ -2193,7 +2193,7 @@ class Conversion {
             // Fixed arrays have the same CLR interface surface as slices. Their
             // element type can remain symbolic while binding, so use the symbolic
             // element check instead of the erased array's object-based interface.
-            if from is ArrayTypeSymbol arrayForIface && to?.ClrType != nil && to.ClrType!!.IsInterface {
+            if from is ArrayTypeSymbol arrayForIface && to?.ClrType != nil && to.ClrType.IsInterface {
                 return if ArrayElementConvertsToInterfaceSymbolically(arrayForIface.ElementType, to) {
                     Conversion.Implicit
                 } else {
@@ -2329,12 +2329,24 @@ class Conversion {
             }
             if from?.ClrType != nil &&
                 to?.ClrType != nil &&
-                !from.ClrType!!.IsValueType &&
-                !to.ClrType!!.IsValueType &&
-                !from.ClrType!!.IsPointer &&
-                !to.ClrType!!.IsPointer &&
-                !from.ClrType!!.IsByRef &&
-                !to.ClrType!!.IsByRef &&
+                !from
+                .ClrType
+                .IsValueType &&
+                !to
+                .ClrType
+                .IsValueType &&
+                !from
+                .ClrType
+                .IsPointer &&
+                !to
+                .ClrType
+                .IsPointer &&
+                !from
+                .ClrType
+                .IsByRef &&
+                !to
+                .ClrType
+                .IsByRef &&
                 ClrTypeUtilities.IsAssignableByName(to.ClrType, from.ClrType) {
                 return Conversion.Implicit
             }
@@ -3701,7 +3713,7 @@ class Conversion {
         /// own `ClrType` is populated during a later phase).
         private func ClrInterfaceMatches(iface InterfaceSymbol, target TypeSymbol?) bool {
             return iface?.ClrType != nil && target?.ClrType != nil && ClrTypeUtilities.IsAssignableByName(
-                target!!.ClrType,
+                target.ClrType,
                 iface.ClrType
             )
         }
@@ -3713,8 +3725,8 @@ class Conversion {
                 return true
             }
             return source?.ClrType != nil && target?.ClrType != nil && ClrTypeUtilities.IsAssignableByName(
-                target!!.ClrType,
-                source!!.ClrType
+                target.ClrType,
+                source.ClrType
             )
         }
 
@@ -7156,7 +7168,7 @@ class Conversion {
             if type is TupleTypeSymbol {
                 return true
             }
-            return type?.ClrType != nil && type!!.ClrType!!.IsValueType
+            return type?.ClrType != nil && type.ClrType.IsValueType
         }
 
         private func IsValueTypeAssignableToInterface(from TypeSymbol?, to TypeSymbol?) bool {
@@ -7391,7 +7403,7 @@ class Conversion {
                 }
                 if !string.Equals(
                     iface.GetGenericTypeDefinition().FullName,
-                    toOpen!!.FullName,
+                    toOpen.FullName,
                     StringComparison.Ordinal
                 ) {
                     continue

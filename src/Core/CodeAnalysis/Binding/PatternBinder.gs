@@ -790,8 +790,8 @@ internal class PatternBinder {
             let importedBase = TypeMemberModel.GetNearestImportedBase(structType)
             if importedBase?.ClrType != nil &&
                 TryBindClrPropertyPatternMember(
-                importedBase!!,
-                importedBase!!.ClrType!!,
+                importedBase,
+                importedBase.ClrType,
                 syntax,
                 bindingContext,
                 preferTypeNames,

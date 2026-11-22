@@ -431,7 +431,7 @@ internal shared class CrossAssemblyDefinitionResolver {
                 .ToArray()
             let best = SelectMatchingMethod(candidates, method) ?? candidates.FirstOrDefault()
             if best?.Declaration != nil {
-                location = ToLocation(best!!.Declaration!!.Identifier)
+                location = ToLocation(best.Declaration!!.Identifier)
                 return location != nil
             }
         }
@@ -444,7 +444,7 @@ internal shared class CrossAssemblyDefinitionResolver {
                 )
             )
             if match?.Declaration != nil {
-                location = ToLocation(match!!.Declaration!!.Identifier)
+                location = ToLocation(match.Declaration!!.Identifier)
                 return location != nil
             }
         }
@@ -471,7 +471,7 @@ internal shared class CrossAssemblyDefinitionResolver {
             (p PropertySymbol) -> p.Declaration != nil && string.Equals(p.Name, propertyName, StringComparison.Ordinal)
         )
         if property?.Declaration != nil {
-            location = ToLocation(property!!.Declaration!!.Identifier)
+            location = ToLocation(property.Declaration!!.Identifier)
             return location != nil
         }
         return false
@@ -520,7 +520,7 @@ internal shared class CrossAssemblyDefinitionResolver {
             (e EventSymbol) -> e.Declaration != nil && string.Equals(e.Name, eventName, StringComparison.Ordinal)
         )
         if match?.Declaration != nil {
-            location = ToLocation(match!!.Declaration!!.Identifier)
+            location = ToLocation(match.Declaration!!.Identifier)
             return location != nil
         }
         return false

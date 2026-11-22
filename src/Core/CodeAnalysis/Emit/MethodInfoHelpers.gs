@@ -42,7 +42,7 @@ internal shared class MethodInfoHelpers {
                     owner.Definition ?? owner,
                     implementer.Definition ?? implementer
                 ) {
-                    methods.Add(method!!)
+                    methods.Add(method)
                 }
             }
             let AddProperty = func (property PropertySymbol?, needsGetter bool, needsSetter bool) {

@@ -47,7 +47,7 @@ gsc Program.gs /out:bin/App.dll /debug:portable /pdb:bin/App.pdb
 The SDK maps standard .NET debug properties to the same compiler flags.
 
 ```xml title="MyApp.gsproj"
-<Project Sdk="Gsharp.NET.Sdk/0.5.212">
+<Project Sdk="Gsharp.NET.Sdk/0.5.767">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -58,6 +58,12 @@ The SDK maps standard .NET debug properties to the same compiler flags.
 ```
 
 Use `<DebugType>embedded</DebugType>` and `<EmbedAllSources>true</EmbedAllSources>` only when you deliberately want a self-contained debug artifact. Embedding source is off by default because it places raw source bytes in the symbol data.
+
+### Source Link
+
+The SDK uses standard .NET Source Link generation for supported Git hosts. The PDB contains commit-specific source URLs without source file contents. Use the [SDK publishing instructions](./sdk-projects.md#source-link) to distribute repository metadata and matching symbols.
+
+The debugger must support Source Link and permit source downloads. The referenced commit must contain the source bytes that match the PDB hash. Source Link does not make a private repository public.
 
 ## Source matching requirements
 

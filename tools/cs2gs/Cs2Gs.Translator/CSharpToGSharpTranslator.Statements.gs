@@ -5190,7 +5190,7 @@ partial class CSharpToGSharpTranslator {
             if startStatement?.Parent is not BlockSyntax block || useStatement?.Parent != block {
                 return false
             }
-            let startIndex = block.Statements.IndexOf(startStatement!!)
+            let startIndex = block.Statements.IndexOf(startStatement)
             let useIndex = block.Statements.IndexOf(useStatement!!)
             if startIndex < 0 || useIndex <= startIndex {
                 return false
@@ -5431,7 +5431,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 var operation IOperation? = this.context.SemanticModel.GetOperation(expression)
                 while operation?.Parent != nil {
-                    operation = operation!!.Parent
+                    operation = operation.Parent
                 }
                 return switch operation {
                     case block is IBlockOperation: ControlFlowGraph.Create(block)
@@ -5445,7 +5445,7 @@ partial class CSharpToGSharpTranslator {
                 let expression = primaryBase.ArgumentList.Arguments.First().Expression
                 var operation IOperation? = this.context.SemanticModel.GetOperation(expression)
                 while operation?.Parent != nil {
-                    operation = operation!!.Parent
+                    operation = operation.Parent
                 }
                 return switch operation {
                     case body is IConstructorBodyOperation: ControlFlowGraph.Create(body)

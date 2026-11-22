@@ -191,7 +191,7 @@ class GapLedger {
                             TriageSerialization.Options
                         )
                         if artifact?.Fingerprint != nil {
-                            artifacts.Add(artifact!!)
+                            artifacts.Add(artifact)
                         }
                     } catch (JsonException) { } catch (IOException) { }
                 }

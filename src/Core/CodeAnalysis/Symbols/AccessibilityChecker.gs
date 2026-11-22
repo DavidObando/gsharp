@@ -313,7 +313,7 @@ internal shared class AccessibilityChecker {
     internal func NormalizeAccessContext(
         currentFunction FunctionSymbol?
     ) FunctionSymbol? -> if currentFunction?.LocalDeclaration != nil &&
-        !currentFunction!!.HasNonGenericLexicalOwner {
+        !currentFunction.HasNonGenericLexicalOwner {
         default(FunctionSymbol?)
     } else {
         currentFunction
