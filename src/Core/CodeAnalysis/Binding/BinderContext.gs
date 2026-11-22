@@ -199,8 +199,19 @@ internal class BinderContext {
             callee() is {} load &&
             !(load is BoundErrorExpression) {
             // A member load has no anchor of its own; the failed call is not in the tree, so its
-            // callee is not anchored later.
-            load.AnchorSyntax(call.Identifier)
+            // callee is not anchored later. The read under a conversion or a null assertion (a
+            // narrowed read) is anchored at the identifier too; the receiver keeps its own anchor.
+            var anchored BoundExpression? = load
+            while anchored != nil {
+                anchored.AnchorSyntax(call.Identifier)
+                anchored = switch anchored {
+                    case conversion is BoundConversionExpression: conversion.Expression
+                    case assertion is BoundUnaryExpression when assertion
+                        .Op
+                        .Kind == BoundUnaryOperatorKind.NullAssertion: assertion.Operand
+                    default: default(BoundExpression?)
+                }
+            }
             error.FailedCallee = load
         }
     }

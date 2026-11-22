@@ -77,6 +77,7 @@ open class Issue6189FunctionValueCalleeTests {
     ) // a CLR delegate field
     @InlineData("c.Inner.G(x, 2)", "c.Inner.G(x)", "G", "FieldSymbol", "(int32) -> int32", "GS0144") // a longer chain
     @InlineData("G(x, a: 2)", "G(x)", "G", "FieldSymbol", "(int32) -> int32", "GS0144") // a named argument
+    @InlineData("c.Z(x)", "c.Z()", "Z", "FieldSymbol", "() -> int32", "GS0144") // no parameters
     func FailedCallThroughAMemberFunctionValue_CalleeAnswersTheMember(
         failed string,
         bound string,
@@ -149,8 +150,8 @@ open class Issue6189FunctionValueCalleeTests {
         let (model, tree, compilation) = CreateModel(MemberTemplate.Replace("@@CALL", "W(x, 2)"))
         Assert.Equal(
             []string{
-                "GS0127 Error 393..394 Variable 'W' is read-only and cannot be assigned to.",
-                "GS0144 Error 393..394 Function 'W' requires 1 arguments but was given 2."
+                "GS0127 Error 425..426 Variable 'W' is read-only and cannot be assigned to.",
+                "GS0144 Error 425..426 Function 'W' requires 1 arguments but was given 2."
             },
             compilation.GetDiagnostics().Select(Describe).ToArray()
         )
@@ -272,10 +273,11 @@ open class Issue6189FunctionValueCalleeTests {
     @InlineData("c.G.Invoke(x).G()", "G") // the same, where the method has the field's name
     @InlineData("d.G?.G(x)", "G") // an ordinary `?.` access of a method with the field's name
     @InlineData("d.G!!.G(x)", "G")
+    @InlineData("c.G.Invoke(x).c.G()", "G") // a member of the result with the receiver's name
     func MethodWithTheNameOfAFunctionValueInTheChain_AnswersTheMethod(statement string, method string) {
-        // Only a call that directly follows the load's receiver invokes the load.
+        // Only the call that invokes the field's load answers the field.
         let (model, tree, compilation) = CreateModel(
-            "package P\n\nclass R {\n    func G(v int32) int32 -> v\n    func G() int32 -> 0\n    func M() int32 -> 0\n}\n\nclass C {\n    var G (int32) -> R = (v int32) -> R()\n}\n\nclass D {\n    var G R? = nil\n}\n\nfunc F(c C, d D) {\n    let x = 1\n    let k = " +
+            "package P\n\nclass S {\n    func G() int32 -> 0\n}\n\nclass R {\n    var c S = S()\n    func G(v int32) int32 -> v\n    func G() int32 -> 0\n    func M() int32 -> 0\n}\n\nclass C {\n    var G (int32) -> R = (v int32) -> R()\n}\n\nclass D {\n    var G R? = nil\n}\n\nfunc F(c C, d D) {\n    let x = 1\n    let k = " +
                 statement +
                 "\n}\n"
         )
@@ -288,6 +290,18 @@ open class Issue6189FunctionValueCalleeTests {
             .Identifier
         Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(token).Symbol)
         Assert.Null(model.GetTypeInfo(token).Type)
+    }
+
+    @Fact
+    func FailedCallThroughANarrowedNullableFunctionPointerMember_CalleeAnswersAsInACallThatBinds() {
+        // The narrowed read of a nullable function pointer is unwrapped under a null assertion; the
+        // failed call anchors the whole load, so the field answers.
+        AssertCalleeAnswersAsInACallThatBinds(
+            "package P\n\nclass H {\n    let Fp (unmanaged[Cdecl] () -> int32)? = nil\n}\n\nfunc F(h H) {\n    let x = 1\n    if h.Fp != nil {\n        let k = @@CALL\n    }\n}\n",
+            "h.Fp(x)",
+            "h.Fp()",
+            "GS0144"
+        )
     }
 
     @Fact
@@ -326,7 +340,7 @@ open class Issue6189FunctionValueCalleeTests {
     }
 
     shared {
-        private const MemberTemplate string = "package P\n\nimport System\n\nclass C {\n    var G (int32) -> int32 = (v int32) -> v\n    var N ((int32) -> int32)? = nil\n    var D Func[int32, int32] = (v int32) -> v\n    prop P (int32) -> int32 {\n        get { return (v int32) -> v }\n    }\n    prop Inner C {\n        get { return this }\n    }\n    prop W (int32) -> int32 {\n        set { }\n    }\n    func M(c C) {\n        let x = 1\n        let k = @@CALL\n    }\n}\n"
+        private const MemberTemplate string = "package P\n\nimport System\n\nclass C {\n    var G (int32) -> int32 = (v int32) -> v\n    var Z () -> int32 = () -> 0\n    var N ((int32) -> int32)? = nil\n    var D Func[int32, int32] = (v int32) -> v\n    prop P (int32) -> int32 {\n        get { return (v int32) -> v }\n    }\n    prop Inner C {\n        get { return this }\n    }\n    prop W (int32) -> int32 {\n        set { }\n    }\n    func M(c C) {\n        let x = 1\n        let k = @@CALL\n    }\n}\n"
 
         private func AssertCalleeAnswersAsInACallThatBinds(
             template string,
