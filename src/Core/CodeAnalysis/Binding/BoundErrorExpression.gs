@@ -88,6 +88,27 @@ class BoundErrorExpression : BoundExpression {
         !FailedArguments.IsDefaultOrEmpty
 
     shared {
+        /// Finds the error of a failed call through the wrappers a call bind can put around it: a
+        /// block that saves a native-slice receiver, a conversion, a suspending call's logical
+        /// operand.
+        /// @param bound The bound expression.
+        /// @returns The error, or null when [`bound`](paramref) is not a failed call.
+        internal func FindFailedCall(bound BoundExpression) BoundErrorExpression? {
+            var node BoundExpression? = bound
+            for var depth = 0; depth < 8 && node != nil; depth++ {
+                if node is BoundErrorExpression error {
+                    return error
+                }
+                node = switch node {
+                    case logical is BoundExpression{LogicalCompletionOperand: {} operand}: operand
+                    case block is BoundBlockExpression: block.Expression
+                    case conversion is BoundConversionExpression: conversion.Expression
+                    default: default(BoundExpression?)
+                }
+            }
+            return nil
+        }
+
         /// Creates the error of a member access whose member did not bind, keeping its receiver.
         /// @param receiver The bound receiver, or null.
         /// @param receiverSyntax The receiver's syntax, when the receiver does not carry it.
@@ -108,11 +129,11 @@ class BoundErrorExpression : BoundExpression {
         internal func WithFailedOperands(left BoundExpression, right BoundExpression? = nil) BoundErrorExpression {
             let error = BoundErrorExpression(nil)
             var builder ImmutableArray[BoundErrorExpression].Builder? = nil
-            if left is BoundErrorExpression leftError && leftError.HasFailedRecords {
+            if FindFailedCall(left) is {HasFailedRecords: true} leftError {
                 builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
                 builder.Add(leftError)
             }
-            if right is BoundErrorExpression rightError && rightError.HasFailedRecords {
+            if right != nil && FindFailedCall(right) is {HasFailedRecords: true} rightError {
                 builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
                 if !builder.Contains(rightError) {
                     builder.Add(rightError)

@@ -1522,6 +1522,7 @@ internal partial class ExpressionBinder {
         receiverStart int32? = nil
     ) BoundExpression {
         let frame = CallCandidateRecorder.Begin(ce, receiver?.Type ?? classSymbol?.SymbolicReceiver)
+        binderCtx.ExpectCallArguments(ce.Arguments)
         try {
             var bound = BindAccessorCallWithReceiver(receiver, classSymbol, ce, receiverSyntax, receiverStart)
             if verifyCallArgumentsAfterConversions != nil {

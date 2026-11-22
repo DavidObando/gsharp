@@ -719,6 +719,7 @@ internal partial class OverloadResolver {
     /// @returns The bound call or conversion.
     func BindCallExpression(syntax CallExpressionSyntax, resolvedType TypeSymbol? = nil) BoundExpression {
         let frame = CallCandidateRecorder.Begin(syntax)
+        binderCtx.ExpectCallArguments(syntax.Arguments)
         try {
             var bound = BindCallExpressionCore(syntax, resolvedType)
             if verifyCallArgumentsAfterConversions != nil {

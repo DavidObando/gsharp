@@ -91,6 +91,27 @@ internal class BinderContext {
     /// not shared between threads.
     private var callArguments Dictionary[SyntaxNode, BoundExpression]?
 
+    /// The arguments of calls being bound whose argument list is not their syntax parent: a call
+    /// the binder synthesized over source expressions (the `Add` of a collection initializer).
+    private var expectedArguments HashSet[SyntaxNode]?
+
+    /// Declares the arguments of a call about to be bound, so they are recorded even when the call
+    /// is not their syntax parent (a synthesized call over source expressions, #6150).
+    /// @param arguments The call's argument list.
+    internal func ExpectCallArguments(arguments SeparatedSyntaxList[ExpressionSyntax]) {
+        if arguments.Count == 0 {
+            return
+        }
+        let expected = expectedArguments ?? HashSet[SyntaxNode](ReferenceEqualityComparer.Instance)
+        expectedArguments = expected
+        for argument in arguments {
+            let value = ArgumentValue(argument)
+            if !(value.Parent is CallExpressionSyntax or NamedArgumentExpressionSyntax) {
+                let _ = expected.Add(value)
+            }
+        }
+    }
+
     /// Remembers [`bound`](paramref) when [`syntax`](paramref) is a call argument, so a call that
     /// fails keeps it for the semantic model (#6150). The record is keyed by the argument as the
     /// argument list holds it (inside a named argument), reached from its operand through
@@ -109,7 +130,8 @@ internal class BinderContext {
         if argument.Parent is {} wrapper and (NamedArgumentExpressionSyntax or NamedTupleElementSyntax) {
             listed = wrapper
         }
-        if listed.Parent is not(CallExpressionSyntax or BaseInterfaceCallExpressionSyntax) {
+        let expected = expectedArguments?.Contains(argument) == true
+        if !expected && listed.Parent is not(CallExpressionSyntax or BaseInterfaceCallExpressionSyntax) {
             return
         }
         // The callee of an indirect call (`(f)(x)`) is a child of the call too, but not an argument.
@@ -157,7 +179,12 @@ internal class BinderContext {
         receiverSyntax SyntaxNode? = nil
     ) {
         var failed ImmutableArray[BoundExpression].Builder? = nil
-        let error = FailedCallError(bound)
+        let error = BoundErrorExpression.FindFailedCall(bound)
+        if expectedArguments is {Count: > 0} expected {
+            for argument in arguments {
+                let _ = expected.Remove(ArgumentValue(argument))
+            }
+        }
         if callArguments is {Count: > 0} table {
             for argument in arguments {
                 if !table.Remove(ArgumentValue(argument), out var argumentBound) {
@@ -179,24 +206,6 @@ internal class BinderContext {
             error.FailedReceiver = receiver
             error.FailedReceiverSyntax = receiverSyntax
         }
-    }
-
-    /// The error of a failed call, through the wrappers a call bind can put around it: a block that
-    /// saves a native-slice receiver, a conversion, a suspending call's logical operand.
-    private func FailedCallError(bound BoundExpression) BoundErrorExpression? {
-        var node BoundExpression? = bound
-        for var depth = 0; depth < 8 && node != nil; depth++ {
-            if node is BoundErrorExpression error {
-                return error
-            }
-            node = switch node {
-                case logical is BoundExpression{LogicalCompletionOperand: {} operand}: operand
-                case block is BoundBlockExpression: block.Expression
-                case conversion is BoundConversionExpression: conversion.Expression
-                default: default(BoundExpression?)
-            }
-        }
-        return nil
     }
 
     private func ArgumentValue(argument ExpressionSyntax) ExpressionSyntax -> switch argument {

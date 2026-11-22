@@ -199,11 +199,14 @@ open class Issue6150FailedCallArgumentTests {
         Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(x).Type)
     }
 
-    @Fact
-    func FailedNativeSliceCall_ArgumentAndReceiverAnswer() {
+    @Theory
+    @InlineData("let k = s.Missing(x)")
+    @InlineData("let k = s.Missing(x) + 1") // the failed call is a binary operand
+    @InlineData("let k = -s.Missing(x)") // the failed call is a unary operand
+    func FailedNativeSliceCall_ArgumentAndReceiverAnswer(statement string) {
         // A call on a native slice saves the receiver in a block around the call.
         let (model, tree, compilation) = CreateModel(
-            "package P\n\nfunc F() {\n    let x = 1\n    let s = slice[int32]{1, 2}\n    let k = s.Missing(x)\n}\n"
+            "package P\n\nfunc F() {\n    let x = 1\n    let s = slice[int32]{1, 2}\n    " + statement + "\n}\n"
         )
         Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
         let x = Assert.Single(Names(tree, "x"))
@@ -254,6 +257,19 @@ open class Issue6150FailedCallArgumentTests {
         let k = Assert.Single(Names(tree, "k"))
         Assert.Equal("k", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(k).Symbol).Name)
         Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(k).Type)
+    }
+
+    @Fact
+    func FailedCollectionInitializerAdd_ElementAnswers() {
+        // The initializer binds a synthesized `Add(x)` whose argument's syntax parent is the
+        // initializer, not a call.
+        let (model, tree, compilation) = CreateModel(
+            "package P\n\nimport System.Collections.Generic\n\nfunc F(x string) {\n    let items = List[int32]() { x }\n}\n"
+        )
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let x = Assert.Single(Names(tree, "x"))
+        Assert.Equal("x", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(x).Symbol).Name)
+        Assert.Same(TypeSymbol.String, model.GetTypeInfo(x).Type)
     }
 
     @Fact
