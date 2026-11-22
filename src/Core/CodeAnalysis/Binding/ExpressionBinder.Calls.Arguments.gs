@@ -617,9 +617,17 @@ internal partial class ExpressionBinder {
             return false
         }
         memberLoad = ApplyCallableMemberNarrowing(memberLoad)
-        // A call that fails keeps the member's load for the semantic model (#6189).
+        // A call that fails keeps the member's load for the semantic model, prepared as a call that
+        // binds prepares it (#6189). The record is dropped if the member is not invoked after all.
         let calleeLoad = memberLoad
-        binderCtx.RecordCallCallee(ce, () -> calleeLoad)
+        binderCtx.RecordCallCallee(
+            ce,
+            () -> if ce.NullableQuestionToken == nil {
+                PlatformCoercion.CheckDelegateInvocationTarget(calleeLoad, ce.Identifier.Location)
+            } else {
+                calleeLoad
+            }
+        )
         if matchedProperty != nil {
             lastSelectedCallablePropertyLoad = memberLoad
         }
@@ -719,9 +727,11 @@ internal partial class ExpressionBinder {
             // delegate.
             if !TryBindAmbiguousBracketAsIndex(ce, memberLoad, out var indexedValue) ||
                 indexedValue.Type is not{} indexedType {
+                binderCtx.ForgetCallCallee(ce)
                 return false
             }
             if !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(indexedType, out functionType) {
+                binderCtx.ForgetCallCallee(ce)
                 return false
             }
             memberLoad = indexedValue

@@ -897,19 +897,32 @@ internal partial class OverloadResolver {
     }
 
     /// Builds the load of the callee of a call through a function value that failed, for the
-    /// semantic model only (#6189). The call has reported its error, so the diagnostics of the load
-    /// are dropped.
+    /// semantic model only (#6189), as a call that binds builds it: a nullable value called with
+    /// `?(...)` is read without its narrowing, and any other is checked as a delegate invocation
+    /// target. The call has reported its error, so the diagnostics of the load are dropped.
     /// @param variable The callee variable.
-    /// @param identifier The callee name.
+    /// @param syntax The call.
     /// @param narrowedType The active narrowed type, or `null`.
     /// @returns The callee load, or null when the load fails.
     private func BuildFailedCalleeLoad(
         variable VariableSymbol,
-        identifier SyntaxToken,
+        syntax CallExpressionSyntax,
         narrowedType TypeSymbol?
     ) BoundExpression? {
+        let nullSafe = syntax.NullableQuestionToken != nil
         let mark = Diagnostics.Count
-        let load = BuildCalleeLoad(variable, identifier, narrowedType)
+        var load = BuildCalleeLoad(
+            variable,
+            syntax.Identifier,
+            if nullSafe && variable.Type is NullableTypeSymbol {
+                default(TypeSymbol?)
+            } else {
+                narrowedType
+            }
+        )
+        if !nullSafe && !(load is BoundErrorExpression) {
+            load = PlatformCoercion.CheckDelegateInvocationTarget(load, syntax.Identifier.Location)
+        }
         Diagnostics.TruncateTo(mark)
         return if load is BoundErrorExpression {
             default(BoundExpression?)

@@ -1609,7 +1609,7 @@ internal partial class OverloadResolver {
         if symbol is VariableSymbol calleeVariable {
             binderCtx.RecordCallCallee(
                 syntax,
-                () -> BuildFailedCalleeLoad(calleeVariable, syntax.Identifier, narrowedCallTargetType)
+                () -> BuildFailedCalleeLoad(calleeVariable, syntax, narrowedCallTargetType)
             )
         }
         // ADR-0122 §9 / issues #1035 and #3523: invoking a function-pointer-

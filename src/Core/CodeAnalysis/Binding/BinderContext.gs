@@ -112,6 +112,13 @@ internal class BinderContext {
         table[call] = callee
     }
 
+    /// Forgets the callee recorded for [`call`](paramref) when the binder does not invoke it after
+    /// all (#6189).
+    /// @param call The call.
+    internal func ForgetCallCallee(call CallExpressionSyntax) {
+        let _ = callCallees?.Remove(call)
+    }
+
     /// Declares the arguments of a call about to be bound, so they are recorded even when the call
     /// is not their syntax parent (a synthesized call over source expressions, #6150).
     /// @param arguments The call's argument list.

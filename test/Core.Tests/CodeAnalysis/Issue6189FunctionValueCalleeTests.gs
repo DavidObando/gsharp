@@ -27,6 +27,11 @@ open class Issue6189FunctionValueCalleeTests {
     @InlineData("n?(x, 2)", "n?(x)", "GS0144") // a nullable value called with `?(...)`
     @InlineData("n(x)", "n?(x)", "GS0503") // a nullable value called without `?(...)`
     @InlineData(
+        "0\n    if n != nil {\n        let j = n?(x, 2)\n    }",
+        "0\n    if n != nil {\n        let j = n?(x)\n    }",
+        "GS0144"
+    ) // a narrowed nullable value called with `?(...)`
+    @InlineData(
         "0\n    if n != nil {\n        let j = n(x, 2)\n    }",
         "0\n    if n != nil {\n        let j = n(x)\n    }",
         "GS0144"
@@ -219,6 +224,59 @@ open class Issue6189FunctionValueCalleeTests {
         }
         let x = Assert.Single(Names(tree, "x"))
         Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(x).Symbol).Name)
+    }
+
+    @Theory
+    @InlineData("f(x, 2)", "f(x)", "GS0144") // an oblivious parameter
+    @InlineData("G(x, 2)", "G(x)", "GS0144") // an oblivious implicit field
+    func FailedCallThroughAnObliviousFunctionValue_CalleeAnswersAsInACallThatBinds(
+        failed string,
+        bound string,
+        diagnostic string
+    ) {
+        // The callee of a call that binds is checked as a delegate invocation target, which unwraps
+        // the platform type (the default nullability mode); the callee of a failed call is prepared
+        // the same way.
+        AssertCalleeAnswersAsInACallThatBinds(
+            "package P\n\nclass C {\n    @Oblivious var G (int32) -> int32 = (v int32) -> v\n    func F(@Oblivious f (int32) -> int32) {\n        let x = 1\n        let k = @@CALL\n    }\n}\n",
+            failed,
+            bound,
+            diagnostic
+        )
+    }
+
+    @Fact
+    func MemberCallOnTheResultOfAFunctionValueWithTheSameName_AnswersTheMethod() {
+        // Both calls are named `G`; the field's load answers only the call that invokes it.
+        let (model, tree, compilation) = CreateModel(
+            "package P\n\nclass R {\n    func G() int32 -> 0\n}\n\nclass C {\n    var G (int32) -> R = (v int32) -> R()\n}\n\nfunc F(c C) {\n    let x = 1\n    let k = c.G(x).G()\n}\n"
+        )
+        Assert.Empty(compilation.GetDiagnostics())
+        let calls = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .Where((c CallExpressionSyntax) -> c.Identifier.ValueText == "G")
+            .ToArray()
+        Assert.Equal(2, calls.Length)
+        let field = calls.Single((c CallExpressionSyntax) -> c.Arguments.Count == 1).Identifier
+        Assert.IsType[FieldSymbol](model.GetSymbolInfo(field).Symbol)
+        Assert.Equal("(int32) -> R", model.GetTypeInfo(field).Type?.ToString())
+        let method = calls.Single((c CallExpressionSyntax) -> c.Arguments.Count == 0).Identifier
+        Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(method).Symbol)
+        Assert.Null(model.GetTypeInfo(method).Type)
+    }
+
+    @Fact
+    func CallOfANonCallableField_IdentifierAnswersAsBefore() {
+        // The member is not invoked, so the call does not keep it as its callee.
+        let (model, tree, compilation) = CreateModel(
+            "package P\n\nclass C {\n    var N int32\n}\n\nfunc F(c C) {\n    let x = 1\n    let k = c.N(x)\n}\n"
+        )
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let callee = LastCall(tree).Identifier
+        Assert.Null(model.GetSymbolInfo(callee).Symbol)
+        Assert.Null(model.GetTypeInfo(callee).Type)
     }
 
     @Fact
