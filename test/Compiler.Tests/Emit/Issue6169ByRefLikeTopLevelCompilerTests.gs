@@ -194,6 +194,26 @@ Console.WriteLine(*p)
 `, "top-level-reseated-alias-after-await", executable: true)
         IlVerifier.Verify(reseatedAssembly)
         Assert.Equal("42\n1\n", fixture.Run(reseatedAssembly))
+
+        let arrayIndexSafeAssembly = fixture.Compile(`import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var a = []int32{10, 20, 30}
+    var c = Counter{Value: 1}
+    var p = &a[c.Value]
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`, "func-array-index-ref-struct-safe", executable: true)
+        IlVerifier.Verify(arrayIndexSafeAssembly)
+        Assert.Equal("20\n", fixture.Run(arrayIndexSafeAssembly))
     }
 
     shared {

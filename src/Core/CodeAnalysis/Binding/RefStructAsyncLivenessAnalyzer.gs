@@ -574,7 +574,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
     }
 
-    private class PointerTargetCollector : BoundTreeWalker {
+    private class PointerTargetCollector {
         init() {
             Targets = HashSet[VariableSymbol]()
         }
@@ -583,32 +583,68 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             get;
         }
 
-        override func VisitExpression(node BoundExpression?) {
-            if node is BoundVariableExpression variableExpression {
-                Targets.Add(variableExpression.Variable)
+        // Follow only the addressed storage chain (not index or condition sub-expressions),
+        // because scalar indices like `c.Value` in `&a[c.Value]` are evaluated before the
+        // address is taken and do not require `c` to survive suspension.
+        func Visit(node BoundExpression?) {
+            if node == nil {
+                return
             }
-            base.VisitExpression(node)
-        }
-
-        protected override func VisitIndexAssignmentExpression(node BoundIndexAssignmentExpression) {
-            if node.Target != nil {
-                Targets.Add(node.Target)
+            switch node {
+                case variableExpression is BoundVariableExpression {
+                    Targets.Add(variableExpression.Variable)
+                }
+                case addressOf is BoundAddressOfExpression {
+                    Visit(addressOf.Operand)
+                }
+                case dereference is BoundDereferenceExpression {
+                    Visit(dereference.Operand)
+                }
+                case field is BoundFieldAccessExpression {
+                    if field.Receiver != nil {
+                        Visit(field.Receiver)
+                    }
+                }
+                case clrProp is BoundClrPropertyAccessExpression {
+                    if clrProp.Receiver != nil &&
+                        (
+                        clrProp.Member is System.Reflection.FieldInfo || RefCapabilities.IsRefReturningAccess(clrProp)
+                    ) {
+                        Visit(clrProp.Receiver)
+                    }
+                }
+                case tuple is BoundTupleElementAccessExpression {
+                    Visit(tuple.Receiver)
+                }
+                case idx is BoundIndexExpression {
+                    Visit(idx.Target)
+                }
+                case clrIdx is BoundClrIndexExpression {
+                    Visit(clrIdx.Target)
+                }
+                case conditionalAddress is BoundConditionalAddressExpression {
+                    Visit(conditionalAddress.WhenTrueOperand)
+                    Visit(conditionalAddress.WhenFalseOperand)
+                }
+                case conditional is BoundConditionalExpression {
+                    Visit(conditional.WhenTrue)
+                    Visit(conditional.WhenFalse)
+                }
+                case switchExpr is BoundSwitchExpression {
+                    for arm in switchExpr.Arms {
+                        Visit(arm.Result)
+                    }
+                }
+                case conversion is BoundConversionExpression {
+                    Visit(conversion.Expression)
+                }
+                case asExpr is BoundAsExpression {
+                    Visit(asExpr.Expression)
+                }
+                case block is BoundBlockExpression {
+                    Visit(block.Expression)
+                }
             }
-            base.VisitIndexAssignmentExpression(node)
-        }
-
-        protected override func VisitClrIndexAssignmentExpression(node BoundClrIndexAssignmentExpression) {
-            if node.Target != nil {
-                Targets.Add(node.Target)
-            }
-            base.VisitClrIndexAssignmentExpression(node)
-        }
-
-        protected override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
-            if node.Receiver != nil {
-                Targets.Add(node.Receiver)
-            }
-            base.VisitFieldAssignmentExpression(node)
         }
     }
 
@@ -664,6 +700,48 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 RefStructAsyncLivenessAnalyzer.UpdatePointsTo(node.Variable, node.Expression, state, interesting)
             }
         }
+
+        protected override func VisitConditionalExpression(node BoundConditionalExpression) {
+            VisitExpression(node.Condition)
+            let whenTrueState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+            PointsToExpressionUpdater(whenTrueState, interesting).VisitExpression(node.WhenTrue)
+            let whenFalseState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+            PointsToExpressionUpdater(whenFalseState, interesting).VisitExpression(node.WhenFalse)
+            state.Clear()
+            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, whenTrueState)
+            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, whenFalseState)
+        }
+
+        protected override func VisitSwitchExpression(node BoundSwitchExpression) {
+            VisitExpression(node.Discriminant)
+            let joined = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+            for arm in node.Arms {
+                let armState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+                if arm.Guard != nil {
+                    PointsToExpressionUpdater(armState, interesting).VisitExpression(arm.Guard)
+                }
+                PointsToExpressionUpdater(armState, interesting).VisitExpression(arm.Result)
+                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(joined, armState)
+            }
+            state.Clear()
+            RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, joined)
+        }
+
+        protected override func VisitBinaryExpression(node BoundBinaryExpression) {
+            if node
+                .Op
+                .Kind is BoundBinaryOperatorKind.LogicalAnd or
+                BoundBinaryOperatorKind.LogicalOr or
+                BoundBinaryOperatorKind
+                .NullCoalesce {
+                VisitExpression(node.Left)
+                let rightState = RefStructAsyncLivenessAnalyzer.ClonePointsTo(state)
+                PointsToExpressionUpdater(rightState, interesting).VisitExpression(node.Right)
+                RefStructAsyncLivenessAnalyzer.UnionPointsToInto(state, rightState)
+                return
+            }
+            base.VisitBinaryExpression(node)
+        }
     }
 
     private func UpdatePointsTo(
@@ -673,7 +751,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         interesting HashSet[VariableSymbol]
     ) {
         let collector = PointerTargetCollector()
-        collector.VisitExpression(expression)
+        collector.Visit(expression)
         let resolved = HashSet[VariableSymbol]()
         for referenced in collector.Targets {
             if !object.ReferenceEquals(referenced, target) && interesting.Contains(referenced) &&
@@ -741,20 +819,58 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         return true
     }
 
-    private func ComputeRegionExitPointsTo(
+    private func ComputeRegionPointsToSummary(
         regionBody BoundStatement,
         entryPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]?,
         interesting HashSet[VariableSymbol]
-    ) Dictionary[VariableSymbol, HashSet[VariableSymbol]] {
+    )(
+        ExitState Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+        ExceptionalUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]]
+    ) {
         let graph = ControlFlowGraph.Create(Lowerer.Flatten(regionBody))
-        let (_, _, exitState) = ComputeGraphPointsTo(graph, entryPointsTo, interesting)
-        return exitState
+        let (_, _, exitState, exceptionalUnion) = ComputeGraphPointsTo(graph, entryPointsTo, interesting)
+        return (exitState, exceptionalUnion)
+    }
+
+    private func ComputeTryPointsToSummary(
+        tryStmt BoundTryStatement,
+        entryPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]?,
+        interesting HashSet[VariableSymbol]
+    )(
+        ExceptionalIn Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+        FinallyIn Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+        AfterTry Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+        CombinedExceptional Dictionary[VariableSymbol, HashSet[VariableSymbol]]
+    ) {
+        let (tryExit, tryExceptional) = ComputeRegionPointsToSummary(tryStmt.TryBlock, entryPointsTo, interesting)
+        let exceptionalIn = ClonePointsTo(entryPointsTo)
+        UnionPointsToInto(exceptionalIn, tryExceptional)
+        UnionPointsToInto(exceptionalIn, tryExit)
+        let afterTry = ClonePointsTo(tryExit)
+        let combinedExceptional = ClonePointsTo(exceptionalIn)
+        for clause in tryStmt.CatchClauses {
+            let (catchExit, catchExceptional) = ComputeRegionPointsToSummary(clause.Body, exceptionalIn, interesting)
+            UnionPointsToInto(afterTry, catchExit)
+            UnionPointsToInto(combinedExceptional, catchExceptional)
+            UnionPointsToInto(combinedExceptional, catchExit)
+        }
+        let finallyIn = ClonePointsTo(combinedExceptional)
+        UnionPointsToInto(finallyIn, afterTry)
+        var finalState = afterTry
+        if tryStmt.FinallyBlock is {} finallyBlock {
+            let (finallyExit, finallyExceptional) = ComputeRegionPointsToSummary(finallyBlock, finallyIn, interesting)
+            finalState = finallyExit
+            UnionPointsToInto(combinedExceptional, finallyExceptional)
+            UnionPointsToInto(combinedExceptional, finallyExit)
+        }
+        return (exceptionalIn, finallyIn, finalState, combinedExceptional)
     }
 
     private func AdvancePointsToStatement(
         statement BoundStatement,
         state Dictionary[VariableSymbol, HashSet[VariableSymbol]],
-        interesting HashSet[VariableSymbol]
+        interesting HashSet[VariableSymbol],
+        exceptionalUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
     ) {
         switch statement {
             case es is BoundExpressionStatement {
@@ -786,22 +902,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             case tryStmt is BoundTryStatement {
                 {
-                    let tryExit = ComputeRegionExitPointsTo(tryStmt.TryBlock, state, interesting)
-                    let exceptionalIn = ClonePointsTo(state)
-                    UnionPointsToInto(exceptionalIn, tryExit)
-                    let afterTry = ClonePointsTo(tryExit)
-                    for clause in tryStmt.CatchClauses {
-                        let catchExit = ComputeRegionExitPointsTo(clause.Body, exceptionalIn, interesting)
-                        UnionPointsToInto(afterTry, catchExit)
-                    }
-                    let finalState = if tryStmt.FinallyBlock is {} finallyBlock {
-                        {
-                            let finallyIn = ClonePointsTo(exceptionalIn)
-                            UnionPointsToInto(finallyIn, afterTry)
-                            ComputeRegionExitPointsTo(finallyBlock, finallyIn, interesting)
-                        }
-                    } else {
-                        afterTry
+                    let (_, _, finalState, combinedExceptional) = ComputeTryPointsToSummary(tryStmt, state, interesting)
+                    if exceptionalUnion != nil {
+                        UnionPointsToInto(exceptionalUnion, combinedExceptional)
                     }
                     state.Clear()
                     UnionPointsToInto(state, finalState)
@@ -810,7 +913,10 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             case fixedStmt is BoundFixedStatement {
                 {
                     PointsToExpressionUpdater(state, interesting).VisitExpression(fixedStmt.PinnedSource)
-                    let bodyExit = ComputeRegionExitPointsTo(fixedStmt.Body, state, interesting)
+                    let (bodyExit, bodyExceptional) = ComputeRegionPointsToSummary(fixedStmt.Body, state, interesting)
+                    if exceptionalUnion != nil {
+                        UnionPointsToInto(exceptionalUnion, bodyExceptional)
+                    }
                     state.Clear()
                     UnionPointsToInto(state, bodyExit)
                 }
@@ -827,8 +933,14 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                         let armIn = ClonePointsTo(state)
                         if arm.Guard != nil {
                             PointsToExpressionUpdater(armIn, interesting).VisitExpression(arm.Guard)
+                            if exceptionalUnion != nil {
+                                UnionPointsToInto(exceptionalUnion, armIn)
+                            }
                         }
-                        let armExit = ComputeRegionExitPointsTo(arm.Body, armIn, interesting)
+                        let (armExit, armExceptional) = ComputeRegionPointsToSummary(arm.Body, armIn, interesting)
+                        if exceptionalUnion != nil {
+                            UnionPointsToInto(exceptionalUnion, armExceptional)
+                        }
                         UnionPointsToInto(afterSwitch, armExit)
                     }
                     if !hasDefault {
@@ -862,11 +974,17 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     )(
         StatementPointsTo Dictionary[BoundStatement, IReadOnlyDictionary[VariableSymbol, HashSet[VariableSymbol]]]?,
         CompoundEntryPointsTo Dictionary[BoundStatement, Dictionary[VariableSymbol, HashSet[VariableSymbol]]]?,
-        ExitState Dictionary[VariableSymbol, HashSet[VariableSymbol]]
+        ExitState Dictionary[VariableSymbol, HashSet[VariableSymbol]],
+        ExceptionalUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]]
     ) {
         let hasEntry = entryPointsTo != nil && entryPointsTo.Count > 0
         if interesting.Count == 0 || (!hasEntry && !GraphMayMutatePointers(graph)) {
-            return (nil, nil, Dictionary[VariableSymbol, HashSet[VariableSymbol]]())
+            return (
+                nil,
+                nil,
+                Dictionary[VariableSymbol, HashSet[VariableSymbol]](),
+                Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
+            )
         }
         let outMap = Dictionary[ControlFlowGraph.BasicBlock, Dictionary[VariableSymbol, HashSet[VariableSymbol]]]()
         let reachable = HashSet[ControlFlowGraph.BasicBlock]()
@@ -881,6 +999,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         let compoundEntryPointsTo = Dictionary[BoundStatement, Dictionary[VariableSymbol, HashSet[VariableSymbol]]](
             ReferenceEqualityComparer.Instance
         )
+        let exceptionalUnion = ClonePointsTo(entryPointsTo)
         var changed = true
         var safety = 0
         while changed && safety++ < 10000 {
@@ -900,13 +1019,17 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 if !anyReachablePred {
                     continue
                 }
-                reachable.Add(block)
+                if reachable.Add(block) {
+                    changed = true
+                }
                 for stmt in block.Statements {
                     stmtPointsTo[stmt] = ClonePointsTo(state)
                     if stmt is BoundTryStatement or BoundFixedStatement or BoundPatternSwitchStatement {
                         compoundEntryPointsTo[stmt] = ClonePointsTo(state)
                     }
-                    AdvancePointsToStatement(stmt, state, interesting)
+                    UnionPointsToInto(exceptionalUnion, state)
+                    AdvancePointsToStatement(stmt, state, interesting, exceptionalUnion)
+                    UnionPointsToInto(exceptionalUnion, state)
                 }
                 if !PointsToEqual(state, outMap[block]) {
                     outMap[block] = state
@@ -920,7 +1043,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 UnionPointsToInto(exitState, outMap[branch.From])
             }
         }
-        return (stmtPointsTo, compoundEntryPointsTo, exitState)
+        return (stmtPointsTo, compoundEntryPointsTo, exitState, exceptionalUnion)
     }
 
     internal func FindLocalsLiveAcrossSuspension(body BoundBlockStatement, locals IEnumerable[VariableSymbol]) HashSet[
@@ -956,7 +1079,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         entryPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
     ) HashSet[VariableSymbol] {
         let graph = ControlFlowGraph.Create(Lowerer.Flatten(regionBody))
-        let (stmtPointsTo, compoundEntryPointsTo, _) = ComputeGraphPointsTo(graph, entryPointsTo, interesting)
+        let (stmtPointsTo, compoundEntryPointsTo, _, _) = ComputeGraphPointsTo(graph, entryPointsTo, interesting)
         let liveIn = Dictionary[ControlFlowGraph.BasicBlock, HashSet[VariableSymbol]]()
         for b in graph.Blocks {
             liveIn[b] = HashSet[VariableSymbol]()
@@ -1151,40 +1274,18 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     ) {
         let afterTry = HashSet[VariableSymbol](live)
         let exceptionalEscapeLive = HashSet[VariableSymbol]()
-        let tryExitPointsTo = if entryPointsTo != nil ||
-            GraphMayMutatePointers(ControlFlowGraph.Create(Lowerer.Flatten(tryStmt.TryBlock))) {
-            ComputeRegionExitPointsTo(tryStmt.TryBlock, entryPointsTo, interesting)
-        } else {
-            default(Dictionary[VariableSymbol, HashSet[VariableSymbol]]?)
-        }
-        let exceptionalPointsTo = if entryPointsTo != nil || tryExitPointsTo != nil {
-            {
-                let merged = ClonePointsTo(entryPointsTo)
-                UnionPointsToInto(merged, tryExitPointsTo)
-                merged
-            }
-        } else {
-            default(Dictionary[VariableSymbol, HashSet[VariableSymbol]]?)
-        }
-        var catchExitPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
-        if tryStmt.CatchClauses.Length > 0 && exceptionalPointsTo != nil {
-            catchExitPointsTo = Dictionary[VariableSymbol, HashSet[VariableSymbol]]()
-            for clause in tryStmt.CatchClauses {
-                UnionPointsToInto(
-                    catchExitPointsTo,
-                    ComputeRegionExitPointsTo(clause.Body, exceptionalPointsTo, interesting)
-                )
-            }
-        }
-        let finallyPointsTo = if tryStmt.FinallyBlock != nil &&
-            (exceptionalPointsTo != nil || catchExitPointsTo != nil) {
-            {
-                let merged = ClonePointsTo(exceptionalPointsTo)
-                UnionPointsToInto(merged, catchExitPointsTo)
-                merged
-            }
-        } else {
-            default(Dictionary[VariableSymbol, HashSet[VariableSymbol]]?)
+        let hasPointsTo = entryPointsTo != nil ||
+            GraphMayMutatePointers(ControlFlowGraph.Create(Lowerer.Flatten(tryStmt)))
+        var exceptionalPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+        var finallyPointsTo Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
+        if hasPointsTo {
+            let (computedExceptional, computedFinally, _, _) = ComputeTryPointsToSummary(
+                tryStmt,
+                entryPointsTo,
+                interesting
+            )
+            exceptionalPointsTo = computedExceptional
+            finallyPointsTo = computedFinally
         }
         var finallyLiveIn HashSet[VariableSymbol]? = nil
         if tryStmt.FinallyBlock != nil {

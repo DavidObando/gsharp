@@ -290,6 +290,105 @@ Console.WriteLine(*p)
 `)
         Assert.Empty(safeReseatedAfterAwait.Diagnostics)
         Assert.Equal("42\n1\n", safeReseatedAfterAwait.Output)
+
+        let conditionalArmUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run(flag bool) Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &c.Value
+    let choice = if flag { 0 } else {
+        p = &x
+        0
+    }
+    await Task.Delay(1)
+    Console.WriteLine(*p + choice)
+}
+
+run(true).GetAwaiter().GetResult()
+`)
+        Assert.Contains(conditionalArmUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(conditionalArmUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let tryThrowAliasUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+func mayThrow() { throw InvalidOperationException("boom") }
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    var x = 1
+    var p = &x
+    try {
+        p = &c.Value
+        mayThrow()
+        p = &x
+    } catch { }
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(tryThrowAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(tryThrowAliasUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let gotoReorderUnsafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var c = Counter{Value: 42}
+    goto setup
+    use:
+    let p = &c.Value
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+    return
+    setup:
+    goto use
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Contains(gotoReorderUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS0219")
+        Assert.DoesNotContain(gotoReorderUnsafe.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+
+        let arrayIndexByRefStructSafe = EmittedOracle.Evaluate(`
+import System
+import System.Threading.Tasks
+
+ref struct Counter {
+    var Value int32
+}
+
+async func run() Task {
+    var a = []int32{10, 20, 30}
+    var c = Counter{Value: 1}
+    var p = &a[c.Value]
+    await Task.Delay(1)
+    Console.WriteLine(*p)
+}
+
+run().GetAwaiter().GetResult()
+`)
+        Assert.Empty(arrayIndexByRefStructSafe.Diagnostics)
+        Assert.Equal("20\n", arrayIndexByRefStructSafe.Output)
     }
 
     @Fact
