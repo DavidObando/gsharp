@@ -4,10 +4,12 @@
 
 package Cs2Gs.Translator
 
+import CompilationMeasurements = GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements
 import Cs2Gs.Translator.Analyzers
 import Cs2Gs.Translator.Coverage
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
+import Microsoft.CodeAnalysis.CSharp.Syntax
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -27,6 +29,8 @@ import System.Threading
 class TranslationContext {
     private let suppliedModels Dictionary[(Owner Compilation, Tree SyntaxTree), SemanticModel] =
     Dictionary[(Owner Compilation, Tree SyntaxTree), SemanticModel]()
+    private let preprocessorSymbolStates Dictionary[SyntaxTree, PreprocessorSymbolStateIndex] =
+    Dictionary[SyntaxTree, PreprocessorSymbolStateIndex](ReferenceEqualityComparer.Instance)
     private let diagnostics List[TranslationDiagnostic] = List[TranslationDiagnostic]()
 
     // Keyed by the syntax tree instance, so two in-memory trees without a file
@@ -508,6 +512,18 @@ class TranslationContext {
     /// @returns The resolved type info.
     func GetTypeInfo(node SyntaxNode?) TypeInfo -> this.SemanticModel.GetTypeInfo(node!!)
 
+    /// Returns whether [`symbol`](paramref) is defined at [`position`](paramref) in [`tree`](paramref).
+    internal func IsPreprocessorSymbolDefined(tree SyntaxTree?, position int32, symbol string) bool {
+        if tree == nil {
+            return false
+        }
+        if !this.preprocessorSymbolStates.TryGetValue(tree, out var index) {
+            index = PreprocessorSymbolStateIndex(tree)
+            this.preprocessorSymbolStates.Add(tree, index)
+        }
+        return index.IsDefined(symbol, position)
+    }
+
     /// Records [`diagnostic`](paramref) unless one with the same id and
     /// generic-store metadata was already recorded at the same source span. A node that is translated
     /// more than once in one context (a speculative translation) then reports
@@ -638,6 +654,117 @@ class TranslationContext {
 
         shared {
             let Instance NoOpScope = NoOpScope()
+        }
+    }
+
+    private sealed class PreprocessorSymbolStateIndex {
+        private let initialSymbols HashSet[string]
+        private var transitionsBySymbol Dictionary[string, List[(SpanStart int32, IsDefined bool)]]?
+
+        init(tree SyntaxTree) {
+            CompilationMeasurements.Count("translation.preprocessor_index_builds")
+            let parseOptions = tree.Options as CSharpParseOptions
+            this.initialSymbols = HashSet[string](
+                if parseOptions == nil {
+                    Array.Empty[string]()
+                } else {
+                    parseOptions.PreprocessorSymbolNames
+                },
+                StringComparer.Ordinal
+            )
+            let root = tree.GetRoot()
+            if !root.ContainsDirectives {
+                return
+            }
+            this.CollectDirectives(root)
+        }
+
+        private func CollectDirectives(root SyntaxNode) {
+            let stack = Stack[SyntaxNodeOrToken]()
+            stack.Push(root)
+            while stack.Count > 0 {
+                let current = stack.Pop()
+                if !current.ContainsDirectives {
+                    continue
+                }
+                if current.IsNode {
+                    let children = current.AsNode()!!.ChildNodesAndTokens()
+                    for var i = children.Count - 1; i >= 0; i-- {
+                        let child = children[i]
+                        if child.ContainsDirectives {
+                            stack.Push(child)
+                        }
+                    }
+                } else {
+                    let token = current.AsToken()
+                    this.CollectTriviaDirectives(token.LeadingTrivia)
+                    this.CollectTriviaDirectives(token.TrailingTrivia)
+                }
+            }
+        }
+
+        private func CollectTriviaDirectives(triviaList SyntaxTriviaList) {
+            for trivia in triviaList {
+                CompilationMeasurements.Count("translation.preprocessor_trivia_visits")
+                if trivia.IsDirective {
+                    switch trivia.GetStructure() {
+                        case define is DefineDirectiveTriviaSyntax {
+                            CompilationMeasurements.Count("translation.preprocessor_directive_visits")
+                            if define.IsActive {
+                                this.AddTransition(define.Name.ValueText, define.SpanStart, true)
+                            }
+                        }
+                        case undef is UndefDirectiveTriviaSyntax {
+                            CompilationMeasurements.Count("translation.preprocessor_directive_visits")
+                            if undef.IsActive {
+                                this.AddTransition(undef.Name.ValueText, undef.SpanStart, false)
+                            }
+                        }
+                    }
+                } else if trivia.HasStructure && trivia.GetStructure() is {} structure && structure.ContainsDirectives {
+                    this.CollectDirectives(structure)
+                }
+            }
+        }
+
+        private func AddTransition(symbol string, spanStart int32, isDefined bool) {
+            var symbolMap = this.transitionsBySymbol
+            if symbolMap == nil {
+                symbolMap = Dictionary[string, List[(SpanStart int32, IsDefined bool)]](StringComparer.Ordinal)
+                this.transitionsBySymbol = symbolMap
+            }
+            if !symbolMap.TryGetValue(symbol, out var entries) {
+                entries = List[(SpanStart int32, IsDefined bool)]()
+                symbolMap.Add(symbol, entries)
+            }
+            entries.Add((spanStart, isDefined))
+        }
+
+        func IsDefined(symbol string, position int32) bool {
+            CompilationMeasurements.Count("translation.preprocessor_symbol_queries")
+            let transitionsBySymbol = this.transitionsBySymbol
+            if transitionsBySymbol != nil && transitionsBySymbol.TryGetValue(symbol, out var entries) {
+                let lastIndex = entries.Count - 1
+                if entries[lastIndex].SpanStart < position {
+                    return entries[lastIndex].IsDefined
+                }
+                var low = 0
+                var high = lastIndex
+                var match = -1
+                while low <= high {
+                    let mid = low + ((high - low) >> 1)
+                    if entries[mid].SpanStart < position {
+                        match = mid
+                        low = mid + 1
+                    } else {
+                        high = mid - 1
+                    }
+                }
+                if match >= 0 {
+                    return entries[match].IsDefined
+                }
+            }
+            return this.initialSymbols.Contains(symbol)
         }
     }
 
