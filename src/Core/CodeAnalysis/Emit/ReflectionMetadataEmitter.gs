@@ -1291,7 +1291,7 @@ internal class ReflectionMetadataEmitter {
         )
         CompilationMeasurements.Count("lowering.emit-lambdas.completed", localJobs.Count)
         CompilationMeasurements.Count("lowering.emit-lambdas.observed-workers", this.workBudget.LastObservedWorkers)
-        if this.workBudget.LastObservedWorkers > 1 {
+        if this.workBudget.LastScheduledWorkers > 1 {
             CompilationMeasurements.Count("lowering.emit-lambdas.parallel-batches")
         }
         for var index = 0; index < zeroCaptureLiterals.Count; index++ {

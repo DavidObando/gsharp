@@ -11,6 +11,7 @@ class CompilationWorkBudget {
     private var active int32
     private var peak int32 = 1
     private var lastPeak int32 = 1
+    private var lastWorkers int32
 
     /// Creates an opt-in worker budget. Memory bounds concurrent workspaces, not the retained syntax or symbol graph.
     init(
@@ -53,6 +54,9 @@ class CompilationWorkBudget {
     /// Gets the observed concurrency of the most recently joined batch.
     prop LastObservedWorkers int32 -> Volatile.Read(&lastPeak)
 
+    /// Gets the worker count scheduled for the most recently joined batch.
+    internal prop LastScheduledWorkers int32 -> Volatile.Read(&lastWorkers)
+
     /// Executes indexed work and joins all workers. Failures are rethrown in input order.
     /// The action owns its output slot and must not publish mutable state to other actions.
     internal func Run(count int32, action(int32) -> void, workspaceBytes int64 = 100663296) ->
@@ -66,6 +70,14 @@ class CompilationWorkBudget {
         try {
             Volatile.Write(
                 &lastPeak,
+                if count > 0 {
+                    1
+                } else {
+                    0
+                }
+            )
+            Volatile.Write(
+                &lastWorkers,
                 if count > 0 {
                     1
                 } else {
@@ -94,6 +106,7 @@ class CompilationWorkBudget {
             }
             let failures = [count]ExceptionDispatchInfo?
             var next int32 = -1
+            Volatile.Write(&lastWorkers, workers)
             CompilationMeasurements.Count("workers.parallel-batches")
             CompilationMeasurements.Count("workers.parallel-items", count)
             Parallel.For(

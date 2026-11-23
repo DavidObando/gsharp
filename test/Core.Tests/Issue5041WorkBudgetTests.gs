@@ -221,4 +221,18 @@ class Issue5041WorkBudgetTests {
         let function = Assert.Single(compilation.GlobalScope.Functions)
         Assert.Equal(eligible, IndependentBodyClassifier.CanBind(function))
     }
+
+    @Fact
+    func LastScheduledWorkersTracksParallelAndSequentialBatches() {
+        let budget = CompilationWorkBudget(4, 1024)
+        Assert.Equal(0, budget.LastScheduledWorkers)
+        budget.Run(0, (_ int32) -> { })
+        Assert.Equal(0, budget.LastScheduledWorkers)
+        budget.Run(4, (_ int32) -> { }, workspaceBytes: 100663296, allowParallel: false)
+        Assert.Equal(1, budget.LastScheduledWorkers)
+        budget.Run(4, (_ int32) -> { }, workspaceBytes: 536870912, allowParallel: true)
+        Assert.Equal(1, budget.LastScheduledWorkers)
+        budget.Run(2, (_ int32) -> { })
+        Assert.Equal(Math.Min(2, budget.MaxWorkers), budget.LastScheduledWorkers)
+    }
 }
