@@ -24,6 +24,13 @@ shared class GSharpFormatter {
 
     private data struct DiffOperation(Kind DiffKind, Text string) : IEquatable[DiffOperation] { }
 
+    private data struct IncrementDecrementParts(
+        Target ExpressionSyntax,
+        OperatorToken SyntaxToken,
+        Value ExpressionSyntax,
+        ReturnsPreviousValue bool
+    ) : IEquatable[IncrementDecrementParts] { }
+
     private class LayoutBuilder {
         private let tree SyntaxTree
         private let tokens List[LayoutToken]
@@ -566,7 +573,15 @@ shared class GSharpFormatter {
                         pendingNewlines += CountNewlines(token.Text)
                         continue
                     }
-                    parsedTokens.TryGetValue((token.Position, token.Kind, token.Text), out var parent)
+                    // Parser lowers `++` and `--` to `+=` and `-=` at the same source position (issue #5957).
+                    var parent SyntaxNode? = nil
+                    if !parsedTokens.TryGetValue((token.Position, token.Kind, token.Text), out parent) {
+                        if token.Kind == SyntaxKind.PlusPlusToken {
+                            parsedTokens.TryGetValue((token.Position, SyntaxKind.PlusEqualsToken, "+="), out parent)
+                        } else if token.Kind == SyntaxKind.MinusMinusToken {
+                            parsedTokens.TryGetValue((token.Position, SyntaxKind.MinusEqualsToken, "-="), out parent)
+                        }
+                    }
                     result.Add(
                         LayoutToken(
                             token,
@@ -770,9 +785,8 @@ shared class GSharpFormatter {
                     ConditionalRefArgumentExpressionSyntax
             )
 
-            private func IsPostfix(token LayoutToken) bool -> (
-                token.Token.Kind is SyntaxKind.BangBangToken or SyntaxKind.PlusPlusToken or SyntaxKind.MinusMinusToken
-            ) ||
+            private func IsPostfix(token LayoutToken) bool -> token.Token.Kind == SyntaxKind.BangBangToken ||
+                IsPostfixIncrementDecrement(token) ||
                 (
                 token.Token.Kind == SyntaxKind.QuestionToken && (IsNullableMarker(token) || IsCallNullableMarker(token))
             )
@@ -785,6 +799,9 @@ shared class GSharpFormatter {
                 ) {
                     return true
                 }
+                if IsPrefixIncrementDecrement(token) {
+                    return true
+                }
                 return (token.Token.Kind is SyntaxKind.BangToken or SyntaxKind.AtToken) ||
                     (
                     (
@@ -795,6 +812,18 @@ shared class GSharpFormatter {
                         (token.Parent is TypeClauseSyntax or ParameterSyntax)
                 )
             }
+
+            private func IsPrefixIncrementDecrement(token LayoutToken) bool -> (
+                token.Token.Kind is SyntaxKind.PlusPlusToken or SyntaxKind.MinusMinusToken
+            ) &&
+                TryGetIncrementDecrementParts(token.Parent) is IncrementDecrementParts parts &&
+                parts.OperatorToken.Position < parts.Target.Span.Start
+
+            private func IsPostfixIncrementDecrement(token LayoutToken) bool -> (
+                token.Token.Kind is SyntaxKind.PlusPlusToken or SyntaxKind.MinusMinusToken
+            ) &&
+                TryGetIncrementDecrementParts(token.Parent) is IncrementDecrementParts parts &&
+                parts.Target.Span.Start < parts.OperatorToken.Position
 
             private func IsNullableMarker(token LayoutToken) bool -> token.Token.Kind == SyntaxKind.QuestionToken &&
                 token.Parent is TypeClauseSyntax or
@@ -998,11 +1027,11 @@ shared class GSharpFormatter {
         if formattedTree.Diagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) {
             return formattedTree.Diagnostics
         }
-        if !string.Equals(inputTree.Root.ToString(), formattedTree.Root.ToString(), StringComparison.Ordinal) ||
-            !SignificantTokens(input).SequenceEqual(SignificantTokens(formatted), StringComparer.Ordinal) || !Comments(
-            input
-        )
-            .SequenceEqual(Comments(formatted), StringComparer.Ordinal) {
+        if !AreTreesEquivalent(inputTree.Root, formattedTree.Root) || !SignificantTokens(input).SequenceEqual(
+            SignificantTokens(formatted),
+            StringComparer.Ordinal
+        ) ||
+            !Comments(input).SequenceEqual(Comments(formatted), StringComparer.Ordinal) {
             let location = TextLocation(input, TextSpan(0, 0))
             return ImmutableArray.Create(
                 Diagnostic(
@@ -1014,6 +1043,92 @@ shared class GSharpFormatter {
             )
         }
         return ImmutableArray[Diagnostic].Empty
+    }
+
+    // Compare increment/decrement nodes by child role instead of source-ordered child dump.
+    // Parser places the synthetic `1` at `op.Span.End`, so whitespace after prefix `++`/`--`
+    // flips `Value` and `Target` in `SyntaxNode.ToString()` (issue #5957).
+    private func AreTreesEquivalent(leftRoot SyntaxNode, rightRoot SyntaxNode) bool {
+        let pending = Stack[(Left SyntaxNode, Right SyntaxNode)]()
+        pending.Push((leftRoot, rightRoot))
+        while pending.Count > 0 {
+            let pair = pending.Pop()
+            let left = pair.Left
+            let right = pair.Right
+            if left.Kind != right.Kind {
+                return false
+            }
+            if left is SyntaxToken leftToken {
+                if right is not SyntaxToken rightToken {
+                    return false
+                }
+                if leftToken.IsMissing != rightToken.IsMissing ||
+                    (leftToken.Value == nil) != (rightToken.Value == nil) ||
+                    !string.Equals(
+                    leftToken.Value?.ToString(),
+                    rightToken.Value?.ToString(),
+                    StringComparison.Ordinal
+                ) {
+                    return false
+                }
+                continue
+            }
+            if right is SyntaxToken {
+                return false
+            }
+            if TryGetIncrementDecrementParts(left) is IncrementDecrementParts leftParts {
+                if TryGetIncrementDecrementParts(right) is not IncrementDecrementParts rightParts {
+                    return false
+                }
+                if leftParts.ReturnsPreviousValue != rightParts.ReturnsPreviousValue {
+                    return false
+                }
+                pending.Push((leftParts.Value, rightParts.Value))
+                pending.Push((leftParts.OperatorToken, rightParts.OperatorToken))
+                pending.Push((leftParts.Target, rightParts.Target))
+                continue
+            }
+            if TryGetIncrementDecrementParts(right) != nil {
+                return false
+            }
+            let leftChildren = left.GetChildren().ToArray()
+            let rightChildren = right.GetChildren().ToArray()
+            if leftChildren.Length != rightChildren.Length {
+                return false
+            }
+            for var i = leftChildren.Length - 1; i >= 0; i-- {
+                pending.Push((leftChildren[i], rightChildren[i]))
+            }
+        }
+        return true
+    }
+
+    private func TryGetIncrementDecrementParts(node SyntaxNode?) IncrementDecrementParts? {
+        if node is EventSubscriptionExpressionSyntax eventSub && eventSub.IsIncrementDecrement {
+            return IncrementDecrementParts(
+                eventSub.LeftHandSide,
+                eventSub.OperatorToken,
+                eventSub.Value,
+                eventSub.ReturnsPreviousValue
+            )
+        }
+        if node is CompoundIndexAssignmentExpressionSyntax indexAssign && indexAssign.IsIncrementDecrement {
+            return IncrementDecrementParts(
+                indexAssign.Target,
+                indexAssign.OperatorToken,
+                indexAssign.Value,
+                indexAssign.ReturnsPreviousValue
+            )
+        }
+        if node is IndirectCompoundAssignmentExpressionSyntax indirectAssign && indirectAssign.IsIncrementDecrement {
+            return IncrementDecrementParts(
+                indirectAssign.Target,
+                indirectAssign.OperatorToken,
+                indirectAssign.Value,
+                indirectAssign.ReturnsPreviousValue
+            )
+        }
+        return nil
     }
 
     private func SignificantTokens(text SourceText) ImmutableArray[string] {
