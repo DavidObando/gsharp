@@ -318,6 +318,7 @@ internal partial class ExpressionBinder {
 
     private var activePreCallArgumentsNarrowing StatementBinder.NarrowingBindSnapshot?
     private var lastSelectedCallablePropertyLoad BoundExpression?
+    private var lastSelectedIndexedCalleeLoad BoundExpression?
 
     private func ApplyCallableMemberNarrowing(load BoundExpression) BoundExpression {
         if activePreCallArgumentsNarrowing is not{} saved {
@@ -822,6 +823,7 @@ internal partial class ExpressionBinder {
             return false
         }
         AnchorReshapedCalleeIdentifiers(bound)
+        lastSelectedIndexedCalleeLoad = bound
         indexed = bound
         return true
     }

@@ -1905,13 +1905,21 @@ internal partial class ExpressionBinder {
             }
         }
         let prevSelectedProp = lastSelectedCallablePropertyLoad
+        let prevSelectedIndexed = lastSelectedIndexedCalleeLoad
         lastSelectedCallablePropertyLoad = nil
+        lastSelectedIndexedCalleeLoad = nil
         try {
             var result = bindArgumentsAndDispatch()
-            if !preAppliedCallableProperty &&
-                lastSelectedCallablePropertyLoad is {} selectedPropLoad &&
-                ce.Arguments.Count > 0 {
+            let selectedCalleeEffectsLoad BoundExpression? = if lastSelectedIndexedCalleeLoad is {} indexedLoad {
+                indexedLoad
+            } else if !preAppliedCallableProperty && lastSelectedCallablePropertyLoad is {} selectedPropLoad {
+                selectedPropLoad
+            } else {
+                default(BoundExpression?)
+            }
+            if selectedCalleeEffectsLoad != nil && ce.Arguments.Count > 0 {
                 lastSelectedCallablePropertyLoad = nil
+                lastSelectedIndexedCalleeLoad = nil
                 result = Diagnostics.ReplaceDiagnosticsIn(
                     ce.Location,
                     () -> {
@@ -1919,7 +1927,7 @@ internal partial class ExpressionBinder {
                             $scope.RemoveVariablesDeclaredInSpan(arg.SyntaxTree, arg.Span)
                         }
                         RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
-                        ApplySubExpressionNarrowingEffects(ce.Identifier, selectedPropLoad)
+                        ApplySubExpressionNarrowingEffects(ce.Identifier, selectedCalleeEffectsLoad)
                         return bindArgumentsAndDispatch()
                     }
                 )
@@ -1927,6 +1935,7 @@ internal partial class ExpressionBinder {
             return result
         } finally {
             lastSelectedCallablePropertyLoad = prevSelectedProp
+            lastSelectedIndexedCalleeLoad = prevSelectedIndexed
         }
     }
 

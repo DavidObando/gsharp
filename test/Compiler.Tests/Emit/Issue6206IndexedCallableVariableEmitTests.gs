@@ -367,6 +367,62 @@ func Main() {
 }`)
         Assert.Contains("GS0155", badSliceIndexErrors, StringComparison.Ordinal)
         Assert.DoesNotContain("GS0131", badSliceIndexErrors, StringComparison.Ordinal)
+
+        // Mutating index getter invalidates non-null narrowing on a global before argument evaluation
+        let qualifiedMutatingIndexErrors = CompileExpectingErrors(`package P
+import System.Collections.Generic
+
+var text string? = "ok"
+
+class KeySource {
+    prop Index string {
+        get {
+            text = nil
+            return "hit"
+        }
+    }
+}
+
+class Holder {
+    prop Callbacks Dictionary[string, (int32) -> int32] { get }
+    init() {
+        Callbacks = Dictionary[string, (int32) -> int32]()
+        Callbacks["hit"] = (v int32) -> v + 1
+    }
+}
+
+func Main() {
+    let holder = Holder()
+    let keys = KeySource()
+    if text != nil {
+        let n = holder.Callbacks[keys.Index](text.Length)
+    }
+}`)
+        Assert.Contains("GS0158", qualifiedMutatingIndexErrors, StringComparison.Ordinal)
+
+        let bareMutatingIndexErrors = CompileExpectingErrors(`package P
+import System.Collections.Generic
+
+var text string? = "ok"
+
+class KeySource {
+    prop Index string {
+        get {
+            text = nil
+            return "hit"
+        }
+    }
+}
+
+func Main() {
+    let callbacks = Dictionary[string, (int32) -> int32]()
+    callbacks["hit"] = (v int32) -> v + 1
+    let keys = KeySource()
+    if text != nil {
+        let n = callbacks[keys.Index](text.Length)
+    }
+}`)
+        Assert.Contains("GS0158", bareMutatingIndexErrors, StringComparison.Ordinal)
     }
 
     shared {
