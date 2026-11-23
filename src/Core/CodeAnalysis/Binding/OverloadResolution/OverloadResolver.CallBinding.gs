@@ -1515,6 +1515,17 @@ internal partial class OverloadResolver {
                         return BoundErrorExpression(nil)
                     }
                     if matchedStaticImport != nil {
+                        if syntax.TypeArgumentList is {} staticImportTypeArguments &&
+                            TryBindFallbackValueAsIndexThenCall(
+                            syntax,
+                            staticImportTypeArguments,
+                            rollbackPrebind,
+                            prebindDiagMark,
+                            preArgumentsNarrowing,
+                            out var staticImportIndexedCall
+                        ) {
+                            return staticImportIndexedCall
+                        }
                         return InvokeUserTypeStaticCall(
                             matchedStaticImport,
                             syntax,
@@ -1553,6 +1564,17 @@ internal partial class OverloadResolver {
                         return BoundErrorExpression(nil)
                     }
                     if matchedClrStaticImport != nil {
+                        if syntax.TypeArgumentList is {} clrStaticImportTypeArguments &&
+                            TryBindFallbackValueAsIndexThenCall(
+                            syntax,
+                            clrStaticImportTypeArguments,
+                            rollbackPrebind,
+                            prebindDiagMark,
+                            preArgumentsNarrowing,
+                            out var clrStaticImportIndexedCall
+                        ) {
+                            return clrStaticImportIndexedCall
+                        }
                         RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                         return InvokeImportedClrStaticCall(
                             matchedClrStaticImport,
@@ -3205,7 +3227,7 @@ internal partial class OverloadResolver {
             let diagMark = Diagnostics.Count
             let snapshot = CaptureNarrowingBindSnapshot()
             let callee = bindExpression(indexExpr)
-            if callee is BoundErrorExpression || Diagnostics.Count != diagMark {
+            if callee is BoundErrorExpression || Diagnostics.HasErrorSince(diagMark) {
                 Diagnostics.TruncateTo(diagMark)
                 RestoreNarrowingBindSnapshot(snapshot)
                 return false
@@ -3243,8 +3265,7 @@ internal partial class OverloadResolver {
         let specMark = Diagnostics.Count
         let specSnapshot = CaptureNarrowingBindSnapshot()
         let targetProbe = bindExpression(NameExpressionSyntax(syntax.SyntaxTree, syntax.Identifier))
-        let isIndexableValue = !(targetProbe is BoundErrorExpression) &&
-            Diagnostics.Count == specMark &&
+        let isIndexableValue = !(targetProbe is BoundErrorExpression) && !Diagnostics.HasErrorSince(specMark) &&
             !(targetProbe is BoundMethodGroupExpression or BoundClrMethodGroupExpression) &&
             !IsCallableValueType(targetProbe.Type)
         Diagnostics.TruncateTo(specMark)

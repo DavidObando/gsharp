@@ -190,6 +190,7 @@ open class BaseCallbacks {
     }
     shared {
         let StaticFns [](int32) -> int32 = [](int32) -> int32{(v int32) -> v + 22}
+        let NullableStaticFns []((int32) -> int32)? = []((int32) -> int32)?{(v int32) -> v + 44, nil}
     }
 }`, consumer: `package P
 import System
@@ -202,9 +203,69 @@ class Child : BaseCallbacks {
 
 func Main() {
     let i = 0
-    Console.WriteLine(Child().Run(i, 3))
+    let j = 1
+    let top = StaticFns[i](3)
+    let condOk = NullableStaticFns[i]?(3)
+    let condNil = NullableStaticFns[j]?(3)
+    Console.WriteLine("${Child().Run(i, 3)}:${top}:${condOk}:${condNil == nil}")
 }`)
-        Assert.Equal("39${Environment.NewLine}", output)
+        Assert.Equal("39:25:47:True${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func ObsoleteShadowingContainer_EmitsWarningAndStillIndexesInsteadOfConstructing() {
+        let source = `package P
+import System
+import System.Collections.Generic
+
+class Box[T] {
+    let Value T
+    init(v T) { Value = v }
+}
+
+class Holder {
+    @Obsolete("legacy")
+    var Box List[(int32) -> int32] = List[(int32) -> int32]()
+
+    func Run(i int32, x int32) int32 {
+        Box.Add((v int32) -> v + 500)
+        return Box[i](x)
+    }
+}
+
+func Main() {
+    Console.WriteLine(Holder().Run(0, 7))
+}`
+        let tempDir = Directory.CreateTempSubdirectory("gs_6206_obs_").FullName
+        try {
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let outPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, source)
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            var compileExit int32
+            try {
+                compileExit = Program.Main(
+                    []string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath}
+                )
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            let compileLog = compileOut.ToString() + compileErr.ToString()
+            Assert.True(compileExit == 0, compileLog)
+            Assert.Contains("GS0204", compileLog, StringComparison.Ordinal)
+            IlVerifier.Verify(outPath)
+            Assert.Equal("507${Environment.NewLine}", ExecDll(tempDir, outPath))
+        } finally {
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch { }
+        }
     }
 
     @Fact
