@@ -304,6 +304,24 @@ open class Issue6189FunctionValueCalleeTests {
         )
     }
 
+    @Theory
+    @InlineData("c.A(x)", "c.A(x, 2)", "(int32) -> int32") // an auto-property of the owning type
+    @InlineData("c.Q?(x)", "c.Q?(x, 2)", "((int32) -> int32)?") // a nullable auto-property called with `?(...)`
+    func CallThroughAnAutoPropertyOfTheOwningType_CalleeAnswersTheProperty(bound string, failed string, type string) {
+        // Inside its own type an auto-property read lowers to a read of its backing field.
+        for source in[]string{bound, failed} {
+            let (model, tree, _) = CreateModel(
+                "package P\n\nclass C {\n    prop A (int32) -> int32 { get; set }\n    prop Q ((int32) -> int32)? { get; set }\n    init() {\n        A = (v int32) -> v\n    }\n    func M(c C) {\n        let x = 1\n        let k = " +
+                    source +
+                    "\n    }\n}\n"
+            )
+            let callee = LastCall(tree).Identifier
+            let property = Assert.IsType[PropertySymbol](model.GetSymbolInfo(callee).Symbol)
+            Assert.Equal(callee.ValueText, property.Name)
+            Assert.Equal(type, model.GetTypeInfo(callee).Type?.ToString())
+        }
+    }
+
     @Fact
     func CallOfANonCallableField_IdentifierAnswersAsBefore() {
         // The member is not invoked, so the call does not keep it as its callee.

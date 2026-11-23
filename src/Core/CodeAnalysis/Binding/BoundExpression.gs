@@ -169,6 +169,17 @@ abstract class BoundExpression : BoundNode {
         set;
     }
 
+    /// Carries (cref:CalleeIdentifier) to a node that replaces this read (a lowered or rewritten
+    /// copy of the same load).
+    /// @param copy The replacement.
+    /// @returns The replacement.
+    internal func CopyCalleeIdentifierTo(copy BoundExpression) BoundExpression {
+        if copy.CalleeIdentifier == nil {
+            copy.CalleeIdentifier = CalleeIdentifier
+        }
+        return copy
+    }
+
     internal prop StaticQualifierType TypeSymbol? {
         get;
         private set;

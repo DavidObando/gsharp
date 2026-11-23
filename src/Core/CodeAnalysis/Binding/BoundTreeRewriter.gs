@@ -2157,17 +2157,19 @@ abstract class BoundTreeRewriter {
         return if receiver == node.Receiver {
             node
         } else {
-            BoundFieldAccessExpression(
-                node.Syntax,
-                receiver,
-                Invariant.Required(
-                    node.StructType,
-                    "an instance field access has a struct type",
-                    expression: "node.StructType"
-                ),
-                node.Field,
-                node.SubstitutedType,
-                node.NarrowedType
+            node.CopyCalleeIdentifierTo(
+                BoundFieldAccessExpression(
+                    node.Syntax,
+                    receiver,
+                    Invariant.Required(
+                        node.StructType,
+                        "an instance field access has a struct type",
+                        expression: "node.StructType"
+                    ),
+                    node.Field,
+                    node.SubstitutedType,
+                    node.NarrowedType
+                )
             )
         }
     }
@@ -2243,14 +2245,16 @@ abstract class BoundTreeRewriter {
         return if receiver == node.Receiver {
             node
         } else {
-            BoundPropertyAccessExpression(
-                node.Syntax,
-                receiver,
-                node.StructType,
-                node.Property,
-                node.SubstitutedType,
-                node.NarrowedType,
-                node.InterfaceType
+            node.CopyCalleeIdentifierTo(
+                BoundPropertyAccessExpression(
+                    node.Syntax,
+                    receiver,
+                    node.StructType,
+                    node.Property,
+                    node.SubstitutedType,
+                    node.NarrowedType,
+                    node.InterfaceType
+                )
             )
         }
     }

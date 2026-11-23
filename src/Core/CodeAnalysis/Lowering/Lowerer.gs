@@ -541,13 +541,15 @@ class Lowerer : BoundTreeRewriter {
         // ADR-0051: an auto-property read lowers to a backing-field read only
         // when UsesBackingField permits it. Otherwise it stays an accessor call.
         if UsesBackingField(node.Property, isWrite: false) {
-            return BoundFieldAccessExpression(
-                node.Syntax,
-                node.Receiver,
-                node.StructType,
-                node.Property.BackingField!!,
-                node.SubstitutedType ?? node.Property.Type,
-                node.NarrowedType
+            return node.CopyCalleeIdentifierTo(
+                BoundFieldAccessExpression(
+                    node.Syntax,
+                    node.Receiver,
+                    node.StructType,
+                    node.Property.BackingField!!,
+                    node.SubstitutedType ?? node.Property.Type,
+                    node.NarrowedType
+                )
             )
         }
         // Computed properties (or external access) remain as BoundPropertyAccessExpression —
