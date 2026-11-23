@@ -1183,6 +1183,100 @@ async func bad() Task[int32] {
     }
 
     @Fact
+    func DeadBlockExpressionOpaqueAlias_DoesNotReconstructAcrossAwait() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package DeadBlockOpaqueAlias6182
+import System
+import System.Threading.Tasks
+
+func at(xs []int32, i int32) ref int32 {
+    return ref xs[i]
+}
+
+async func run(flag bool) Task[string] {
+    var arr = []int32{10, 20}
+    var y = 77
+    var z = 88
+    var p = ({
+        var ref alias = at(arr, 0)
+        var r = &alias
+        r = &y
+        r
+    })
+    var q = ({
+        var ref alias2 = at(arr, 1)
+        var r2 = &alias2
+        let pre = *r2
+        if flag {
+            r2 = &y
+        } else {
+            r2 = &z
+        }
+        r2
+    })
+    await Task.Yield()
+    return "${*p}:${*q}"
+}
+
+Console.WriteLine("${run(true).GetAwaiter().GetResult()}|${run(false).GetAwaiter().GetResult()}")`, "DeadBlockOpaqueAlias6182", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("77:77|77:88\n", fixture.Run(dll))
+
+        let (code, output) = fixture.TryCompile(`package LiveBlockOpaqueAliasReject6182
+import System.Threading.Tasks
+
+func at(xs []int32, i int32) ref int32 {
+    return ref xs[i]
+}
+
+async func bad() Task[int32] {
+    var arr = []int32{10, 20}
+    var p = ({
+        var ref alias = at(arr, 0)
+        var r = &alias
+        r
+    })
+    await Task.Yield()
+    return *p
+}`, "LiveBlockOpaqueAliasReject6182", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(
+            output.Contains("error GS0258:", StringComparison.Ordinal) || output.Contains(
+                "error GS9998:",
+                StringComparison.Ordinal
+            ),
+            output
+        )
+    }
+
+    @Fact
+    func NullRefAliasCondition_InSelfConditionalReseat_StillThrowsNullReferenceException() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package NullRefCondSelfReseat6182
+import System
+import System.Runtime.CompilerServices
+import System.Threading.Tasks
+
+async func run() Task[string] {
+    var x = 10
+    var p = &x
+    var ref flag = Unsafe.NullRef[bool]()
+    var threw = false
+    try {
+        p = flag ? p : p
+    } catch (NullReferenceException) {
+        threw = true
+    }
+    await Task.Yield()
+    return "${threw}:${*p}"
+}
+
+Console.WriteLine(run().GetAwaiter().GetResult())`, "NullRefCondSelfReseat6182", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("True:10\n", fixture.Run(dll))
+    }
+
+    @Fact
     func ManagedPointerDefault_EmitAndExecute_WithStrictILVerify() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let templateDll = fixture.Compile(`package Template6182

@@ -1663,7 +1663,7 @@ shared class RefInitializationHoister {
         }
         let crossing = RefStructAsyncLivenessAnalyzer.FindLocalsLiveAcrossSuspension(
             body,
-            collector.StatementLocals.Cast[VariableSymbol]()
+            collector.OrderedLocals.Cast[VariableSymbol]()
         )
         let rewriteLocals = HashSet[LocalVariableSymbol]()
         for local in collector.StatementLocals {
@@ -1692,8 +1692,7 @@ shared class RefInitializationHoister {
                     for dep in deps {
                         if collector.Declarations.TryGetValue(dep, out var depDecl) &&
                             !(
-                            dep.RefKind != RefKind.None && collector.StatementDeclarations.Contains(dep) &&
-                                !crossing.Contains(dep) &&
+                            dep.RefKind != RefKind.None && !crossing.Contains(dep) &&
                                 (
                                 depDecl.Initializer == nil || !DefinitionRewriter.IsReconstructableStorage(
                                     depDecl.Initializer
@@ -1904,8 +1903,12 @@ shared class RefInitializationHoister {
     }
 
     private func IsTriviallyRepeatable(expression BoundExpression) bool {
-        return expression is BoundVariableExpression ||
-            expression is BoundLiteralExpression ||
-            expression is BoundDefaultExpression
+        return expression is BoundLiteralExpression ||
+            expression is BoundDefaultExpression ||
+            (
+            expression is BoundVariableExpression varExpr &&
+                !(varExpr.Variable is LocalVariableSymbol l && l.RefKind != RefKind.None) &&
+                !(varExpr.Variable is ParameterSymbol p && p.RefKind != RefKind.None)
+        )
     }
 }
