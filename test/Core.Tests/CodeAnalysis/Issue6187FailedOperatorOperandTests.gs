@@ -31,6 +31,7 @@ open class Issue6187FailedOperatorOperandTests {
     @InlineData("let k = Use(x) == 1 ? default : Use(x, x)") // a bare default and a failed branch
     @InlineData("let k = Use(x) == 1 ? Use(x, x) : default")
     @InlineData("let k = Use(x) == 1 ? default : default") // two bare defaults
+    @InlineData("let k = (Make(x).Other++) + 1") // a failed postfix whose receiver is saved
     @InlineData("let k = Opt(x) ?? Use(x, x)") // a coalesce with a failed right operand
     func OperandsOfAFailedBinary_AnswerTheirSymbolAndType(statement string) {
         let (model, tree, compilation) = CreateModel(statement)
@@ -121,7 +122,7 @@ open class Issue6187FailedOperatorOperandTests {
     shared {
         private func Source(
             statement string
-        ) string -> "package P\n\nclass C {\n    var N int32\n    var Other D = D()\n}\n\nclass D { }\n\nclass Grid {\n    prop this[a int32, b int32] int32 {\n        get { return 0 }\n        set { }\n    }\n}\n\nfunc Use(v int32) int32 -> v\n\nfunc Opt(v int32) int32? -> v\n\nfunc F(c C, arr []int32, r [,]int32, g Grid) {\n    let x = 1\n    var t = 0\n    " +
+        ) string -> "package P\n\nclass C {\n    var N int32\n    var Other D = D()\n}\n\nclass D { }\n\nclass Grid {\n    prop this[a int32, b int32] int32 {\n        get { return 0 }\n        set { }\n    }\n}\n\nfunc Use(v int32) int32 -> v\n\nfunc Opt(v int32) int32? -> v\n\nfunc Make(v int32) C -> C()\n\nfunc F(c C, arr []int32, r [,]int32, g Grid) {\n    let x = 1\n    var t = 0\n    " +
             statement +
             "\n}\n"
 

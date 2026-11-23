@@ -109,8 +109,8 @@ class BoundErrorExpression : BoundExpression {
         !FailedOperands.IsDefaultOrEmpty
 
     /// Keeps the operands of the operator expression that this error replaces, for the semantic
-    /// model only (#6187). An operand that is a failed call, or that wraps one, gives the call's
-    /// records. Any other operand is kept as a failed operand.
+    /// model only (#6187). An operand that is an error gives its failed-call records. Any other
+    /// operand, a wrapper around a failed call included, is kept as a failed operand.
     /// @param left The bound left (or only) operand.
     /// @param right The bound right operand, or null.
     internal func KeepOperands(left BoundExpression, right BoundExpression? = nil) {
@@ -124,9 +124,10 @@ class BoundErrorExpression : BoundExpression {
         if object.ReferenceEquals(operand, this) {
             return
         }
-        if BoundErrorExpression.FindFailedCall(operand) is {} operandError {
-            if operandError.HasFailedRecords && !object.ReferenceEquals(operandError, this) &&
-                (FailedChildren.IsDefault || !FailedChildren.Contains(operandError)) {
+        // A wrapper around a failed call (a block that saves a receiver, a conversion) is kept
+        // whole: the index reaches the failed call through it, and also the values it saves.
+        if operand is BoundErrorExpression operandError {
+            if operandError.HasFailedRecords && (FailedChildren.IsDefault || !FailedChildren.Contains(operandError)) {
                 FailedChildren = if FailedChildren.IsDefault {
                     ImmutableArray.Create(operandError)
                 } else {
