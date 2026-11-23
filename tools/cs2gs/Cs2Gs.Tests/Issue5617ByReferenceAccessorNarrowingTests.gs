@@ -6173,7 +6173,9 @@ public class Demo
             rejectConditionalIndexWarnings bool = false,
             strictIl bool = false,
             expectedOutput string? = nil,
-            rejectedWarning string? = nil
+            rejectedWarning string? = nil,
+            preprocessorSymbols IEnumerable[string]? = nil,
+            conditionalCompilation ConditionalCompilationPolicy = ConditionalCompilationPolicy.Reject
         ) string {
             let libraryImage = if library == nil {
                 Array.Empty[byte]()
@@ -6191,11 +6193,11 @@ public class Demo
             if libraryImage.Length > 0 && !runtimeOnlyLibrary {
                 references.Add(MetadataReference.CreateFromImage(libraryImage))
             }
-            let tree = CSharpSyntaxTree.ParseText(
-                source,
-                CSharpParseOptions(LanguageVersion.Latest),
-                path: "Snippet.cs"
-            )
+            var parseOptions = CSharpParseOptions(LanguageVersion.Latest)
+            if preprocessorSymbols != nil {
+                parseOptions = parseOptions.WithPreprocessorSymbols(preprocessorSymbols)
+            }
+            let tree = CSharpSyntaxTree.ParseText(source, parseOptions, path: "Snippet.cs")
             let compilation = CSharpCompilation.Create(
                 "Snippet" + Guid.NewGuid().ToString("N"),
                 []SyntaxTree{tree},
@@ -6230,7 +6232,8 @@ public class Demo
                     document.FilePath,
                     cancellationToken: cancellationToken
                 )
-                let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+                let translator = CSharpToGSharpTranslator(){ConditionalCompilation = conditionalCompilation}
+                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
                 inspect?.Invoke(context)
                 Assert.Equal(
                     expected,
