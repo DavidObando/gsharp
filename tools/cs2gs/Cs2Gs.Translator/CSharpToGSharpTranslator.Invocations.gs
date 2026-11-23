@@ -4623,7 +4623,9 @@ partial class CSharpToGSharpTranslator {
                 this.context.Compilation.ClassifyConversion(sourceSymbol, targetSymbol)
             }
             if !(cast.Type is NullableTypeSyntax) && this.CastUsesCheckedReferenceConversion(cast) &&
-                this.IsFlowNarrowedAnnotatedReference(cast.Expression) {
+                !this.GSharpExpressionIsStaticallyNonNull(cast.Expression) && this.IsFlowNarrowedAnnotatedReference(
+                cast.Expression
+            ) {
                 operand = EnsureNonNullAssertion(operand)
             }
             // Issue #4356: an operand that is `T?` only on the G# analyzer API
