@@ -1686,7 +1686,7 @@ internal partial class ExpressionBinder {
                     TypeSymbol.FromClrTypeWithoutNullability(classSymbol.ClassType, NullabilityFreeReason.TypeStructure)
                 }
             )
-            if !IsAmbiguousSingleIdentifierTypeArgument(ce.TypeArgumentList) ||
+            if !CanConvertTypeArgumentsToIndices(ce.TypeArgumentList) ||
                 indexableOwner is not{} receiverType ||
                 !HasCallableIndexableValueMember(receiverType, methodName) {
                 Diagnostics.ReportUnableToFindFunction(ce.Location, methodName)

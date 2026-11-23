@@ -1157,9 +1157,16 @@ internal partial class OverloadResolver {
         syntax CallExpressionSyntax,
         callee BoundExpression,
         calleeName string,
-        calleeLocation TextLocation
+        calleeLocation TextLocation,
+        bracketIsIndex bool = false
     ) BoundExpression {
-        let bound = BindNullConditionalIndirectCallExpressionCore(syntax, callee, calleeName, calleeLocation)
+        let bound = BindNullConditionalIndirectCallExpressionCore(
+            syntax,
+            callee,
+            calleeName,
+            calleeLocation,
+            bracketIsIndex
+        )
         // A failed call keeps its callee and arguments for the semantic model (#6150, #6151).
         binderCtx.CompleteCall(bound, syntax.Arguments, IndirectCallee(callee))
         return bound
@@ -1169,7 +1176,8 @@ internal partial class OverloadResolver {
         syntax CallExpressionSyntax,
         callee BoundExpression,
         calleeName string,
-        calleeLocation TextLocation
+        calleeLocation TextLocation,
+        bracketIsIndex bool = false
     ) BoundExpression {
         var callee = callee
         if callee is BoundErrorExpression {
@@ -1205,7 +1213,8 @@ internal partial class OverloadResolver {
             captureRef,
             calleeName,
             calleeLocation,
-            nullSafeInvocation: nil
+            nullSafeInvocation: nil,
+            bracketIsIndex: bracketIsIndex
         )
         if invocation is BoundErrorExpression {
             return invocation
@@ -1218,9 +1227,17 @@ internal partial class OverloadResolver {
         callee BoundExpression,
         calleeName string,
         calleeLocation TextLocation,
-        nullSafeInvocation string?
+        nullSafeInvocation string?,
+        bracketIsIndex bool = false
     ) BoundExpression {
-        let bound = BindIndirectCallExpressionCore(syntax, callee, calleeName, calleeLocation, nullSafeInvocation)
+        let bound = BindIndirectCallExpressionCore(
+            syntax,
+            callee,
+            calleeName,
+            calleeLocation,
+            nullSafeInvocation,
+            bracketIsIndex
+        )
         // A failed call keeps its callee and arguments for the semantic model (#6150, #6151).
         binderCtx.CompleteCall(bound, syntax.Arguments, IndirectCallee(callee))
         return bound
@@ -1240,14 +1257,17 @@ internal partial class OverloadResolver {
         callee BoundExpression,
         calleeName string,
         calleeLocation TextLocation,
-        nullSafeInvocation string?
+        nullSafeInvocation string?,
+        bracketIsIndex bool = false
     ) BoundExpression {
         var callee = callee
         if callee is BoundErrorExpression {
             return callee
         }
         // A function value has no type parameters (#6186).
-        if syntax.TypeArgumentList is {} unexpectedTypeArguments && IsCallableValueType(callee.Type) {
+        if !bracketIsIndex &&
+            syntax.TypeArgumentList is {} unexpectedTypeArguments &&
+            IsCallableValueType(callee.Type) {
             ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, calleeName)
             return BoundErrorExpression(nil)
         }

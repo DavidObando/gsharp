@@ -863,7 +863,23 @@ partial class SemanticModel {
         }
         let single = GetTokenSymbol(token)
         // A call through a local function value names a variable; any other variable or type is no member.
-        let calledVariable = single is VariableSymbol && token.Parent is CallExpressionSyntax{Callee: nil}
+        let calledVariable = single is VariableSymbol variable &&
+            token.Parent is CallExpressionSyntax{Callee: nil} parentCall &&
+            (
+            parentCall.TypeArgumentList == nil ||
+                (
+                referenced is not BoundIndirectCallExpression &&
+                    referenced is not BoundFunctionPointerInvocationExpression &&
+                    referenced is not BoundNullConditionalAccessExpression &&
+                    GSharp
+                    .Core
+                    .CodeAnalysis
+                    .Binding
+                    .OverloadResolution
+                    .OverloadResolver
+                    .IsCallableValueType(variable.Type)
+            )
+        )
         if single != nil &&
             (
             calledVariable ||

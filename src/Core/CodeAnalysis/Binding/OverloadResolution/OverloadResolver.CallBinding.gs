@@ -775,6 +775,17 @@ internal partial class OverloadResolver {
             tryBindIntrinsicCall(syntax, out var checkedCast) {
             return checkedCast!!
         }
+        // Issue #6206: `fns[i](x)`, `matrix[i, j](x)`, `fns[jobs[i]](x)`, `fns[i]?(x)` parse
+        // with `TypeArgumentList` because ADR-0020 commits `name[...](` to a generic call site.
+        // When `Name` resolves to a non-callable variable in scope and the bracket items reshape
+        // to index expressions, bind it as index-then-call.
+        if resolvedType == nil &&
+            syntax.Callee == nil &&
+            syntax.ConversionTypeClause == nil &&
+            syntax.TypeArgumentList is {} ambiguousTypeArguments &&
+            TryBindVariableAsIndexThenCall(syntax, ambiguousTypeArguments, out var indexedVariableCall) {
+            return indexedVariableCall
+        }
         // ADR-0065 §2: a bare `init(args)` call inside a constructor body is
         // a self-delegation to a sibling constructor on the same aggregate. This
         // is the only legal use of `init` as a callable identifier. Recognise
@@ -1328,6 +1339,17 @@ internal partial class OverloadResolver {
                     out var inheritedClrTypeArgs,
                     out var inheritedTypeArgSymbols
                 ) {
+                    if syntax.TypeArgumentList is {} fallbackTypeArguments &&
+                        TryBindFallbackValueAsIndexThenCall(
+                        syntax,
+                        fallbackTypeArguments,
+                        rollbackPrebind,
+                        prebindDiagMark,
+                        preArgumentsNarrowing,
+                        out var fallbackIndexedCall
+                    ) {
+                        return fallbackIndexedCall
+                    }
                     return BoundErrorExpression(nil)
                 }
                 let implicitBaseClr = if effThis.Type is StructSymbol inheritedReceiver {
@@ -1568,6 +1590,17 @@ internal partial class OverloadResolver {
                     preArgumentsNarrowing
                 ) {
                     return inheritedStaticCall
+                }
+                if syntax.TypeArgumentList is {} fallbackTypeArguments &&
+                    TryBindFallbackValueAsIndexThenCall(
+                    syntax,
+                    fallbackTypeArguments,
+                    rollbackPrebind,
+                    prebindDiagMark,
+                    preArgumentsNarrowing,
+                    out var fallbackIndexedCall
+                ) {
+                    return fallbackIndexedCall
                 }
                 RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                 Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.ValueText)
@@ -3137,22 +3170,151 @@ internal partial class OverloadResolver {
         return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType: nil, methodTypeArguments)
     }
 
-    /// Gets whether a value of [`type`](paramref) can be called: a function type, a function
-    /// pointer or a delegate, also when nullable or a platform type.
-    /// @param type The type of the value.
-    /// @returns `true` when the value can be called.
-    private func IsCallableValueType(type TypeSymbol?) bool {
-        if type == nil {
+    /// Issue #6206: reshapes `name[indices](args)` / `name[indices]?(args)` into
+    /// index-then-call when `name` is a non-callable variable in scope and the
+    /// bracketed arguments are expression-shaped.
+    private func TryBindVariableAsIndexThenCall(
+        syntax CallExpressionSyntax,
+        typeArgumentList TypeArgumentListSyntax,
+        @NotNullWhen(true) out result BoundExpression?
+    ) bool {
+        result = nil
+        if syntax.Identifier.Kind != SyntaxKind.IdentifierToken || syntax.Identifier.IsMissing {
             return false
         }
-        var callable = PlatformTypeSymbol.StripTopLevel(type)
-        if callable is NullableTypeSymbol nullable {
-            callable = nullable.UnderlyingType
+        let symbol = Scope.TryLookupSymbol(syntax.Identifier.ValueText)
+        if symbol is not VariableSymbol variable {
+            return false
         }
-        return callable is FunctionTypeSymbol or
-            FunctionPointerTypeSymbol or
-            DelegateTypeSymbol ||
-            ClrTypeUtilities.IsDelegateType(callable.ClrType)
+        let narrowedType = TryGetNarrowedVariableType(variable)
+        if IsCallableValueType(narrowedType ?? variable.Type) {
+            return false
+        }
+        if !ExpressionBinder.TryConvertSeparatedTypeArgumentsToIndices(
+            typeArgumentList.Arguments,
+            out var indexArguments
+        ) {
+            return false
+        }
+        let indexExpr = BuildReshapedIndexExpression(syntax, typeArgumentList, indexArguments)
+        // Color Color guard: when the identifier also names a type in scope
+        // (e.g. `class Box[T]` shadowed by a local `Box`), try indexing
+        // speculatively so `Box[int32](5)` falls back to construction when the
+        // bracket argument is not an expression.
+        if HasTypeCandidateInScope(syntax.Identifier, typeArgumentList.Arguments.Count) {
+            let diagMark = Diagnostics.Count
+            let snapshot = CaptureNarrowingBindSnapshot()
+            let callee = bindExpression(indexExpr)
+            if callee is BoundErrorExpression || Diagnostics.Count != diagMark {
+                Diagnostics.TruncateTo(diagMark)
+                RestoreNarrowingBindSnapshot(snapshot)
+                return false
+            }
+            result = FinishIndexThenCall(syntax, typeArgumentList, callee)
+            return true
+        }
+        let callee = bindExpression(indexExpr)
+        result = FinishIndexThenCall(syntax, typeArgumentList, callee)
+        return true
+    }
+
+    /// Issue #6206: fallback for bare non-local value targets not stored in
+    /// `Scope.TryLookupSymbol` (inherited CLR properties/fields, DIM interface
+    /// properties, `using static` fields/properties, submission globals) after
+    /// all function/method/type paths failed.
+    private func TryBindFallbackValueAsIndexThenCall(
+        syntax CallExpressionSyntax,
+        typeArgumentList TypeArgumentListSyntax,
+        rollbackPrebind Action?,
+        prebindDiagMark int32,
+        preArgumentsNarrowing StatementBinder.NarrowingBindSnapshot,
+        @NotNullWhen(true) out result BoundExpression?
+    ) bool {
+        result = nil
+        if syntax.Identifier.Kind != SyntaxKind.IdentifierToken || syntax.Identifier.IsMissing {
+            return false
+        }
+        if !ExpressionBinder.TryConvertSeparatedTypeArgumentsToIndices(
+            typeArgumentList.Arguments,
+            out var indexArguments
+        ) {
+            return false
+        }
+        let specMark = Diagnostics.Count
+        let specSnapshot = CaptureNarrowingBindSnapshot()
+        let targetProbe = bindExpression(NameExpressionSyntax(syntax.SyntaxTree, syntax.Identifier))
+        let isIndexableValue = !(targetProbe is BoundErrorExpression) &&
+            Diagnostics.Count == specMark &&
+            !(targetProbe is BoundMethodGroupExpression or BoundClrMethodGroupExpression) &&
+            !IsCallableValueType(targetProbe.Type)
+        Diagnostics.TruncateTo(specMark)
+        RestoreNarrowingBindSnapshot(specSnapshot)
+        if !isIndexableValue {
+            return false
+        }
+        if rollbackPrebind != nil {
+            Diagnostics.TruncateTo(prebindDiagMark)
+            rollbackPrebind()
+        }
+        RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
+        let indexExpr = BuildReshapedIndexExpression(syntax, typeArgumentList, indexArguments)
+        let callee = bindExpression(indexExpr)
+        result = FinishIndexThenCall(syntax, typeArgumentList, callee)
+        return true
+    }
+
+    private func BuildReshapedIndexExpression(
+        syntax CallExpressionSyntax,
+        typeArgumentList TypeArgumentListSyntax,
+        indexArguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax]
+    ) IndexExpressionSyntax {
+        let targetExpr = NameExpressionSyntax(syntax.SyntaxTree, syntax.Identifier)
+        return IndexExpressionSyntax(
+            syntax.SyntaxTree,
+            targetExpr,
+            typeArgumentList.OpenBracketToken,
+            indexArguments,
+            typeArgumentList.CloseBracketToken
+        )
+    }
+
+    private func HasTypeCandidateInScope(identifier SyntaxToken, preferredArity int32) bool {
+        let name = identifier.ValueText
+        return Scope.TryLookupImportedClassByArity(name, preferredArity, declaration: nil, out _) ||
+            binderCtx.TryLookupSourceType(Scope, name, preferredArity, getCurrentFunction(), out _, out _) ||
+            lookupTypeWithArity(identifier, preferredArity) != nil
+    }
+
+    private func FinishIndexThenCall(
+        syntax CallExpressionSyntax,
+        typeArgumentList TypeArgumentListSyntax,
+        callee BoundExpression
+    ) BoundExpression {
+        ExpressionBinder.AnchorReshapedCalleeIdentifiers(callee)
+        let sourceText = syntax.SyntaxTree.Text
+        let calleeSpan = TextSpan.FromBounds(syntax.Identifier.Span.Start, typeArgumentList.CloseBracketToken.Span.End)
+        let calleeName = sourceText.ToString(calleeSpan)
+        let calleeLocation = TextLocation(sourceText, calleeSpan)
+        if callee.Syntax is ExpressionSyntax calleeSyntax {
+            ApplySubExpressionNarrowingEffects(calleeSyntax, callee)
+        }
+        if syntax.NullableQuestionToken != nil {
+            return BindNullConditionalIndirectCallExpression(
+                syntax,
+                callee,
+                calleeName,
+                calleeLocation,
+                bracketIsIndex: true
+            )
+        }
+        return BindIndirectCallExpression(
+            syntax,
+            callee,
+            calleeName,
+            calleeLocation,
+            GetNullableDelegateNullSafeInvocation(),
+            bracketIsIndex: true
+        )
     }
 
     /// Gets whether any of [`candidates`](paramref) declares type parameters.
@@ -3537,6 +3699,24 @@ internal partial class OverloadResolver {
             }
             functionType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), returnType)
             return true
+        }
+
+        /// Gets whether a value of [`type`](paramref) can be called: a function type, a function
+        /// pointer or a delegate, also when nullable or a platform type.
+        /// @param type The type of the value.
+        /// @returns `true` when the value can be called.
+        internal func IsCallableValueType(type TypeSymbol?) bool {
+            if type == nil {
+                return false
+            }
+            var callable = PlatformTypeSymbol.StripTopLevel(type)
+            if callable is NullableTypeSymbol nullable {
+                callable = nullable.UnderlyingType
+            }
+            return callable is FunctionTypeSymbol or
+                FunctionPointerTypeSymbol or
+                DelegateTypeSymbol ||
+                ClrTypeUtilities.IsDelegateType(callable.ClrType)
         }
     }
 }
