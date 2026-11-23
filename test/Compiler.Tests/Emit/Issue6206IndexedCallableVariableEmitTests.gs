@@ -269,6 +269,59 @@ func Main() {
     }
 
     @Fact
+    func QualifiedMemberIndexWithObsoleteIndex_EmitsWarningAndStillBinds() {
+        let source = `package P
+import System
+import System.Collections.Generic
+
+class KeyHolder {
+    @Obsolete("legacy")
+    var Index string = "hit"
+}
+
+class Holder {
+    var Callbacks Dictionary[string, (int32) -> int32] = Dictionary[string, (int32) -> int32]()
+}
+
+func Main() {
+    let holder = Holder()
+    holder.Callbacks["hit"] = (v int32) -> v + 91
+    let keys = KeyHolder()
+    Console.WriteLine(holder.Callbacks[keys.Index](9))
+}`
+        let tempDir = Directory.CreateTempSubdirectory("gs_6206_qobs_").FullName
+        try {
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let outPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, source)
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            var compileExit int32
+            try {
+                compileExit = Program.Main(
+                    []string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath}
+                )
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            let compileLog = compileOut.ToString() + compileErr.ToString()
+            Assert.True(compileExit == 0, compileLog)
+            Assert.Contains("GS0204", compileLog, StringComparison.Ordinal)
+            IlVerifier.Verify(outPath)
+            Assert.Equal("100${Environment.NewLine}", ExecDll(tempDir, outPath))
+        } finally {
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch { }
+        }
+    }
+
+    @Fact
     func NegativeControls_ReportExpectedDiagnostics() {
         // Non-generic function with type argument -> GS0148
         let nonGenericErrors = CompileExpectingErrors(`package P
@@ -373,9 +426,16 @@ func Main() {
             psi.ArgumentList.Add(Path.ChangeExtension(dllPath, ".runtimeconfig.json"))
             psi.ArgumentList.Add(dllPath)
             using let proc = Process.Start(psi)!!
-            let stdout = proc.StandardOutput.ReadToEnd()
-            let stderr = proc.StandardError.ReadToEnd()
-            Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+            let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+            let stderrTask = proc.StandardError.ReadToEndAsync()
+            if !proc.WaitForExit(30_000) {
+                try {
+                    proc.Kill(entireProcessTree: true)
+                } catch { }
+                Assert.Fail("dotnet exec timed out after 30s")
+            }
+            let stdout = stdoutTask.GetAwaiter().GetResult()
+            let stderr = stderrTask.GetAwaiter().GetResult()
             Assert.True(proc.ExitCode == 0, (`exited ` + "${proc.ExitCode}" + `
 stdout:
 ` + "$stdout" + `

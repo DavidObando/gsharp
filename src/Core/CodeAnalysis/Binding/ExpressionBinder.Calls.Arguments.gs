@@ -817,7 +817,7 @@ internal partial class ExpressionBinder {
         } else {
             BindIndexAgainstTarget(memberLoad, indices[0], ce.Identifier.Location)
         }
-        if bound is BoundErrorExpression || Diagnostics.Count != mark || bound.Type == nil {
+        if bound is BoundErrorExpression || Diagnostics.HasErrorSince(mark) || bound.Type == nil {
             Diagnostics.TruncateTo(mark)
             return false
         }
@@ -4866,6 +4866,10 @@ internal partial class ExpressionBinder {
     }
 
     private class ReshapedTokenAnchorWalker : BoundTreeWalker {
+        private let visitedErrors HashSet[BoundErrorExpression] = HashSet[BoundErrorExpression](
+            ReferenceEqualityComparer.Instance
+        )
+
         override func VisitExpression(node BoundExpression?) {
             if node != nil && node.CalleeIdentifier == nil && node is not BoundConversionExpression {
                 if node is BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}, Operand: {} inner} &&
@@ -4882,6 +4886,29 @@ internal partial class ExpressionBinder {
                     !rhs.IdentifierToken.IsMissing &&
                     !object.ReferenceEquals(rhs.IdentifierToken.Parent, rhs) {
                     node.CalleeIdentifier = rhs.IdentifierToken
+                }
+            }
+            if node is BoundErrorExpression error && visitedErrors.Add(error) {
+                if !error.FailedOperands.IsDefaultOrEmpty {
+                    for operand in error.FailedOperands {
+                        VisitExpression(operand)
+                    }
+                }
+                if error.FailedReceiver is {} failedReceiver {
+                    VisitExpression(failedReceiver)
+                }
+                if !error.FailedArguments.IsDefaultOrEmpty {
+                    for failedArg in error.FailedArguments {
+                        VisitExpression(failedArg)
+                    }
+                }
+                if error.FailedCallee is {} failedCallee {
+                    VisitExpression(failedCallee)
+                }
+                if !error.FailedChildren.IsDefaultOrEmpty {
+                    for failedChild in error.FailedChildren {
+                        VisitExpression(failedChild)
+                    }
                 }
             }
             base.VisitExpression(node)

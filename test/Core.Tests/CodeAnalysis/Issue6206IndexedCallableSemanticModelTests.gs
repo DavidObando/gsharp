@@ -105,4 +105,44 @@ func F(x int32) {
         Assert.Equal("i", Assert.IsType[LocalVariableSymbol](model.GetSymbolInfo(failedIdxToken).Symbol).Name)
         Assert.Empty(model.GetMemberGroup(failedCall))
     }
+
+    @Fact
+    func InvalidIndexType_PreservesTargetAndIndexOperandsForSemanticModel() {
+        let source = `package P
+import System.Collections.Generic
+
+func F() {
+    let fns = List[(int32) -> int32]()
+    let bad = "k"
+    let a = fns[bad](1)
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6206_sm_bad_idx.gs"))
+        let compilation = Compilation(tree)
+        let error = Assert.Single(
+            compilation.GetDiagnostics().Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        )
+        Assert.Equal("GS0267", error.Id)
+        let model = compilation.GetSemanticModel(tree)
+
+        let call = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .Single((c CallExpressionSyntax) -> c.Identifier.ValueText == "fns")
+        let fnsSym = Assert.IsType[LocalVariableSymbol](model.GetSymbolInfo(call.Identifier).Symbol)
+        Assert.Equal("fns", fnsSym.Name)
+        Assert.Equal(
+            "System.Collections.Generic.List[System.Func[int32, int32]]",
+            model.GetTypeInfo(call.Identifier).Type?.ToString()
+        )
+
+        let badClause = Assert.Single(call.TypeArgumentList!!.Arguments)
+        let badToken = badClause.Identifier!!
+        let badSym = Assert.IsType[LocalVariableSymbol](model.GetSymbolInfo(badToken).Symbol)
+        Assert.Equal("bad", badSym.Name)
+        Assert.Same(TypeSymbol.String, model.GetTypeInfo(badToken).Type)
+        Assert.Same(badSym, model.GetSymbolInfo(badClause).Symbol)
+        Assert.Same(TypeSymbol.String, model.GetTypeInfo(badClause).Type)
+    }
 }
