@@ -28,6 +28,9 @@ open class Issue6187FailedOperatorOperandTests {
     @InlineData("let k = Use(Use(x) + Use(x, x))") // the failed binary is a call argument
     @InlineData("t += Use(x) + Use(x, x)") // compound assignment with a failed binary value
     @InlineData("let k = Use(x) == 1 ? Use(x) : Use(x, x)") // a conditional with a failed branch
+    @InlineData("let k = Use(x) == 1 ? default : Use(x, x)") // a bare default and a failed branch
+    @InlineData("let k = Use(x) == 1 ? Use(x, x) : default")
+    @InlineData("let k = Use(x) == 1 ? default : default") // two bare defaults
     @InlineData("let k = Opt(x) ?? Use(x, x)") // a coalesce with a failed right operand
     func OperandsOfAFailedBinary_AnswerTheirSymbolAndType(statement string) {
         let (model, tree, compilation) = CreateModel(statement)

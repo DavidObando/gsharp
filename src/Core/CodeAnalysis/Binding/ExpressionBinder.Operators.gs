@@ -838,11 +838,13 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportBareDefaultNoTargetType(
                 (cast[DefaultExpressionSyntax](syntax.WhenTrue)).DefaultKeyword.Location
             )
-            return BoundErrorExpression(nil)
+            // The condition keeps its answers in the semantic model (#6187).
+            return BoundErrorExpression.WithFailedOperands(condition)
         } else if trueIsBareDefault {
             whenFalse = bindWhenFalse(nil)
             if whenFalse is BoundErrorExpression {
-                return BoundErrorExpression(nil)
+                // The condition and the bound branch keep their answers in the semantic model (#6187).
+                return BoundErrorExpression.WithFailedOperands(condition, whenFalse)
             }
             TruncateBranchSiblingExpressions(afterCondition)
             falseExit = CaptureExpressionNarrowingFrames()
@@ -865,7 +867,8 @@ internal partial class ExpressionBinder {
         } else if falseIsBareDefault {
             whenTrue = bindWhenTrue(nil)
             if whenTrue is BoundErrorExpression {
-                return BoundErrorExpression(nil)
+                // The condition and the bound branch keep their answers in the semantic model (#6187).
+                return BoundErrorExpression.WithFailedOperands(condition, whenTrue)
             }
             TruncateBranchSiblingExpressions(afterCondition)
             thenExit = CaptureExpressionNarrowingFrames()
