@@ -22,11 +22,12 @@ import Xunit.Abstractions
 /// of re-enumerating `SyntaxTree.GetRoot().DescendantTrivia(descendIntoTrivia: true)`
 /// up to each conditional invocation.
 /// @remarks Discrimination witness (ADR-0154): reverting `IsElidedInvocation` to
-/// prefix trivia traversal fails both scaling tests (`builds=0`); an uncached
-/// index mutant fails `builds == 1` (`128/256/512`) and scales directives;
-/// dropping `directive.IsActive` fails inactive-branch controls (`"a|-|c|d|3:3"`
-/// and `NullReferenceException`); dropping `OverriddenMethod` fails the
-/// inherited-attribute control (`"1|-|3|4|3:3"`).
+/// prefix trivia traversal fails both scaling tests (`builds=0`); using
+/// `GetNextDirective` rescans fails `triviaVisits > 0` (and rescans O(D^2) leading
+/// trivia); an uncached index mutant fails `builds == 1` (`128/256/512`) and scales
+/// directives; dropping `directive.IsActive` fails inactive-branch controls
+/// (`"a|-|c|d|3:3"` and `NullReferenceException`); dropping `OverriddenMethod`
+/// fails the inherited-attribute control (`"1|-|3|4|3:3"`).
 open class Issue6034PreprocessorStateIndexTests {
     private let output ITestOutputHelper
 
@@ -61,7 +62,10 @@ open class Issue6034PreprocessorStateIndexTests {
             let (printed, bytes) = MeasureTranslationAllocations(compilation, document)
             let runBody = RunBodyOf(printed)
             Assert.DoesNotContain("Skip(", runBody, StringComparison.Ordinal)
-            let (buildCount, visitCount, queryCount, measuredPrinted) = MeasurePreprocessorWork(compilation, document)
+            let (buildCount, _, visitCount, queryCount, measuredPrinted) = MeasurePreprocessorWork(
+                compilation,
+                document
+            )
             Assert.Equal(Encoding.UTF8.GetBytes(printed), Encoding.UTF8.GetBytes(measuredPrinted))
             this.output.WriteLine(
                 "Issue6034 withDirectives=$withDirectives N=$repetitions: builds=$buildCount, " +
@@ -90,6 +94,67 @@ open class Issue6034PreprocessorStateIndexTests {
                 allocatedBytes[1] <= allocatedBytes[0] * 3 &&
                 allocatedBytes[2] <= allocatedBytes[1] * 3,
             "Translation allocations must scale linearly: ${string.Join(", ", allocatedBytes)}."
+        )
+    }
+
+    @Fact
+    func ConsecutivePreprocessorDirectives_ScaleLinearlyInWorkAndAllocations() {
+        let builds = List[int64]()
+        let triviaVisits = List[int64]()
+        let directiveVisits = List[int64]()
+        let allocatedBytes = List[int64]()
+        for directiveCount in[]int32{16, 128, 256, 512} {
+            let source = BuildConsecutiveDirectivesSource(directiveCount)
+            let tree = CSharpSyntaxTree.ParseText(
+                source,
+                CSharpParseOptions(LanguageVersion.Latest),
+                path: "DirectivesScaling.cs"
+            )
+            let compilation = CSharpCompilation.Create(
+                "Issue6034DirectivesScaling$directiveCount",
+                []SyntaxTree{tree},
+                CSharpProjectLoader.RuntimeReferences(),
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error))
+            let model = compilation.GetSemanticModel(tree)
+            let document = LoadedDocument("DirectivesScaling.cs", tree, model)
+            let (printed, bytes) = MeasureTranslationAllocations(compilation, document)
+            let runBody = RunBodyOf(printed)
+            Assert.DoesNotContain("Skip(", runBody, StringComparison.Ordinal)
+            Assert.Contains("Keep(", runBody, StringComparison.Ordinal)
+            let (buildCount, triviaCount, visitCount, queryCount, measuredPrinted) = MeasurePreprocessorWork(
+                compilation,
+                document
+            )
+            Assert.Equal(Encoding.UTF8.GetBytes(printed), Encoding.UTF8.GetBytes(measuredPrinted))
+            this.output.WriteLine(
+                "Issue6034 directives D=$directiveCount: builds=$buildCount, trivia=$triviaCount, " +
+                    "directives=$visitCount, queries=$queryCount, alloc=$bytes"
+            )
+            if directiveCount != 16 {
+                builds.Add(buildCount)
+                triviaVisits.Add(triviaCount)
+                directiveVisits.Add(visitCount)
+                allocatedBytes.Add(bytes)
+            }
+        }
+        Assert.All(builds, (count int64) -> Assert.Equal(1, count))
+        Assert.True(
+            triviaVisits[0] > 0 && triviaVisits[1] <= triviaVisits[0] * 3 && triviaVisits[2] <= triviaVisits[1] * 3,
+            "Directive trivia visits must scale linearly: ${string.Join(", ", triviaVisits)}."
+        )
+        Assert.True(
+            directiveVisits[0] > 0 &&
+                directiveVisits[1] <= directiveVisits[0] * 3 &&
+                directiveVisits[2] <= directiveVisits[1] * 3,
+            "Directive transitions must scale linearly: ${string.Join(", ", directiveVisits)}."
+        )
+        Assert.True(
+            allocatedBytes[0] > 0 &&
+                allocatedBytes[1] <= allocatedBytes[0] * 3 &&
+                allocatedBytes[2] <= allocatedBytes[1] * 3,
+            "Directive-index allocations must scale linearly: ${string.Join(", ", allocatedBytes)}."
         )
     }
 
@@ -346,6 +411,35 @@ public static class Demo
             return builder.ToString()
         }
 
+        private func BuildConsecutiveDirectivesSource(directiveCount int32) string {
+            let builder = StringBuilder()
+            for var i = 0; i < directiveCount; i++ {
+                if i % 2 == 0 {
+                    builder.AppendLine("#define SYM_$i")
+                } else {
+                    builder.AppendLine("#undef SYM_$i")
+                }
+            }
+            builder.AppendLine("using System.Diagnostics;")
+            builder.AppendLine()
+            builder.AppendLine("public static class Demo")
+            builder.AppendLine("{")
+            builder.AppendLine("    [Conditional(\"MISSING\")]")
+            builder.AppendLine("    static void Skip(int value) { }")
+            builder.AppendLine()
+            builder.AppendLine("    [Conditional(\"SYM_0\")]")
+            builder.AppendLine("    static void Keep(int value) { }")
+            builder.AppendLine()
+            builder.AppendLine("    public static string Run()")
+            builder.AppendLine("    {")
+            builder.AppendLine("        Skip(0);")
+            builder.AppendLine("        Keep(1);")
+            builder.AppendLine("        return \"\";")
+            builder.AppendLine("    }")
+            builder.AppendLine("}")
+            return builder.ToString()
+        }
+
         private func MeasureTranslationAllocations(compilation CSharpCompilation, document LoadedDocument)(
             Printed string,
             AllocatedBytes int64
@@ -369,6 +463,7 @@ public static class Demo
 
         private func MeasurePreprocessorWork(compilation CSharpCompilation, document LoadedDocument)(
             Builds int64,
+            TriviaVisits int64,
             DirectiveVisits int64,
             Queries int64,
             Printed string
@@ -379,6 +474,7 @@ public static class Demo
             let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
             return (
                 measurements.GetCounter("translation.preprocessor_index_builds"),
+                measurements.GetCounter("translation.preprocessor_trivia_visits"),
                 measurements.GetCounter("translation.preprocessor_directive_visits"),
                 measurements.GetCounter("translation.preprocessor_symbol_queries"),
                 printed

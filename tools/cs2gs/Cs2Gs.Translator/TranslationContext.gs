@@ -676,17 +676,54 @@ class TranslationContext {
             if !root.ContainsDirectives {
                 return
             }
-            var directive = Microsoft.CodeAnalysis.CSharp.CSharpExtensions.GetFirstDirective(root, DefineOrUndefFilter)
-            while directive != nil {
-                CompilationMeasurements.Count("translation.preprocessor_directive_visits")
-                if directive.IsActive {
-                    if directive is DefineDirectiveTriviaSyntax define {
-                        this.AddTransition(define.Name.ValueText, define.SpanStart, true)
-                    } else if directive is UndefDirectiveTriviaSyntax undef {
-                        this.AddTransition(undef.Name.ValueText, undef.SpanStart, false)
-                    }
+            this.CollectDirectives(root)
+        }
+
+        private func CollectDirectives(root SyntaxNode) {
+            let stack = Stack[SyntaxNodeOrToken]()
+            stack.Push(root)
+            while stack.Count > 0 {
+                let current = stack.Pop()
+                if !current.ContainsDirectives {
+                    continue
                 }
-                directive = directive.GetNextDirective(DefineOrUndefFilter)
+                if current.IsNode {
+                    let children = current.AsNode()!!.ChildNodesAndTokens()
+                    for var i = children.Count - 1; i >= 0; i-- {
+                        let child = children[i]
+                        if child.ContainsDirectives {
+                            stack.Push(child)
+                        }
+                    }
+                } else {
+                    let token = current.AsToken()
+                    this.CollectTriviaDirectives(token.LeadingTrivia)
+                    this.CollectTriviaDirectives(token.TrailingTrivia)
+                }
+            }
+        }
+
+        private func CollectTriviaDirectives(triviaList SyntaxTriviaList) {
+            for trivia in triviaList {
+                CompilationMeasurements.Count("translation.preprocessor_trivia_visits")
+                if trivia.IsDirective {
+                    switch trivia.GetStructure() {
+                        case define is DefineDirectiveTriviaSyntax {
+                            CompilationMeasurements.Count("translation.preprocessor_directive_visits")
+                            if define.IsActive {
+                                this.AddTransition(define.Name.ValueText, define.SpanStart, true)
+                            }
+                        }
+                        case undef is UndefDirectiveTriviaSyntax {
+                            CompilationMeasurements.Count("translation.preprocessor_directive_visits")
+                            if undef.IsActive {
+                                this.AddTransition(undef.Name.ValueText, undef.SpanStart, false)
+                            }
+                        }
+                    }
+                } else if trivia.HasStructure && trivia.GetStructure() is {} structure && structure.ContainsDirectives {
+                    this.CollectDirectives(structure)
+                }
             }
         }
 
@@ -728,13 +765,6 @@ class TranslationContext {
                 }
             }
             return this.initialSymbols.Contains(symbol)
-        }
-
-        shared {
-            private let DefineOrUndefFilter Func[DirectiveTriviaSyntax, bool] = (
-                directive DirectiveTriviaSyntax
-            ) -> directive is DefineDirectiveTriviaSyntax ||
-                directive is UndefDirectiveTriviaSyntax
         }
     }
 
