@@ -269,12 +269,24 @@ namespace Demo
         public bool Accept(int x) => x == 0;
     }
 
+    public struct CounterBox
+    {
+        public int Counter;
+
+        public bool StructThisWriteInRight(Node item) =>
+            item.Child != null && (++this.Counter > 0 && item.Child.Value == 0);
+
+        public bool StructThisWriteInLeft(Node item) =>
+            (item.Child != null && ++this.Counter > 0) && item.Child.Value == 0;
+    }
+
     public static class Probe
     {
         private static bool Check() => false;
         private static int SideEffectInt() => 0;
         private static bool Compare(int a, int b) => a == b;
         private static Holder GetHolder() => new Holder();
+        private static bool Touch(ref int x) { x += 1; return true; }
         private static bool MutateNonNullRef(ref Node item, Node next) { item = next; return true; }
 
         public static bool CallBeforeInRightOr(Node item) =>
@@ -340,6 +352,15 @@ namespace Demo
         public static bool LambdaInsideAnd(Node item) =>
             item.Child != null && ((Func<bool>)(() => item.Child.Value == 0))();
 
+        public static bool AssertedGuardReceiverBeforeLocalGuard(Node? item) =>
+            item.Child != null && item != null && item.Child.Value == 0;
+
+        public static bool MutableRootWithByRefFieldCallInLeft(Node item, Node other)
+        {
+            if (item == other) item = other;
+            return (item.Child != null && Touch(ref other.Value)) && item.Child.Value == 0;
+        }
+
         public static void Main()
         {
             var leaf = new Node(null, 0);
@@ -347,6 +368,7 @@ namespace Demo
             var other = new Node(leaf, 2);
             var noChild = new Node(null, 3);
             var arr = new[] { 0 };
+            var box = new CounterBox();
             Console.Write(
                 CallBeforeInRightOr(item) + "|" +
                 CallInEarlierArg(item) + "|" +
@@ -364,7 +386,11 @@ namespace Demo
                 AndLeftOfOr(item, other) + "|" +
                 ComputedSubpattern(item) + "|" +
                 EmptyBracesPattern(item) + "|" +
-                LambdaInsideAnd(item));
+                LambdaInsideAnd(item) + "|" +
+                AssertedGuardReceiverBeforeLocalGuard(item) + "|" +
+                MutableRootWithByRefFieldCallInLeft(item, other) + "|" +
+                box.StructThisWriteInRight(item) + "|" +
+                box.StructThisWriteInLeft(item));
         }
     }
 }
@@ -374,6 +400,8 @@ namespace Demo
             verifyTranslation: (printed string) -> {
                 Issue5585ReadonlyNullArgumentTests.AssertClean(printed)
                 let methodNames = []string{
+                    "StructThisWriteInRight",
+                    "StructThisWriteInLeft",
                     "CallBeforeInRightOr",
                     "CallInEarlierArg",
                     "CallInInvocationReceiver",
@@ -390,7 +418,9 @@ namespace Demo
                     "AndLeftOfOr",
                     "ComputedSubpattern",
                     "EmptyBracesPattern",
-                    "LambdaInsideAnd"
+                    "LambdaInsideAnd",
+                    "AssertedGuardReceiverBeforeLocalGuard",
+                    "MutableRootWithByRefFieldCallInLeft"
                 }
                 for var i = 0; i < methodNames.Length; i++ {
                     let start = printed.IndexOf("func " + methodNames[i] + "(", StringComparison.Ordinal)
@@ -402,14 +432,14 @@ namespace Demo
                     }
                     Assert.True(end > start)
                     let body = printed.Substring(start, end - start)
-                    Assert.Contains("!!", body, StringComparison.Ordinal)
+                    Assert.Contains("Child!!", body, StringComparison.Ordinal)
                 }
             },
             verifyIL: true,
             verifyAssembly: (assembly string) -> {
                 Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
             },
-            expectedOutput: "True|True|True|True|True|True|nre|True|True|True|True|False|True|True|True|True|True"
+            expectedOutput: "True|True|True|True|True|True|nre|True|True|True|True|False|True|True|True|True|True|True|True|True|True"
         )
     }
 }

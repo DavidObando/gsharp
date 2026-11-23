@@ -14522,6 +14522,7 @@ partial class CSharpToGSharpTranslator {
             let rootIsByReference = (targetRoot != nil && this.IsByReferenceVariable(targetRoot)) ||
                 enclosingValueTypeRoot
             let rootIsClosureAssigned = targetRoot != nil && this.IsClosureAssignedVariable(targetRoot)
+            let rootIsEmittedMutable = targetRoot != nil && this.IsEmittedMutableVariable(targetRoot)
             let rootType ITypeSymbol? = if targetRoot != nil {
                 this.ReferenceStorageType(targetRoot)
             } else if enclosingValueTypeRoot {
@@ -14537,6 +14538,7 @@ partial class CSharpToGSharpTranslator {
                 wantNonNullWhenTrue,
                 rootIsByReference,
                 rootIsClosureAssigned,
+                rootIsEmittedMutable,
                 hasSeparateLinks,
                 rootType
             ) {
@@ -14579,6 +14581,7 @@ partial class CSharpToGSharpTranslator {
             wantNonNullWhenTrue bool,
             rootIsByReference bool,
             rootIsClosureAssigned bool,
+            rootIsEmittedMutable bool,
             hasSeparateLinks bool,
             rootType ITypeSymbol?
         ) bool {
@@ -14595,6 +14598,7 @@ partial class CSharpToGSharpTranslator {
                         !wantNonNullWhenTrue,
                         rootIsByReference,
                         rootIsClosureAssigned,
+                        rootIsEmittedMutable,
                         hasSeparateLinks,
                         rootType
                     )
@@ -14611,6 +14615,7 @@ partial class CSharpToGSharpTranslator {
                             wantNonNullWhenTrue: true,
                             rootIsByReference,
                             rootIsClosureAssigned,
+                            rootIsEmittedMutable,
                             hasSeparateLinks,
                             rootType
                         ) {
@@ -14624,6 +14629,7 @@ partial class CSharpToGSharpTranslator {
                             wantNonNullWhenTrue: true,
                             rootIsByReference,
                             rootIsClosureAssigned,
+                            rootIsEmittedMutable,
                             hasSeparateLinks,
                             rootType
                         ) &&
@@ -14633,6 +14639,7 @@ partial class CSharpToGSharpTranslator {
                             targetRoot,
                             rootIsByReference,
                             rootIsClosureAssigned,
+                            rootIsEmittedMutable,
                             hasSeparateLinks,
                             rootType
                         )
@@ -14645,6 +14652,7 @@ partial class CSharpToGSharpTranslator {
                         wantNonNullWhenTrue: false,
                         rootIsByReference,
                         rootIsClosureAssigned,
+                        rootIsEmittedMutable,
                         hasSeparateLinks,
                         rootType
                     ) &&
@@ -14656,6 +14664,7 @@ partial class CSharpToGSharpTranslator {
                         wantNonNullWhenTrue: false,
                         rootIsByReference,
                         rootIsClosureAssigned,
+                        rootIsEmittedMutable,
                         hasSeparateLinks,
                         rootType
                     )
@@ -14672,6 +14681,7 @@ partial class CSharpToGSharpTranslator {
                             wantNonNullWhenTrue: false,
                             rootIsByReference,
                             rootIsClosureAssigned,
+                            rootIsEmittedMutable,
                             hasSeparateLinks,
                             rootType
                         ) {
@@ -14685,6 +14695,7 @@ partial class CSharpToGSharpTranslator {
                             wantNonNullWhenTrue: false,
                             rootIsByReference,
                             rootIsClosureAssigned,
+                            rootIsEmittedMutable,
                             hasSeparateLinks,
                             rootType
                         ) &&
@@ -14694,6 +14705,7 @@ partial class CSharpToGSharpTranslator {
                             targetRoot,
                             rootIsByReference,
                             rootIsClosureAssigned,
+                            rootIsEmittedMutable,
                             hasSeparateLinks,
                             rootType
                         )
@@ -14706,6 +14718,7 @@ partial class CSharpToGSharpTranslator {
                         wantNonNullWhenTrue: true,
                         rootIsByReference,
                         rootIsClosureAssigned,
+                        rootIsEmittedMutable,
                         hasSeparateLinks,
                         rootType
                     ) &&
@@ -14717,6 +14730,7 @@ partial class CSharpToGSharpTranslator {
                         wantNonNullWhenTrue: true,
                         rootIsByReference,
                         rootIsClosureAssigned,
+                        rootIsEmittedMutable,
                         hasSeparateLinks,
                         rootType
                     )
@@ -14740,7 +14754,7 @@ partial class CSharpToGSharpTranslator {
                         out var candidateIsThisRoot,
                         out var candidateRoot,
                         out var candidateMembers,
-                        out _
+                        out var candidateReceiverCheckpoints
                     ) {
                         return StableAccessPathsMatch(
                             targetIsThisRoot,
@@ -14749,7 +14763,8 @@ partial class CSharpToGSharpTranslator {
                             candidateIsThisRoot,
                             candidateRoot,
                             candidateMembers
-                        )
+                        ) &&
+                            this.AllStableReceiverCheckpointsNonNull(candidateReceiverCheckpoints)
                     }
                     return false
                 }
@@ -14841,6 +14856,7 @@ partial class CSharpToGSharpTranslator {
             targetRoot ISymbol?,
             rootIsByReference bool,
             rootIsClosureAssigned bool,
+            rootIsEmittedMutable bool,
             hasSeparateLinks bool,
             rootType ITypeSymbol?
         ) bool {
@@ -14870,7 +14886,9 @@ partial class CSharpToGSharpTranslator {
                         return true
                     }
                 } else if this.SiblingOperandHasMemberStorageWrite(candidate) ||
-                    candidate is Microsoft.CodeAnalysis.CSharp.Syntax.WithExpressionSyntax {
+                    candidate is Microsoft.CodeAnalysis.CSharp.Syntax.WithExpressionSyntax ||
+                    (rootIsEmittedMutable && this.CallMayInvalidateAnyRoot(candidate)) ||
+                    this.WriteCandidateHasByReferenceRootMismatch(candidate, targetIsThisRoot, targetRoot) {
                     return true
                 }
             }
@@ -14898,10 +14916,76 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             if !rootIsByReference && !rootIsClosureAssigned && this.IsSeparateStorageWriteNode(node) &&
+                !this.WriteCandidateHasByReferenceRootMismatch(node, targetIsThisRoot, targetRoot) &&
                 !this.NodeRunsStaticTypeInitializer(node) {
                 return false
             }
             return this.ExitedIfConditionNodeMayMutate(node, targetRoot)
+        }
+
+        private func WriteCandidateHasByReferenceRootMismatch(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            targetIsThisRoot bool,
+            targetRoot ISymbol?
+        ) bool {
+            let target Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch node {
+                case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax: assignment.Left
+                case prefix is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax when prefix.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreIncrementExpression
+                ) ||
+                    prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreDecrementExpression): prefix.Operand
+                case postfix is Microsoft.CodeAnalysis.CSharp.Syntax.PostfixUnaryExpressionSyntax when postfix.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostIncrementExpression
+                ) ||
+                    postfix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostDecrementExpression): postfix.Operand
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if target == nil {
+                return false
+            }
+            var current = UnwrapParenthesesAndSuppressions(target)
+            while current is MemberAccessExpressionSyntax member {
+                let symbol = this.context.GetSymbolInfo(member).Symbol
+                if symbol is not IFieldSymbol and not IPropertySymbol || symbol!!.IsStatic {
+                    return false
+                }
+                let receiver = UnwrapParenthesesAndSuppressions(member.Expression)
+                if receiver == nil {
+                    return false
+                }
+                if receiver is ThisExpressionSyntax {
+                    return this.EnclosingTypeIsValueType(receiver) && !targetIsThisRoot
+                }
+                if receiver is IdentifierNameSyntax {
+                    let receiverSymbol = this.context.GetSymbolInfo(receiver).Symbol
+                    if receiverSymbol != nil && this.IsByReferenceVariable(receiverSymbol) && this.ReferenceStorageType(
+                        receiverSymbol
+                    )
+                        ?.IsValueType == true {
+                        return targetIsThisRoot || !SymbolEqualityComparer.Default.Equals(targetRoot, receiverSymbol)
+                    }
+                    if receiverSymbol is IFieldSymbol field &&
+                        !field.IsStatic &&
+                        field.Type.IsValueType &&
+                        this.EnclosingTypeIsValueType(receiver) {
+                        return !targetIsThisRoot
+                    }
+                    return false
+                }
+                if this.context.GetTypeInfo(receiver).Type?.IsReferenceType == true {
+                    return false
+                }
+                current = receiver
+            }
+            if current is IdentifierNameSyntax {
+                let symbol = this.context.GetSymbolInfo(current).Symbol
+                if (symbol is IFieldSymbol or IPropertySymbol) && !symbol!!.IsStatic && this.EnclosingTypeIsValueType(
+                    current
+                ) {
+                    return !targetIsThisRoot
+                }
+            }
+            return false
         }
 
         private func IsSeparateStorageWriteNode(node Microsoft.CodeAnalysis.SyntaxNode) bool {
