@@ -32,13 +32,20 @@ machine() {
 
 if [[ -n "${GSHARP_R2R_NUPKG_DIR:-}" ]]; then
     PKGS="$GSHARP_R2R_NUPKG_DIR"
+    if [[ -f "$PKGS/artifact-manifest.sha256" ]]; then
+        bash "$ROOT/build/artifact-manifest.sh" verify "$PKGS" --require-r2r-packages
+    fi
 else
     echo "==> Packing Gsharp.NET.Sdk and the Gsharp.NET.Sdk.Compiler.<rid> packages"
     dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v:q
     PKGS="out/bin/Release/nupkgs"
 fi
 
-NUPKG=$(ls -t "$PKGS"/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
+shopt -s nullglob
+SDK_CANDIDATES=("$PKGS"/Gsharp.NET.Sdk.[0-9]*.nupkg)
+shopt -u nullglob
+[[ ${#SDK_CANDIDATES[@]} -ge 1 ]] || fail "missing Gsharp.NET.Sdk.<version>.nupkg in $PKGS"
+NUPKG=$(ls -t "${SDK_CANDIDATES[@]}" | head -1)
 VER="${NUPKG##*Gsharp.NET.Sdk.}"
 VER="${VER%.nupkg}"
 RID=$(dotnet --info | sed -n 's/^ *RID: *//p' | head -1 | tr -d '\r')

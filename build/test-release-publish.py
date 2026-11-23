@@ -334,6 +334,25 @@ class VerifyNugetTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("2 versions", result.stderr)
 
+    def test_artifact_manifest_passes_when_valid_and_fails_on_mismatch(self) -> None:
+        make_packages(self.nupkgs)
+        manifest_script = REPO / "build" / "artifact-manifest.sh"
+        written = subprocess.run(["bash", str(manifest_script), "write", str(self.nupkgs), "--require-r2r-packages"],
+                                 capture_output=True, text=True, check=False)
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertEqual(self.verify().returncode, 0)
+
+        snupkg = self.nupkgs / "Gsharp.Repl.0.5.212.snupkg"
+        snupkg.write_bytes(b"y")
+        bad_hash = self.verify()
+        self.assertEqual(bad_hash.returncode, 1)
+        self.assertIn("artifact-manifest.sha256: checksum mismatch for Gsharp.Repl.0.5.212.snupkg", bad_hash.stderr)
+
+        snupkg.write_bytes(b"corrupted-symbol")
+        failed = self.verify()
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("artifact-manifest.sha256: size mismatch for Gsharp.Repl.0.5.212.snupkg", failed.stderr)
+
     def test_missing_directory_fails(self) -> None:
         self.assertEqual(self.verify().returncode, 1)
 
