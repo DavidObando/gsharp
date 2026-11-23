@@ -168,6 +168,7 @@ shared class RefInitializationHoister {
             StatementDeclarations = HashSet[LocalVariableSymbol]()
             AssignmentCounts = Dictionary[LocalVariableSymbol, int32]()
             Dependencies = Dictionary[LocalVariableSymbol, HashSet[LocalVariableSymbol]]()
+            OpaqueLocals = HashSet[LocalVariableSymbol]()
         }
 
         prop OrderedLocals List[LocalVariableSymbol] {
@@ -186,6 +187,9 @@ shared class RefInitializationHoister {
             get;
         }
         prop Dependencies Dictionary[LocalVariableSymbol, HashSet[LocalVariableSymbol]] {
+            get;
+        }
+        prop OpaqueLocals HashSet[LocalVariableSymbol] {
             get;
         }
 
@@ -213,8 +217,11 @@ shared class RefInitializationHoister {
                 if blockExpressionDepth == 0 && StatementDeclarations.Add(local) {
                     StatementLocals.Add(local)
                 }
-                if node.Initializer != nil {
-                    CollectDependencies(local, node.Initializer)
+                if let initializer = node.Initializer {
+                    CollectDependencies(local, initializer)
+                    if RefInitializationHoister.ContainsOpaqueStorage(initializer) {
+                        OpaqueLocals.Add(local)
+                    }
                 }
             }
             base.VisitVariableDeclaration(node)
@@ -230,6 +237,9 @@ shared class RefInitializationHoister {
                 AssignmentCounts.TryGetValue(local, out var count)
                 AssignmentCounts[local] = count + 1
                 CollectDependencies(local, node.Expression)
+                if RefInitializationHoister.ContainsOpaqueStorage(node.Expression) {
+                    OpaqueLocals.Add(local)
+                }
             }
             base.VisitAssignmentExpression(node)
         }
@@ -446,6 +456,7 @@ shared class RefInitializationHoister {
     private class DefinitionRewriter : BoundTreeRewriter {
         private let refLocals Dictionary[LocalVariableSymbol, RefLocalInfo]
         private let crossing HashSet[VariableSymbol]
+        private let assignmentCounts Dictionary[LocalVariableSymbol, int32]
         private var tempCounter int32
         private let activeDeclarations List[BoundStatement] = List[BoundStatement]()
         private let deferredCopies HashSet[BoundAssignmentExpression] = HashSet[BoundAssignmentExpression]()
@@ -455,11 +466,13 @@ shared class RefInitializationHoister {
         init(
             refLocals Dictionary[LocalVariableSymbol, RefLocalInfo],
             crossing HashSet[VariableSymbol],
+            assignmentCounts Dictionary[LocalVariableSymbol, int32],
             initialTempCounter int32,
             sharedSites List[SharedSite]? = nil
         ) {
             this.refLocals = refLocals
             this.crossing = crossing
+            this.assignmentCounts = assignmentCounts
             this.tempCounter = initialTempCounter
             this.sharedSites = sharedSites
         }
@@ -1088,6 +1101,41 @@ shared class RefInitializationHoister {
                     }
                     return rebuilt
                 }
+                case varExpr is BoundVariableExpression when varExpr.Variable is LocalVariableSymbol srcLocal &&
+                    srcLocal.Type is ByRefTypeSymbol &&
+                    !refLocals.ContainsKey(srcLocal) {
+                    let isReassigned = assignmentCounts.TryGetValue(srcLocal, out var assignCount) && assignCount > 0
+                    if !isReassigned {
+                        return BoundAddressOfExpression(
+                            varExpr.Syntax,
+                            BoundDereferenceExpression(varExpr.Syntax, varExpr)
+                        )
+                    }
+                    let previousStaged = this.stagedTemps
+                    let captured = if stageComponents {
+                        List[LocalVariableSymbol]()
+                    } else {
+                        previousStaged
+                    }
+                    this.stagedTemps = captured
+                    var capturedPointer BoundExpression
+                    try {
+                        capturedPointer = HoistIfNeeded(varExpr, prelude, forceCapture: true)
+                    } finally {
+                        this.stagedTemps = previousStaged
+                    }
+                    let rebuilt = BoundAddressOfExpression(
+                        varExpr.Syntax,
+                        BoundDereferenceExpression(varExpr.Syntax, capturedPointer)
+                    )
+                    if stageComponents && captured != nil && captured.Count > 0 {
+                        return CommitStagedTemps(captured, rebuilt, prelude, syntax, siteComponents)
+                    }
+                    if stageComponents && captured != nil {
+                        siteComponents?.AddRange(captured)
+                    }
+                    return rebuilt
+                }
                 case _ is BoundDefaultExpression {
                     return BoundDefaultExpression(nil, targetLocal.Type)
                 }
@@ -1366,7 +1414,19 @@ shared class RefInitializationHoister {
                     )
                 }
                 case dereference is BoundDereferenceExpression {
-                    return BoundDereferenceExpression(dereference.Syntax, HoistIfNeeded(dereference.Operand, prelude))
+                    let forceCapturePointer = dereference.Operand is BoundVariableExpression{
+                        Variable: LocalVariableSymbol ptrLocal
+                    } &&
+                        ptrLocal.Type is ByRefTypeSymbol &&
+                        !refLocals.ContainsKey(ptrLocal) && assignmentCounts.TryGetValue(
+                        ptrLocal,
+                        out var assignCount
+                    ) &&
+                        assignCount > 0
+                    return BoundDereferenceExpression(
+                        dereference.Syntax,
+                        HoistIfNeeded(dereference.Operand, prelude, forceCapture: forceCapturePointer)
+                    )
                 }
                 default {
                     if operand.Type is ByRefTypeSymbol && operand is not BoundVariableExpression {
@@ -1764,15 +1824,8 @@ shared class RefInitializationHoister {
                 }
                 if collector.Dependencies.TryGetValue(local, out var deps) {
                     for dep in deps {
-                        if collector.Declarations.TryGetValue(dep, out var depDecl) &&
-                            !(
-                            dep.RefKind != RefKind.None && !crossing.Contains(dep) &&
-                                (
-                                depDecl.Initializer == nil || !DefinitionRewriter.IsReconstructableStorage(
-                                    depDecl.Initializer
-                                )
-                            )
-                        ) &&
+                        if collector.Declarations.ContainsKey(dep) &&
+                            !(collector.OpaqueLocals.Contains(dep) && !crossing.Contains(dep)) &&
                             rewriteLocals.Add(dep) {
                             dependencyAdded = true
                         }
@@ -1841,7 +1894,7 @@ shared class RefInitializationHoister {
                     }
                 }
             }
-            let defRewriter = DefinitionRewriter(batch, crossing, tempCounter, sharedSites)
+            let defRewriter = DefinitionRewriter(batch, crossing, currentAssignmentCounts, tempCounter, sharedSites)
             currentBody = cast[BoundBlockStatement](defRewriter.RewriteStatement(currentBody))
             tempCounter = defRewriter.TempCounter
             let extraDeclarations = List[BoundStatement]()
@@ -2063,6 +2116,22 @@ shared class RefInitializationHoister {
         }
         local = nil
         return false
+    }
+
+    internal func ContainsOpaqueStorage(expression BoundExpression) bool {
+        return switch expression {
+            case block is BoundBlockExpression: ContainsOpaqueStorage(block.Expression)
+            case conditional is BoundConditionalExpression: ContainsOpaqueStorage(conditional.WhenTrue) ||
+                ContainsOpaqueStorage(conditional.WhenFalse)
+            case condAddr is BoundConditionalAddressExpression: ContainsOpaqueStorage(condAddr.WhenTrueOperand) ||
+                ContainsOpaqueStorage(condAddr.WhenFalseOperand)
+            case assign is BoundAssignmentExpression: ContainsOpaqueStorage(assign.Expression)
+            case _ is BoundDefaultExpression: false
+            case addr is BoundAddressOfExpression: !addr.IsUnmanaged && ContainsOpaqueStorage(addr.Operand)
+            case deref is BoundDereferenceExpression: deref.Operand.Type is ByRefTypeSymbol &&
+                ContainsOpaqueStorage(deref.Operand)
+            default: !DefinitionRewriter.IsReconstructableStorage(expression)
+        }
     }
 
     private func IsTriviallyRepeatable(expression BoundExpression) bool {

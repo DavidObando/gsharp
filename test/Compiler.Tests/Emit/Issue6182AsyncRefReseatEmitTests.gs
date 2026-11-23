@@ -1403,6 +1403,92 @@ Console.WriteLine("${run(true).GetAwaiter().GetResult()}|${run(false).GetAwaiter
     }
 
     @Fact
+    func OpaquePointerDependency_OverwrittenBeforeAwait_PreservesNativePointerAndVerifies() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package OpaquePtrDepBeforeAwait6182
+import System
+import System.Threading.Tasks
+
+func at(xs []int32, i int32) ref int32 {
+    return ref xs[i]
+}
+
+async func copyStraight() Task[string] {
+    var arr = []int32{10, 20, 30}
+    var y = 77
+    var n = &at(arr, 0)
+    var p = n
+    let before = *p
+    p = &y
+    await Task.Yield()
+    return "${before}:${*p}"
+}
+
+async func copyThenReseatSource() Task[string] {
+    var arr = []int32{11, 22, 33}
+    var y = 88
+    var z = 99
+    var n = &at(arr, 1)
+    var p = n
+    n = &z
+    let nVal = *n
+    let before = *p
+    p = &y
+    await Task.Yield()
+    return "${before}:${nVal}:${*p}"
+}
+
+async func reseatToOpaqueThenCopyAndBlock() Task[string] {
+    var arr = []int32{15, 25, 35}
+    var x = 5
+    var y = 66
+    var n = &x
+    n = &at(arr, 2)
+    var p = &y
+    p = n
+    let before = *p
+    p = &y
+    var q = ({
+        var nb = &at(arr, 0)
+        var rb = nb
+        rb = &y
+        rb
+    })
+    await Task.Yield()
+    return "${before}:${*p}:${*q}"
+}
+
+Console.WriteLine(
+    "${copyStraight().GetAwaiter().GetResult()}|${copyThenReseatSource().GetAwaiter().GetResult()}|${reseatToOpaqueThenCopyAndBlock().GetAwaiter().GetResult()}"
+)`, "OpaquePtrDepBeforeAwait6182", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("10:77|22:99:88|35:66:66\n", fixture.Run(dll))
+
+        let (code, output) = fixture.TryCompile(`package OpaquePtrDepSurvives6182
+import System.Threading.Tasks
+
+func at(xs []int32, i int32) ref int32 {
+    return ref xs[i]
+}
+
+async func bad() Task[int32] {
+    var arr = []int32{10, 20}
+    var n = &at(arr, 0)
+    var p = n
+    await Task.Yield()
+    return *p
+}`, "OpaquePtrDepSurvives6182", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.True(
+            output.Contains("error GS0258:", StringComparison.Ordinal) || output.Contains(
+                "error GS9998:",
+                StringComparison.Ordinal
+            ),
+            output
+        )
+    }
+
+    @Fact
     func DownstreamSingleDefinitionPointer_AfterPointerAliasCycle_VerifyAndExecute() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let dll = fixture.Compile(`package DownstreamSingleDefAfterCycle6182
