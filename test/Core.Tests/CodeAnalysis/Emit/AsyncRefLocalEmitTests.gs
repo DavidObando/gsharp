@@ -5,10 +5,14 @@
 package GSharp.Core.Tests.CodeAnalysis.Emit
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Emit
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
+import System.Collections.Immutable
 import System.IO
 import System.Linq
 import System.Reflection
@@ -139,7 +143,65 @@ Console.WriteLine(run(true).GetAwaiter().GetResult())
         Assert.Equal("1:1\n77:77\n", output)
     }
 
+    @Fact
+    func MissingUnsafeNullRef_InTargetClosure_ReportsGS0546() {
+        const Source = `package MissingUnsafeNullRef6182
+func run() int32 {
+    var dummy = 0
+    var p = &dummy
+    return *p
+}
+`
+        using let netStandard = NetStandardClosure()
+        let comp = Compilation(netStandard, SyntaxTree.Parse(SourceText.From(Source)))
+        let bound = comp.BoundProgram
+        Assert.False(bound.Diagnostics.Any((d Diagnostic) -> d.IsError))
+        let patcher = DummyAddressToDefaultRewriter()
+        let patchedFunctions = ImmutableDictionary.CreateBuilder[FunctionSymbol, BoundBlockStatement]()
+        for pair in bound.Functions {
+            patchedFunctions.Add(pair.Key, cast[BoundBlockStatement](patcher.RewriteStatement(pair.Value)))
+        }
+        let patchedProgram = BoundProgram(
+            bound.EntryPointPackage,
+            bound.Packages,
+            bound.Diagnostics,
+            patchedFunctions.ToImmutable(),
+            bound.EntryPoint,
+            bound.Statement
+        )
+        using let peStream = MemoryStream()
+        let ex = Assert.Throws[EmitDiagnosticException](
+            () -> ReflectionMetadataEmitter.Emit(
+                patchedProgram,
+                peStream,
+                netStandard,
+                "MissingUnsafeNullRef6182",
+                metadataOnly: false
+            )
+        )
+        Assert.Equal("GS0546", ex.DiagnosticId)
+        Assert.Contains(PinningShapes.UnsafeNullRefSignature, ex.Message, StringComparison.Ordinal)
+    }
+
+    private class DummyAddressToDefaultRewriter : BoundTreeRewriter {
+        protected override func RewriteAddressOfExpression(node BoundAddressOfExpression) BoundExpression {
+            if node.Operand is BoundVariableExpression{Variable: LocalVariableSymbol v} && v.Name == "dummy" {
+                return BoundDefaultExpression(node.Syntax, node.Type)
+            }
+            return base.RewriteAddressOfExpression(node)
+        }
+    }
+
     shared {
+        private func NetStandardClosure() ReferenceResolver {
+            let directory = typeof(AsyncRefLocalEmitTests)
+                .Assembly
+                .GetCustomAttributes[AssemblyMetadataAttribute]()
+                .Single((attribute AssemblyMetadataAttribute) -> attribute.Key == "NetStandard20ReferenceDirectory")
+                .Value!!
+            return ReferenceResolver.WithReferences(Directory.EnumerateFiles(directory, "*.dll"))
+        }
+
         private func CompileAndRun(source string, contextName string) string {
             using let peStream = MemoryStream()
             let tree = SyntaxTree.Parse(SourceText.From(source))

@@ -698,6 +698,38 @@ shared class RefInitializationHoister {
                 EmitAssignmentStatements(local, info, block.Expression, syntax, statements, out rebuiltTemplate)
                 return
             }
+            if rhs is BoundAddressOfExpression{IsUnmanaged: false, Operand: BoundBlockExpression block} addrBlock &&
+                RequiresBranchLowering(info, local, addrBlock) {
+                for stmt in block.Statements {
+                    let rewritten = RewriteStatement(stmt)
+                    if rewritten is BoundBlockStatement nested {
+                        statements.AddRange(nested.Statements)
+                    } else {
+                        statements.Add(rewritten)
+                    }
+                }
+                EmitAssignmentStatements(
+                    local,
+                    info,
+                    BoundAddressOfExpression(addrBlock.Syntax, block.Expression),
+                    syntax,
+                    statements,
+                    out rebuiltTemplate
+                )
+                return
+            }
+            if rhs is BoundAddressOfExpression{IsUnmanaged: false, Operand: BoundConditionalExpression cond} addrCond &&
+                RequiresBranchLowering(info, local, addrCond) {
+                let asCondExpr = BoundConditionalExpression(
+                    cond.Syntax,
+                    cond.Condition,
+                    BoundAddressOfExpression(addrCond.Syntax, cond.WhenTrue),
+                    BoundAddressOfExpression(addrCond.Syntax, cond.WhenFalse),
+                    addrCond.Type
+                )
+                EmitAssignmentStatements(local, info, asCondExpr, syntax, statements, out rebuiltTemplate)
+                return
+            }
             if rhs is BoundConditionalAddressExpression condAddr && RequiresBranchLowering(info, local, condAddr) {
                 let asCondExpr = BoundConditionalExpression(
                     condAddr.Syntax,
@@ -837,6 +869,16 @@ shared class RefInitializationHoister {
             if current is BoundConditionalExpression condExpr {
                 return RequiresBranchLowering(info, local, condExpr.WhenTrue) ||
                     RequiresBranchLowering(info, local, condExpr.WhenFalse)
+            }
+            if current is BoundAddressOfExpression{IsUnmanaged: false, Operand: BoundBlockExpression block} addrBlock {
+                return RequiresBranchLowering(info, local, BoundAddressOfExpression(addrBlock.Syntax, block.Expression))
+            }
+            if current is BoundAddressOfExpression{
+                IsUnmanaged: false,
+                Operand: BoundConditionalExpression cond
+            } addrCond {
+                return RequiresBranchLowering(info, local, BoundAddressOfExpression(addrCond.Syntax, cond.WhenTrue)) ||
+                    RequiresBranchLowering(info, local, BoundAddressOfExpression(addrCond.Syntax, cond.WhenFalse))
             }
             if current is BoundConditionalAddressExpression condAddr {
                 return RequiresBranchLowering(

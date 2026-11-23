@@ -34,7 +34,7 @@ internal partial class MethodBodyEmitter {
         // pointer as a zero native int. Emit it directly (the source `nil`
         // would otherwise push an object `ldnull`, which is not a pointer
         // value).
-        if conv.Expression.Type == TypeSymbol.Null && this.TryEmitPointerLikeDefault(conv.Type) {
+        if conv.Expression.Type == TypeSymbol.Null && this.TryEmitPointerLikeDefault(conv.Type, conv.Syntax) {
             return
         }
         // Issue #5767 (ADR-0219): a conversion of a constant floating-point operand to an integer type or
@@ -1251,7 +1251,7 @@ internal partial class MethodBodyEmitter {
         // Issue #3285: pointer defaults use the same native-int zero as
         // explicit `nil` conversions. `ldnull` is an object reference and is
         // invalid when the evaluation-stack slot expects a pointer.
-        if this.TryEmitPointerLikeDefault(type) {
+        if this.TryEmitPointerLikeDefault(type, node.Syntax) {
             return
         }
         // Issue #774: a type parameter or erased open generic (e.g. `T` or
@@ -1293,29 +1293,30 @@ internal partial class MethodBodyEmitter {
         this.il.LoadLocal(slot)
     }
 
-    private func TryEmitPointerLikeDefault(type TypeSymbol) bool {
+    private func TryEmitPointerLikeDefault(type TypeSymbol, anchor SyntaxNode? = nil) bool {
         if type is ByRefTypeSymbol byRef {
-            if PinningShapes.TryGetUnsafeNullRef(
+            if !PinningShapes.TryGetUnsafeNullRef(
                 this.outer.emitCtx.References,
                 this.outer.emitCtx.ConsumerAssemblyName,
                 out var openNullRef
             ) {
-                let rawPointeeType = byRef.PointeeType.ClrType ?? typeof(object)
-                let projectedPointeeType = this
-                    .outer
-                    .emitCtx
-                    .References
-                    .ProjectClrType(rawPointeeType, this.outer.emitCtx.ConsumerAssemblyName) ??
-                    rawPointeeType
-                let closed = PinningShapes.CloseOver(openNullRef, projectedPointeeType)
-                let symbolicTypeArguments = ImmutableArray.Create[TypeSymbol?](byRef.PointeeType)
-                let handle = this.outer.memberRefs.GetMethodEntityHandle(closed, typeArgSymbols: symbolicTypeArguments)
-                this.il.OpCode(ILOpCode.Call)
-                this.il.Token(handle)
-                return true
+                EmitDiagnosticException.ThrowTargetFrameworkMemberUnavailable(
+                    anchor,
+                    PinningShapes.UnsafeNullRefSignature
+                )
             }
-            this.il.LoadConstantI4(0)
-            this.il.OpCode(ILOpCode.Conv_i)
+            let rawPointeeType = byRef.PointeeType.ClrType ?? typeof(object)
+            let projectedPointeeType = this
+                .outer
+                .emitCtx
+                .References
+                .ProjectClrType(rawPointeeType, this.outer.emitCtx.ConsumerAssemblyName) ??
+                rawPointeeType
+            let closed = PinningShapes.CloseOver(openNullRef!!, projectedPointeeType)
+            let symbolicTypeArguments = ImmutableArray.Create[TypeSymbol?](byRef.PointeeType)
+            let handle = this.outer.memberRefs.GetMethodEntityHandle(closed, typeArgSymbols: symbolicTypeArguments)
+            this.il.OpCode(ILOpCode.Call)
+            this.il.Token(handle)
             return true
         }
         if !(type is PointerTypeSymbol) && !(type is FunctionPointerTypeSymbol) {

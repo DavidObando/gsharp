@@ -1340,6 +1340,51 @@ Console.WriteLine("${run(true).GetAwaiter().GetResult()}:${run(false).GetAwaiter
     }
 
     @Fact
+    func BlockPrefixBeforeSelfAndSharedAlias_LiftsPrefixAndPreservesTarget() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package BlockPrefixSelfSharedAlias6182
+import System
+import System.Threading.Tasks
+
+async func run(keep bool) Task[string] {
+    var x = 10
+    var y = 77
+    var z = 99
+    var log = ""
+    var p = &x
+    p = &({
+        log += "1:"
+        *p
+    })
+    p = keep ? &({
+        log += "2:"
+        *p
+    }) : &y
+    var q = &z
+    if false {
+        p = q
+        q = p
+    }
+    var r = &z
+    r = &({
+        log += "3:"
+        *q
+    })
+    var s = &z
+    s = &({
+        log += "4:"
+        *p
+    })
+    await Task.Yield()
+    return "${log}${*p}:${*r}:${*s}"
+}
+
+Console.WriteLine("${run(true).GetAwaiter().GetResult()}|${run(false).GetAwaiter().GetResult()}")`, "BlockPrefixSelfSharedAlias6182", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("1:2:3:4:10:99:10|1:3:4:77:99:77\n", fixture.Run(dll))
+    }
+
+    @Fact
     func ManagedPointerDefault_EmitAndExecute_WithStrictILVerify() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let templateDll = fixture.Compile(`package Template6182

@@ -48,6 +48,9 @@ internal shared class PinningShapes {
     /// The display signature used when a target does not provide `AsPointer<T>`.
     const UnsafeAsPointerSignature string = UnsafeTypeFullName + ".AsPointer<T>(ref T)"
 
+    /// The display signature used when a target does not provide `NullRef<T>`.
+    const UnsafeNullRefSignature string = UnsafeTypeFullName + ".NullRef<T>()"
+
     /// The display signature used when a target does not provide `GetPinnableReference`.
     const StringGetPinnableReferenceSignature string = "System.String.GetPinnableReference()"
 
