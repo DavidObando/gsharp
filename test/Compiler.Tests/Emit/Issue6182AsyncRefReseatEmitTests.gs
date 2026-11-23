@@ -1403,6 +1403,66 @@ Console.WriteLine("${run(true).GetAwaiter().GetResult()}|${run(false).GetAwaiter
     }
 
     @Fact
+    func ConditionalAndBlockAliasDependency_HoistedInDependencyOrder() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package CondBlockAliasDep6182
+import System
+import System.Threading.Tasks
+
+async func run(flag bool) Task[string] {
+    var x = 10
+    var y = 77
+    var log = ""
+    var ref alias = x
+    var q = &alias
+    q = &y
+    var ref alias2 = alias
+    var s = &({
+        log += "1:"
+        alias
+    })
+    let preS = *s
+    s = &y
+    var r = &(flag ? alias2 : y)
+    let preR = *r
+    r = &y
+    var b = &({
+        var ref inner = x
+        inner
+    })
+    let preB = *b
+    b = &y
+    var q2 = &x
+    if flag {
+        q2 = &y
+    }
+    var ref condAlias = *q2
+    var s2 = &({
+        log += "2:"
+        condAlias
+    })
+    let preS2 = *s2
+    s2 = &y
+    var ref condInitAlias = ({
+        log += "3:"
+        flag ? x : y
+    })
+    var pCond = &condInitAlias
+    let preCondInit = *pCond
+    pCond = &y
+    await Task.Yield()
+    return "${log}${preS}:${preR}:${preB}:${preS2}:${preCondInit}:${*s}:${*r}:${*b}:${*s2}:${*pCond}:${*q}"
+}
+
+Console.WriteLine("${run(true).GetAwaiter().GetResult()}|${run(false).GetAwaiter().GetResult()}")`, "CondBlockAliasDep6182", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(
+            "1:2:3:10:10:10:77:10:77:77:77:77:77:77|1:2:3:10:77:10:10:77:77:77:77:77:77:77\n",
+            fixture.Run(dll)
+        )
+    }
+
+    @Fact
     func OpaquePointerDependency_OverwrittenBeforeAwait_PreservesNativePointerAndVerifies() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let dll = fixture.Compile(`package OpaquePtrDepBeforeAwait6182

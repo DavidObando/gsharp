@@ -312,7 +312,7 @@ shared class RefInitializationHoister {
                 if node is BoundVariableExpression varExpr &&
                     inStorageContext &&
                     varExpr.Variable is LocalVariableSymbol other &&
-                    other.Type is ByRefTypeSymbol {
+                    (other.Type is ByRefTypeSymbol || other.RefKind != RefKind.None) {
                     RecordStorageDependency(other)
                 }
                 switch node {
@@ -1085,7 +1085,7 @@ shared class RefInitializationHoister {
                         prelude.AddRange(falsePrelude)
                         prelude.Add(BoundLabelStatement(nil, skip))
                     }
-                    let pointeeType = (cast[ByRefTypeSymbol](targetLocal.Type)).PointeeType
+                    let pointeeType = GetPointeeType(targetLocal)
                     let rebuilt = BoundConditionalAddressExpression(
                         condExpr.Syntax,
                         condition,
