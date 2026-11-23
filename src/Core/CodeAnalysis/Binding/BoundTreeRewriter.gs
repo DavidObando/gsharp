@@ -318,6 +318,17 @@ abstract class BoundTreeRewriter {
     /// @param node The expression to rewrite.
     /// @returns The rewritten expression.
     protected open func RewriteExpression(node BoundExpression) BoundExpression {
+        let rewritten = RewriteExpressionByKind(node)
+        // A replacement of a member function value's load keeps the identifier of the call that
+        // invokes it, for the semantic model (#6189).
+        return if node.CalleeIdentifier != nil && !object.ReferenceEquals(rewritten, node) {
+            node.CopyCalleeIdentifierTo(rewritten)
+        } else {
+            rewritten
+        }
+    }
+
+    private func RewriteExpressionByKind(node BoundExpression) BoundExpression {
         if sharedReceiverTarget != nil && object.ReferenceEquals(node, sharedReceiverTarget) {
             return sharedReceiverReplacement!!
         }

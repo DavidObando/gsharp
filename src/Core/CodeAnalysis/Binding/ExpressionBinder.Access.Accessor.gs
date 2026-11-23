@@ -4029,7 +4029,7 @@ internal partial class ExpressionBinder {
                 ) ??
                     bound
             }
-            binderCtx.CompleteCall(bound, ce.Arguments)
+            binderCtx.CompleteCall(bound, ce.Arguments, call: ce)
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {
