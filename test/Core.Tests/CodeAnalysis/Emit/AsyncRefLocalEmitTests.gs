@@ -89,6 +89,56 @@ Console.WriteLine(t.Result)
         Assert.Contains("42", output)
     }
 
+    @Fact
+    func RefLocal_UnreachableConditionalReseat_AcrossAwait_PreservesOriginalTarget() {
+        const Source = `package AsyncRefConditionalFalse
+import System
+import System.Threading.Tasks
+
+async func run() Task {
+    var x = 1
+    var y = 77
+    var p = &x
+    if false {
+        p = &y
+    }
+    Console.WriteLine("before=${*p}")
+    await Task.Delay(1)
+    Console.WriteLine("after=${*p}")
+}
+
+run().GetAwaiter().GetResult()
+`
+        let output = CompileAndRun(Source, "AsyncRefConditionalFalse").Replace("\r\n", "\n")
+        Assert.Equal("before=1\nafter=1\n", output)
+    }
+
+    @Fact
+    func RefLocal_DynamicConditionalReseat_AcrossAwait_SelectsExecutedBranch() {
+        const Source = `package AsyncRefConditionalDynamic
+import System
+import System.Threading.Tasks
+
+async func run(flag bool) Task[string] {
+    var x = 1
+    var y = 77
+    var p = &x
+    if flag {
+        p = &y
+    }
+    let before = *p
+    await Task.Delay(1)
+    let after = *p
+    return "${before}:${after}"
+}
+
+Console.WriteLine(run(false).GetAwaiter().GetResult())
+Console.WriteLine(run(true).GetAwaiter().GetResult())
+`
+        let output = CompileAndRun(Source, "AsyncRefConditionalDynamic").Replace("\r\n", "\n")
+        Assert.Equal("1:1\n77:77\n", output)
+    }
+
     shared {
         private func CompileAndRun(source string, contextName string) string {
             using let peStream = MemoryStream()

@@ -1294,6 +1294,30 @@ internal partial class MethodBodyEmitter {
     }
 
     private func TryEmitPointerLikeDefault(type TypeSymbol) bool {
+        if type is ByRefTypeSymbol byRef {
+            if PinningShapes.TryGetUnsafeNullRef(
+                this.outer.emitCtx.References,
+                this.outer.emitCtx.ConsumerAssemblyName,
+                out var openNullRef
+            ) {
+                let rawPointeeType = byRef.PointeeType.ClrType ?? typeof(object)
+                let projectedPointeeType = this
+                    .outer
+                    .emitCtx
+                    .References
+                    .ProjectClrType(rawPointeeType, this.outer.emitCtx.ConsumerAssemblyName) ??
+                    rawPointeeType
+                let closed = PinningShapes.CloseOver(openNullRef, projectedPointeeType)
+                let symbolicTypeArguments = ImmutableArray.Create[TypeSymbol?](byRef.PointeeType)
+                let handle = this.outer.memberRefs.GetMethodEntityHandle(closed, typeArgSymbols: symbolicTypeArguments)
+                this.il.OpCode(ILOpCode.Call)
+                this.il.Token(handle)
+                return true
+            }
+            this.il.LoadConstantI4(0)
+            this.il.OpCode(ILOpCode.Conv_i)
+            return true
+        }
         if !(type is PointerTypeSymbol) && !(type is FunctionPointerTypeSymbol) {
             return false
         }

@@ -81,6 +81,27 @@ internal shared class PinningShapes {
         return false
     }
 
+    /// Resolves the target framework's open `Unsafe.NullRef<T>()` definition.
+    func TryGetUnsafeNullRef(
+        references ReferenceResolver,
+        consumerAssemblyName string?,
+        @NotNullWhen(true) out nullRef MethodInfo?
+    ) bool {
+        nullRef = nil
+        if !references.TryResolveType(UnsafeTypeFullName, consumerAssemblyName, out var unsafeType) {
+            return false
+        }
+        for candidate in unsafeType.GetMethods(BindingFlags.Public | BindingFlags.Static) {
+            if candidate.Name == "NullRef" && candidate.IsGenericMethodDefinition && candidate.GetGenericArguments()
+                .Length == 1 &&
+                candidate.GetParameters().Length == 0 {
+                nullRef = candidate
+                return true
+            }
+        }
+        return false
+    }
+
     /// Resolves the target framework's `String.GetPinnableReference()`.
     /// @remarks The declaring type is (cref:EmitContext.CoreStringType), which is
     /// already resolved from the reference closure; only the member probe was
