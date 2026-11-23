@@ -226,8 +226,7 @@ internal shared class XmlDocMarkdownConverter {
                 continue
             }
             if !inFence && IsStrayTagStart(line) && joined.Count > 0 && !string.IsNullOrWhiteSpace(joined[^1]) &&
-                !joined[^1]
-                .TrimStart().StartsWith("```", StringComparison.Ordinal) {
+                !joined[^1].TrimStart().StartsWith("```", StringComparison.Ordinal) {
                 joined[^1] = joined[^1].TrimEnd() + " " + line.TrimStart()
                 continue
             }
@@ -342,8 +341,7 @@ internal shared class XmlDocMarkdownConverter {
                 }
                 case XElement{Name: {LocalName: "code"}} code {
                     FlushInline()
-                    let lang = code.Attribute(XName?("lang")!!)?.Value ?? code.Attribute(XName?("language")!!)
-                        ?.Value ??
+                    let lang = code.Attribute(XName?("lang")!!)?.Value ?? code.Attribute(XName?("language")!!)?.Value ??
                         string.Empty
                     lines.Add("```$lang")
                     lines.AddRange(TrimCodeBlock(code.Value))

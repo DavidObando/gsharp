@@ -109,13 +109,8 @@ open class Adr0212InheritedMemberTests {
             Assert.DoesNotContain(
                 equals,
                 (m Symbol) -> m is ImportedFunctionSymbol imported &&
-                    imported
-                    .Method
-                    .DeclaringType!!.Name == "Object" &&
-                    imported
-                    .Method
-                    .GetParameters()
-                    .Length == 1
+                    imported.Method.DeclaringType!!.Name == "Object" &&
+                    imported.Method.GetParameters().Length == 1
             )
             Assert.NotEmpty(equals)
         }
@@ -776,12 +771,8 @@ func UseTypeParameters[
             var best AccessorExpressionSyntax? = nil
             for node in Tree.Root.DescendantNodes() {
                 if node is AccessorExpressionSyntax accessor &&
-                    accessor
-                    .Span
-                    .Start >= lineStart &&
-                    accessor
-                    .Span
-                    .End <= position &&
+                    accessor.Span.Start >= lineStart &&
+                    accessor.Span.End <= position &&
                     (best == nil || accessor.Span.Start <= best.Span.Start) {
                     best = accessor
                 }

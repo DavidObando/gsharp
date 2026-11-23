@@ -335,9 +335,7 @@ partial class A {
         Assert.Contains(
             diagnostics,
             (d Diagnostic) -> d.IsError && d.Message.Contains(name, StringComparison.Ordinal) &&
-                d
-                .Location
-                .Text!!.FileName == "A.gs"
+                d.Location.Text!!.FileName == "A.gs"
         )
         let bothImport = EmitDiagnostics([]SyntaxTree{SyntaxTree.Parse(SourceText.From((`package App
 import ` + "$importedOnlyByImplementation" + `

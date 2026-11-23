@@ -971,9 +971,7 @@ open class OverloadResolutionTests {
                         []Type{typeof(object)},
                         supplementaryInterfaceCheck: (source Type, target Type) -> target == wantInterface
                     )
-                    if result.Outcome != ClrOverloadResolution
-                        .ResolutionOutcome
-                        .Resolved ||
+                    if result.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved ||
                         result.Best!!.Name != expectedName {
                         lock errors {
                             errors.Add(

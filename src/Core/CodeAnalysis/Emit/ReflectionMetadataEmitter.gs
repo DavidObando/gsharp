@@ -566,16 +566,9 @@ internal class ReflectionMetadataEmitter {
 
     // The declaring aggregate owns its authored async Main's entry-point stub.
     private func AggregateOwnsEntryPointStub(c StructSymbol) bool -> this.EntryPointNeedsSeparateStub &&
-        this
-        .emitCtx
-        .Program
-        .EntryPoint is {} entryPoint &&
-        !c
-        .StaticMethods
-        .IsDefaultOrEmpty &&
-        c
-        .StaticMethods
-        .Contains(entryPoint)
+        this.emitCtx.Program.EntryPoint is {} entryPoint &&
+        !c.StaticMethods.IsDefaultOrEmpty &&
+        c.StaticMethods.Contains(entryPoint)
 
     // Issue #1467 / #1537: reifies every user-declared type nested inside a
     // generic type over an ordinal-aligned clone of the flattened enclosing +
@@ -1240,15 +1233,8 @@ internal class ReflectionMetadataEmitter {
         // package (which always exists for compilable programs that run).
         let lambdaLiterals = this.methodBodyPlanner.CollectFunctionLiterals()
         let goStatements = this.methodBodyPlanner.CollectGoStatements()
-        let hostPackageGuess PackageSymbol? = this
-            .emitCtx
-            .Program
-            .EntryPoint
-            ?.Package ??
-            this
-            .emitCtx
-            .Program
-            .EntryPointPackage ??
+        let hostPackageGuess PackageSymbol? = this.emitCtx.Program.EntryPoint?.Package ??
+            this.emitCtx.Program.EntryPointPackage ??
             (
             if this.emitCtx.Program.Packages.IsDefaultOrEmpty {
                 default(PackageSymbol?)
@@ -1643,10 +1629,7 @@ internal class ReflectionMetadataEmitter {
             // Match emitted-field deduplication, including storage declared on earlier base types.
             for p in s.Properties {
                 if p.IsAutoProperty && p.BackingField != nil && p.OwnsBackingField(s) &&
-                    !this
-                    .cache
-                    .DeclaredFieldDefs
-                    .ContainsKey(p.BackingField!!) {
+                    !this.cache.DeclaredFieldDefs.ContainsKey(p.BackingField!!) {
                     PlanField(p.BackingField!!)
                 }
             }
@@ -2132,32 +2115,16 @@ internal class ReflectionMetadataEmitter {
             // pass stay valid).
             let needsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s)
             let hasLetFieldCtors = s.Fields.Any((f FieldSymbol) -> structLetFields.Contains(f))
-            if s
-                .Methods
-                .IsDefaultOrEmpty &&
-                s
-                .ExplicitConstructors
-                .IsDefaultOrEmpty &&
+            if s.Methods.IsDefaultOrEmpty &&
+                s.ExplicitConstructors.IsDefaultOrEmpty &&
                 !s.IsInline &&
                 !s.IsData &&
-                s
-                .Properties
-                .IsDefaultOrEmpty &&
-                s
-                .Events
-                .IsDefaultOrEmpty &&
-                s
-                .StaticMethods
-                .IsDefaultOrEmpty &&
-                s
-                .StaticProperties
-                .IsDefaultOrEmpty &&
-                s
-                .StaticEvents
-                .IsDefaultOrEmpty &&
-                s
-                .StaticFieldInitializers
-                .IsEmpty &&
+                s.Properties.IsDefaultOrEmpty &&
+                s.Events.IsDefaultOrEmpty &&
+                s.StaticMethods.IsDefaultOrEmpty &&
+                s.StaticProperties.IsDefaultOrEmpty &&
+                s.StaticEvents.IsDefaultOrEmpty &&
+                s.StaticFieldInitializers.IsEmpty &&
                 !ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(s.ConstFields) &&
                 !s.HasStaticInitializerBlock &&
                 !needsSynthesizedDefaultCtor &&
@@ -2942,15 +2909,8 @@ internal class ReflectionMetadataEmitter {
             }
             bucket.Add(kvp.Key)
         }
-        let entryPointPackage PackageSymbol? = this
-            .emitCtx
-            .Program
-            .EntryPoint
-            ?.Package ??
-            this
-            .emitCtx
-            .Program
-            .EntryPointPackage
+        let entryPointPackage PackageSymbol? = this.emitCtx.Program.EntryPoint?.Package ??
+            this.emitCtx.Program.EntryPointPackage
         // Issue #456: enumeration of `program.Functions` walks a
         // Dictionary<FunctionSymbol, ...> whose hash buckets depend on
         // FunctionSymbol identity, which is not stable across Compilation
@@ -2987,10 +2947,7 @@ internal class ReflectionMetadataEmitter {
                 // and its body is already registered against the synthesized
                 // Invoke method, so it must NOT also be hosted as a top-level
                 // <Program> static method.
-                if this
-                    .closures
-                    .ClosureInfos
-                    .ContainsKey(literal) ||
+                if this.closures.ClosureInfos.ContainsKey(literal) ||
                     literal.Function is {LocalDeclaration: not nil, StaticOwnerType: not nil} {
                     continue
                 }
@@ -3372,11 +3329,7 @@ internal class ReflectionMetadataEmitter {
             }
             // The stub must share its owner's access to private state-machine members.
             if this.AggregateOwnsEntryPointStub(owner) &&
-                this
-                .emitCtx
-                .Program
-                .Functions
-                .TryGetValue(this.emitCtx.Program.EntryPoint!!, out var stubBody) {
+                this.emitCtx.Program.Functions.TryGetValue(this.emitCtx.Program.EntryPoint!!, out var stubBody) {
                 this.functions.EmitFunction(
                     this.emitCtx.Program.EntryPoint!!,
                     stubBody,
@@ -3479,11 +3432,7 @@ internal class ReflectionMetadataEmitter {
             // produced by the class's `deinit { … }` body. The emitted method
             // wraps the lowered user body in `try { … } finally { base.Finalize(); }`.
             if c.Deinitializer != nil &&
-                this
-                .emitCtx
-                .Program
-                .Functions
-                .TryGetValue(c.Deinitializer!!.Function, out var deinitBody) {
+                this.emitCtx.Program.Functions.TryGetValue(c.Deinitializer!!.Function, out var deinitBody) {
                 let deinitHandle = this.typeDefEmitter.EmitClassDeinitializer(c, c.Deinitializer!!, deinitBody)
                 this.cache.MethodHandles[c.Deinitializer!!.Function] = deinitHandle
             }
@@ -3570,33 +3519,16 @@ internal class ReflectionMetadataEmitter {
             // that ctor.
             let emitsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s) &&
                 (!s.IsData || s.NeedsValueStructZeroHelper)
-            if s
-                .Methods
-                .IsDefaultOrEmpty &&
-                s
-                .ExplicitConstructors
-                .IsDefaultOrEmpty &&
-                s
-                .Properties
-                .IsDefaultOrEmpty &&
-                s
-                .Events
-                .IsDefaultOrEmpty &&
-                s
-                .StaticMethods
-                .IsDefaultOrEmpty &&
-                s
-                .StaticProperties
-                .IsDefaultOrEmpty &&
-                s
-                .StaticEvents
-                .IsDefaultOrEmpty &&
-                s
-                .StaticFieldInitializers
-                .IsEmpty &&
+            if s.Methods.IsDefaultOrEmpty &&
+                s.ExplicitConstructors.IsDefaultOrEmpty &&
+                s.Properties.IsDefaultOrEmpty &&
+                s.Events.IsDefaultOrEmpty &&
+                s.StaticMethods.IsDefaultOrEmpty &&
+                s.StaticProperties.IsDefaultOrEmpty &&
+                s.StaticEvents.IsDefaultOrEmpty &&
+                s.StaticFieldInitializers.IsEmpty &&
                 !ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(s.ConstFields) &&
-                !s
-                .HasStaticInitializerBlock {
+                !s.HasStaticInitializerBlock {
                 if emitsSynthesizedDefaultCtor {
                     this.typeDefEmitter.EmitValueStructDefaultConstructor(s)
                 }
@@ -3729,10 +3661,7 @@ internal class ReflectionMetadataEmitter {
                     this.functions.EmitFunction(fn, body, isEntryPoint: false)
                 }
             }
-            if this
-                .emitCtx
-                .Program
-                .EntryPoint is {} entryPoint &&
+            if this.emitCtx.Program.EntryPoint is {} entryPoint &&
                 pkg == entryPointPackage &&
                 !entryPointIsAggregateOwned {
                 let entryBody = this.emitCtx.Program.Functions[entryPoint]
@@ -3821,16 +3750,10 @@ internal class ReflectionMetadataEmitter {
                 default: default(TypeSymbol?)
             }
             if containing is StructSymbol enclosingStruct &&
-                this
-                .cache
-                .StructTypeDefs
-                .TryGetValue(enclosingStruct, out var enclosingHandle) {
+                this.cache.StructTypeDefs.TryGetValue(enclosingStruct, out var enclosingHandle) {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle)
             } else if containing is InterfaceSymbol enclosingInterface &&
-                this
-                .cache
-                .InterfaceTypeDefs
-                .TryGetValue(enclosingInterface, out var interfaceHandle) {
+                this.cache.InterfaceTypeDefs.TryGetValue(enclosingInterface, out var interfaceHandle) {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, interfaceHandle)
             }
         }
@@ -3891,20 +3814,12 @@ internal class ReflectionMetadataEmitter {
         for s in smStructsOrdered {
             let nestedHandle = this.cache.StructTypeDefs[s]
             var enclosingTypeName string
-            if this
-                .stateMachines
-                .AsyncSmEnclosingClosures
-                .TryGetValue(s, out var closureSym) &&
-                this
-                .cache
-                .StructTypeDefs
-                .TryGetValue(closureSym, out var closureHandle) {
+            if this.stateMachines.AsyncSmEnclosingClosures.TryGetValue(s, out var closureSym) &&
+                this.cache.StructTypeDefs.TryGetValue(closureSym, out var closureHandle) {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, closureHandle)
                 enclosingTypeName = CustomAttributeEncoder.GetMetadataTypeName(closureSym)
             } else if this.methodBodyPlanner.TryGetUserKickoffReceiverHandle(s, out var receiverEnclosing) &&
-                this
-                .methodBodyPlanner
-                .TryGetUserKickoffReceiverSymbol(s, out var receiverSym) {
+                this.methodBodyPlanner.TryGetUserKickoffReceiverSymbol(s, out var receiverSym) {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, receiverEnclosing)
                 enclosingTypeName = CustomAttributeEncoder.GetMetadataTypeName(receiverSym)
             } else {
@@ -3977,14 +3892,8 @@ internal class ReflectionMetadataEmitter {
         }
         if kickoff == nil ||
             (
-            !this
-                .cache
-                .FunctionHandles
-                .TryGetValue(kickoff, out var kickoffHandle) &&
-                !this
-                .cache
-                .MethodHandles
-                .TryGetValue(kickoff, out kickoffHandle)
+            !this.cache.FunctionHandles.TryGetValue(kickoff, out var kickoffHandle) &&
+                !this.cache.MethodHandles.TryGetValue(kickoff, out kickoffHandle)
         ) ||
             kickoffHandle.IsNil {
             return
@@ -4458,9 +4367,7 @@ internal class ReflectionMetadataEmitter {
         }
 
         protected override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
-            if node
-                .Field
-                .IsReadOnly &&
+            if node.Field.IsReadOnly &&
                 ((node.Receiver != nil && node.Receiver is not ParameterSymbol) || node.ReceiverExpression != nil) {
                 let owner = (node.StructType as StructSymbol) ?? (node.Receiver?.Type as StructSymbol)
                 if owner != nil {
@@ -4757,9 +4664,7 @@ internal class ReflectionMetadataEmitter {
         let stateMachine = plan.StateMachine
         let builderInfo = stateMachine.BuilderInfo
         if builderInfo.Kind == AsyncMethodBuilderKind.Void ||
-            builderInfo
-            .TaskProperty
-            ?.PropertyType is not Type taskClrType {
+            builderInfo.TaskProperty?.PropertyType is not Type taskClrType {
             return nil
         }
         let taskType TypeSymbol = if taskClrType.IsConstructedGenericType && taskClrType.GetGenericArguments()
@@ -4774,9 +4679,7 @@ internal class ReflectionMetadataEmitter {
             ImportedTypeSymbol.GetWithoutNullability(taskClrType, NullabilityFreeReason.EmitShape)
         }
         let declaration SyntaxNode? = cast[SyntaxNode?](plan.KickoffMethod.Declaration) ??
-            plan
-            .KickoffMethod
-            .LocalDeclaration
+            plan.KickoffMethod.LocalDeclaration
         return if !taskClrType.IsValueType && declaration != nil && ObliviousScope.IsInObliviousScope(declaration) {
             ObliviousScope.Wrap(taskType)
         } else {
@@ -4793,15 +4696,9 @@ internal class ReflectionMetadataEmitter {
             return ImmutableArray[uint8].Empty
         }
         let builderInfo = plan.StateMachine.BuilderInfo
-        if builderInfo
-            .TaskProperty
-            ?.PropertyType
-            .IsValueType == true &&
-            plan
-            .StateMachine
-            .ResultTypeSymbol is {} resultType &&
-            NullableFlagsBuilder
-            .Build(resultType).IsEmpty {
+        if builderInfo.TaskProperty?.PropertyType.IsValueType == true &&
+            plan.StateMachine.ResultTypeSymbol is {} resultType &&
+            NullableFlagsBuilder.Build(resultType).IsEmpty {
             return ImmutableArray[uint8].Empty
         }
         return NullableFlagsBuilder.Build(returnType)
@@ -4910,8 +4807,7 @@ internal class ReflectionMetadataEmitter {
         // The constrained emitter still needs a spill for CLR type-parameter fields.
         if receiver.Type is not TypeParameterSymbol &&
             receiver is BoundClrPropertyAccessExpression clrField &&
-            this
-            .IsAddressableReceiverStorage(
+            this.IsAddressableReceiverStorage(
             clrField,
             (variable VariableSymbol) -> this.CanLoadVariableAddressForReceiverSpill(variable, function, locals)
         ) {
@@ -4984,9 +4880,7 @@ internal class ReflectionMetadataEmitter {
     ) bool -> switch receiver {
         case variable is BoundVariableExpression: (
             variable.NarrowedType == nil ||
-                variable.NarrowedType == variable
-                .Variable
-                .Type ||
+                variable.NarrowedType == variable.Variable.Type ||
                 (
                 variable.Type is not TypeParameterSymbol &&
                     (IsValueTypeSymbol(variable.Type) || variable.Type?.ClrType?.IsValueType == true)
@@ -5361,14 +5255,10 @@ internal class ReflectionMetadataEmitter {
         private func IsModuleInitializer(function FunctionSymbol) bool -> function.IsStatic &&
             function.StaticOwnerType != nil &&
             !function.IsGeneric &&
-            function
-            .Parameters
-            .IsDefaultOrEmpty &&
+            function.Parameters.IsDefaultOrEmpty &&
             function.Type == TypeSymbol.Void &&
             (function.Accessibility is Accessibility.Public or Accessibility.Internal) &&
-            function
-            .Attributes
-            .Any(
+            function.Attributes.Any(
             (attribute BoundAttribute) -> string.Equals(
                 attribute.AttributeType?.ClrType?.FullName,
                 ModuleInitializerAttributeName,
@@ -5739,9 +5629,7 @@ internal class ReflectionMetadataEmitter {
             // `ref struct` such as `DefaultInterpolatedStringHandler`.
             return IsValueTypeSymbol(receiverType) &&
                 method?.DeclaringType != nil &&
-                !method
-                .DeclaringType
-                .IsValueTypeSafe()
+                !method.DeclaringType.IsValueTypeSafe()
         }
 
         // Issue #671 (construction-call follow-up): a generic type-argument

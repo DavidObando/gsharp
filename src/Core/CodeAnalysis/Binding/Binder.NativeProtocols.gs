@@ -21,12 +21,8 @@ partial class Binder {
         (
         if concrete is StructSymbol owned {
             !owned.IsGenericDefinition &&
-                owned
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                owned
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty &&
+                owned.TypeArguments.IsDefaultOrEmpty &&
+                owned.EnclosingTypeArguments.IsDefaultOrEmpty &&
                 !owned.IsRefStruct &&
                 (!owned.IsClass || !owned.IsOpen && !owned.IsSealedHierarchy)
         } else {
@@ -81,12 +77,8 @@ partial class Binder {
             let previousPackage = $scope.SetCurrentDeclaringPackage(type.PackageName)
             try {
                 if type.IsGenericDefinition ||
-                    !type
-                    .TypeArguments
-                    .IsDefaultOrEmpty ||
-                    !type
-                    .EnclosingTypeArguments
-                    .IsDefaultOrEmpty ||
+                    !type.TypeArguments.IsDefaultOrEmpty ||
+                    !type.EnclosingTypeArguments.IsDefaultOrEmpty ||
                     type.IsRefStruct ||
                     type.IsClass &&
                     (type.IsOpen || type.IsSealedHierarchy) {
@@ -358,15 +350,9 @@ partial class Binder {
                     .TryLookupExtensionFunctions(concrete, slot.Name)
                     .Where(
                     (method FunctionSymbol) -> method.Accessibility == Accessibility.Public &&
-                        method
-                        .Parameters
-                        .Length > 0 &&
-                        method
-                        .Parameters[0]
-                        .RefKind == RefKind.None &&
-                        method
-                        .Parameters[0]
-                        .Type == concrete &&
+                        method.Parameters.Length > 0 &&
+                        method.Parameters[0].RefKind == RefKind.None &&
+                        method.Parameters[0].Type == concrete &&
                         NativeProtocolSignaturesMatch(slot, method, 1)
                 )
                     .Distinct()
@@ -376,11 +362,8 @@ partial class Binder {
                     .Where(
                     (method MethodInfo) -> method.IsPublic &&
                         method.IsStatic &&
-                        method
-                        .DeclaringType
-                        ?.IsVisible == true &&
-                        method
-                        .GetParameters().Length > 0
+                        method.DeclaringType?.IsVisible == true &&
+                        method.GetParameters().Length > 0
                 )
                     .ToArray()
                 let importedExtensions = importedExtensionCandidates
@@ -399,14 +382,8 @@ partial class Binder {
                 )
                     .Where(
                     (item(Method MethodInfo, Symbol FunctionSymbol)) ->
-                    item
-                        .Symbol
-                        .Parameters[0]
-                        .RefKind == RefKind.None &&
-                        item
-                        .Symbol
-                        .Parameters[0]
-                        .Type == concrete &&
+                    item.Symbol.Parameters[0].RefKind == RefKind.None &&
+                        item.Symbol.Parameters[0].Type == concrete &&
                         NativeProtocolSignaturesMatch(slot, item.Symbol, 1)
                 )
                     .ToArray()
@@ -433,41 +410,31 @@ partial class Binder {
                             method.IsAsyncOrSuspending ||
                                 method.IsGeneric ||
                                 method.ReturnRefKind != RefKind.None ||
-                                method
-                                .Parameters
-                                .Any((parameter ParameterSymbol) -> parameter.RefKind != RefKind.None)
+                                method.Parameters.Any((parameter ParameterSymbol) -> parameter.RefKind != RefKind.None)
                         )
                     ) ||
-                        $scope
-                        .TryLookupExtensionFunctions(concrete, slot.Name).Any(
+                        $scope.TryLookupExtensionFunctions(concrete, slot.Name).Any(
                         (method FunctionSymbol) -> method.Accessibility == Accessibility.Public &&
                             (
                             method.IsAsyncOrSuspending ||
                                 method.IsGeneric ||
                                 method.ReturnRefKind != RefKind.None ||
-                                method
-                                .Parameters
-                                .Any((parameter ParameterSymbol) -> parameter.RefKind != RefKind.None)
+                                method.Parameters.Any((parameter ParameterSymbol) -> parameter.RefKind != RefKind.None)
                         )
                     ) ||
                         concrete.ClrType is {} importedConcrete &&
-                        MemberLookup
-                        .SafeGetMethodsIncludingSelfAndInterfaces(importedConcrete, slot.Name).Any(
+                        MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(importedConcrete, slot.Name).Any(
                         (method MethodInfo) -> method.IsPublic &&
                             !method.IsStatic &&
                             (
                             !ImportedMethodMetadataSupported(method) ||
                                 method.IsGenericMethod ||
-                                method
-                                .ReturnType
-                                .IsByRef ||
-                                method
-                                .GetParameters().Any((parameter ParameterInfo) -> parameter.ParameterType.IsByRef)
+                                method.ReturnType.IsByRef ||
+                                method.GetParameters().Any((parameter ParameterInfo) -> parameter.ParameterType.IsByRef)
                         )
                     ) ||
                         concrete.ClrType is {} importedReceiver &&
-                        importedExtensionCandidates
-                        .Any(
+                        importedExtensionCandidates.Any(
                         (method MethodInfo) -> {
                             let receiver = method.GetParameters()[0].ParameterType
                             let shape = if receiver.IsByRef {
@@ -483,11 +450,10 @@ partial class Binder {
                                 (
                                 !ImportedMethodMetadataSupported(method) ||
                                     method.IsGenericMethod ||
-                                    method
-                                    .ReturnType
-                                    .IsByRef ||
-                                    method
-                                    .GetParameters().Any((parameter ParameterInfo) -> parameter.ParameterType.IsByRef)
+                                    method.ReturnType.IsByRef ||
+                                    method.GetParameters().Any(
+                                    (parameter ParameterInfo) -> parameter.ParameterType.IsByRef
+                                )
                             )
                         }
                     )
@@ -526,9 +492,7 @@ partial class Binder {
                         !NativeProtocolMetadata.IsPublic(receiver)
                 ) ||
                     witness.ImportedTarget is {} importedTarget &&
-                    importedTarget
-                    .DeclaringType
-                    ?.IsVisible != true
+                    importedTarget.DeclaringType?.IsVisible != true
             ) {
                 if protocol != required {
                     // Omitted authority is unknown evidence, never a negative conformance record.
@@ -791,15 +755,9 @@ partial class Binder {
 
         private func NativeProtocolSignaturesMatch(slot FunctionSymbol, candidate FunctionSymbol, offset int32) bool {
             if candidate.IsAsyncOrSuspending ||
-                candidate
-                .TypeParameters
-                .Length != 0 ||
-                slot
-                .Parameters
-                .Length +
-                offset != candidate
-                .Parameters
-                .Length ||
+                candidate.TypeParameters.Length != 0 ||
+                slot.Parameters.Length +
+                offset != candidate.Parameters.Length ||
                 !NativeProtocolMetadata.TypesMatch(slot.Type, candidate.Type) ||
                 slot.ReturnRefKind != RefKind.None ||
                 candidate.ReturnRefKind != RefKind.None {
@@ -810,12 +768,8 @@ partial class Binder {
                     slot.Parameters[index].Type,
                     candidate.Parameters[index + offset].Type
                 ) ||
-                    slot
-                    .Parameters[index]
-                    .RefKind != RefKind.None ||
-                    candidate
-                    .Parameters[index + offset]
-                    .RefKind != RefKind.None {
+                    slot.Parameters[index].RefKind != RefKind.None ||
+                    candidate.Parameters[index + offset].RefKind != RefKind.None {
                     return false
                 }
             }

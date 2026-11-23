@@ -39,18 +39,12 @@ partial class CSharpToGSharpTranslator {
                 case method is MethodDeclarationSyntax {
                     if this.context.GetDeclaredSymbol(method) is IMethodSymbol importedContractMethod &&
                         EmittedNameAllocator.IsUserRecordDeconstruct(importedContractMethod) &&
-                        this
-                        .nameAllocator
-                        .HasImportedDeconstructionContract(importedContractMethod) &&
+                        this.nameAllocator.HasImportedDeconstructionContract(importedContractMethod) &&
                         (
-                        importedContractMethod
-                            .ContainingType
-                            .IsValueType ||
+                        importedContractMethod.ContainingType.IsValueType ||
                             importedContractMethod.IsStatic ||
                             (
-                            !importedContractMethod
-                                .ExplicitInterfaceImplementations
-                                .IsDefaultOrEmpty &&
+                            !importedContractMethod.ExplicitInterfaceImplementations.IsDefaultOrEmpty &&
                                 this.HasConflictingImportedDeconstructSignature(importedContractMethod) &&
                                 !this.IsExplicitImportedDeconstructOnlyInterface(importedContractMethod)
                         )
@@ -106,8 +100,7 @@ partial class CSharpToGSharpTranslator {
                     if ownedExtensionTarget == nil && !preservedOwnedExtension && this.context.GetDeclaredSymbol(
                         method
                     ) is IMethodSymbol companionSymbol &&
-                        this
-                        .HasReceiverCompanion(companionSymbol) {
+                        this.HasReceiverCompanion(companionSymbol) {
                         let (companion, companionIsStatic) = this.TranslateOwnerScopedCompanion(
                             method,
                             ownerKind,
@@ -151,9 +144,9 @@ partial class CSharpToGSharpTranslator {
                         regexPropertyDefinition,
                         CSharpToGSharpTranslator.GeneratedRegexAttributeName
                     ) &&
-                        regexPropertyDefinition
-                        .DeclaringSyntaxReferences
-                        .Any((reference SyntaxReference) -> this.IsTranslatedByThisRun(reference.SyntaxTree)) {
+                        regexPropertyDefinition.DeclaringSyntaxReferences.Any(
+                        (reference SyntaxReference) -> this.IsTranslatedByThisRun(reference.SyntaxTree)
+                    ) {
                         break
                     }
                     if propertySymbol != nil && propertySymbol.IsPartialDefinition == true {
@@ -176,22 +169,14 @@ partial class CSharpToGSharpTranslator {
                         propertySymbol.IsVirtual == false &&
                         propertySymbol.IsOverride == false &&
                         propertySymbol.DeclaredAccessibility == Accessibility.Public &&
-                        propertySymbol
-                        .GetMethod
-                        ?.DeclaredAccessibility == Accessibility.Public &&
+                        propertySymbol.GetMethod?.DeclaredAccessibility == Accessibility.Public &&
                         propertySymbol.SetMethod is {IsInitOnly: true} &&
                         propertySymbol.SetMethod!!.DeclaredAccessibility == Accessibility.Public &&
-                        property
-                        .Initializer
-                        ?.Value is {} primaryValue &&
-                        this
-                        .context
-                        .GetSymbolInfo(primaryValue)
-                        .Symbol is IParameterSymbol primaryParameter &&
+                        property.Initializer?.Value is {} primaryValue &&
+                        this.context.GetSymbolInfo(primaryValue).Symbol is IParameterSymbol primaryParameter &&
                         primaryParameter.Name == propertySymbol.Name &&
-                        SymbolEqualityComparer
-                        .IncludeNullability
-                        .Equals(primaryParameter.Type, propertySymbol.Type) && SymbolEqualityComparer.Default.Equals(
+                        SymbolEqualityComparer.IncludeNullability.Equals(primaryParameter.Type, propertySymbol.Type) &&
+                        SymbolEqualityComparer.Default.Equals(
                         primaryParameter.ContainingSymbol.ContainingType,
                         propertySymbol.ContainingType
                     ) &&
@@ -201,9 +186,7 @@ partial class CSharpToGSharpTranslator {
                         .All(
                         (accessor AccessorDeclarationSyntax) -> accessor.Body == nil &&
                             accessor.ExpressionBody == nil &&
-                            accessor
-                            .AttributeLists
-                            .Count == 0
+                            accessor.AttributeLists.Count == 0
                     ) == true {
                         break
                     }
@@ -335,9 +318,7 @@ partial class CSharpToGSharpTranslator {
                 !symbol.IsExtensionMethod ||
                 symbol.DeclaredAccessibility == Accessibility.Private ||
                 symbol.IsExtern ||
-                symbol
-                .Parameters
-                .Length == 0 {
+                symbol.Parameters.Length == 0 {
                 return false
             }
             if !this.CanPreserveSuspendingExtensionSignature(symbol, method) ||
@@ -429,13 +410,8 @@ partial class CSharpToGSharpTranslator {
             // `s` as the receiver for its instance members (and may still declare
             // static members that simply ignore it).
             let hasNamedReceiver = receiverParameter != nil &&
-                !receiverParameter
-                .Identifier
-                .IsMissing &&
-                receiverParameter
-                .Identifier
-                .ValueText
-                .Length > 0
+                !receiverParameter.Identifier.IsMissing &&
+                receiverParameter.Identifier.ValueText.Length > 0
             var receiver Receiver? = nil
             if hasNamedReceiver {
                 let receiverSymbol IParameterSymbol? = this.context.GetDeclaredSymbol(
@@ -631,16 +607,12 @@ partial class CSharpToGSharpTranslator {
             // TranslateEventField needs no matching change.
             let isExplicitInterfaceEventImpl = symbol != nil && symbol.ExplicitInterfaceImplementations.Length > 0
             let usesExplicitInterfaceEventClause = isExplicitInterfaceEventImpl &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .Length == 1
+                symbol!!.ExplicitInterfaceImplementations.Length == 1
             if isExplicitInterfaceEventImpl &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .Length > 1 &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .All((e IEventSymbol) -> e.ContainingType.Locations.Any((l Location) -> l.IsInSource)) {
+                symbol!!.ExplicitInterfaceImplementations.Length > 1 &&
+                symbol!!.ExplicitInterfaceImplementations.All(
+                (e IEventSymbol) -> e.ContainingType.Locations.Any((l Location) -> l.IsInSource)
+            ) {
                 let names = string.Join(
                     ", ",
                     symbol!!.ExplicitInterfaceImplementations.Select((e IEventSymbol) -> e.ContainingType.Name)
@@ -879,12 +851,7 @@ partial class CSharpToGSharpTranslator {
                 if this.widenObliviousReferenceFields && CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(
                     symbol?.Type
                 ) &&
-                    symbol!!
-                    .Type
-                    .NullableAnnotation == Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .None {
+                    symbol!!.Type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.None {
                     type = MakeNullable(type)
                 }
                 // Issue #1072: a non-nullable reference/array field that is
@@ -904,10 +871,7 @@ partial class CSharpToGSharpTranslator {
                 if lift.FieldInitializers.TryGetValue(declarator.Identifier.ValueText, out var lifted) {
                     initializer = lifted
                 } else if symbol != nil &&
-                    this
-                    .state
-                    .StaticFieldInitializers
-                    .TryGetValue(symbol, out var staticLifted) {
+                    this.state.StaticFieldInitializers.TryGetValue(symbol, out var staticLifted) {
                     // Issue #1729 (mode 1): a folded `static` constructor
                     // (`static T() { Field = value; }`) runs *after* the field's own
                     // inline initializer in C#, so its assigned value — not the
@@ -960,9 +924,7 @@ partial class CSharpToGSharpTranslator {
                     binding != BindingKind.Const &&
                     symbol != nil &&
                     symbol.IsStatic == false &&
-                    symbol
-                    .ContainingType
-                    ?.TypeKind == TypeKind.Class &&
+                    symbol.ContainingType?.TypeKind == TypeKind.Class &&
                     type is ArrayTypeReference{Rank: 1, IsNullable: false} emptyArrayType &&
                     CanUseCachedEmptyArray(emptyArrayType.ElementType) &&
                     this.IsArrayFieldOverwrittenBeforeObservation(symbol) {
@@ -1087,12 +1049,11 @@ partial class CSharpToGSharpTranslator {
             // definition is only in the stub rendered from the user's G#.
             if symbol?.PartialDefinitionPart is IMethodSymbol regexDefinition &&
                 CSharpToGSharpTranslator.IsGeneratedRegexDefinition(regexDefinition) &&
-                regexDefinition
-                .DeclaringSyntaxReferences
-                .Any((reference SyntaxReference) -> this.IsTranslatedByThisRun(reference.SyntaxTree)) {
+                regexDefinition.DeclaringSyntaxReferences.Any(
+                (reference SyntaxReference) -> this.IsTranslatedByThisRun(reference.SyntaxTree)
+            ) {
                 if !GeneratedSourceDetection.IsGeneratedSource(node.SyntaxTree, this.projectDirectory) ||
-                    !CSharpToGSharpTranslator
-                    .IsRegexGeneratorDeclaration(symbol) {
+                    !CSharpToGSharpTranslator.IsRegexGeneratorDeclaration(symbol) {
                     let message = "[GeneratedRegex] method '${regexDefinition.ContainingType?.Name}.${regexDefinition.Name}' " +
                         "has a user-written partial implementation; cs2gs cannot replace that implementation " +
                         "with gsgen output without changing runtime behavior."
@@ -1176,17 +1137,13 @@ partial class CSharpToGSharpTranslator {
             // keeps both slots, so the clause is emitted for imported generic
             // interfaces as well.
             let hasSingleExplicitInterfaceImpl = isExplicitInterfaceImpl &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .Length == 1
+                symbol!!.ExplicitInterfaceImplementations.Length == 1
             let hasClauseCompatibleExplicitInterfaceImpl = hasSingleExplicitInterfaceImpl
             if isExplicitInterfaceImpl &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .Length > 1 &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .All((e IMethodSymbol) -> e.ContainingType.Locations.Any((l Location) -> l.IsInSource)) {
+                symbol!!.ExplicitInterfaceImplementations.Length > 1 &&
+                symbol!!.ExplicitInterfaceImplementations.All(
+                (e IMethodSymbol) -> e.ContainingType.Locations.Any((l Location) -> l.IsInSource)
+            ) {
                 let names = string.Join(
                     ", ",
                     symbol!!.ExplicitInterfaceImplementations.Select((e IMethodSymbol) -> e.ContainingType.Name)
@@ -1231,9 +1188,7 @@ partial class CSharpToGSharpTranslator {
             }
             let bridgedExplicitRecordDeconstruct = isExplicitInterfaceImpl &&
                 symbol != nil &&
-                symbol
-                .ContainingType
-                .IsRecord &&
+                symbol.ContainingType.IsRecord &&
                 this.DirectlyImplementsImportedDeconstructContract(symbol)
             let helperExplicitValueTypeDeconstruct = this.NeedsValueTypeExplicitDeconstructHelper(symbol)
             // ADR-0149: the resolved explicit-interface qualifier clause type
@@ -1419,9 +1374,7 @@ partial class CSharpToGSharpTranslator {
                 symbol.Name == "Deconstruct" &&
                 this.EmittedName(symbol, symbol.Name) != symbol.Name &&
                 symbol.OverriddenMethod != nil &&
-                symbol.OverriddenMethod!!
-                .DeclaringSyntaxReferences
-                .IsDefaultOrEmpty &&
+                symbol.OverriddenMethod!!.DeclaringSyntaxReferences.IsDefaultOrEmpty &&
                 !this.TryResolveMigratedProducerDeconstruct(symbol.OverriddenMethod, out _, out _)
             var isOverride = symbol != nil && symbol.IsOverride && !overridesImportedNonMigratedDeconstruct
             // Interface members are implicitly abstract in C#; in canonical G# the
@@ -1586,12 +1539,8 @@ partial class CSharpToGSharpTranslator {
             // implementing-part spelling.
             if definition.IsExtensionMethod ||
                 implementation.IsExtern ||
-                definition
-                .ExplicitInterfaceImplementations
-                .Length > 0 ||
-                implementation
-                .ExplicitInterfaceImplementations
-                .Length > 0 ||
+                definition.ExplicitInterfaceImplementations.Length > 0 ||
+                implementation.ExplicitInterfaceImplementations.Length > 0 ||
                 (
                 this.entryType is {} entryType && SymbolEqualityComparer.Default.Equals(
                     definition.ContainingType?.OriginalDefinition,
@@ -1604,29 +1553,17 @@ partial class CSharpToGSharpTranslator {
             // differently; G# requires identical names on both parts (GS0611),
             // and each name is observable to callers passing arguments by name.
             // There is no faithful G# spelling, so keep the pre-ADR-0192 shape.
-            if definition
-                .Parameters
-                .Length != implementation
-                .Parameters
-                .Length ||
+            if definition.Parameters.Length != implementation.Parameters.Length ||
                 definition
                 .Parameters
                 .Zip(implementation.Parameters, (d IParameterSymbol, i IParameterSymbol) -> d.Name == i.Name)
                 .Any((sameName bool) -> !sameName) {
                 return false
             }
-            if definition
-                .DeclaringSyntaxReferences
-                .Length != 1 ||
-                implementation
-                .DeclaringSyntaxReferences
-                .Length != 1 ||
-                definition
-                .DeclaringSyntaxReferences[0]
-                .GetSyntax() is not MethodDeclarationSyntax definitionNode ||
-                implementation
-                .DeclaringSyntaxReferences[0]
-                .GetSyntax() is not MethodDeclarationSyntax implNode {
+            if definition.DeclaringSyntaxReferences.Length != 1 ||
+                implementation.DeclaringSyntaxReferences.Length != 1 ||
+                definition.DeclaringSyntaxReferences[0].GetSyntax() is not MethodDeclarationSyntax definitionNode ||
+                implementation.DeclaringSyntaxReferences[0].GetSyntax() is not MethodDeclarationSyntax implNode {
                 return false
             }
             // Both parts must be hand-authored source that this translation
@@ -1668,10 +1605,7 @@ partial class CSharpToGSharpTranslator {
             // code — a leak the post-pass cannot see. Within one file (one
             // type mapper) the union is safe.
             if definitionNode.SyntaxTree != implNode.SyntaxTree &&
-                definition
-                .Parameters
-                .Concat(implementation.Parameters)
-                .Any(HasParameterAttributes) {
+                definition.Parameters.Concat(implementation.Parameters).Any(HasParameterAttributes) {
                 return false
             }
             implementationNode = implNode
@@ -1702,9 +1636,7 @@ partial class CSharpToGSharpTranslator {
             // IsEmittablePartialMethodPair.
             if definition.IsExtensionMethod ||
                 implementation.IsExtern ||
-                implementation
-                .ExplicitInterfaceImplementations
-                .Length > 0 ||
+                implementation.ExplicitInterfaceImplementations.Length > 0 ||
                 (
                 this.entryType is {} entryType2 && SymbolEqualityComparer.Default.Equals(
                     definition.ContainingType?.OriginalDefinition,
@@ -1840,12 +1772,8 @@ partial class CSharpToGSharpTranslator {
             let arguments = List[GExpression](parameters.Count + 1){IdentifierExpression(receiver.Name)}
             for var index = 0; index < parameters.Count; index++ {
                 var argument GExpression = IdentifierExpression(parameters[index].Name)
-                if original!!
-                    .Parameters[index + 1]
-                    .RefKind == RefKind.Ref ||
-                    original!!
-                    .Parameters[index + 1]
-                    .RefKind == RefKind.Out {
+                if original!!.Parameters[index + 1].RefKind == RefKind.Ref ||
+                    original!!.Parameters[index + 1].RefKind == RefKind.Out {
                     argument = UnaryExpression("&", argument)
                 }
                 arguments.Add(argument)
@@ -1906,9 +1834,10 @@ partial class CSharpToGSharpTranslator {
             let original IMethodSymbol? = method?.ReducedFrom ?? method
             if original != nil && original.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> reference.GetSyntax() is MethodDeclarationSyntax declaration &&
-                    this
-                    .ownedExtensions
-                    .Contains(declaration) && !this.CanPreserveSuspendingExtensionSignature(original, declaration)
+                    this.ownedExtensions.Contains(declaration) && !this.CanPreserveSuspendingExtensionSignature(
+                    original,
+                    declaration
+                )
             ) {
                 return false
             }
@@ -1928,9 +1857,7 @@ partial class CSharpToGSharpTranslator {
             if !CSharpToGSharpTranslator.IsOwnerScopedCompanionShapeEligible(original) {
                 return false
             }
-            if original!!
-                .Parameters[0]
-                .Type is INamedTypeSymbol receiver &&
+            if original!!.Parameters[0].Type is INamedTypeSymbol receiver &&
                 this.HasCanonicalReducedDeclarationCollision(receiver.OriginalDefinition, original) {
                 return false
             }
@@ -2104,9 +2031,7 @@ partial class CSharpToGSharpTranslator {
             }
             return original != nil && original.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> reference.GetSyntax() is MethodDeclarationSyntax declaration &&
-                    this
-                    .ownedExtensions
-                    .Contains(declaration) &&
+                    this.ownedExtensions.Contains(declaration) &&
                     (
                     original.DeclaredAccessibility == Accessibility.Private || this.CanLowerOwnedExtension(declaration)
                 )
@@ -2128,9 +2053,7 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             if !CSharpToGSharpTranslator.RequiresOwnerScopedExtension(original) ||
-                this
-                .context
-                .SiblingCompilations == nil {
+                this.context.SiblingCompilations == nil {
                 return false
             }
             // Reproduce the owner-scoped declaration only for projects translated
@@ -2439,9 +2362,7 @@ partial class CSharpToGSharpTranslator {
                     case declaration is PropertyDeclarationSyntax {
                         if declaration.ExpressionBody != nil ||
                             declaration.AccessorList == nil ||
-                            declaration.AccessorList!!
-                            .Accessors
-                            .Any(
+                            declaration.AccessorList!!.Accessors.Any(
                             (accessor AccessorDeclarationSyntax) -> accessor.Body != nil ||
                                 accessor.ExpressionBody != nil
                         ) ||
@@ -2509,16 +2430,12 @@ partial class CSharpToGSharpTranslator {
             // a type mismatch — see FindPriorCollidingSiblingProperty.
             let isExplicitInterfacePropertyImpl = symbol != nil && symbol.ExplicitInterfaceImplementations.Length > 0
             let usesExplicitInterfacePropertyClause = isExplicitInterfacePropertyImpl &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .Length == 1
+                symbol!!.ExplicitInterfaceImplementations.Length == 1
             if isExplicitInterfacePropertyImpl &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .Length > 1 &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .All((e IPropertySymbol) -> e.ContainingType.Locations.Any((l Location) -> l.IsInSource)) {
+                symbol!!.ExplicitInterfaceImplementations.Length > 1 &&
+                symbol!!.ExplicitInterfaceImplementations.All(
+                (e IPropertySymbol) -> e.ContainingType.Locations.Any((l Location) -> l.IsInSource)
+            ) {
                 let names = string.Join(
                     ", ",
                     symbol!!.ExplicitInterfaceImplementations.Select((e IPropertySymbol) -> e.ContainingType.Name)
@@ -2597,8 +2514,11 @@ partial class CSharpToGSharpTranslator {
             if usesExplicitInterfacePropertyClause &&
                 type != nil &&
                 type.IsNullable &&
-                this
-                .TryGetErasedExplicitInterfacePropertySlotType(symbol!!, node.GetLocation(), out var explicitSlotType) {
+                this.TryGetErasedExplicitInterfacePropertySlotType(
+                symbol!!,
+                node.GetLocation(),
+                out var explicitSlotType
+            ) {
                 type = explicitSlotType
             }
             // Issue #1907: register a synthesized backing field BEFORE mapping the
@@ -2845,17 +2765,11 @@ partial class CSharpToGSharpTranslator {
                     .Select((entry KeyValuePair[IMethodSymbol, LiftedRecursiveLocalFunction]) -> entry.Value.Name!!)
             )
             taken.UnionWith(
-                this
-                    .state
-                    .PendingStaticSynthHelpers
-                    ?.Select((helper MethodDeclaration) -> helper.Name) ??
+                this.state.PendingStaticSynthHelpers?.Select((helper MethodDeclaration) -> helper.Name) ??
                     Enumerable.Empty[string]()
             )
             taken.UnionWith(
-                this
-                    .state
-                    .PendingInstanceSynthHelpers
-                    ?.Select((helper MethodDeclaration) -> helper.Name) ??
+                this.state.PendingInstanceSynthHelpers?.Select((helper MethodDeclaration) -> helper.Name) ??
                     Enumerable.Empty[string]()
             )
             let candidate = LiftedLocalFunctionNameAllocator.For(this.context.Compilation).AllocateBackingField(
@@ -2892,10 +2806,7 @@ partial class CSharpToGSharpTranslator {
             ) string -> implementation!!.GetDocumentationCommentId() ?? implementation!!.ToDisplayString()
 
             private func HasParameterAttributes(parameter IParameterSymbol) bool -> (
-                parameter
-                    .DeclaringSyntaxReferences
-                    .FirstOrDefault()
-                    ?.GetSyntax() is ParameterSyntax and
+                parameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is ParameterSyntax and
                     {AttributeLists: {Count: > 0}}
             )
 
@@ -2911,9 +2822,7 @@ partial class CSharpToGSharpTranslator {
                 assembly IAssemblySymbol?
             ) bool -> compilation != nil &&
                 assembly != nil &&
-                compilation
-                .References
-                .Any(
+                compilation.References.Any(
                 (reference MetadataReference) -> compilation.GetAssemblyOrModuleSymbol(
                     reference
                 ) is IAssemblySymbol referenced &&
@@ -2997,19 +2906,12 @@ partial class CSharpToGSharpTranslator {
                         explicitImplementation
                     ) ||
                         EffectiveSimpleName(candidate) != simpleName ||
-                        candidate
-                        .Parameters
-                        .Length != explicitImplementation!!
-                        .Parameters
-                        .Length ||
-                        candidate
-                        .TypeParameters
-                        .Length != explicitImplementation!!
-                        .TypeParameters
-                        .Length ||
-                        !SymbolEqualityComparer
-                        .Default
-                        .Equals(candidate.ReturnType, explicitImplementation!!.ReturnType) ||
+                        candidate.Parameters.Length != explicitImplementation!!.Parameters.Length ||
+                        candidate.TypeParameters.Length != explicitImplementation!!.TypeParameters.Length ||
+                        !SymbolEqualityComparer.Default.Equals(
+                        candidate.ReturnType,
+                        explicitImplementation!!.ReturnType
+                    ) ||
                         !HasSameParameterTypes(candidate, explicitImplementation) {
                         continue
                     }
@@ -3017,11 +2919,7 @@ partial class CSharpToGSharpTranslator {
                         bestPublicCandidate = candidate
                         continue
                     }
-                    let candidatePosition = candidate
-                        .DeclaringSyntaxReferences
-                        .FirstOrDefault()
-                        ?.Span
-                        .Start ??
+                    let candidatePosition = candidate.DeclaringSyntaxReferences.FirstOrDefault()?.Span.Start ??
                         int32.MaxValue
                     if candidatePosition < bestExplicitPosition {
                         bestExplicitCandidate = candidate
@@ -3111,11 +3009,7 @@ partial class CSharpToGSharpTranslator {
                         explicitImplementation
                     ) ||
                         EffectiveSimplePropertyName(candidate) != simpleName ||
-                        candidate
-                        .Parameters
-                        .Length != explicitImplementation!!
-                        .Parameters
-                        .Length ||
+                        candidate.Parameters.Length != explicitImplementation!!.Parameters.Length ||
                         !HasSamePropertyParameterTypes(candidate, explicitImplementation) {
                         continue
                     }
@@ -3123,11 +3017,7 @@ partial class CSharpToGSharpTranslator {
                         bestPublicCandidate = candidate
                         continue
                     }
-                    let candidatePosition = candidate
-                        .DeclaringSyntaxReferences
-                        .FirstOrDefault()
-                        ?.Span
-                        .Start ??
+                    let candidatePosition = candidate.DeclaringSyntaxReferences.FirstOrDefault()?.Span.Start ??
                         int32.MaxValue
                     if candidatePosition < bestExplicitPosition {
                         bestExplicitCandidate = candidate
@@ -3211,11 +3101,7 @@ partial class CSharpToGSharpTranslator {
                         bestPublicCandidate = candidate
                         continue
                     }
-                    let candidatePosition = candidate
-                        .DeclaringSyntaxReferences
-                        .FirstOrDefault()
-                        ?.Span
-                        .Start ??
+                    let candidatePosition = candidate.DeclaringSyntaxReferences.FirstOrDefault()?.Span.Start ??
                         int32.MaxValue
                     if candidatePosition < bestExplicitPosition {
                         bestExplicitCandidate = candidate
@@ -3297,9 +3183,7 @@ partial class CSharpToGSharpTranslator {
             ) bool -> symbol != nil &&
                 symbol.IsStatic == false &&
                 symbol.IsAbstract == false &&
-                symbol
-                .ContainingType
-                .IsRecord == true &&
+                symbol.ContainingType.IsRecord == true &&
                 GetPrimaryConstructorParameterList(symbol.ContainingType)?.Parameters.Any(
                 (parameter ParameterSyntax) -> parameter.Identifier.ValueText == symbol.Name
             ) == true &&
@@ -3335,11 +3219,7 @@ partial class CSharpToGSharpTranslator {
             ) GStatement? {
                 if csExpressionBody == nil ||
                     accessors.Count != 1 ||
-                    accessors[0].Kind != Cs2Gs
-                    .CodeModel
-                    .Ast
-                    .AccessorKind
-                    .Get ||
+                    accessors[0].Kind != Cs2Gs.CodeModel.Ast.AccessorKind.Get ||
                     accessors[0].Body == nil {
                     return nil
                 }

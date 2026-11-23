@@ -201,12 +201,8 @@ partial class CSharpToGSharpTranslator {
             (attribute AttributeData) -> attribute
                 .AttributeClass
                 ?.ToDisplayString() == "System.CodeDom.Compiler.GeneratedCodeAttribute" &&
-                attribute
-                .ConstructorArguments
-                .Length > 0 &&
-                attribute
-                .ConstructorArguments[0]
-                .Value is string generator &&
+                attribute.ConstructorArguments.Length > 0 &&
+                attribute.ConstructorArguments[0].Value is string generator &&
                 generator == RegexGeneratorName
         ) == true
 

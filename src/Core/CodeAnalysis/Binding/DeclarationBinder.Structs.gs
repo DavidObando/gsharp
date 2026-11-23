@@ -525,9 +525,8 @@ internal partial class DeclarationBinder {
                     if nominalOnly &&
                         index == 0 &&
                         binderCtx.CurrentContainingType is {} containing &&
-                        binderCtx
-                        .CurrentTypeParameters
-                        ?.ContainsKey(name) != true && $scope.TryLookupLexicalNestedTypeAlias(
+                        binderCtx.CurrentTypeParameters?.ContainsKey(name) != true &&
+                        $scope.TryLookupLexicalNestedTypeAlias(
                         containing,
                         name,
                         arity,
@@ -543,8 +542,7 @@ internal partial class DeclarationBinder {
                 if resolved is StructSymbol container {
                     let definition = container.Definition ?? container
                     if !nominalOnly && index < segments.Length - 1 && activeHeaders.Contains(definition) &&
-                        !structBaseBindings
-                        .ContainsKey(definition) {
+                        !structBaseBindings.ContainsKey(definition) {
                         let inheritedPrerequisite = FindPendingInheritedTypeHeader(
                             container,
                             segments[index + 1],
@@ -1552,8 +1550,7 @@ internal partial class DeclarationBinder {
                     () -> {
                         if declaringDefault.HasExplicitDefaultValue &&
                             implementingParameter.HasExplicitDefaultValue &&
-                            !FunctionTypeSymbol
-                            .DefaultValuesEqual(
+                            !FunctionTypeSymbol.DefaultValuesEqual(
                             declaringDefault.ExplicitDefaultValue,
                             implementingParameter.ExplicitDefaultValue
                         ) {
@@ -2191,9 +2188,7 @@ internal partial class DeclarationBinder {
                     let hasExplicitReplacement = !syntax.Properties.IsDefaultOrEmpty && syntax.Properties.Any(
                         (propSyntax PropertyDeclarationSyntax) -> !propSyntax.IsIndexer &&
                             !propSyntax.HasExplicitInterfaceClause &&
-                            propSyntax
-                            .Identifier
-                            .ValueText == parameter.Name
+                            propSyntax.Identifier.ValueText == parameter.Name
                     )
                     if !hasExplicitReplacement && TypeMemberModel.ResolveInheritedDataPositionalProperty(
                         structSymbol,
@@ -2317,8 +2312,7 @@ internal partial class DeclarationBinder {
                 // indexer's signature.
                 let duplicatesPlainIndexer = isIndexer &&
                     !propSyntax.HasExplicitInterfaceClause &&
-                    declaredIndexerSignatures
-                    .Any(
+                    declaredIndexerSignatures.Any(
                     (declared ImmutableArray[ParameterSymbol]) -> HaveSameIndexerSignature(declared, indexerParameters)
                 )
                 let propExemptCollision = !duplicatesPlainIndexer &&
@@ -2395,9 +2389,7 @@ internal partial class DeclarationBinder {
                     // Auto-property if accessors have no bodies
                     isAutoProperty = (getAccessor == nil || getAccessor.Body == nil) &&
                         (writeAccessor == nil || writeAccessor.Body == nil) &&
-                        propSyntax
-                        .Accessors
-                        .All((a PropertyAccessorSyntax) -> a.Body == nil)
+                        propSyntax.Accessors.All((a PropertyAccessorSyntax) -> a.Body == nil)
                     // A bodyless accessor list on an open property declares an
                     // abstract slot; it must not acquire an auto-property field.
                     if propSyntax.OpenModifier != nil && propSyntax.OverrideModifier == nil && hasGetter && !hasSetter {
@@ -2438,12 +2430,8 @@ internal partial class DeclarationBinder {
                         (getterAccessibility == Accessibility.Private && hasGetter) ||
                         (setterAccessibility == Accessibility.Private && hasSetter) ||
                         propSyntax.OpenBraceToken == nil ||
-                        propSyntax
-                        .Accessors
-                        .IsDefaultOrEmpty ||
-                        propSyntax
-                        .Accessors
-                        .Any((accessor PropertyAccessorSyntax) -> accessor.Body != nil) {
+                        propSyntax.Accessors.IsDefaultOrEmpty ||
+                        propSyntax.Accessors.Any((accessor PropertyAccessorSyntax) -> accessor.Body != nil) {
                         Diagnostics.ReportInvalidAbstractProperty(propSyntax.Identifier.Location, propName)
                     }
                 }
@@ -2535,8 +2523,7 @@ internal partial class DeclarationBinder {
                         } else if !hasSetter &&
                             baseProp.HasGetter &&
                             !baseProp.HasSetter &&
-                            propReturnRefKind == RefKind
-                            .None {
+                            propReturnRefKind == RefKind.None {
                             // Issue #4481: a get-only override may narrow the
                             // type to one with an implicit reference conversion
                             // to the base type (C# 9 covariant returns). Its
@@ -3267,8 +3254,7 @@ internal partial class DeclarationBinder {
                     // Issue #3310 / ADR-0159 channel carve-out: a bare
                     // `chan T` static field has no usable default.
                     if !ManagedReferenceTypes.TryGetElement(fieldType, out _, out _) &&
-                        !NativeProtocolMetadata
-                        .IsProtocol(fieldType) {
+                        !NativeProtocolMetadata.IsProtocol(fieldType) {
                         Diagnostics.ReportChannelRequiresInitializer(
                             fieldSyntax.Identifier.Location,
                             fieldName,
@@ -3670,9 +3656,7 @@ internal partial class DeclarationBinder {
                     }
                     isAutoProperty = (getAccessor == nil || getAccessor.Body == nil) &&
                         (setAccessor == nil || setAccessor.Body == nil) &&
-                        propSyntax
-                        .Accessors
-                        .All((a PropertyAccessorSyntax) -> a.Body == nil)
+                        propSyntax.Accessors.All((a PropertyAccessorSyntax) -> a.Body == nil)
                 }
                 // Issue #3879 (ADR-0060 amendment): a `shared` (static) property
                 // may return by reference on exactly the same terms as an
@@ -4228,8 +4212,7 @@ internal partial class DeclarationBinder {
                 // this closure runs.
                 if enclosingTypeParameters.Count > 0 ||
                     !ownTypeParameters.IsDefaultOrEmpty ||
-                    !methodTypeParameters
-                    .IsDefaultOrEmpty {
+                    !methodTypeParameters.IsDefaultOrEmpty {
                     let typeParameterScope = Dictionary[string, TypeParameterSymbol]()
                     for tp in enclosingTypeParameters {
                         typeParameterScope[tp.Name] = tp
@@ -5024,8 +5007,7 @@ internal partial class DeclarationBinder {
             // reported when the initializer was bound or by the deferred check whose operand is constant now.
             ReportDeferredFloatingConstantChecks(constField)
             if !(bound is BoundErrorExpression) &&
-                !ConstantExpressionEvaluator
-                .ContainsCheckedOutOfRangeFloatingConstantConversion(bound) {
+                !ConstantExpressionEvaluator.ContainsCheckedOutOfRangeFloatingConstantConversion(bound) {
                 Diagnostics.ReportConstFieldInitializerNotConstant(location, constField.Name)
             }
         }
@@ -5242,8 +5224,7 @@ internal partial class DeclarationBinder {
             }: TypeSignaturesEquivalent(leftArgument.Type, rightArgument.Type) &&
                 BoundAttributeValuesEquivalent(leftArgument.Value, rightArgument.Value)
             case {Item1: leftArray is Array, Item2: rightArray is Array}: leftArray.Length == rightArray.Length &&
-                Enumerable
-                .Range(0, leftArray.Length).All(
+                Enumerable.Range(0, leftArray.Length).All(
                 (i int32) -> BoundAttributeValuesEquivalent(leftArray.GetValue(i), rightArray.GetValue(i))
             )
             default: object.Equals(left, right)

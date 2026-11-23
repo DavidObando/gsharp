@@ -143,8 +143,7 @@ shared class RepositorySolutionGenerator {
             return sourceFiles
                 .Where(
                 (path string) -> Path.GetExtension(path).Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
-                    Path
-                    .GetExtension(path).Equals(".slnx", StringComparison.OrdinalIgnoreCase)
+                    Path.GetExtension(path).Equals(".slnx", StringComparison.OrdinalIgnoreCase)
             )
                 .Select((path string) -> Path.GetFullPath(Path.Combine(sourceRoot, path)))
                 .OrderBy((path string) -> path, StringComparer.Ordinal)

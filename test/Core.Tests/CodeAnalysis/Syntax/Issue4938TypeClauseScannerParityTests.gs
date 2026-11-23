@@ -110,8 +110,7 @@ open class Issue4938TypeClauseScannerParityTests {
         let properties = typeof(TypeClauseSyntax)
             .GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(
-            (property PropertyInfo) -> property.GetIndexParameters()
-                .Length == 0 &&
+            (property PropertyInfo) -> property.GetIndexParameters().Length == 0 &&
                 (
                 property.PropertyType == typeof(SyntaxToken) ||
                     (property.PropertyType == typeof(bool) && property.Name.StartsWith("Is", StringComparison.Ordinal))

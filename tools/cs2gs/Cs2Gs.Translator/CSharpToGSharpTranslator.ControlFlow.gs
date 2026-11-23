@@ -413,15 +413,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 this.state.EmittedLocalStorageAcceptsNil[mainBinder] = binderType != nil && binderType.IsNullable
                 this.RecordEmittedLocalNullability(mainBinder, binderType, nil, nil)
-                let binderInit GExpression = if mainBinder
-                    .Type
-                    .IsValueType &&
-                    scrutineeType
-                    ?.OriginalDefinition
-                    .SpecialType != SpecialType.System_Nullable_T &&
-                    !SymbolEqualityComparer
-                    .Default
-                    .Equals(scrutineeType, mainBinder.Type) && binderType != nil {
+                let binderInit GExpression = if mainBinder.Type.IsValueType &&
+                    scrutineeType?.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T &&
+                    !SymbolEqualityComparer.Default.Equals(scrutineeType, mainBinder.Type) && binderType != nil {
                     cast[GExpression](ConversionExpression(binderType, sourceExpr, isCheckedReferenceCast: true))
                 } else {
                     cast[GExpression](sourceExpr)
@@ -434,10 +428,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 if SymbolEqualityComparer.Default.Equals(nestedBinder, mainBinder) ||
-                    !this
-                    .state
-                    .PatternBindings
-                    .TryGetValue(nestedBinder, out var projectedInit) {
+                    !this.state.PatternBindings.TryGetValue(nestedBinder, out var projectedInit) {
                     continue
                 }
                 this.state.PatternBindings.Remove(nestedBinder)
@@ -480,10 +471,7 @@ partial class CSharpToGSharpTranslator {
                             (
                             this.InferredLocalDeclarationIsNullable(nestedBinder) ||
                                 (wholeValueBinders.Contains(nestedBinder) && scrutineeIsNullable) ||
-                                this
-                                .state
-                                .StoredPatternCaptures
-                                .Contains(projectedInit) ||
+                                this.state.StoredPatternCaptures.Contains(projectedInit) ||
                                 !this.TryGetVarCaptureStaticNonNull(nestedBinder, out var varIsNonNull) || !varIsNonNull
                         )
                     )
@@ -500,15 +488,9 @@ partial class CSharpToGSharpTranslator {
                 this.state.EmittedLocalStorageAcceptsNil[nestedBinder] = nestedType != nil && nestedType.IsNullable
                 this.RecordEmittedLocalNullability(nestedBinder, nestedType, nil, nil)
                 let nestedInit GExpression = if wholeValueBinders.Contains(nestedBinder) &&
-                    nestedBinder
-                    .Type
-                    .IsValueType &&
-                    scrutineeType
-                    ?.OriginalDefinition
-                    .SpecialType != SpecialType.System_Nullable_T &&
-                    !SymbolEqualityComparer
-                    .Default
-                    .Equals(scrutineeType, nestedBinder.Type) && nestedType != nil {
+                    nestedBinder.Type.IsValueType &&
+                    scrutineeType?.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T &&
+                    !SymbolEqualityComparer.Default.Equals(scrutineeType, nestedBinder.Type) && nestedType != nil {
                     cast[GExpression](ConversionExpression(nestedType, projectedInit, isCheckedReferenceCast: true))
                 } else {
                     projectedInit
@@ -587,9 +569,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 case VarPatternSyntax{Designation: SingleVariableDesignationSyntax single} when !negated &&
                     mainBinder != nil &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(this.context.GetDeclaredSymbol(single), mainBinder) {
+                    SymbolEqualityComparer.Default.Equals(this.context.GetDeclaredSymbol(single), mainBinder) {
                     return
                 }
                 case declaration is DeclarationPatternSyntax when !negated && this.IsBindOnlyMainBinder(
@@ -644,12 +624,8 @@ partial class CSharpToGSharpTranslator {
             if scrutineeIsNullable ||
                 mainBinder == nil ||
                 declaration.Designation is not SingleVariableDesignationSyntax single ||
-                this
-                .context
-                .GetDeclaredSymbol(single) is not ILocalSymbol symbol || !SymbolEqualityComparer.Default.Equals(
-                symbol,
-                mainBinder
-            ) {
+                this.context.GetDeclaredSymbol(single) is not ILocalSymbol symbol ||
+                !SymbolEqualityComparer.Default.Equals(symbol, mainBinder) {
                 return false
             }
             let target ITypeSymbol? = this.context.GetTypeInfo(declaration.Type).Type
@@ -745,9 +721,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 case recursive is RecursivePatternSyntax when !negated {
                     if recursive.Designation is SingleVariableDesignationSyntax single &&
-                        this
-                        .context
-                        .GetDeclaredSymbol(single) is ILocalSymbol symbol {
+                        this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol {
                         yield symbol
                     }
                     if recursive.PropertyPatternClause != nil {
@@ -1284,19 +1258,10 @@ partial class CSharpToGSharpTranslator {
                 if isSharedNode {
                     hoistInitializer = sharedInitializer
                 } else if targetSymbol.IsValueType {
-                    if this
-                        .context
-                        .GetTypeInfo(isPattern!!.Expression)
-                        .Type is INamedTypeSymbol receiverType &&
-                        receiverType
-                        .OriginalDefinition
-                        .SpecialType == SpecialType.System_Nullable_T &&
-                        receiverType
-                        .TypeArguments
-                        .Length == 1 &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(receiverType.TypeArguments[0], targetSymbol) {
+                    if this.context.GetTypeInfo(isPattern!!.Expression).Type is INamedTypeSymbol receiverType &&
+                        receiverType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+                        receiverType.TypeArguments.Length == 1 &&
+                        SymbolEqualityComparer.Default.Equals(receiverType.TypeArguments[0], targetSymbol) {
                         hoistInitializer = receiver
                     } else {
                         hoistInitializer = BinaryExpression(receiver, "as", TypeExpression(MakeNullable(targetType)))
@@ -1442,8 +1407,7 @@ partial class CSharpToGSharpTranslator {
                 designation = designations[0]
             }
             if patternIndex < 0 || this.context.GetDeclaredSymbol(designation) is not ILocalSymbol binder ||
-                terms
-                .Where((_ ExpressionSyntax, index int32) -> index != patternIndex).Any(
+                terms.Where((_ ExpressionSyntax, index int32) -> index != patternIndex).Any(
                 (term ExpressionSyntax) -> term
                     .DescendantNodesAndSelf()
                     .OfType[IsPatternExpressionSyntax]()
@@ -1466,12 +1430,8 @@ partial class CSharpToGSharpTranslator {
                     isPattern!!.Expression
                 )
             ) &&
-                binder
-                .Type
-                .TypeKind != TypeKind.Error &&
-                !binder
-                .Type
-                .IsRefLikeType {
+                binder.Type.TypeKind != TypeKind.Error &&
+                !binder.Type.IsRefLikeType {
                 let mutableName string? = this.EmittedName(designation, designation!!.Identifier)
                 let matchName = FreshPatternMatchName(mutableName, this.state.CurrentBodyScope ?? ifStatement)
                 this.state.NativePatternVariableAliases[binder] = matchName
@@ -1639,19 +1599,10 @@ partial class CSharpToGSharpTranslator {
                     if isSharedNode {
                         initializer = sharedInitializer
                     } else if targetSymbol.IsValueType {
-                        if this
-                            .context
-                            .GetTypeInfo(isPattern!!.Expression)
-                            .Type is not INamedTypeSymbol receiverType ||
-                            receiverType
-                            .OriginalDefinition
-                            .SpecialType != SpecialType.System_Nullable_T ||
-                            receiverType
-                            .TypeArguments
-                            .Length != 1 ||
-                            !SymbolEqualityComparer
-                            .Default
-                            .Equals(receiverType.TypeArguments[0], targetSymbol) {
+                        if this.context.GetTypeInfo(isPattern!!.Expression).Type is not INamedTypeSymbol receiverType ||
+                            receiverType.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T ||
+                            receiverType.TypeArguments.Length != 1 ||
+                            !SymbolEqualityComparer.Default.Equals(receiverType.TypeArguments[0], targetSymbol) {
                             return false
                         }
                         initializer = receiver
@@ -1747,12 +1698,8 @@ partial class CSharpToGSharpTranslator {
         private func ForRequiresWhileLowering(forStatement ForStatementSyntax) bool {
             let declaratorCount = forStatement.Declaration?.Variables.Count ?? 0
             return declaratorCount > 1 ||
-                forStatement
-                .Initializers
-                .Count > 1 ||
-                forStatement
-                .Incrementors
-                .Count > 1 ||
+                forStatement.Initializers.Count > 1 ||
+                forStatement.Incrementors.Count > 1 ||
                 forStatement
                 .Initializers
                 .Concat(forStatement.Incrementors)
@@ -1868,10 +1815,7 @@ partial class CSharpToGSharpTranslator {
             let bodyStatements = List[GStatement](conditionPrologue!!)
             let hasOwnContinue = incrementorStatements.Count > 0 && BodyContainsOwnLoopContinue(forStatement.Statement)
             let forHasPredeclaredOut = this.ClauseRequiresOutPredeclaration(forStatement.Condition) ||
-                forStatement
-                .Initializers
-                .Concat(forStatement.Incrementors)
-                .Any(this.ClauseRequiresOutPredeclaration)
+                forStatement.Initializers.Concat(forStatement.Incrementors).Any(this.ClauseRequiresOutPredeclaration)
             if hasOwnContinue && !forHasPredeclaredOut && OwnLoopContinueCrossesFinally(forStatement.Statement) {
                 this.context.ReportUnsupported(
                     forStatement,
@@ -1948,10 +1892,7 @@ partial class CSharpToGSharpTranslator {
 
         private func ForUsesSharedContinueIncrementors(loop ForStatementSyntax) bool ->
         this.ClauseRequiresOutPredeclaration(loop.Condition) ||
-            loop
-            .Initializers
-            .Concat(loop.Incrementors)
-            .Any(this.ClauseRequiresOutPredeclaration) ||
+            loop.Initializers.Concat(loop.Incrementors).Any(this.ClauseRequiresOutPredeclaration) ||
             OwnLoopContinueCrossesTryOrUsing(loop.Statement)
 
         /// Emits a `for` loop's incrementor statements immediately ahead of every `continue` that targets
@@ -2001,9 +1942,7 @@ partial class CSharpToGSharpTranslator {
                             return replacement
                         }
                         let incrementors IReadOnlyList[GStatement] = if forStatement is ForStatementSyntax loop &&
-                            this
-                            .continueSources
-                            .TryGetValue(continuation, out var source) {
+                            this.continueSources.TryGetValue(continuation, out var source) {
                             this.TranslateForIncrementors(loop, source)
                         } else {
                             incrementorStatements
@@ -2413,9 +2352,7 @@ partial class CSharpToGSharpTranslator {
                     property.Instance
                     default: default(IOperation?)
                 }
-                if receiver
-                    ?.Type
-                    ?.IsValueType == true &&
+                if receiver?.Type?.IsValueType == true &&
                     IsVariableStorageOperation(receiver) &&
                     receiver.Syntax is ExpressionSyntax operand {
                     this.IndexScopeWriteTarget(index.ReadonlyAddresses, bindings, operation.Syntax, operand)
@@ -2545,16 +2482,9 @@ partial class CSharpToGSharpTranslator {
         // one of its fields or elements inside the current body scope.
         private func RequiresStructFieldWiseDefaultInitializer(local ILocalSymbol?) bool {
             if local == nil ||
-                local
-                .Type
-                .TypeKind != TypeKind.Struct ||
-                local
-                .Type
-                .OriginalDefinition
-                .SpecialType == SpecialType.System_Nullable_T ||
-                this
-                .state
-                .CurrentBodyScope == nil {
+                local.Type.TypeKind != TypeKind.Struct ||
+                local.Type.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T ||
+                this.state.CurrentBodyScope == nil {
                 return false
             }
             for node in this.state.CurrentBodyScope!!.DescendantNodes() {
@@ -2732,10 +2662,7 @@ partial class CSharpToGSharpTranslator {
                     target == nil ||
                     scrutineeType.TypeKind == TypeKind.TypeParameter ||
                     target.TypeKind == TypeKind.TypeParameter ||
-                    scrutineeType.NullableAnnotation == Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated {
+                    scrutineeType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                     return false
                 }
                 for var t ITypeSymbol? = scrutineeType; t != nil; t = t!!.BaseType {
@@ -3228,8 +3155,7 @@ partial class CSharpToGSharpTranslator {
             symbol ISymbol?,
             model SemanticModel
         ) bool {
-            if model.GetSymbolInfo(invocation)
-                .Symbol is not IMethodSymbol method ||
+            if model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method ||
                 method.IsStatic ||
                 method.IsReadOnly ||
                 method.IsExtensionMethod ||
@@ -3253,8 +3179,7 @@ partial class CSharpToGSharpTranslator {
             symbol ISymbol?,
             model SemanticModel
         ) bool {
-            if model.GetSymbolInfo(access)
-                .Symbol is not IPropertySymbol property ||
+            if model.GetSymbolInfo(access).Symbol is not IPropertySymbol property ||
                 property.GetMethod is not{IsReadOnly: false} ||
                 (
                 property.ContainingType is {IsReferenceType: true} container && container.TypeKind != TypeKind.Interface
@@ -3279,9 +3204,7 @@ partial class CSharpToGSharpTranslator {
             if !WritesStorageOf(receiver, symbol, model) || model.GetOperation(
                 invocation
             ) is not IInvocationOperation operation ||
-                !operation
-                .TargetMethod
-                .IsExtensionMethod {
+                !operation.TargetMethod.IsExtensionMethod {
                 return false
             }
             let extensionMethod = operation.TargetMethod.ReducedFrom ?? operation.TargetMethod

@@ -792,10 +792,7 @@ internal class DataStructSynthesizer {
             synthesizedRows.First
         )
         this.StampSynthesized(copyConstructor, synthesizedRows)
-        if this
-            .cache
-            .DataClassCopyConstructorHandles
-            .TryGetValue(structSym, out var plannedCopyConstructor) &&
+        if this.cache.DataClassCopyConstructorHandles.TryGetValue(structSym, out var plannedCopyConstructor) &&
             copyConstructor != plannedCopyConstructor {
             throw InvalidOperationException(
                 "Class '${structSym.Name}' copy-constructor MethodDef row ${MetadataTokens.GetRowNumber(copyConstructor)} did not match the planned row ${MetadataTokens.GetRowNumber(plannedCopyConstructor)}."
@@ -844,10 +841,7 @@ internal class DataStructSynthesizer {
             synthesizedRows.First
         )
         this.StampSynthesized(cloneMethod, synthesizedRows)
-        if this
-            .cache
-            .DataClassCloneHandles
-            .TryGetValue(structSym, out var plannedClone) &&
+        if this.cache.DataClassCloneHandles.TryGetValue(structSym, out var plannedClone) &&
             cloneMethod != plannedClone {
             throw InvalidOperationException(
                 "Data class '${structSym.Name}' <Clone>$$ MethodDef row ${MetadataTokens.GetRowNumber(cloneMethod)} did not match the planned row ${MetadataTokens.GetRowNumber(plannedClone)}."
@@ -881,8 +875,7 @@ internal class DataStructSynthesizer {
                 importedBase,
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly
             ) {
-                if method.Name != "<Clone>$$" || method.IsGenericMethod || method.GetParameters()
-                    .Length != 0 ||
+                if method.Name != "<Clone>$$" || method.IsGenericMethod || method.GetParameters().Length != 0 ||
                     !method.IsVirtual ||
                     !ClrTypeUtilities.AreSame(method.ReturnType, importedBase) {
                     continue
@@ -937,8 +930,10 @@ internal class DataStructSynthesizer {
                     let parameters = constructor.GetParameters()
                     if parameters.Length == 1 &&
                         parameters[0].ParameterType == clrBase &&
-                        ClrMemberVisibility
-                        .IsVisibleFromDerived(constructor, this.emitCtx.CanAccessInternalMembers(clrBase.Assembly)) {
+                        ClrMemberVisibility.IsVisibleFromDerived(
+                        constructor,
+                        this.emitCtx.CanAccessInternalMembers(clrBase.Assembly)
+                    ) {
                         copyConstructorToken = this.resolveImportedConstructorRef(constructor, importedBase)
                         return true
                     }
@@ -2327,8 +2322,7 @@ internal class DataStructSynthesizer {
         private func GetPrintMembersSlot(structSym StructSymbol) FunctionSymbol -> DataPrintMembersModel.FindDeclared(
             structSym
         ) ??
-            Invariant
-            .Required(
+            Invariant.Required(
             structSym.DataPrintMembers,
             "a data type owns a print-members slot",
             expression: "structSym.DataPrintMembers"

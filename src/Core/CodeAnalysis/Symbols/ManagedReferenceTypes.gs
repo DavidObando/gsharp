@@ -195,8 +195,7 @@ internal shared class ManagedReferenceTypes {
             !type.IsAbstract ||
             type.IsSealed ||
             !type.IsGenericTypeDefinition ||
-            type
-            .GetGenericArguments().Length != 1 {
+            type.GetGenericArguments().Length != 1 {
             return false
         }
         let parameter = type.GetGenericArguments()[0]
@@ -207,9 +206,7 @@ internal shared class ManagedReferenceTypes {
             nil
         )
         return parameter.GenericParameterAttributes == GenericParameterAttributes.None &&
-            parameter
-            .GetGenericParameterConstraints()
-            .Length == 0 &&
+            parameter.GetGenericParameterConstraints().Length == 0 &&
             constructor != nil &&
             (constructor.CallingConvention & CallingConventions.VarArgs) == 0 &&
             (constructor.IsPublic || constructor.IsFamily || constructor.IsFamilyOrAssembly)
@@ -230,14 +227,9 @@ internal shared class ManagedReferenceTypes {
             !IsOrdinaryMethod(borrow) ||
             !ClrTypeUtilities.AreSame(borrow.DeclaringType, type) ||
             !ParametersMatch(borrow) ||
-            !borrow
-            .ReturnType
-            .IsByRef ||
+            !borrow.ReturnType.IsByRef ||
             !ClrTypeUtilities.AreSame(borrow.ReturnType.GetElementType(), element) ||
-            borrow
-            .ReturnParameter
-            .GetOptionalCustomModifiers()
-            .Length != 0 ||
+            borrow.ReturnParameter.GetOptionalCustomModifiers().Length != 0 ||
             getLocation == nil ||
             !getLocation.IsAbstract ||
             !getLocation.IsVirtual ||
@@ -362,18 +354,14 @@ internal shared class ManagedReferenceTypes {
         .ReturnParameter
         .GetRequiredCustomModifiers()
         .Length == 0 &&
-        method
-        .ReturnParameter
-        .GetOptionalCustomModifiers()
-        .Length == 0
+        method.ReturnParameter.GetOptionalCustomModifiers().Length == 0
 
     private func ParametersMatch(method MethodInfo, types ...Type) bool {
         let parameters = method.GetParameters()
         return parameters.Length == types.Length && parameters.Select(
             (parameter ParameterInfo, i int32) -> ClrTypeUtilities.AreSame(parameter.ParameterType, types[i]) &&
                 (!types[i].IsArray || parameter.ParameterType.IsSZArray == types[i].IsSZArray) &&
-                parameter
-                .GetRequiredCustomModifiers().Length == 0 && parameter.GetOptionalCustomModifiers().Length == 0
+                parameter.GetRequiredCustomModifiers().Length == 0 && parameter.GetOptionalCustomModifiers().Length == 0
         )
             .All((match bool) -> match)
     }

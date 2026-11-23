@@ -535,9 +535,7 @@ open class IlVerifyRunner {
             "DelegateCtor",
             StringComparison.Ordinal
         ) &&
-            error
-            .Method
-            ?.Contains("::!XamlIlPopulate(", StringComparison.Ordinal) == true
+            error.Method?.Contains("::!XamlIlPopulate(", StringComparison.Ordinal) == true
 
         private func BuildReferenceSet(assemblyPath string?, additionalReferences IReadOnlyList[string]?) IReadOnlyList[
             string
@@ -661,8 +659,7 @@ open class IlVerifyRunner {
                 "No manifest file exists",
                 StringComparison.OrdinalIgnoreCase
             ) ||
-                output
-                .Contains(
+                output.Contains(
                 "Run a \"dotnet tool restore\" to make the \"ilverify\" command available",
                 StringComparison.OrdinalIgnoreCase
             )

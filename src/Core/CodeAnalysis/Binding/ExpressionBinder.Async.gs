@@ -99,12 +99,9 @@ internal partial class ExpressionBinder {
                     }
                 )
             ) ||
-                ClrTypeUtilities
-                .SafeGetProperties(level, DeclaredInstance).Any(
+                ClrTypeUtilities.SafeGetProperties(level, DeclaredInstance).Any(
                 (property PropertyInfo) -> string.Equals(property.Name, name, StringComparison.Ordinal) &&
-                    property
-                    .GetIndexParameters()
-                    .Length == 0 &&
+                    property.GetIndexParameters().Length == 0 &&
                     (
                     if fromDerived {
                         ClrMemberVisibility.IsVisibleFromDerived(property.GetMethod, includeInternal) ||
@@ -278,12 +275,8 @@ internal partial class ExpressionBinder {
         // member-access LHS can never denote an event and must go straight to
         // compound-assignment (operator-overload) resolution below, carrying
         // the actual base operator instead of the +/- `isAdd` bool.
-        let isEventCapableOperator = syntax
-            .OperatorToken
-            .Kind == SyntaxKind.PlusEqualsToken ||
-            syntax
-            .OperatorToken
-            .Kind == SyntaxKind.MinusEqualsToken
+        let isEventCapableOperator = syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken ||
+            syntax.OperatorToken.Kind == SyntaxKind.MinusEqualsToken
         SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpSyntaxKind)
         // `base.Member op= rhs` and `base.Member++` / `++base.Member`: the
         // parser desugars every compound form of a member target to this node,
@@ -461,8 +454,12 @@ internal partial class ExpressionBinder {
             // to the compound-assignment fallback.
             if isEventCapableOperator &&
                 !SourceStaticValueMemberPrecedesInheritedEvent(staticStruct, eventName) &&
-                TypeMemberModel
-                .TryGetStaticEventIncludingInherited(staticStruct, eventName, out var ev, out var eventOwner) {
+                TypeMemberModel.TryGetStaticEventIncludingInherited(
+                staticStruct,
+                eventName,
+                out var ev,
+                out var eventOwner
+            ) {
                 if !AccessibilityChecker.IsAccessible(ev.Accessibility, eventOwner, function) {
                     Diagnostics.ReportMemberInaccessible(
                         eventNameSyntax.Location,
@@ -548,8 +545,12 @@ internal partial class ExpressionBinder {
             if ctorStruct != nil &&
                 isEventCapableOperator &&
                 !SourceStaticValueMemberPrecedesInheritedEvent(ctorStruct, eventName) &&
-                TypeMemberModel
-                .TryGetStaticEventIncludingInherited(ctorStruct, eventName, out var ctorEvent, out var ctorEventOwner) {
+                TypeMemberModel.TryGetStaticEventIncludingInherited(
+                ctorStruct,
+                eventName,
+                out var ctorEvent,
+                out var ctorEventOwner
+            ) {
                 if !AccessibilityChecker.IsAccessible(ctorEvent.Accessibility, ctorEventOwner, function) {
                     Diagnostics.ReportMemberInaccessible(
                         eventNameSyntax.Location,
@@ -712,8 +713,12 @@ internal partial class ExpressionBinder {
             // constraint as the event owner while the receiver remains T.
             if isEventCapableOperator &&
                 boundReceiver.Type is TypeParameterSymbol{ClassConstraint: StructSymbol classConstraint} &&
-                TypeMemberModel
-                .TryGetEvent(classConstraint, eventName, out var constrainedUserEvent, out var constrainedEventOwner) {
+                TypeMemberModel.TryGetEvent(
+                classConstraint,
+                eventName,
+                out var constrainedUserEvent,
+                out var constrainedEventOwner
+            ) {
                 if ReportInaccessibleSourceEvent(
                     constrainedUserEvent,
                     constrainedEventOwner,
@@ -761,8 +766,7 @@ internal partial class ExpressionBinder {
                 boundReceiver.Type is TypeParameterSymbol tpReceiver &&
                 tpReceiver.ClrInterfaceConstraint is TypeSymbol clrInterfaceConstraint &&
                 clrInterfaceConstraint.ClrType is Type clrInterface &&
-                clrInterface
-                .IsInterface {
+                clrInterface.IsInterface {
                 let constrainedEvent EventInfo? = ClrTypeUtilities.SafeGetEventIncludingInterfaces(
                     clrInterface,
                     eventName,
@@ -1104,8 +1108,7 @@ internal partial class ExpressionBinder {
         // diagnostics produced during LeftPart binding.
         if handlerSyntax is AccessorExpressionSyntax memberAccess &&
             memberAccess.RightPart is NameExpressionSyntax memberName &&
-            !memberAccess
-            .IsNullConditional {
+            !memberAccess.IsNullConditional {
             let boundReceiver = BindExpression(memberAccess.LeftPart)
             if boundReceiver is BoundErrorExpression || boundReceiver.Type == TypeSymbol.Error {
                 // LeftPart already reported its own diagnostic; surface the
@@ -1661,12 +1664,8 @@ internal partial class ExpressionBinder {
         internal func TryGetAwaiterTypeSymbol(awaitableType TypeSymbol) TypeSymbol? {
             if awaitableType is not ImportedTypeSymbol importedAwaitable ||
                 importedAwaitable.OpenDefinition == nil ||
-                importedAwaitable
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                !importedAwaitable
-                .TypeArguments
-                .Any(IsAwaiterTypeArgumentCandidate) {
+                importedAwaitable.TypeArguments.IsDefaultOrEmpty ||
+                !importedAwaitable.TypeArguments.Any(IsAwaiterTypeArgumentCandidate) {
                 return nil
             }
             let shape = AwaitableShape.Resolve(importedAwaitable.ClrType)

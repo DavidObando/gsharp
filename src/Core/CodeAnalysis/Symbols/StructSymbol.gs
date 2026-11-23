@@ -946,9 +946,7 @@ class StructSymbol : TypeSymbol {
         (
         HasDeclaredPrimaryConstructor || !EffectiveExplicitConstructors.Any(
             (constructor ConstructorSymbol) -> !constructor.IsSynthesizedFromPrimaryConstructor &&
-                constructor
-                .Parameters
-                .IsEmpty
+                constructor.Parameters.IsEmpty
         )
     )
 
@@ -959,9 +957,7 @@ class StructSymbol : TypeSymbol {
             HasDeclaredPrimaryConstructor
         } else {
             ImportedAssemblySemantics.TryGetTypeSemantics(ClrType, out var semantics) &&
-                !semantics
-                .PrimaryConstructorParameterNames
-                .IsDefaultOrEmpty
+                !semantics.PrimaryConstructorParameterNames.IsDefaultOrEmpty
         }
     )
 
@@ -980,9 +976,7 @@ class StructSymbol : TypeSymbol {
             ImmutableArray[ParameterSymbol].Empty
         }
         if ImportedAssemblySemantics.TryGetTypeSemantics(importedType, out var semantics) &&
-            semantics
-            .PrimaryConstructorParameterNames
-            .Length != parameters.Length {
+            semantics.PrimaryConstructorParameterNames.Length != parameters.Length {
             return nil
         }
         let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
@@ -1230,9 +1224,9 @@ class StructSymbol : TypeSymbol {
                     IsGenericDefinition || HasPrimaryConstructor || !CollectEnclosingTypeParameters(
                         this
                     ).IsDefaultOrEmpty ||
-                        InstanceFieldInitializers
-                        .Keys
-                        .Any((member FieldSymbol) -> member.Accessibility != Accessibility.Public || member.IsReadOnly)
+                        InstanceFieldInitializers.Keys.Any(
+                        (member FieldSymbol) -> member.Accessibility != Accessibility.Public || member.IsReadOnly
+                    )
                 )
             }
         )
@@ -1262,9 +1256,9 @@ class StructSymbol : TypeSymbol {
                     IsGenericDefinition || HasPrimaryConstructor || !CollectEnclosingTypeParameters(
                         this
                     ).IsDefaultOrEmpty ||
-                        InstanceFieldInitializers
-                        .Keys
-                        .Any((member FieldSymbol) -> member.Accessibility != Accessibility.Public)
+                        InstanceFieldInitializers.Keys.Any(
+                        (member FieldSymbol) -> member.Accessibility != Accessibility.Public
+                    )
                 )
             }
         )
@@ -1847,12 +1841,8 @@ class StructSymbol : TypeSymbol {
         var running Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
         for c in GetHierarchy() {
             if c.Definition != nil &&
-                !c
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                !c.Definition!!
-                .TypeParameters
-                .IsDefaultOrEmpty {
+                !c.TypeArguments.IsDefaultOrEmpty &&
+                !c.Definition!!.TypeParameters.IsDefaultOrEmpty {
                 let defParams = c.Definition!!.TypeParameters
                 let count = Math.Min(defParams.Length, c.TypeArguments.Length)
                 for var i = 0; i < count; i++ {
@@ -3266,9 +3256,7 @@ class StructSymbol : TypeSymbol {
             // so it surfaces as `Holder[int32]` on `Box[int32]`. Recurses so nested
             // generics (`Holder[Holder[T]]`, `Dictionary[K, List[V]]`) work too.
             if type is StructSymbol ss && ss.Definition != nil && !object.ReferenceEquals(ss.Definition, ss) &&
-                !ss
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !ss.TypeArguments.IsDefaultOrEmpty {
                 return SubstituteConstructionArguments(ss, SubstituteNested, mapClrType)
             }
             // Issue #1521: a member type that is a reference to a type nested inside
@@ -3304,9 +3292,7 @@ class StructSymbol : TypeSymbol {
             }
             if type is ImportedTypeSymbol imported &&
                 imported.OpenDefinition != nil &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !imported.TypeArguments.IsDefaultOrEmpty {
                 let substitutedArgs = ImmutableArray.CreateBuilder[TypeSymbol](imported.TypeArguments.Length)
                 var changed = false
                 for var i = 0; i < imported.TypeArguments.Length; i++ {
@@ -3378,9 +3364,7 @@ class StructSymbol : TypeSymbol {
                 del.Definition,
                 del
             ) &&
-                !del
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !del.TypeArguments.IsDefaultOrEmpty {
                 let substitutedDelegateArgs = ImmutableArray.CreateBuilder[TypeSymbol](del.TypeArguments.Length)
                 var delegateChanged = false
                 for var i = 0; i < del.TypeArguments.Length; i++ {

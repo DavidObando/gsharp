@@ -515,12 +515,8 @@ open partial class TypeSymbol : Symbol {
                         }
                         return false
                     }
-                    case st is StructSymbol when !st
-                        .EnclosingTypeArguments
-                        .IsDefaultOrEmpty ||
-                        !st
-                        .TypeArguments
-                        .IsDefaultOrEmpty {
+                    case st is StructSymbol when !st.EnclosingTypeArguments.IsDefaultOrEmpty ||
+                        !st.TypeArguments.IsDefaultOrEmpty {
                         for arg in GSharp.Core.CodeAnalysis.Binding.Conversion.GetEffectiveStructTypeArguments(st) {
                             if AnyTypeParameter(arg, match) {
                                 return true
@@ -528,12 +524,8 @@ open partial class TypeSymbol : Symbol {
                         }
                         return false
                     }
-                    case iface is InterfaceSymbol when !iface
-                        .EnclosingTypeArguments
-                        .IsDefaultOrEmpty ||
-                        !iface
-                        .TypeArguments
-                        .IsDefaultOrEmpty {
+                    case iface is InterfaceSymbol when !iface.EnclosingTypeArguments.IsDefaultOrEmpty ||
+                        !iface.TypeArguments.IsDefaultOrEmpty {
                         for arg in GSharp
                             .Core
                             .CodeAnalysis
@@ -617,19 +609,11 @@ open partial class TypeSymbol : Symbol {
                 return true
             }
             let isUnconstructedSourceType = switch type {
-                case structType is StructSymbol: structType
-                    .EnclosingTypeArguments
-                    .IsDefaultOrEmpty &&
-                    structType
-                    .TypeArguments
-                    .IsDefaultOrEmpty
+                case structType is StructSymbol: structType.EnclosingTypeArguments.IsDefaultOrEmpty &&
+                    structType.TypeArguments.IsDefaultOrEmpty
                 case enumType is EnumSymbol: enumType.EnclosingTypeArguments.IsDefaultOrEmpty
-                case interfaceType is InterfaceSymbol: interfaceType
-                    .EnclosingTypeArguments
-                    .IsDefaultOrEmpty &&
-                    interfaceType
-                    .TypeArguments
-                    .IsDefaultOrEmpty
+                case interfaceType is InterfaceSymbol: interfaceType.EnclosingTypeArguments.IsDefaultOrEmpty &&
+                    interfaceType.TypeArguments.IsDefaultOrEmpty
                 case delegateType is DelegateTypeSymbol: delegateType.TypeArguments.IsDefaultOrEmpty
                 default: false
             }
@@ -1143,9 +1127,7 @@ open partial class TypeSymbol : Symbol {
                         !(
                         leftDefinition.ClrType != nil &&
                             rightDefinition.ClrType != nil &&
-                            TypeIdentityComparer
-                            .Instance
-                            .Equals(leftDefinition.ClrType, rightDefinition.ClrType)
+                            TypeIdentityComparer.Instance.Equals(leftDefinition.ClrType, rightDefinition.ClrType)
                     )
                 ) ||
                     leftArguments.Length != rightArguments.Length {
@@ -1263,19 +1245,11 @@ open partial class TypeSymbol : Symbol {
                     AreRuntimeEquivalentIgnoringReferenceNullability(leftNonSzElement, rightNonSzElement)
             }
             if left is ImportedTypeSymbol{OpenDefinition: not nil} leftImported &&
-                !leftImported
-                .TypeArguments
-                .IsDefaultOrEmpty &&
+                !leftImported.TypeArguments.IsDefaultOrEmpty &&
                 right is ImportedTypeSymbol{OpenDefinition: not nil} rightImported &&
-                !rightImported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !rightImported.TypeArguments.IsDefaultOrEmpty {
                 return ClrTypeUtilities.AreSame(leftImported.OpenDefinition, rightImported.OpenDefinition) &&
-                    leftImported
-                    .TypeArguments
-                    .Length == rightImported
-                    .TypeArguments
-                    .Length &&
+                    leftImported.TypeArguments.Length == rightImported.TypeArguments.Length &&
                     leftImported
                     .TypeArguments
                     .Zip(rightImported.TypeArguments)
@@ -1321,9 +1295,7 @@ open partial class TypeSymbol : Symbol {
             }
             if left is FunctionTypeSymbol leftFunction &&
                 right is FunctionTypeSymbol rightFunction &&
-                !leftFunction
-                .IsVariadic
-                .SequenceEqual(rightFunction.IsVariadic) {
+                !leftFunction.IsVariadic.SequenceEqual(rightFunction.IsVariadic) {
                 return false
             }
             let leftParts = GetWrappedTypes(left).ToArray()

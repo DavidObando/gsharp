@@ -765,14 +765,8 @@ open class Adr0227BodyLocalDeltaTests {
             context.ConfigureScope(AnalyzerScope.MemberBody)
             context.RegisterBoundNodeAction(
                 (ctx BoundNodeAnalysisContext) -> {
-                    if ctx
-                        .BoundNode
-                        .Syntax is {} syntax &&
-                        syntax
-                        .Location
-                        .Text
-                        ?.ToString(syntax.Location.Span)
-                        ?.Contains("boom") == true {
+                    if ctx.BoundNode.Syntax is {} syntax &&
+                        syntax.Location.Text?.ToString(syntax.Location.Span)?.Contains("boom") == true {
                         throw InvalidOperationException("boom")
                     }
                 },

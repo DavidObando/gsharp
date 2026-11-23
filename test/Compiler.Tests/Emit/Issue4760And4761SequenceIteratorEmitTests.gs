@@ -219,11 +219,8 @@ Console.WriteLine(RunAsync().GetAwaiter().GetResult())
 
             let openReferenceEquals = Assert.Single(
                 typeof(ValueTuple[_]).GetMethods(),
-                (m MethodInfo) -> m.Name == "Equals" && !m.IsStatic && m.GetParameters()
-                    .Length == 1 &&
-                    m
-                    .GetParameters()[0]
-                    .ParameterType == typeof(object)
+                (m MethodInfo) -> m.Name == "Equals" && !m.IsStatic && m.GetParameters().Length == 1 &&
+                    m.GetParameters()[0].ParameterType == typeof(object)
             )
             let hybridValueTuple = typeof(ValueTuple[_]).MakeGenericType(contextString)
             let rawUnmappedTupleEquals = TypeBuilder.GetMethod(hybridValueTuple, openReferenceEquals)

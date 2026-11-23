@@ -159,8 +159,7 @@ open class Adr0212MemberConformanceTests {
                 call
             ) &&
                 (
-                model.GetReceiverTypeInfo(accessor.LeftPart)
-                    .Type ??
+                model.GetReceiverTypeInfo(accessor.LeftPart).Type ??
                     (model.GetSymbolInfo(accessor.LeftPart).Symbol as TypeParameterSymbol)
             ) is {} receiverType {
                 ExtensionGroupsCompared++
@@ -169,12 +168,8 @@ open class Adr0212MemberConformanceTests {
                     (g Symbol) -> IsExtension(g) &&
                         (
                         g is not ImportedFunctionSymbol imported ||
-                            !imported
-                            .Method
-                            .IsGenericMethod ||
-                            imported
-                            .Method
-                            .IsGenericMethodDefinition
+                            !imported.Method.IsGenericMethod ||
+                            imported.Method.IsGenericMethodDefinition
                     ) &&
                         members.Any((m Symbol) -> Matches(m, g))
                 ) {
@@ -206,8 +201,7 @@ open class Adr0212MemberConformanceTests {
             if bound is not(FieldSymbol or PropertySymbol or EventSymbol or FunctionSymbol or ImportedFunctionSymbol) {
                 return 0
             }
-            let receiverType = model.GetReceiverTypeInfo(accessor.LeftPart)
-                .Type ??
+            let receiverType = model.GetReceiverTypeInfo(accessor.LeftPart).Type ??
                 (model.GetSymbolInfo(accessor.LeftPart).Symbol as TypeParameterSymbol)
             if receiverType == nil {
                 return 0

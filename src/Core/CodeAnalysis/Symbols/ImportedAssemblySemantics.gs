@@ -90,9 +90,7 @@ internal shared class ImportedAssemblySemantics {
     internal func GetPrimaryConstructorMember(type Type, index int32) MemberInfo? {
         if !TryGetTypeSemantics(type, out var semantics) ||
             index < 0 ||
-            index >= semantics
-            .PrimaryConstructorParameterNames
-            .Length {
+            index >= semantics.PrimaryConstructorParameterNames.Length {
             return nil
         }
         let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
@@ -184,9 +182,7 @@ internal shared class ImportedAssemblySemantics {
             !TryGetTypeSemantics(type, out var semantics) ||
             !semantics.IsData ||
             index < 0 ||
-            index >= semantics
-            .PrimaryConstructorParameterNames
-            .Length {
+            index >= semantics.PrimaryConstructorParameterNames.Length {
             return nil
         }
         let tokens = semantics.PrimaryConstructorParameterFieldTokens
@@ -322,13 +318,9 @@ internal shared class ImportedAssemblySemantics {
         for method in ClrTypeUtilities.SafeGetMethods(type, InstanceAny) {
             let parameters = method.GetParameters()
             if string.Equals(method.Name, "PrintMembers", StringComparison.Ordinal) &&
-                method
-                .ReturnType
-                .FullName == "System.Boolean" &&
+                method.ReturnType.FullName == "System.Boolean" &&
                 parameters.Length == 1 &&
-                parameters[0]
-                .ParameterType
-                .FullName == "System.Text.StringBuilder" {
+                parameters[0].ParameterType.FullName == "System.Text.StringBuilder" {
                 hasPrintMembers = true
                 break
             }
@@ -371,9 +363,7 @@ internal shared class ImportedAssemblySemantics {
                 "EqualityContract",
                 BindingFlags.NonPublic | BindingFlags.Instance
             ) is {} equalityContractProperty &&
-                equalityContractProperty
-                .PropertyType
-                .FullName == "System.Type"
+                equalityContractProperty.PropertyType.FullName == "System.Type"
             if !hasCopyConstructor || !hasClone || !hasEqualityContract {
                 return false
             }
@@ -464,48 +454,28 @@ internal shared class ImportedAssemblySemantics {
             let parameters = method.GetParameters()
             hasTypedEquals |= method.Name == "Equals" &&
                 !method.IsStatic &&
-                method
-                .ReturnType
-                .FullName == "System.Boolean" &&
+                method.ReturnType.FullName == "System.Boolean" &&
                 parameters.Length == 1 &&
-                parameters[0]
-                .ParameterType
-                .FullName == type.FullName
+                parameters[0].ParameterType.FullName == type.FullName
             hasEquality |= method.Name == "op_Equality" &&
                 method.IsStatic &&
-                method
-                .ReturnType
-                .FullName == "System.Boolean" &&
+                method.ReturnType.FullName == "System.Boolean" &&
                 parameters.Length == 2 &&
-                parameters[0]
-                .ParameterType
-                .FullName == type.FullName &&
-                parameters[1]
-                .ParameterType
-                .FullName == type.FullName
+                parameters[0].ParameterType.FullName == type.FullName &&
+                parameters[1].ParameterType.FullName == type.FullName
             hasInequality |= method.Name == "op_Inequality" &&
                 method.IsStatic &&
-                method
-                .ReturnType
-                .FullName == "System.Boolean" &&
+                method.ReturnType.FullName == "System.Boolean" &&
                 parameters.Length == 2 &&
-                parameters[0]
-                .ParameterType
-                .FullName == type.FullName &&
-                parameters[1]
-                .ParameterType
-                .FullName == type.FullName
+                parameters[0].ParameterType.FullName == type.FullName &&
+                parameters[1].ParameterType.FullName == type.FullName
             hasToString |= method.Name == "ToString" &&
                 !method.IsStatic &&
-                method
-                .ReturnType
-                .FullName == "System.String" &&
+                method.ReturnType.FullName == "System.String" &&
                 parameters.Length == 0
             hasGetHashCode |= method.Name == "GetHashCode" &&
                 !method.IsStatic &&
-                method
-                .ReturnType
-                .FullName == "System.Int32" &&
+                method.ReturnType.FullName == "System.Int32" &&
                 parameters.Length == 0
         }
         return hasTypedEquals && hasEquality && hasInequality && hasToString && hasGetHashCode
@@ -535,8 +505,7 @@ internal shared class ImportedAssemblySemantics {
             BindingFlags.Public | BindingFlags.Instance,
             (property PropertyInfo) -> property.GetMethod != nil &&
                 property.SetMethod != nil &&
-                property
-                .GetIndexParameters().Length == 0
+                property.GetIndexParameters().Length == 0
         ) {
             autoProperties.Add(property.Name, property)
         }
@@ -558,8 +527,7 @@ internal shared class ImportedAssemblySemantics {
             var allParametersMatch = true
             for parameter in parameters {
                 if !autoProperties.TryGetValue(parameter.Name ?? string.Empty, out var property) ||
-                    !ClrNullability
-                    .GetSignatureType(parameter).Equals(ClrNullability.GetSignatureType(property)) {
+                    !ClrNullability.GetSignatureType(parameter).Equals(ClrNullability.GetSignatureType(property)) {
                     allParametersMatch = false
                     break
                 }
@@ -622,9 +590,7 @@ internal shared class ImportedAssemblySemantics {
                 continue
             }
             if !string.Equals(attributeName, InternalsVisibleToAttributeFullName, StringComparison.Ordinal) ||
-                attribute
-                .ConstructorArguments
-                .Count == 0 {
+                attribute.ConstructorArguments.Count == 0 {
                 continue
             }
             if attribute.ConstructorArguments[0].Value is string friendName {

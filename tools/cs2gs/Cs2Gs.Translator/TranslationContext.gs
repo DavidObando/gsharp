@@ -285,17 +285,13 @@ class TranslationContext {
         }
         // The active model is already owned. A shared tree is not evidence that
         // a different compilation (including the root) owns this invocation.
-        if tree == this
-            .SemanticModel
-            .SyntaxTree &&
+        if tree == this.SemanticModel.SyntaxTree &&
             (owner == nil || object.ReferenceEquals(this.SemanticModel.Compilation, owner)) {
             return NoOpScope.Instance
         }
         let currentKey(Owner Compilation, Tree SyntaxTree) = (this.Compilation, tree)
         let ownerCompilation = owner ?? if this.suppliedModels.ContainsKey(currentKey) ||
-            this
-            .Compilation
-            .ContainsSyntaxTree(tree) {
+            this.Compilation.ContainsSyntaxTree(tree) {
             this.Compilation
         } else {
             (
@@ -305,8 +301,7 @@ class TranslationContext {
                     default(CSharpCompilation?)
                 }
             ) ??
-                this
-                .SourceOwners(false).UniqueTreeOwner(tree) ?? this.SourceOwners(true).UniqueTreeOwner(tree) ??
+                this.SourceOwners(false).UniqueTreeOwner(tree) ?? this.SourceOwners(true).UniqueTreeOwner(tree) ??
                 throw InvalidOperationException("A source tree requires an explicit compilation owner.")
         }
         let key(Owner Compilation, Tree SyntaxTree) = (ownerCompilation, tree)
@@ -930,8 +925,7 @@ class TranslationContext {
         ) IEnumerable[SyntaxNode] {
             // The traversal root owns its scope; child predicates only restrict descendants.
             if ActiveSpeculativeBody() is {} overlay && object.ReferenceEquals(owner, overlay.Model.Compilation) &&
-                object
-                .ReferenceEquals(root.SyntaxTree, overlay.Original.SyntaxTree) {
+                object.ReferenceEquals(root.SyntaxTree, overlay.Original.SyntaxTree) {
                 if object.ReferenceEquals(root, overlay.Original.Body) {
                     return Enumerable.Empty[SyntaxNode]()
                 }

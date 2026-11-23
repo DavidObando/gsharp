@@ -158,13 +158,8 @@ public static class Driver
                 )
                 Assert.DoesNotContain(
                     calls,
-                    (call(Instruction IlInstruction, Method MethodBase)) -> call
-                        .Item1
-                        .OpCode == OpCodes.Newobj &&
-                        call
-                        .Item2
-                        .GetParameters()
-                        .Length == 0
+                    (call(Instruction IlInstruction, Method MethodBase)) -> call.Item1.OpCode == OpCodes.Newobj &&
+                        call.Item2.GetParameters().Length == 0
                 )
             }
         } finally {

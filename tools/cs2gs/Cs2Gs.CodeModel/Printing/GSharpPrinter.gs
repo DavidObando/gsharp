@@ -1072,26 +1072,16 @@ shared class GSharpPrinter {
             // property (lowered to `.Add(...)` calls by gsc).
             target = string.Empty
         } else if collection.Target is InvocationExpression invocation &&
-            invocation
-            .Arguments
-            .Count == 0 &&
-            invocation
-            .TypeArguments
-            .Count > 0 &&
-            collection
-            .Elements
-            .Count > 0 &&
+            invocation.Arguments.Count == 0 &&
+            invocation.TypeArguments.Count > 0 &&
+            collection.Elements.Count > 0 &&
             !(
-            collection
-                .Elements[0]
-                .Kind == CollectionInitializerElementKind.Keyed &&
-                collection
-                .Elements[0]
-                .Key is IdentifierExpression
+            collection.Elements[0].Kind == CollectionInitializerElementKind.Keyed &&
+                collection.Elements[0].Key is IdentifierExpression
         ) &&
-            !collection
-            .Elements
-            .Any((element CollectionInitializerElement) -> element.Value is SpreadElementExpression) {
+            !collection.Elements.Any(
+            (element CollectionInitializerElement) -> element.Value is SpreadElementExpression
+        ) {
             let typeArgs = "[${string.Join(", ", invocation.TypeArguments.Select(RenderType))}]"
             target = "${RenderPostfixTarget(invocation.Target, indent)}$typeArgs"
         } else {

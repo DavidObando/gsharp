@@ -83,11 +83,7 @@ shared class GsgenProgram {
                 )
                 CompilationMeasurements.SetProperty(
                     "generator.roslyn.version",
-                    typeof(Microsoft.CodeAnalysis.CSharp.CSharpCompilation)
-                        .Assembly
-                        .GetName()
-                        .Version
-                        ?.ToString() ??
+                    typeof(Microsoft.CodeAnalysis.CSharp.CSharpCompilation).Assembly.GetName().Version?.ToString() ??
                         string.Empty
                 )
                 CompilationMeasurements.SetProperty("generator.protocol.version", WorkerProtocol.Version.ToString())

@@ -154,8 +154,7 @@ open partial class Parser {
         // bare-identifier form `id[k] op= v` also lands here (TryLift returns
         // the IndexExpression directly when the expression already IS one).
         if SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Current.Kind, out _) &&
-            AssignmentTargetSyntaxFacts
-            .TryLiftTrailingIndexer(expression, out var compoundIndexedLhs) {
+            AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(expression, out var compoundIndexedLhs) {
             let compoundOpToken = NextToken()
             let compoundRhs = ParseAssignmentExpression()
             return CompoundIndexAssignmentExpressionSyntax(syntaxTree, compoundIndexedLhs, compoundOpToken, compoundRhs)
@@ -175,11 +174,8 @@ open partial class Parser {
         // binder produces a `BoundIndirectAssignmentExpression` which the
         // emitter lowers to `<load-address> <value> stind.*`.
         if expression is UnaryExpressionSyntax unaryDeref &&
-            unaryDeref
-            .OperatorToken
-            .Kind == SyntaxKind.StarToken &&
-            Current.Kind == SyntaxKind
-            .EqualsToken {
+            unaryDeref.OperatorToken.Kind == SyntaxKind.StarToken &&
+            Current.Kind == SyntaxKind.EqualsToken {
             let equalsToken = NextToken()
             let value = ParseAssignmentExpression()
             return IndirectAssignmentExpressionSyntax(syntaxTree, unaryDeref, equalsToken, value)
@@ -191,11 +187,8 @@ open partial class Parser {
         // CompoundIndexAssignmentExpressionSyntax for the analogous indexer
         // pattern) before desugaring to `*tmp = *tmp op value`.
         if expression is UnaryExpressionSyntax unaryDerefCompound &&
-            unaryDerefCompound
-            .OperatorToken
-            .Kind == SyntaxKind.StarToken &&
-            SyntaxFacts
-            .TryGetCompoundAssignmentBaseOperator(Current.Kind, out _) {
+            unaryDerefCompound.OperatorToken.Kind == SyntaxKind.StarToken &&
+            SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Current.Kind, out _) {
             let compoundOpToken = NextToken()
             let value = ParseAssignmentExpression()
             return IndirectCompoundAssignmentExpressionSyntax(syntaxTree, unaryDerefCompound, compoundOpToken, value)
@@ -232,8 +225,7 @@ open partial class Parser {
         // entirely for non-`+=`/`-=` operators and going straight to compound
         // assignment.
         if expression is AccessorExpressionSyntax accessor && !AssignmentTargetSyntaxFacts.IsCallResult(expression) &&
-            SyntaxFacts
-            .TryGetCompoundAssignmentBaseOperator(Current.Kind, out _) {
+            SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Current.Kind, out _) {
             let opToken = NextToken()
             let rhs = ParseAssignmentExpression()
             return EventSubscriptionExpressionSyntax(syntaxTree, accessor, opToken, rhs)
@@ -246,8 +238,7 @@ open partial class Parser {
         if expression is BaseInterfaceCallExpressionSyntax basePropForm &&
             basePropForm.IsPropertyAccess &&
             !basePropForm.IsPropertyWrite &&
-            Current.Kind == SyntaxKind
-            .EqualsToken {
+            Current.Kind == SyntaxKind.EqualsToken {
             let equalsToken = NextToken()
             let value = ParseAssignmentExpression()
             return BaseInterfaceCallExpressionSyntax(
@@ -756,16 +747,11 @@ open partial class Parser {
         if Current.Kind is SyntaxKind.Utf8StringToken or
             SyntaxKind.StringToken or
             SyntaxKind.ByteStringToken or
-            SyntaxKind
-            .InterpolatedStringToken {
+            SyntaxKind.InterpolatedStringToken {
             let utf8Representation = SyntaxFacts.IsUtf8LiteralRepresentation(current)
             if (utf8Representation || Current.Kind == SyntaxKind.Utf8StringToken) &&
                 (utf8Representation || current is LiteralExpressionSyntax) &&
-                current
-                .Location
-                .EndLine == Current
-                .Location
-                .StartLine {
+                current.Location.EndLine == Current.Location.StartLine {
                 Diagnostics.ReportInvalidUtf8StringLiteral(
                     Current.Location,
                     "Adjacent literals are not concatenated; separate the expressions."
@@ -820,11 +806,8 @@ open partial class Parser {
                     current = BaseClassCallExpressionSyntax(syntaxTree, baseName.IdentifierToken, dotToken, baseCall)
                 } else if dotToken.Kind == SyntaxKind.DotToken &&
                     current is NameExpressionSyntax &&
-                    current
-                    .IdentifierToken
-                    .Text == "base" &&
-                    Current.Kind == SyntaxKind
-                    .IdentifierToken {
+                    current.IdentifierToken.Text == "base" &&
+                    Current.Kind == SyntaxKind.IdentifierToken {
                     // Issue #4331: `base.f` takes only the member name, so a
                     // following postfix chain applies to the base member
                     // (`base.f.ToString()`, `base.arr[0]`, `base.obj.Field = v`).
@@ -854,8 +837,7 @@ open partial class Parser {
                 let deref = UnaryExpressionSyntax(syntaxTree, starToken, current)
                 current = AccessorExpressionSyntax(syntaxTree, deref, arrowToken, rightSide)
             } else if Current.Kind == SyntaxKind.OpenSquareBracketToken ||
-                Current.Kind == SyntaxKind
-                .QuestionOpenBracketToken {
+                Current.Kind == SyntaxKind.QuestionOpenBracketToken {
                 let openBracket = NextToken()
                 // Issue #522: an indexer is a fresh inner expression context.
                 let savedSuppress = suppressTrailingObjectInitializer
@@ -875,9 +857,7 @@ open partial class Parser {
                 Current.Kind == SyntaxKind.OpenParenthesisToken ||
                     (
                     Current.Kind == SyntaxKind.QuestionToken && Peek(1).Kind == SyntaxKind.OpenParenthesisToken &&
-                        Current.Position == current
-                        .Span
-                        .End &&
+                        Current.Position == current.Span.End &&
                         Peek(1).Position == Current.Span.End
                 )
             ) &&

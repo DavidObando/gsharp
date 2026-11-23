@@ -42,10 +42,7 @@ partial class CSharpToGSharpTranslator {
                 isPattern.Expression
             ) ??
                 this.GetProjectedReceiverType(isPattern.Expression) ??
-                this
-                .context
-                .GetTypeInfo(isPattern.Expression)
-                .Type
+                this.context.GetTypeInfo(isPattern.Expression).Type
             this.RegisterProjectedNativePatternBindings(
                 pattern,
                 effectiveReceiverType,
@@ -98,10 +95,7 @@ partial class CSharpToGSharpTranslator {
                     var effectiveReceiverType ITypeSymbol? = receiverType
                     if recursive.Type != nil &&
                         receiverType is INamedTypeSymbol projectedReceiver &&
-                        this
-                        .context
-                        .GetTypeInfo(recursive.Type)
-                        .Type is INamedTypeSymbol narrowedType {
+                        this.context.GetTypeInfo(recursive.Type).Type is INamedTypeSymbol narrowedType {
                         effectiveReceiverType = this.GetReceiverTypeHierarchy(projectedReceiver).FirstOrDefault(
                             (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
                                 candidate,
@@ -222,10 +216,7 @@ partial class CSharpToGSharpTranslator {
                     var effectiveReceiverType ITypeSymbol? = receiverType
                     if recursive.Type != nil &&
                         receiverType is INamedTypeSymbol projectedReceiver &&
-                        this
-                        .context
-                        .GetTypeInfo(recursive.Type)
-                        .Type is INamedTypeSymbol narrowedType {
+                        this.context.GetTypeInfo(recursive.Type).Type is INamedTypeSymbol narrowedType {
                         effectiveReceiverType = this.GetReceiverTypeHierarchy(projectedReceiver).FirstOrDefault(
                             (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
                                 candidate,
@@ -361,9 +352,7 @@ partial class CSharpToGSharpTranslator {
                         }
                         let elementType ITypeSymbol? = if projectedTuple != nil &&
                             projectedTuple.IsTupleType &&
-                            i < projectedTuple
-                            .TupleElements
-                            .Length {
+                            i < projectedTuple.TupleElements.Length {
                             GetEffectiveTupleElementType(projectedTuple, i)
                         } else {
                             default(ITypeSymbol?)
@@ -390,9 +379,7 @@ partial class CSharpToGSharpTranslator {
                         }
                         let elementType ITypeSymbol? = if projectedTuple != nil &&
                             projectedTuple.IsTupleType &&
-                            i < projectedTuple
-                            .TupleElements
-                            .Length {
+                            i < projectedTuple.TupleElements.Length {
                             GetEffectiveTupleElementType(projectedTuple, i)
                         } else {
                             default(ITypeSymbol?)
@@ -429,8 +416,10 @@ partial class CSharpToGSharpTranslator {
                     right,
                     projectedRightType
                 ) is {} projectedElementType &&
-                    CSharpToGSharpTranslator
-                    .TypeContainsRecognizedManagedReferenceConsumer(projectedElementType, this.context.Compilation) {
+                    CSharpToGSharpTranslator.TypeContainsRecognizedManagedReferenceConsumer(
+                    projectedElementType,
+                    this.context.Compilation
+                ) {
                     this
                         .state
                         .ManagedReferenceArrayNullable
@@ -481,9 +470,7 @@ partial class CSharpToGSharpTranslator {
                 .Ancestors()
                 .OfType[AssignmentExpressionSyntax]()
                 .FirstOrDefault() is {Left: {} left, Right: {} right} &&
-                left
-                .Span
-                .Contains(designation.Span) {
+                left.Span.Contains(designation.Span) {
                 return this.FindProjectedDeconstructionBindingType(
                     left,
                     designation,
@@ -495,10 +482,7 @@ partial class CSharpToGSharpTranslator {
                 .Ancestors()
                 .OfType[ForEachVariableStatementSyntax]()
                 .FirstOrDefault() is {} variableForEach &&
-                variableForEach
-                .Variable
-                .Span
-                .Contains(designation.Span) {
+                variableForEach.Variable.Span.Contains(designation.Span) {
                 let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(variableForEach)
                 return this.FindProjectedDeconstructionBindingType(
                     variableForEach.Variable,
@@ -519,8 +503,10 @@ partial class CSharpToGSharpTranslator {
         private func RegisterProjectedPatternBinding(symbol ISymbol?, effectiveType ITypeSymbol?) {
             if symbol is ILocalSymbol local &&
                 effectiveType != nil &&
-                CSharpToGSharpTranslator
-                .TypeContainsRecognizedManagedReferenceConsumer(effectiveType, this.context.Compilation) {
+                CSharpToGSharpTranslator.TypeContainsRecognizedManagedReferenceConsumer(
+                effectiveType,
+                this.context.Compilation
+            ) {
                 this.state.ManagedReferenceArrayNullable.ManagedReferenceArrayProjectedLocalType[local] = effectiveType
             }
         }
@@ -589,9 +575,7 @@ partial class CSharpToGSharpTranslator {
                 this.context.SemanticModel.GetOperation(recursive) as IRecursivePatternOperation
             )?.DeconstructSymbol is IMethodSymbol deconstruct &&
                 this.GetProjectedMember(projectedReceiver, deconstruct) is IMethodSymbol projectedDeconstruct &&
-                index < projectedDeconstruct
-                .Parameters
-                .Length {
+                index < projectedDeconstruct.Parameters.Length {
                 return this.SubstituteProjectedContainingTypeParameter(
                     projectedReceiver,
                     projectedDeconstruct.Parameters[index].Type
@@ -704,25 +688,14 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let regions = this.ComputeNativePatternVariableRegions(isPattern)
-            let scope_ = this
-                .state
-                .CurrentBodyScope ??
-                isPattern
-                .Ancestors()
-                .OfType[MemberDeclarationSyntax]()
-                .FirstOrDefault() ??
-                isPattern
-                .SyntaxTree
-                .GetRoot()
+            let scope_ = this.state.CurrentBodyScope ??
+                isPattern.Ancestors().OfType[MemberDeclarationSyntax]().FirstOrDefault() ??
+                isPattern.SyntaxTree.GetRoot()
             for designation in isPattern.Pattern.DescendantNodesAndSelf().OfType[SingleVariableDesignationSyntax]() {
                 if this.context.GetDeclaredSymbol(designation) is not ILocalSymbol local ||
                     local.Type == nil ||
-                    local
-                    .Type
-                    .TypeKind == TypeKind.Error ||
-                    local
-                    .Type
-                    .IsRefLikeType {
+                    local.Type.TypeKind == TypeKind.Error ||
+                    local.Type.IsRefLikeType {
                     return false
                 }
                 // G# pattern variables are `let`-immutable.
@@ -763,9 +736,7 @@ partial class CSharpToGSharpTranslator {
                 .Annotated ||
                 (
                 declaredType is INamedTypeSymbol nullableValue &&
-                    nullableValue
-                    .OriginalDefinition
-                    .SpecialType == SpecialType.System_Nullable_T
+                    nullableValue.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
             )
             if !nullableScrutinee || !this.IsSmartCastableScrutinee(isPattern.Expression) ||
                 PatternIntroducesBinding(isPattern.Pattern) ||
@@ -862,9 +833,7 @@ partial class CSharpToGSharpTranslator {
                 scrutinee
             )
             return if declaredType is INamedTypeSymbol nullableValue &&
-                nullableValue
-                .OriginalDefinition
-                .SpecialType == SpecialType.System_Nullable_T {
+                nullableValue.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T {
                 nullableValue.TypeArguments[0]
             } else {
                 declaredType?.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
@@ -949,9 +918,7 @@ partial class CSharpToGSharpTranslator {
         // annotations included.
         private func IntersectNarrowedTypes(left ITypeSymbol?, right ITypeSymbol?) ITypeSymbol? -> if left != nil &&
             right != nil &&
-            SymbolEqualityComparer
-            .IncludeNullability
-            .Equals(left, right) {
+            SymbolEqualityComparer.IncludeNullability.Equals(left, right) {
             left
         } else {
             default(ITypeSymbol?)
@@ -1056,11 +1023,7 @@ partial class CSharpToGSharpTranslator {
                 (underlyingType.TypeKind == TypeKind.Class && this.IsEmittedOpenClass(underlyingType))
             return if tested.TypeKind == TypeKind.Interface &&
                 openInput &&
-                !this
-                .context
-                .Compilation
-                .ClassifyConversion(underlyingType, tested)
-                .IsImplicit {
+                !this.context.Compilation.ClassifyConversion(underlyingType, tested).IsImplicit {
                 candidate
             } else {
                 default(ITypeSymbol?)
@@ -1153,9 +1116,7 @@ partial class CSharpToGSharpTranslator {
                     return IsNativelyExpressiblePattern(parenthesized.Pattern, topLevel)
                 }
                 case binary is BinaryPatternSyntax when binary.OperatorToken.IsKind(SyntaxKind.AndKeyword) ||
-                    binary
-                    .OperatorToken
-                    .IsKind(SyntaxKind.OrKeyword) {
+                    binary.OperatorToken.IsKind(SyntaxKind.OrKeyword) {
                     if binary.OperatorToken.IsKind(SyntaxKind.OrKeyword) && PatternIntroducesBinding(binary) {
                         return false
                     }
@@ -1508,12 +1469,8 @@ partial class CSharpToGSharpTranslator {
             if loop is ForStatementSyntax forLoop &&
                 (
                 (forLoop.Declaration?.Variables.Count ?? 0) > 1 ||
-                    forLoop
-                    .Initializers
-                    .Count > 1 ||
-                    forLoop
-                    .Incrementors
-                    .Count > 1 ||
+                    forLoop.Initializers.Count > 1 ||
+                    forLoop.Incrementors.Count > 1 ||
                     forLoop
                     .Initializers
                     .Concat(forLoop.Incrementors)
@@ -1534,9 +1491,7 @@ partial class CSharpToGSharpTranslator {
                     node is LocalFunctionStatementSyntax ||
                     node is AnonymousFunctionExpressionSyntax
             ) ??
-                loop
-                .SyntaxTree
-                .GetRoot()
+                loop.SyntaxTree.GetRoot()
             if this.GetScopeGotoIndex(body).Jumps.Count > 0 || this.ScopeSynthesizesLoopContinueLabel(body) {
                 return false
             }
@@ -1557,8 +1512,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 if node is IfStatementSyntax ifStatement &&
                     ifStatement.Else != nil &&
-                    !this
-                    .ConditionUsesNativePatternVariables(ifStatement.Condition) {
+                    !this.ConditionUsesNativePatternVariables(ifStatement.Condition) {
                     DecomposeConjunction(ifStatement.Condition, out var leftmost, out var guards)
                     if guards.Count > 0 && !guards.Any(
                         ($guard ExpressionSyntax) -> ContainsSpillHoistingConstruct(
@@ -1568,25 +1522,14 @@ partial class CSharpToGSharpTranslator {
                     ) &&
                         leftmost is IsPatternExpressionSyntax isPattern &&
                         TryExtractSingleVarTypePattern(isPattern.Pattern, out var typeSyntax, out var single) &&
-                        this
-                        .context
-                        .GetTypeInfo(typeSyntax)
-                        .Type is {IsValueType: true} &&
-                        this
-                        .context
-                        .GetDeclaredSymbol(single) is ILocalSymbol && !this.TryResolveSharedNodeGuardHoistType(
-                        typeSyntax,
-                        out _,
-                        out _,
-                        out _
-                    ) {
+                        this.context.GetTypeInfo(typeSyntax).Type is {IsValueType: true} &&
+                        this.context.GetDeclaredSymbol(single) is ILocalSymbol &&
+                        !this.TryResolveSharedNodeGuardHoistType(typeSyntax, out _, out _, out _) {
                         return true
                     }
                 }
                 if node is ForStatementSyntax forLoop &&
-                    forLoop
-                    .Incrementors
-                    .Count > 0 &&
+                    forLoop.Incrementors.Count > 0 &&
                     BodyContainsOwnLoopContinue(forLoop.Statement) &&
                     this.ForRequiresWhileLowering(forLoop) && this.ForUsesSharedContinueIncrementors(forLoop) {
                     return true
@@ -1649,12 +1592,8 @@ partial class CSharpToGSharpTranslator {
 
         private func IsBuiltInRegionConversionType(type ITypeSymbol) bool {
             let unwrapped = if type is INamedTypeSymbol nullable &&
-                nullable
-                .OriginalDefinition
-                .SpecialType == SpecialType.System_Nullable_T &&
-                nullable
-                .TypeArguments
-                .Length == 1 {
+                nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+                nullable.TypeArguments.Length == 1 {
                 nullable.TypeArguments[0]
             } else {
                 type

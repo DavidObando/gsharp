@@ -136,9 +136,7 @@ internal shared class EmbeddedAttributeSource {
     /// @param fullName The framework type's fully-qualified name.
     /// @returns `true` when the type is that framework type.
     func IsFrameworkTypeDeclaration(declared StructSymbol, fullName string) bool -> declared.ContainingType == nil &&
-        declared
-        .TypeParameters
-        .IsDefaultOrEmpty &&
+        declared.TypeParameters.IsDefaultOrEmpty &&
         declared.PackageName +
         "." +
         declared.Name == fullName
@@ -185,9 +183,7 @@ internal shared class EmbeddedAttributeSource {
                 }
             } else if declared.HasPrimaryConstructor &&
                 IsByteConstructor(declared.PrimaryConstructorParameters, isArrayCtor) &&
-                cache
-                .ClassPrimaryCtorHandles
-                .TryGetValue(declared, out var primaryHandle) {
+                cache.ClassPrimaryCtorHandles.TryGetValue(declared, out var primaryHandle) {
                 return primaryHandle
             }
         }
@@ -309,9 +305,7 @@ internal shared class EmbeddedAttributeSource {
             for member in tree.Root.Members {
                 let declaration = member as StructDeclarationSyntax
                 if declaration != nil &&
-                    declaration
-                    .Identifier
-                    .ValueText == name &&
+                    declaration.Identifier.ValueText == name &&
                     declaration.TypeParameterList == nil {
                     return true
                 }
@@ -405,9 +399,9 @@ internal shared class IsExternalInit {
                         return true
                     }
                     case typeClause is TypeClauseSyntax when typeClause.ReadOnlyManagedModifier != nil ||
-                        typeClause
-                        .FunctionParameterRefKindTokens
-                        .Any((token SyntaxToken?) -> token?.ValueText == "in") {
+                        typeClause.FunctionParameterRefKindTokens.Any(
+                        (token SyntaxToken?) -> token?.ValueText == "in"
+                    ) {
                         return true
                     }
                     case iface is InterfaceDeclarationSyntax when iface.IsProtocol {

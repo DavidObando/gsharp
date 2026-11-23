@@ -562,12 +562,8 @@ class Annotated {
     shared {
         private func GetNullableAttributeValue(parameter ParameterInfo) uint8? {
             for ad in parameter.GetCustomAttributesData() {
-                if ad
-                    .AttributeType
-                    ?.FullName != "System.Runtime.CompilerServices.NullableAttribute" ||
-                    ad
-                    .ConstructorArguments
-                    .Count != 1 {
+                if ad.AttributeType?.FullName != "System.Runtime.CompilerServices.NullableAttribute" ||
+                    ad.ConstructorArguments.Count != 1 {
                     continue
                 }
                 let arg = ad.ConstructorArguments[0]
@@ -585,12 +581,8 @@ class Annotated {
 
         private func GetNullableAttributeArrayValue(parameter ParameterInfo)[]uint8 {
             for ad in parameter.GetCustomAttributesData() {
-                if ad
-                    .AttributeType
-                    ?.FullName != "System.Runtime.CompilerServices.NullableAttribute" ||
-                    ad
-                    .ConstructorArguments
-                    .Count != 1 {
+                if ad.AttributeType?.FullName != "System.Runtime.CompilerServices.NullableAttribute" ||
+                    ad.ConstructorArguments.Count != 1 {
                     continue
                 }
                 let arg = ad.ConstructorArguments[0]
@@ -612,12 +604,8 @@ class Annotated {
 
         private func GetNullableContextAttributeValue(method MethodInfo?) uint8? {
             for ad in method!!.GetCustomAttributesData() {
-                if ad
-                    .AttributeType
-                    ?.FullName != "System.Runtime.CompilerServices.NullableContextAttribute" ||
-                    ad
-                    .ConstructorArguments
-                    .Count != 1 {
+                if ad.AttributeType?.FullName != "System.Runtime.CompilerServices.NullableContextAttribute" ||
+                    ad.ConstructorArguments.Count != 1 {
                     continue
                 }
                 if ad.ConstructorArguments[0].Value is uint8 b {

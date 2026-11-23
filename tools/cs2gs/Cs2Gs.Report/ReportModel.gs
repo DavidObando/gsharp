@@ -133,9 +133,7 @@ class ReportModel {
         !this.Unverified &&
         !this.Partial &&
         this.MissingArtifactCount == 0 &&
-        this
-        .Gaps
-        .Count == 0
+        this.Gaps.Count == 0
 
     /// Gets or sets a value indicating whether the run stopped before executing
     /// all canonical stages (for example `--translate-only` or `--stop-after`,

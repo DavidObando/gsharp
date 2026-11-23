@@ -274,8 +274,7 @@ unsafe {
 }`, "inferred", true)
         IlVerifier.Verify(assembly, nil, FixedIlVerifyIgnored)
         Assert.Equal(Encoding.UTF8.GetBytes("120" + Environment.NewLine), RunBytes(assembly, fixture.Directory))
-        let entryPoint = EmittedFixture.Load(assembly)
-            .EntryPoint ??
+        let entryPoint = EmittedFixture.Load(assembly).EntryPoint ??
             throw InvalidOperationException("Missing entry point")
         let body = entryPoint.GetMethodBody() ?? throw InvalidOperationException("Missing entry point body")
         Assert.Contains(body.LocalVariables, (local) -> local.IsPinned && local.LocalType == typeof([]uint8))

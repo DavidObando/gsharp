@@ -24,8 +24,7 @@ internal shared class SampleConformanceData {
         .Where((path string) -> !string.Equals(Path.GetFileName(path), "aspirational", StringComparison.Ordinal))
         .Where(
         (path string) -> File.Exists(Path.Combine(path, Path.GetFileName(path) + ".golden")) &&
-            Directory
-            .EnumerateFiles(path, "*.gs").Any()
+            Directory.EnumerateFiles(path, "*.gs").Any()
     )
         .Select((path string) -> (Path.GetFileName(path) + "/"))
         .OrderBy((name string) -> name, StringComparer.Ordinal)

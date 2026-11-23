@@ -329,20 +329,14 @@ class CSharpTypeMapper {
         // A nullable value type (Nullable<T>) carries its payload as the single
         // type argument; map the underlying type and mark the result nullable.
         if type is INamedTypeSymbol nullableValue &&
-            nullableValue
-            .OriginalDefinition
-            .SpecialType == SpecialType
-            .System_Nullable_T {
+            nullableValue.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T {
             let underlying GTypeReference? = this.Map(nullableValue.TypeArguments[0], context, location)
             return WithNullable(underlying, true)
         }
         // ADR-0224: source `T?` over an open type parameter requires a proven
         // reference or non-nullable value kind; unknown-kind `T?` lowers to
         // bare `T` in G#, matching C#'s runtime representation.
-        let nullableReference = type.NullableAnnotation == Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .Annotated &&
+        let nullableReference = type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
             CanAnnotateNullableReferenceInGSharp(type)
         // ADR-0169 analyzer mode: a declared INamespaceSymbol renders as G#'s
         // namespace display string, whose honest type is `string?` —
@@ -522,18 +516,12 @@ class CSharpTypeMapper {
             genericNamed.IsGenericType &&
             !genericNamed.IsTupleType &&
             !genericNamed.IsAnonymousType &&
-            genericNamed
-            .OriginalDefinition
-            .SpecialType != SpecialType.System_Nullable_T &&
+            genericNamed.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T &&
             this.Map(type, context, location) is NamedTypeReference structural && structural.Name.EndsWith(
             genericNamed.Name,
             StringComparison.Ordinal
         ) &&
-            structural
-            .TypeArguments
-            .Count == genericNamed
-            .TypeArguments
-            .Length {
+            structural.TypeArguments.Count == genericNamed.TypeArguments.Length {
             let explicitArgs = genericNamed
                 .TypeArguments
                 .Select((a ITypeSymbol) -> this.MapExplicitType(a, context, location)!!)
@@ -754,23 +742,15 @@ class CSharpTypeMapper {
         // so future bare names reserve alias candidates before first use.
         for root in TranslationContext.GetEffectiveSyntaxRoots(compilation, contributingTrees) {
             let tree = root.SyntaxTree
-            let semanticModel = if tree == context
-                .SemanticModel
-                .SyntaxTree &&
-                !context
-                .SemanticModel
-                .IgnoresAccessibility {
+            let semanticModel = if tree == context.SemanticModel.SyntaxTree &&
+                !context.SemanticModel.IgnoresAccessibility {
                 CompilationMeasurements.Count("translation.import_semantic_model_reuses")
                 context.SemanticModel
             } else {
                 TranslationContext.GetEffectiveSemanticModel(compilation, tree)
             }
             for node in TranslationContext.GetEffectiveNodes(root, compilation) {
-                if node is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .TypeParameterSyntax typeParameter &&
+                if node is Microsoft.CodeAnalysis.CSharp.Syntax.TypeParameterSyntax typeParameter &&
                     semanticModel.GetDeclaredSymbol(typeParameter) is ITypeParameterSymbol typeParameterSymbol {
                     this.reservedTypeParameterNames.Add(names.GetName(typeParameterSymbol)!!)
                 }
@@ -811,30 +791,14 @@ class CSharpTypeMapper {
                 // Ordinary expressions remain unreserved to avoid alias churn.
                 let mapsOperationType = switch node {
                     case _ is AnonymousObjectCreationExpressionSyntax or
-                        _ is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .ConditionalExpressionSyntax or
+                        _ is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax or
                         _ is CollectionExpressionSyntax or
-                        _ is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .DefaultExpressionSyntax or
+                        _ is Microsoft.CodeAnalysis.CSharp.Syntax.DefaultExpressionSyntax or
                         _ is ImplicitArrayCreationExpressionSyntax or
                         _ is ImplicitObjectCreationExpressionSyntax or
                         _ is ImplicitStackAllocArrayCreationExpressionSyntax or
-                        _ is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .SwitchExpressionSyntax or
-                        _ is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .ThrowExpressionSyntax: true
+                        _ is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax or
+                        _ is Microsoft.CodeAnalysis.CSharp.Syntax.ThrowExpressionSyntax: true
                     case literal is Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax: literal.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression
                     )
@@ -915,9 +879,7 @@ class CSharpTypeMapper {
             (c Compilation) -> BuildSourceDeclaredTypeNames(c, EmittedNameAllocator.For(c))
         )
         return this.reservedTypeAliases.ContainsKey(name!!) || this.reservedImportedTypeNames.Contains(name!!) ||
-            this
-            .synthesizedTypeAliases
-            .ContainsKey(name!!) || this.sourceDeclaredTypeNames!!.Contains(name!!)
+            this.synthesizedTypeAliases.ContainsKey(name!!) || this.sourceDeclaredTypeNames!!.Contains(name!!)
     }
 
     /// Issue #4610: builds an isolated (cref:CSharpTypeMapper) populated with
@@ -931,12 +893,8 @@ class CSharpTypeMapper {
         let mapper = CSharpTypeMapper(AnonymousTypeRegistry(), names){AnalyzerApiMode = this.AnalyzerApiMode}
         let imports = List[ImportDirective]()
         for tree in contributingTrees {
-            let semanticModel = if tree == context
-                .SemanticModel
-                .SyntaxTree &&
-                !context
-                .SemanticModel
-                .IgnoresAccessibility {
+            let semanticModel = if tree == context.SemanticModel.SyntaxTree &&
+                !context.SemanticModel.IgnoresAccessibility {
                 context.SemanticModel
             } else {
                 TranslationContext.GetEffectiveSemanticModel(context.Compilation, tree)
@@ -1118,9 +1076,8 @@ class CSharpTypeMapper {
         }
         for reservedAlias in this.reservedTypeAliases {
             if reservedAlias.Value.Count == 1 && reservedAlias.Value.Contains(target!!) &&
-                !this
-                .reservedTypeParameterNames
-                .Contains(reservedAlias.Key) && !this.reservedInvokedLocalNames.Contains(reservedAlias.Key) &&
+                !this.reservedTypeParameterNames.Contains(reservedAlias.Key) &&
+                !this.reservedInvokedLocalNames.Contains(reservedAlias.Key) &&
                 !ConflictsWithCompilationSourceType(reservedAlias.Key) &&
                 !this.HasVisibleCallableOrValueName(reservedAlias.Key, context, location, names) &&
                 !this.HasVisibleSourceTypeName(reservedAlias.Key, context, location) {
@@ -1129,9 +1086,7 @@ class CSharpTypeMapper {
         }
         for existing in this.synthesizedTypeAliases {
             if existing.Value == target && !this.reservedTypeParameterNames.Contains(existing.Key) &&
-                !this
-                .reservedInvokedLocalNames
-                .Contains(existing.Key) &&
+                !this.reservedInvokedLocalNames.Contains(existing.Key) &&
                 !ConflictsWithCompilationSourceType(existing.Key) &&
                 !this.HasVisibleCallableOrValueName(existing.Key, context, location, names) &&
                 !this.HasVisibleSourceTypeName(existing.Key, context, location) {
@@ -1213,9 +1168,7 @@ class CSharpTypeMapper {
         if shortName != simpleName &&
             (
             this.reservedTypeAliases.ContainsKey(shortName) || this.synthesizedTypeAliases.ContainsKey(shortName) ||
-                this
-                .reservedImportedTypeNames
-                .Contains(shortName)
+                this.reservedImportedTypeNames.Contains(shortName)
         ) {
             return false
         }
@@ -1239,22 +1192,25 @@ class CSharpTypeMapper {
         let names = this.Names(context)
         for reservedAlias in this.reservedTypeAliases {
             if reservedAlias.Value.Count == 1 && reservedAlias.Value.Contains(namespaceName) &&
-                !this
-                .reservedTypeParameterNames
-                .Contains(reservedAlias.Key) && !this.reservedInvokedLocalNames.Contains(reservedAlias.Key) &&
-                !this
-                .reservedImportedTypeNames
-                .Contains(reservedAlias.Key) && !this.HasSourceTopLevelTypeNamed(reservedAlias.Key, context) &&
-                !this.HasVisibleCallableOrValueName(reservedAlias.Key, context, location, names) &&
+                !this.reservedTypeParameterNames.Contains(reservedAlias.Key) &&
+                !this.reservedInvokedLocalNames.Contains(reservedAlias.Key) && !this.reservedImportedTypeNames.Contains(
+                reservedAlias.Key
+            ) &&
+                !this.HasSourceTopLevelTypeNamed(reservedAlias.Key, context) && !this.HasVisibleCallableOrValueName(
+                reservedAlias.Key,
+                context,
+                location,
+                names
+            ) &&
                 !this.HasVisibleSourceTypeName(reservedAlias.Key, context, location) {
                 return reservedAlias.Key
             }
         }
         for existing in this.synthesizedTypeAliases {
             if existing.Value == namespaceName && !this.reservedTypeParameterNames.Contains(existing.Key) &&
-                !this
-                .reservedInvokedLocalNames
-                .Contains(existing.Key) && !this.reservedImportedTypeNames.Contains(existing.Key) &&
+                !this.reservedInvokedLocalNames.Contains(existing.Key) && !this.reservedImportedTypeNames.Contains(
+                existing.Key
+            ) &&
                 !this.HasSourceTopLevelTypeNamed(existing.Key, context) && !this.HasVisibleCallableOrValueName(
                 existing.Key,
                 context,
@@ -1415,10 +1371,7 @@ class CSharpTypeMapper {
             return PointerTypeReference(element)
         }
         if type is INamedTypeSymbol nullableValue &&
-            nullableValue
-            .OriginalDefinition
-            .SpecialType == SpecialType
-            .System_Nullable_T {
+            nullableValue.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T {
             return WithNullable(this.MapDestinationSafeType(nullableValue.TypeArguments[0], context, location), true)
         }
         if MapPredefinedName(type.SpecialType) is {} predefined {
@@ -1705,11 +1658,7 @@ class CSharpTypeMapper {
         }
         if mapped is TupleTypeReference tuple &&
             declaredType is INamedTypeSymbol{IsTupleType: true} tupleType &&
-            tuple
-            .ElementTypes
-            .Count == tupleType
-            .TupleElements
-            .Length {
+            tuple.ElementTypes.Count == tupleType.TupleElements.Length {
             let elements = List[GTypeReference](tuple.ElementTypes.Count)
             var changed = false
             for var i = 0; i < tuple.ElementTypes.Count; i++ {
@@ -1748,8 +1697,7 @@ class CSharpTypeMapper {
         }
         let isTainted = if createdType != nil {
             (nullablePositions?.Contains(string.Join(".", path)) == true) ||
-                ObliviousNullabilityAnalyzer
-                .IsCreationTupleElementTainted(
+                ObliviousNullabilityAnalyzer.IsCreationTupleElementTainted(
                 context.Compilation,
                 symbol,
                 createdType,
@@ -1996,13 +1944,8 @@ class CSharpTypeMapper {
                 let element GTypeReference? = this.Map(named.TypeArguments[0], context, location)
                 if location == nil ||
                     !location.IsInSource ||
-                    location.SourceTree != context
-                    .SemanticModel
-                    .SyntaxTree ||
-                    context
-                    .SemanticModel
-                    .LookupSymbols(location.SourceSpan.Start, name: "managed")
-                    .Any() ||
+                    location.SourceTree != context.SemanticModel.SyntaxTree ||
+                    context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "managed").Any() ||
                     (
                     readOnly && context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "readonly").Any()
                 ) {
@@ -2014,13 +1957,8 @@ class CSharpTypeMapper {
                 let element GTypeReference? = this.Map(named.TypeArguments[0], context, location)
                 if location == nil ||
                     !location.IsInSource ||
-                    location.SourceTree != context
-                    .SemanticModel
-                    .SyntaxTree ||
-                    context
-                    .SemanticModel
-                    .LookupSymbols(location.SourceSpan.Start, name: "slice")
-                    .Any() {
+                    location.SourceTree != context.SemanticModel.SyntaxTree ||
+                    context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "slice").Any() {
                     return NamedTypeReference("Gsharp.Values." + named.Name, []GTypeReference{element!!})
                 }
                 return NativeSliceTypeReference(element, named.Name == "ReadOnlySlice")
@@ -2356,9 +2294,7 @@ class CSharpTypeMapper {
             named == nil ||
             named.ContainingType != nil ||
             named.ContainingNamespace == nil ||
-            named
-            .ContainingNamespace
-            .IsGlobalNamespace {
+            named.ContainingNamespace.IsGlobalNamespace {
             return
         }
         let definition = named.OriginalDefinition
@@ -2566,12 +2502,8 @@ class CSharpTypeMapper {
                 if symbol is INamedTypeSymbol candidate &&
                     candidate.Arity == named!!.Arity &&
                     candidate.ContainingType != nil &&
-                    candidate
-                    .Locations
-                    .Any((candidateLocation Location) -> candidateLocation.IsInSource) &&
-                    candidate
-                    .OriginalDefinition
-                    .ToDisplayString() != named!!.OriginalDefinition.ToDisplayString() {
+                    candidate.Locations.Any((candidateLocation Location) -> candidateLocation.IsInSource) &&
+                    candidate.OriginalDefinition.ToDisplayString() != named!!.OriginalDefinition.ToDisplayString() {
                     return true
                 }
             }
@@ -2785,8 +2717,7 @@ class CSharpTypeMapper {
                     compilation,
                     context.Compilation
                 ) &&
-                    linkedTree
-                    .GetText().ContentEquals(text) {
+                    linkedTree.GetText().ContentEquals(text) {
                     models.Add(TranslationContext.GetEffectiveSemanticModel(compilation, linkedTree))
                 }
             }
@@ -2853,9 +2784,7 @@ class CSharpTypeMapper {
         if returnType is INamedTypeSymbol returnNamed &&
             returnNamed.Name == "Task" &&
             !ObliviousNullabilityAnalyzer.ReturnContractIsNullable(context.Compilation, invoke!!) &&
-            returnNamed
-            .ContainingNamespace
-            ?.ToDisplayString() == "System.Threading.Tasks" {
+            returnNamed.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks" {
             isAsync = true
             returnType = if returnNamed.IsGenericType {
                 returnNamed.TypeArguments[0]
@@ -2872,9 +2801,7 @@ class CSharpTypeMapper {
             if !isAsync &&
                 declaredReturnType is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} taskLike &&
                 (taskLike.Name == "Task" || taskLike.Name == "ValueTask") &&
-                taskLike
-                .ContainingNamespace
-                ?.ToDisplayString() == "System.Threading.Tasks" &&
+                taskLike.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks" &&
                 mappedReturn is NamedTypeReference{TypeArguments: {Count: 1}} envelopeMapped {
                 let promotedInner GTypeReference? = this.PromoteDelegateReturnPosition(
                     envelopeMapped.TypeArguments[0],
@@ -2918,11 +2845,7 @@ class CSharpTypeMapper {
     ) GTypeReference? {
         if mapped is TupleTypeReference mappedTuple &&
             returnType is INamedTypeSymbol{IsTupleType: true} tupleType &&
-            mappedTuple
-            .ElementTypes
-            .Count == tupleType
-            .TupleElements
-            .Length {
+            mappedTuple.ElementTypes.Count == tupleType.TupleElements.Length {
             var changed = false
             let elements = List[GTypeReference](mappedTuple.ElementTypes.Count)
             for var index = 0; index < mappedTuple.ElementTypes.Count; index++ {
@@ -2959,10 +2882,7 @@ class CSharpTypeMapper {
         return if tainted &&
             !mapped!!.IsNullable &&
             CanAnnotateNullableReferenceInGSharp(returnType) &&
-            returnType.NullableAnnotation != Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .Annotated {
+            returnType.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
             WithNullable(mapped, true)
         } else {
             mapped
@@ -3214,9 +3134,7 @@ class CSharpTypeMapper {
             compilation Compilation,
             names ...string
         ) bool -> IsRecognizedRuntimeType(type, names) &&
-            !SymbolEqualityComparer
-            .Default
-            .Equals(type!!.OriginalDefinition.ContainingAssembly, compilation.Assembly)
+            !SymbolEqualityComparer.Default.Equals(type!!.OriginalDefinition.ContainingAssembly, compilation.Assembly)
 
         internal func IsRecognizedManagedReferenceConsumerType(
             type ITypeSymbol?,
@@ -3232,12 +3150,8 @@ class CSharpTypeMapper {
         internal func IsRecognizedRuntimeType(type ITypeSymbol?, names ...string) bool -> type is INamedTypeSymbol{
             Arity: 1
         } named &&
-            named
-            .ContainingAssembly
-            ?.Name == "Gsharp.Runtime.Values" &&
-            named
-            .ContainingNamespace
-            .ToDisplayString() == "Gsharp.Values" && Array.IndexOf(names, named.Name) >= 0
+            named.ContainingAssembly?.Name == "Gsharp.Runtime.Values" &&
+            named.ContainingNamespace.ToDisplayString() == "Gsharp.Values" && Array.IndexOf(names, named.Name) >= 0
 
         /// Issue #1894: whether [`type`](paramref) is the BCL `System.Index`
         /// or `System.Range` struct. ADR-0187 maps both as ordinary imported
@@ -3500,11 +3414,7 @@ class CSharpTypeMapper {
             }
             if type is INamedTypeSymbol{IsTupleType: true} tuple &&
                 mapped is TupleTypeReference mappedTuple &&
-                tuple
-                .TupleElements
-                .Length == mappedTuple
-                .ElementTypes
-                .Count {
+                tuple.TupleElements.Length == mappedTuple.ElementTypes.Count {
                 var changed = false
                 let elements = List[GTypeReference](mappedTuple.ElementTypes.Count)
                 for var i = 0; i < mappedTuple.ElementTypes.Count; i++ {
@@ -3527,9 +3437,7 @@ class CSharpTypeMapper {
             }
             if type is INamedTypeSymbol named &&
                 named.IsValueType &&
-                named
-                .OriginalDefinition
-                .SpecialType != SpecialType.System_Nullable_T &&
+                named.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T &&
                 ContainsManagedReferenceStorage(
                 named,
                 context.Compilation,
@@ -4034,11 +3942,7 @@ class CSharpTypeMapper {
                         let right = overloads[j]
                         if left.MethodKind != right.MethodKind ||
                             left.Arity != right.Arity ||
-                            left
-                            .Parameters
-                            .Length != right
-                            .Parameters
-                            .Length ||
+                            left.Parameters.Length != right.Parameters.Length ||
                             !ParametersEraseAlike(left, right) {
                             continue
                         }
@@ -4125,20 +4029,12 @@ class CSharpTypeMapper {
             }
             let leftInvoke IMethodSymbol? = leftDelegate.DelegateInvokeMethod
             let rightInvoke IMethodSymbol? = rightDelegate.DelegateInvokeMethod
-            if leftInvoke!!
-                .Parameters
-                .Length != rightInvoke!!
-                .Parameters
-                .Length ||
+            if leftInvoke!!.Parameters.Length != rightInvoke!!.Parameters.Length ||
                 !TypesEraseAlike(leftInvoke!!.ReturnType, rightInvoke!!.ReturnType) {
                 return false
             }
             for var i = 0; i < leftInvoke!!.Parameters.Length; i++ {
-                if leftInvoke!!
-                    .Parameters[i]
-                    .RefKind != rightInvoke!!
-                    .Parameters[i]
-                    .RefKind ||
+                if leftInvoke!!.Parameters[i].RefKind != rightInvoke!!.Parameters[i].RefKind ||
                     !TypesEraseAlike(leftInvoke!!.Parameters[i].Type, rightInvoke!!.Parameters[i].Type) {
                     return false
                 }
@@ -4182,10 +4078,7 @@ class CSharpTypeMapper {
 
         private func ShouldWidenObliviousAnonymousStoragePosition(type ITypeSymbol?) bool ->
         CanAnnotateNullableReferenceInGSharp(type) &&
-            type!!.NullableAnnotation == Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .None
+            type!!.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.None
 
         private func NormalizeAnonymousProjectedStorage(symbol ITypeSymbol?, mapped GTypeReference) GTypeReference {
             var symbol = symbol
@@ -4205,11 +4098,7 @@ class CSharpTypeMapper {
             }
             if symbol is INamedTypeSymbol{IsTupleType: true} tupleSymbol &&
                 mapped is TupleTypeReference tuple &&
-                tupleSymbol
-                .TupleElements
-                .Length == tuple
-                .ElementTypes
-                .Count {
+                tupleSymbol.TupleElements.Length == tuple.ElementTypes.Count {
                 return TupleTypeReference(
                     tupleSymbol
                         .TupleElements
@@ -4229,11 +4118,7 @@ class CSharpTypeMapper {
             }
             if symbol is INamedTypeSymbol namedSymbol &&
                 mapped is NamedTypeReference named &&
-                namedSymbol
-                .TypeArguments
-                .Length == named
-                .TypeArguments
-                .Count {
+                namedSymbol.TypeArguments.Length == named.TypeArguments.Count {
                 let containingType GTypeReference? = if namedSymbol.ContainingType != nil &&
                     named.ContainingType != nil {
                     NormalizeAnonymousProjectedStorage(namedSymbol.ContainingType, named.ContainingType!!)
@@ -4249,9 +4134,7 @@ class CSharpTypeMapper {
                             let normalized = NormalizeAnonymousProjectedStorage(argument, named.TypeArguments[index])
                             return if ShouldWidenObliviousAnonymousStoragePosition(argument) &&
                                 (
-                                index >= namedSymbol
-                                    .TypeParameters
-                                    .Length ||
+                                index >= namedSymbol.TypeParameters.Length ||
                                     !TypeParameterForbidsNullableReferenceArgument(
                                     namedSymbol.TypeParameters[index],
                                     namedSymbol
@@ -4269,11 +4152,7 @@ class CSharpTypeMapper {
             }
             if symbol is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} &&
                 mapped is ArrowTypeReference arrow &&
-                invoke
-                .Parameters
-                .Length == arrow
-                .ParameterTypes
-                .Count &&
+                invoke.Parameters.Length == arrow.ParameterTypes.Count &&
                 (
                 if invoke.ReturnsVoid {
                     arrow.ReturnTypes.Count == 0
@@ -4315,18 +4194,13 @@ class CSharpTypeMapper {
                     if constraintType is ITypeParameterSymbol boundParameter {
                         if owner != nil &&
                             boundParameter.Ordinal >= 0 &&
-                            boundParameter.Ordinal < owner
-                            .TypeParameters
-                            .Length &&
-                            boundParameter.Ordinal < owner
-                            .TypeArguments
-                            .Length &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(owner.TypeParameters[boundParameter.Ordinal], boundParameter) &&
-                            !owner
-                            .TypeArguments[boundParameter.Ordinal]
-                            .IsReferenceType {
+                            boundParameter.Ordinal < owner.TypeParameters.Length &&
+                            boundParameter.Ordinal < owner.TypeArguments.Length &&
+                            SymbolEqualityComparer.Default.Equals(
+                            owner.TypeParameters[boundParameter.Ordinal],
+                            boundParameter
+                        ) &&
+                            !owner.TypeArguments[boundParameter.Ordinal].IsReferenceType {
                             return true
                         }
                         seen ??= HashSet[ITypeParameterSymbol](SymbolEqualityComparer.Default){parameter}
@@ -4336,9 +4210,7 @@ class CSharpTypeMapper {
                         continue
                     }
                     if isSourceDeclared ||
-                        i >= parameter
-                        .ConstraintNullableAnnotations
-                        .Length ||
+                        i >= parameter.ConstraintNullableAnnotations.Length ||
                         parameter.ConstraintNullableAnnotations[i] != Microsoft
                         .CodeAnalysis
                         .NullableAnnotation
@@ -4376,17 +4248,13 @@ class CSharpTypeMapper {
             if sourceType is INamedTypeSymbol{
                 OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T}
             } nullable &&
-                nullable
-                .TypeArguments
-                .Length == 1 {
+                nullable.TypeArguments.Length == 1 {
                 sourceType = nullable.TypeArguments[0]
             }
             var type = mapped
             if owner != nil &&
                 type is NamedTypeReference qualified &&
-                qualified
-                .TypeArguments
-                .Count == 1 &&
+                qualified.TypeArguments.Count == 1 &&
                 sourceType is INamedTypeSymbol source {
                 if IsRecognizedManagedReferenceConsumerType(source, owner) {
                     type = ManagedReferenceTypeReference(
@@ -4455,8 +4323,7 @@ class CSharpTypeMapper {
             ) +
                 structure +
                 "[" +
-                string
-                .Join(
+                string.Join(
                 ",",
                 children.Select(
                     (child GTypeReference, index int32) -> AnonymousOutputContractKey(
@@ -4509,9 +4376,7 @@ class CSharpTypeMapper {
                     if !invoke.ReturnsVoid {
                         let result = if arrow.IsAsync &&
                             invoke.ReturnType is INamedTypeSymbol envelope &&
-                            envelope
-                            .TypeArguments
-                            .Length == 1 {
+                            envelope.TypeArguments.Length == 1 {
                             envelope.TypeArguments[0]
                         } else {
                             invoke.ReturnType
@@ -4547,10 +4412,7 @@ class CSharpTypeMapper {
             let nullable = mapped.IsNullable ||
                 nullableValueWrapper ||
                 (
-                symbol!!.NullableAnnotation == Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated &&
+                symbol!!.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
                     CanAnnotateTypeParameterNullableInGSharp(symbol)
             )
             var merged GTypeReference
@@ -4561,11 +4423,7 @@ class CSharpTypeMapper {
                 )
             } else if symbol is INamedTypeSymbol{IsTupleType: true} tupleSymbol &&
                 mapped is TupleTypeReference tuple &&
-                tupleSymbol
-                .TupleElements
-                .Length == tuple
-                .ElementTypes
-                .Count {
+                tupleSymbol.TupleElements.Length == tuple.ElementTypes.Count {
                 merged = TupleTypeReference(
                     tupleSymbol
                         .TupleElements
@@ -4580,11 +4438,7 @@ class CSharpTypeMapper {
                 )
             } else if symbol is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} &&
                 mapped is ArrowTypeReference arrow &&
-                invoke
-                .Parameters
-                .Length == arrow
-                .ParameterTypes
-                .Count &&
+                invoke.Parameters.Length == arrow.ParameterTypes.Count &&
                 (
                 if invoke.ReturnsVoid {
                     arrow.ReturnTypes.Count == 0
@@ -4595,11 +4449,7 @@ class CSharpTypeMapper {
                 merged = MergeAnonymousDelegateNullability(arrow, invoke)
             } else if symbol is INamedTypeSymbol namedSymbol &&
                 mapped is NamedTypeReference named &&
-                namedSymbol
-                .TypeArguments
-                .Length == named
-                .TypeArguments
-                .Count {
+                namedSymbol.TypeArguments.Length == named.TypeArguments.Count {
                 merged = NamedTypeReference(
                     named.Name,
                     namedSymbol
@@ -4681,25 +4531,15 @@ class CSharpTypeMapper {
             ) ||
                 (expression is CastExpressionSyntax cast && AnonymousInitializerAcceptsNil(cast.Expression, model)) ||
                 (
-                expression is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ConditionalExpressionSyntax conditional &&
+                expression is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional &&
                     (
                     AnonymousInitializerAcceptsNil(conditional.WhenTrue, model) ||
                         AnonymousInitializerAcceptsNil(conditional.WhenFalse, model)
                 )
             ) ||
                 (
-                expression is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .SwitchExpressionSyntax switchExpression &&
-                    switchExpression
-                    .Arms
-                    .Any(
+                expression is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression &&
+                    switchExpression.Arms.Any(
                     (
                         arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
                     ) -> AnonymousInitializerAcceptsNil(arm.Expression, model)
@@ -4708,11 +4548,7 @@ class CSharpTypeMapper {
                 (
                 (
                     expression.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression) ||
-                        expression is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .DefaultExpressionSyntax
+                        expression is Microsoft.CodeAnalysis.CSharp.Syntax.DefaultExpressionSyntax
                 ) &&
                     (
                     model.GetTypeInfo(expression).ConvertedType ?? model.GetTypeInfo(expression).Type

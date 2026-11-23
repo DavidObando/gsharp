@@ -179,11 +179,8 @@ internal partial class OverloadResolver {
         var whenNotNull BoundExpression?
         if !(nullable.UnderlyingType is FunctionTypeSymbol) &&
             !(nullable.UnderlyingType is DelegateTypeSymbol) &&
-            nullable
-            .UnderlyingType
-            .ClrType is Type delegateClr &&
-            ClrTypeUtilities
-            .IsDelegateType(delegateClr) {
+            nullable.UnderlyingType.ClrType is Type delegateClr &&
+            ClrTypeUtilities.IsDelegateType(delegateClr) {
             // The callback uses null to mean that no explicit type arguments were supplied.
             if !tryBindInheritedClrInstanceCall(
                 captureRef,
@@ -534,8 +531,10 @@ internal partial class OverloadResolver {
             if GetLambdaArgumentSyntax(argSyntax) is {} lambdaSyntax &&
                 bindLambdaWithTarget != nil &&
                 (IsUntypedArrowLambda(lambdaSyntax) || argument is BoundErrorExpression) &&
-                MemberLookup
-                .TryGetLambdaTargetFunctionTypeFromSymbol(functionType.ParameterTypes[i], out var lambdaTarget) {
+                MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                functionType.ParameterTypes[i],
+                out var lambdaTarget
+            ) {
                 argument = if argSyntax != nil &&
                     (
                     !(argSyntax is LambdaExpressionSyntax) || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(
@@ -722,8 +721,10 @@ internal partial class OverloadResolver {
                         if GetLambdaArgumentSyntax(argumentSyntax) is {} inLambdaSyntax &&
                             bindLambdaWithTarget != nil &&
                             IsUntypedArrowLambda(inLambdaSyntax) &&
-                            MemberLookup
-                            .TryGetLambdaTargetFunctionTypeFromSymbol(parameter.Type, out var inLambdaTarget) {
+                            MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                            parameter.Type,
+                            out var inLambdaTarget
+                        ) {
                             argument = if argumentSyntax != nil &&
                                 (
                                 !(argumentSyntax is LambdaExpressionSyntax) ||
@@ -756,9 +757,7 @@ internal partial class OverloadResolver {
                     continue
                 }
                 if argument is BoundAddressOfExpression address {
-                    if address
-                        .Operand
-                        .Type == TypeSymbol.Error &&
+                    if address.Operand.Type == TypeSymbol.Error &&
                         argumentSyntax is RefArgumentExpressionSyntax inlineOut &&
                         inlineOut.IsInlineDeclaration &&
                         inlineOut.DeclaredType == nil {
@@ -804,8 +803,7 @@ internal partial class OverloadResolver {
             if GetLambdaArgumentSyntax(argumentSyntax) is {} lambdaSyntax &&
                 bindLambdaWithTarget != nil &&
                 IsUntypedArrowLambda(lambdaSyntax) &&
-                MemberLookup
-                .TryGetLambdaTargetFunctionTypeFromSymbol(parameter.Type, out var lambdaTarget) {
+                MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameter.Type, out var lambdaTarget) {
                 argument = if argumentSyntax != nil &&
                     (
                     !(argumentSyntax is LambdaExpressionSyntax) ||
@@ -1252,9 +1250,7 @@ internal partial class OverloadResolver {
         let assertions = Stack[BoundUnaryExpression]()
         var assertedCallee = callee
         while assertedCallee is BoundUnaryExpression assertion &&
-            assertion
-            .Op
-            .Kind == BoundUnaryOperatorKind.NullAssertion {
+            assertion.Op.Kind == BoundUnaryOperatorKind.NullAssertion {
             assertions.Push(assertion)
             assertedCallee = assertion.Operand
         }
@@ -1346,9 +1342,7 @@ internal partial class OverloadResolver {
                     return BoundErrorExpression(nil)
                 }
                 if dispatchCallee is BoundFunctionLiteralExpression refCalleeLiteral &&
-                    binderCtx
-                    .RootScope
-                    .TryGetSynthesizedRefDelegateForLiteral(
+                    binderCtx.RootScope.TryGetSynthesizedRefDelegateForLiteral(
                     refCalleeLiteral.Function,
                     resolvedFnType.ReturnType
                 ) is {} refDelegateType {
@@ -1673,9 +1667,7 @@ internal partial class OverloadResolver {
                 paramType
             }
             if (i >= permutedSyntax.Length || permutedSyntax[i] == nil) &&
-                !extension
-                .Parameters[i + 1]
-                .IsVariadic &&
+                !extension.Parameters[i + 1].IsVariadic &&
                 expectedType != nil &&
                 expectedType != paramType {
                 permutedArguments = permutedArguments.SetItem(
@@ -1721,8 +1713,7 @@ internal partial class OverloadResolver {
                     if permutedArgument.Type is {} openArgumentType &&
                         openArgumentType != TypeSymbol.Error &&
                         openArgumentType != expectedType &&
-                        conversions
-                        .TryApplyUserDefinedImplicitArgumentConversion(
+                        conversions.TryApplyUserDefinedImplicitArgumentConversion(
                         permutedArgument,
                         expectedType,
                         out var openTargetConverted
@@ -1919,9 +1910,7 @@ internal partial class OverloadResolver {
         }
         var requiredFixedCallableParamCount = fixedCallableParamCount
         while requiredFixedCallableParamCount > 0 &&
-            method
-            .Parameters[requiredFixedCallableParamCount - 1 + parameterOffset]
-            .HasExplicitDefaultValue {
+            method.Parameters[requiredFixedCallableParamCount - 1 + parameterOffset].HasExplicitDefaultValue {
             requiredFixedCallableParamCount--
         }
         let callableParameterNameAt(int32) -> string = (parameterIndex int32) -> method
@@ -2064,9 +2053,7 @@ internal partial class OverloadResolver {
                     let paramType = method.Parameters[i + parameterOffset].Type
                     if isVariadic &&
                         i +
-                        parameterOffset == method
-                        .Parameters
-                        .Length - 1 &&
+                        parameterOffset == method.Parameters.Length - 1 &&
                         VariadicCarriers.GetElementType(paramType) is {} variadicInferElement &&
                         variadicInferElement != TypeSymbol.Error {
                         InferVariadicArguments(paramType, permutedArguments, i, substitution)
@@ -2216,10 +2203,7 @@ internal partial class OverloadResolver {
             // must run BEFORE the open-type-parameter shortcut below so generic
             // out-parameters (`func M[T](out result T)`) are handled too.
             if permutedArguments[i] is BoundAddressOfExpression inlineOutAddr &&
-                inlineOutAddr
-                .Operand
-                .Type == TypeSymbol
-                .Error {
+                inlineOutAddr.Operand.Type == TypeSymbol.Error {
                 let slotSyntax = if i < permutedSyntax.Length {
                     permutedSyntax[i]
                 } else {
@@ -2457,12 +2441,8 @@ internal partial class OverloadResolver {
                     }
                 }
                 if c.Definition == nil || object.ReferenceEquals(c.Definition, c) ||
-                    c
-                    .TypeArguments
-                    .IsDefaultOrEmpty ||
-                    c.Definition!!
-                    .TypeParameters
-                    .IsDefaultOrEmpty {
+                    c.TypeArguments.IsDefaultOrEmpty ||
+                    c.Definition!!.TypeParameters.IsDefaultOrEmpty {
                     continue
                 }
                 let defTps = c.Definition!!.TypeParameters

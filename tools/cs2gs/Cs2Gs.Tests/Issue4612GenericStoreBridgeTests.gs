@@ -2010,8 +2010,8 @@ public class Box<T> where T : class
                     0,
                     site.Message!!.IndexOf(" | target=", StringComparison.Ordinal)
                 ) +
-                    site.Message!!
-                    .Substring(site.Message!!.IndexOf(" | slot-type=", StringComparison.Ordinal)).Split(" (")[0]
+                    site.Message!!.Substring(site.Message!!.IndexOf(" | slot-type=", StringComparison.Ordinal))
+                    .Split(" (")[0]
             )
         )
     }
@@ -2715,10 +2715,7 @@ namespace Demo
                 RedirectStandardError = true
             }
             start.ArgumentList.Add(assembly)
-            using let process = System
-                .Diagnostics
-                .Process
-                .Start(start) ??
+            using let process = System.Diagnostics.Process.Start(start) ??
                 throw InvalidOperationException("Could not start dotnet.")
             using let bytes = MemoryStream()
             let output = process.StandardOutput.BaseStream.CopyToAsync(bytes)

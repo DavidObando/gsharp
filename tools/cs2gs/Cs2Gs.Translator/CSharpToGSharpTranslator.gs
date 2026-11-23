@@ -467,15 +467,13 @@ partial class CSharpToGSharpTranslator {
         let hasNativeTopLevelStatements = globalStatements.Count > 0 &&
             (this.packageFilter == nil || this.includeGlobalNamespace) &&
             entryPoint != nil &&
-            entryPoint
-            .DeclaringSyntaxReferences
-            .Length > 0 &&
-            entryPoint
-            .DeclaringSyntaxReferences[0]
-            .SyntaxTree == root.SyntaxTree &&
-            entryPoint
-            .DeclaringSyntaxReferences[0]
-            .GetSyntax() is Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax
+            entryPoint.DeclaringSyntaxReferences.Length > 0 &&
+            entryPoint.DeclaringSyntaxReferences[0].SyntaxTree == root.SyntaxTree &&
+            entryPoint.DeclaringSyntaxReferences[0].GetSyntax() is Microsoft
+            .CodeAnalysis
+            .CSharp
+            .Syntax
+            .CompilationUnitSyntax
         let members = List[GNode]()
         let trailingStatements = List[GNode]()
         if hasNativeTopLevelStatements {
@@ -501,9 +499,7 @@ partial class CSharpToGSharpTranslator {
                 entryType != nil &&
                 member is TypeDeclarationSyntax typeDecl &&
                 context.GetDeclaredSymbol(member) is INamedTypeSymbol declaredType &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(declaredType.OriginalDefinition, entryType.OriginalDefinition) {
+                SymbolEqualityComparer.Default.Equals(declaredType.OriginalDefinition, entryType.OriginalDefinition) {
                 let (hoistedFuncs, entryStatements) = visitor.TranslateEntryType(typeDecl, entryPoint)
                 members.AddRange(hoistedFuncs)
                 trailingStatements.AddRange(entryStatements)
@@ -1690,15 +1686,8 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 if (receiver!!.TypeKind == TypeKind.Class || receiver!!.TypeKind == TypeKind.Struct) &&
-                    method
-                    .Parameters[0]
-                    .NullableAnnotation != Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated &&
-                    method
-                    .Parameters[0]
-                    .Type is INamedTypeSymbol receiverType &&
+                    method.Parameters[0].NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
+                    method.Parameters[0].Type is INamedTypeSymbol receiverType &&
                     !IsGenericReceiver(receiverType) &&
                     !HasApplicableInstanceMember(receiver!!, method) {
                     result.Add(receiver!!, syntax)
@@ -1714,12 +1703,8 @@ partial class CSharpToGSharpTranslator {
             receiverDefinition = nil
             if method == nil ||
                 !method.IsExtensionMethod ||
-                method
-                .Parameters
-                .Length == 0 ||
-                method
-                .Parameters[0]
-                .Type is not INamedTypeSymbol receiverType {
+                method.Parameters.Length == 0 ||
+                method.Parameters[0].Type is not INamedTypeSymbol receiverType {
                 return false
             }
             receiverDefinition = receiverType.OriginalDefinition
@@ -1729,12 +1714,14 @@ partial class CSharpToGSharpTranslator {
             return (
                 receiverDefinition!!.TypeKind == TypeKind.Class || receiverDefinition!!.TypeKind == TypeKind.Struct
             ) &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(receiverDefinition!!.ContainingAssembly, method.ContainingAssembly) &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(receiverDefinition!!.ContainingNamespace, method.ContainingNamespace)
+                SymbolEqualityComparer.Default.Equals(
+                receiverDefinition!!.ContainingAssembly,
+                method.ContainingAssembly
+            ) &&
+                SymbolEqualityComparer.Default.Equals(
+                receiverDefinition!!.ContainingNamespace,
+                method.ContainingNamespace
+            )
         }
 
         private func HasCrossContainerOwnedExtensionOverload(receiver INamedTypeSymbol?, method IMethodSymbol?) bool {
@@ -1742,9 +1729,7 @@ partial class CSharpToGSharpTranslator {
                 for other in type.GetMembers(method!!.Name).OfType[IMethodSymbol]() {
                     if !SymbolEqualityComparer.Default.Equals(other.ContainingType, method!!.ContainingType) &&
                         TryGetOwnedExtensionReceiver(other, out var otherReceiver) &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(otherReceiver, receiver) {
+                        SymbolEqualityComparer.Default.Equals(otherReceiver, receiver) {
                         return true
                     }
                 }
@@ -1757,9 +1742,8 @@ partial class CSharpToGSharpTranslator {
                 for other in type.GetMembers(method!!.Name).OfType[IMethodSymbol]() {
                     if !SymbolEqualityComparer.Default.Equals(other.ContainingType, method!!.ContainingType) &&
                         TryGetOwnedExtensionReceiver(other, out var otherReceiver) &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(otherReceiver, receiver) && HaveSameReducedSignature(method, other) {
+                        SymbolEqualityComparer.Default.Equals(otherReceiver, receiver) &&
+                        HaveSameReducedSignature(method, other) {
                         return true
                     }
                 }
@@ -1771,12 +1755,8 @@ partial class CSharpToGSharpTranslator {
             let original IMethodSymbol? = method?.ReducedFrom ?? method
             if original != nil &&
                 original.IsExtensionMethod &&
-                original
-                .Parameters
-                .Length > 0 &&
-                original
-                .Parameters[0]
-                .RefKind != RefKind.None {
+                original.Parameters.Length > 0 &&
+                original.Parameters[0].RefKind != RefKind.None {
                 return true
             }
             return TryGetOwnedExtensionReceiver(original, out var receiver) &&
@@ -1887,9 +1867,7 @@ partial class CSharpToGSharpTranslator {
         ) {
             for attribute in attributes {
                 if AttributesNamePrivateNestedType(ImmutableArray.Create(attribute), owner) &&
-                    attribute
-                    .ApplicationSyntaxReference
-                    ?.GetSyntax() is Microsoft.CodeAnalysis.SyntaxNode syntax {
+                    attribute.ApplicationSyntaxReference?.GetSyntax() is Microsoft.CodeAnalysis.SyntaxNode syntax {
                     found.Add(syntax)
                 }
             }
@@ -2024,12 +2002,8 @@ partial class CSharpToGSharpTranslator {
                 original!!.DeclaredAccessibility == Accessibility.Private ||
                 original!!.IsExtern ||
                 !IsEffectivelyPublic(original!!.ContainingType) ||
-                original!!
-                .Parameters[0]
-                .RefKind != RefKind.None ||
-                original!!
-                .Parameters
-                .Any((parameter IParameterSymbol) -> parameter.IsParams) ||
+                original!!.Parameters[0].RefKind != RefKind.None ||
+                original!!.Parameters.Any((parameter IParameterSymbol) -> parameter.IsParams) ||
                 original!!.ReturnsByRef ||
                 original!!.ReturnsByRefReadonly ||
                 SignatureTypesNamePrivateNestedType(original) {
@@ -2066,9 +2040,7 @@ partial class CSharpToGSharpTranslator {
                 return IsOwnerScopedCompanionShapeEligible(original)
             }
             return TryGetOwnedExtensionReceiver(original, out var receiver) &&
-                original!!
-                .Parameters[0]
-                .RefKind == RefKind.None &&
+                original!!.Parameters[0].RefKind == RefKind.None &&
                 HasCrossContainerOwnedExtensionOverload(receiver, original) &&
                 !HasCrossContainerOwnedExtensionDuplicate(receiver, original) &&
                 !HasReducedDeclarationCollision(receiver, original)

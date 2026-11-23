@@ -252,9 +252,7 @@ public class LocalFunctionHoistTranslationTests
                                 originalType.Members.Where(
                                     (member MemberDeclarationSyntax) -> member is MethodDeclarationSyntax method &&
                                         (
-                                        method
-                                            .Identifier
-                                            .ValueText is "FindRepoRoot" or
+                                        method.Identifier.ValueText is "FindRepoRoot" or
                                             "FindRepoRootAbove" or
                                             "ResolveConfiguredSourceRoot"
                                     ) ||

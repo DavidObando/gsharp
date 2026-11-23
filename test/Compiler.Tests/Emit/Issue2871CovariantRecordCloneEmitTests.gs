@@ -189,9 +189,7 @@ class Leaf : Middle {
         Assert.Contains(
             result.Diagnostics,
             (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Id == "GS0387" &&
-                diagnostic
-                .Message
-                .Contains("<Clone>$$", StringComparison.Ordinal)
+                diagnostic.Message.Contains("<Clone>$$", StringComparison.Ordinal)
         )
     }
 
@@ -257,8 +255,9 @@ public static class Probe
                         (handle MemberReferenceHandle) -> {
                             let reference = reader.GetMemberReference(handle)
                             return reader.GetString(reference.Name) == ".ctor" &&
-                                reference.Parent == reader
-                                .GetTypeDefinition(leafType).BaseType && reader.GetBlobBytes(reference.Signature)
+                                reference.Parent == reader.GetTypeDefinition(leafType).BaseType && reader.GetBlobBytes(
+                                reference.Signature
+                            )
                                 .SequenceEqual(baseCopyConstructorSignature)
                         }
                     )

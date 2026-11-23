@@ -125,12 +125,8 @@ internal shared class DefiniteAssignmentAnalyzer {
                 for var i = 0; i < candidates.Count; i++ {
                     let candidate = candidates[i]
                     if candidate.TrackedCount == Count &&
-                        candidate
-                        .Input
-                        .Count == input.Count &&
-                        candidate
-                        .Input
-                        .SetEquals(input) {
+                        candidate.Input.Count == input.Count &&
+                        candidate.Input.SetEquals(input) {
                         exit = if candidate.Exit == nil {
                             default(HashSet[VariableSymbol]?)
                         } else {
@@ -475,8 +471,7 @@ internal shared class DefiniteAssignmentAnalyzer {
             diagnostics != nil ||
             cache == nil ||
             mode == NestedRegionCacheOff ||
-            object
-            .ReferenceEquals(key, NotCacheable) {
+            object.ReferenceEquals(key, NotCacheable) {
             return AnalyzeRegionUncached(
                 regionBody,
                 initialAssigned,
@@ -795,12 +790,8 @@ internal shared class DefiniteAssignmentAnalyzer {
         ]
     ) HashSet[VariableSymbol]? {
         if branch.Condition != nil &&
-            branch
-            .From
-            .Statements
-            .LastOrDefault() is BoundConditionalGotoStatement conditionalGoto &&
-            conditionalExits
-            .TryGetValue(branch.From, out var exits) {
+            branch.From.Statements.LastOrDefault() is BoundConditionalGotoStatement conditionalGoto &&
+            conditionalExits.TryGetValue(branch.From, out var exits) {
             return if object.ReferenceEquals(branch.Condition, conditionalGoto.Condition) {
                 exits.WhenTrue
             } else {
@@ -963,9 +954,7 @@ internal shared class DefiniteAssignmentAnalyzer {
     }
 
     private func FindMethodExitLabel(body BoundBlockStatement) BoundLabel? {
-        if body
-            .Statements
-            .Length >= 2 &&
+        if body.Statements.Length >= 2 &&
             body.Statements[^2] is BoundLabelStatement{Syntax: nil} label &&
             (body.Statements[^1] is BoundReturnStatement and {Syntax: nil}) {
             return label.Label

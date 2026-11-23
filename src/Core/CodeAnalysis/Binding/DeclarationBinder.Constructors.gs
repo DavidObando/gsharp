@@ -55,9 +55,7 @@ internal partial class DeclarationBinder {
     ) {
         let hasPrimaryOnlyDataBase = baseClassSymbol?.IsData == true && baseClassSymbol.HasDeclaredPrimaryConstructor
         let hasImplicitBaseConstructorToResolve = importedBaseType != nil ||
-            baseClassSymbol
-            ?.EffectiveExplicitConstructors
-            .IsDefaultOrEmpty == false ||
+            baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false ||
             hasPrimaryOnlyDataBase
         if !syntax.HasBaseConstructorArguments &&
             (
@@ -120,9 +118,7 @@ internal partial class DeclarationBinder {
             )
         } else if baseClassSymbol != nil &&
             (
-            baseClassSymbol
-                .EffectiveExplicitConstructors
-                .IsDefaultOrEmpty == false ||
+            baseClassSymbol.EffectiveExplicitConstructors.IsDefaultOrEmpty == false ||
                 (baseClassSymbol.IsData && baseClassSymbol.HasDeclaredPrimaryConstructor)
         ) {
             initializer = ResolveGSharpBaseConstructor(
@@ -340,12 +336,8 @@ internal partial class DeclarationBinder {
                             let parameters = ctor.GetParameters()
                             if !AcceptsArgumentCount(ctor, boundArguments.Count) ||
                                 index >= parameters.Length ||
-                                !parameters[index]
-                                .ParameterType
-                                .IsByRef ||
-                                parameters[index]
-                                .ParameterType
-                                .ContainsGenericParameters {
+                                !parameters[index].ParameterType.IsByRef ||
+                                parameters[index].ParameterType.ContainsGenericParameters {
                                 continue
                             }
                             let expectedType = ByRefStorageMatching.PreserveNominalClrPointeeType(
@@ -417,8 +409,7 @@ internal partial class DeclarationBinder {
             let limit = Math.Min(boundArguments.Count, bestCtorParams.Length)
             for var i = 0; i < limit; i++ {
                 if argSyntax(i) is InterpolatedStringExpressionSyntax interpolated &&
-                    ClrOverloadResolution
-                    .IsFormattableStringTarget(bestCtorParams[i].ParameterType) {
+                    ClrOverloadResolution.IsFormattableStringTarget(bestCtorParams[i].ParameterType) {
                     boundArguments[i] = bindInterpolatedStringAsFormattable!!(interpolated, nil)
                 }
             }
@@ -579,8 +570,7 @@ internal partial class DeclarationBinder {
                         baseTypeArguments,
                         i
                     ) ??
-                        ConversionClassifier
-                        .GetImplicitInClrPointeeType(
+                        ConversionClassifier.GetImplicitInClrPointeeType(
                         ctorParams[i],
                         i,
                         method: nil,
@@ -641,8 +631,7 @@ internal partial class DeclarationBinder {
                             baseTypeArguments,
                             i
                         ) ??
-                            ConversionClassifier
-                            .GetImplicitInClrPointeeType(
+                            ConversionClassifier.GetImplicitInClrPointeeType(
                             ctorParams[i],
                             i,
                             method: nil,
@@ -813,8 +802,10 @@ internal partial class DeclarationBinder {
                     targetClrType = targetClrType.GetElementType() ?? targetClrType
                 }
                 if !ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[index], out var syntax) ||
-                    !ExpressionBinder
-                    .CanTargetDependentBlockArgument(syntax, ClrNullability.GetParameterTypeSymbol(parameters[index])) {
+                    !ExpressionBinder.CanTargetDependentBlockArgument(
+                    syntax,
+                    ClrNullability.GetParameterTypeSymbol(parameters[index])
+                ) {
                     deferredTargetsMatch = false
                     break
                 }
@@ -963,10 +954,8 @@ internal partial class DeclarationBinder {
                 )
                 continue
             }
-            if argument.Type != parameter.Type && !Conversion.Classify(argument.Type, parameter.Type)
-                .IsImplicit &&
-                !ExpressionBinder
-                .IsImplicitConstantNarrowingArgument(argument, parameter.Type) {
+            if argument.Type != parameter.Type && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit &&
+                !ExpressionBinder.IsImplicitConstantNarrowingArgument(argument, parameter.Type) {
                 if argument.Type != TypeSymbol.Error {
                     Diagnostics.ReportNoMatchingBaseConstructor(location, baseClassSymbol.Name, boundArguments.Count)
                 }
@@ -1109,8 +1098,7 @@ internal partial class DeclarationBinder {
             } else if best.Parameters[i].RefKind != RefKind.None {
                 if TryGetAddressedArgumentType(boundArguments[i], out var selectedAddressedType) &&
                     selectedAddressedType != TypeSymbol.Error &&
-                    bestParamTypes[i] != TypeSymbol
-                    .Error {
+                    bestParamTypes[i] != TypeSymbol.Error {
                     let _ = conversions.CheckByRefArgumentStorage(
                         argLocation(i),
                         best.Parameters[i],
@@ -1418,9 +1406,7 @@ internal partial class DeclarationBinder {
             !ctorSyntax.IsConvenience &&
                 (
                 importedBaseType != nil ||
-                    baseClassSymbol
-                    ?.EffectiveExplicitConstructors
-                    .IsDefaultOrEmpty == false ||
+                    baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false ||
                     (baseClassSymbol?.IsData == true && baseClassSymbol.HasDeclaredPrimaryConstructor)
             )
         ) {
@@ -1700,9 +1686,7 @@ internal partial class DeclarationBinder {
                 baseTypeArguments.IsDefaultOrEmpty ||
                 index < 0 ||
                 index >= openBaseCtorParams.Length ||
-                !openBaseCtorParams[index]
-                .ParameterType
-                .IsByRef {
+                !openBaseCtorParams[index].ParameterType.IsByRef {
                 return nil
             }
             // Keep every symbolic shape the receiver projection keeps

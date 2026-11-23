@@ -149,9 +149,7 @@ func semanticWitnesses() {
     Console.WriteLine(
         "semantic adapt-independent " + firstCopy.Read().ToString() + " " + secondCopy.Read().ToString() +
             " " +
-            independentSource
-            .Value
-            .ToString()
+            independentSource.Value.ToString()
     )
 
     var firstPointee = ValueCounter{Value: 50}
@@ -163,9 +161,7 @@ func semanticWitnesses() {
     Console.WriteLine(
         "semantic pointer-capture " + capturedPointer.Read().ToString() + " " + firstPointee.Value.ToString() +
             " " +
-            secondPointee
-            .Value
-            .ToString()
+            secondPointee.Value.ToString()
     )
 
     let firstFactoryLocation = makeLocation(70)

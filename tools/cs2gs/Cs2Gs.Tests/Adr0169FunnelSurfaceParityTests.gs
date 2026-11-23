@@ -432,16 +432,10 @@ namespace GSharp.Core.CodeAnalysis.Binding
                     }
                 }
                 current = current.GetChildren().FirstOrDefault(
-                    (child GSharp.Core.CodeAnalysis.Syntax.SyntaxNode) -> child
-                        .Span
-                        .Start <= span.Start &&
+                    (child GSharp.Core.CodeAnalysis.Syntax.SyntaxNode) -> child.Span.Start <= span.Start &&
                         span.Start +
-                        span.Length <= child
-                        .Span
-                        .Start +
-                        child
-                        .Span
-                        .Length
+                        span.Length <= child.Span.Start +
+                        child.Span.Length
                 )
             }
             return name

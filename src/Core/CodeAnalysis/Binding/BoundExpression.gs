@@ -35,9 +35,7 @@ abstract class BoundExpression : BoundNode {
             !object.ReferenceEquals(Syntax, copy.Syntax) || !object.ReferenceEquals(Type, copy.Type) ||
             conversion.IsChecked != copy.IsChecked ||
             !object.ReferenceEquals(conversion.Expression.Type, copy.Expression.Type) ||
-            !conversion
-            .Expression
-            .IsSameSelectedOperationCopy(copy.Expression) {
+            !conversion.Expression.IsSameSelectedOperationCopy(copy.Expression) {
             return
         }
         copy.ImplicitConversionOperand = copy.Expression
@@ -67,28 +65,19 @@ abstract class BoundExpression : BoundNode {
             LogicalCompletionOperand,
             awaited.Expression
         ) &&
-            awaited
-            .Expression
-            .IsSameSelectedOperationCopy(completed.Expression) {
+            awaited.Expression.IsSameSelectedOperationCopy(completed.Expression) {
             completed.RecordLogicalCompletion(completed.Expression)
         } else if this is BoundImportedCallExpression call &&
             copy is BoundImportedCallExpression completedCall &&
-            call
-            .Arguments
-            .Length == 1 &&
-            completedCall
-            .Arguments
-            .Length == 1 &&
+            call.Arguments.Length == 1 &&
+            completedCall.Arguments.Length == 1 &&
             object.ReferenceEquals(LogicalCompletionOperand, call.Arguments[0]) && object.ReferenceEquals(
             Syntax,
             copy.Syntax
         ) &&
             SameSelectedCall(copy) &&
-            call
-            .ArgumentRefKinds
-            .Equals(completedCall.ArgumentRefKinds) && call.Arguments[0].IsSameSelectedOperationCopy(
-            completedCall.Arguments[0]
-        ) {
+            call.ArgumentRefKinds.Equals(completedCall.ArgumentRefKinds) &&
+            call.Arguments[0].IsSameSelectedOperationCopy(completedCall.Arguments[0]) {
             completedCall.RecordLogicalCompletion(completedCall.Arguments[0])
         }
     }
@@ -134,28 +123,19 @@ abstract class BoundExpression : BoundNode {
                 completed.Expression
             ) &&
                 object.ReferenceEquals(awaited.AwaiterTypeSymbol, completed.AwaiterTypeSymbol) &&
-                awaited
-                .Expression
-                .IsSameSelectedOperationCopy(completed.Expression)
+                awaited.Expression.IsSameSelectedOperationCopy(completed.Expression)
         }
         if this is BoundImportedCallExpression call &&
             copy is BoundImportedCallExpression completedCall &&
-            call
-            .Arguments
-            .Length == 1 &&
-            completedCall
-            .Arguments
-            .Length == 1 {
+            call.Arguments.Length == 1 &&
+            completedCall.Arguments.Length == 1 {
             return object.ReferenceEquals(LogicalCompletionOperand, call.Arguments[0]) && object.ReferenceEquals(
                 copy.LogicalCompletionOperand,
                 completedCall.Arguments[0]
             ) &&
                 SameSelectedCall(copy) &&
-                call
-                .ArgumentRefKinds
-                .Equals(completedCall.ArgumentRefKinds) && call.Arguments[0].IsSameSelectedOperationCopy(
-                completedCall.Arguments[0]
-            )
+                call.ArgumentRefKinds.Equals(completedCall.ArgumentRefKinds) &&
+                call.Arguments[0].IsSameSelectedOperationCopy(completedCall.Arguments[0])
         }
         return false
     }
@@ -238,9 +218,7 @@ abstract class BoundExpression : BoundNode {
             }
             if this is BoundConstrainedStaticCallExpression constrained {
                 StaticConstraintOwner = constrained.ConstrainedInterfaceType ??
-                    constrained
-                    .TypeParameter
-                    .ConstraintInterfaceType
+                    constrained.TypeParameter.ConstraintInterfaceType
             }
         }
     }
@@ -263,27 +241,15 @@ abstract class BoundExpression : BoundNode {
     internal func CopyMemberGroupTo(copy BoundExpression) {
         if this is BoundCallOperationExpression source &&
             copy is BoundCallOperationExpression target &&
-            target
-            .MemberGroup
-            .IsDefault &&
-            !source
-            .MemberGroup
-            .IsDefault &&
+            target.MemberGroup.IsDefault &&
+            !source.MemberGroup.IsDefault &&
             object.ReferenceEquals(source.Syntax, target.Syntax) &&
-            source
-            .CalledFunction
-            .Name == target
-            .CalledFunction
-            .Name {
+            source.CalledFunction.Name == target.CalledFunction.Name {
             target.MemberGroup = source.MemberGroup
         } else if this is BoundBaseClassCallExpression{Method: {} sourceMethod} sourceBase &&
             copy is BoundBaseClassCallExpression{Method: {} targetMethod} targetBase &&
-            targetBase
-            .MemberGroup
-            .IsDefault &&
-            !sourceBase
-            .MemberGroup
-            .IsDefault &&
+            targetBase.MemberGroup.IsDefault &&
+            !sourceBase.MemberGroup.IsDefault &&
             object.ReferenceEquals(sourceBase.Syntax, targetBase.Syntax) && sourceMethod.Name == targetMethod.Name {
             targetBase.MemberGroup = sourceBase.MemberGroup
         }
@@ -297,9 +263,7 @@ abstract class BoundExpression : BoundNode {
             return
         }
         let foldingConstant = this is BoundFieldAccessExpression sourceField &&
-            sourceField
-            .Field
-            .IsConst &&
+            sourceField.Field.IsConst &&
             object.ReferenceEquals(StaticConstantFieldRead, sourceField) &&
             copy is BoundLiteralExpression literal &&
             object.ReferenceEquals(sourceField.Field.Type, literal.Type) && object.Equals(
@@ -325,17 +289,13 @@ abstract class BoundExpression : BoundNode {
             replacement.StaticGenericOwnerType
         ) &&
             object.ReferenceEquals(call.StaticGenericInterfaceOwnerType, replacement.StaticGenericInterfaceOwnerType) &&
-            call
-            .MethodTypeArguments
-            .Equals(replacement.MethodTypeArguments)
+            call.MethodTypeArguments.Equals(replacement.MethodTypeArguments)
         case call is BoundImportedCallExpression when copy is BoundImportedCallExpression replacement:
         object.ReferenceEquals(call.Function, replacement.Function) && object.ReferenceEquals(
             call.StaticContainerType,
             replacement.StaticContainerType
         ) &&
-            call
-            .TypeArgumentSymbols
-            .Equals(replacement.TypeArgumentSymbols)
+            call.TypeArgumentSymbols.Equals(replacement.TypeArgumentSymbols)
         case call is BoundConstrainedStaticCallExpression when copy is BoundConstrainedStaticCallExpression replacement:
         object.ReferenceEquals(call.TypeParameter, replacement.TypeParameter) && object.ReferenceEquals(
             call.InterfaceMethod,
@@ -345,9 +305,7 @@ abstract class BoundExpression : BoundNode {
             call.ConstrainedInterfaceType,
             replacement.ConstrainedInterfaceType
         ) &&
-            call
-            .TypeArgumentSymbols
-            .Equals(replacement.TypeArgumentSymbols)
+            call.TypeArgumentSymbols.Equals(replacement.TypeArgumentSymbols)
         case call is BoundImportedInstanceCallExpression when copy is BoundImportedInstanceCallExpression replacement:
         object.ReferenceEquals(call.Method, replacement.Method) && object.ReferenceEquals(
             call.Receiver.Type,
@@ -361,9 +319,9 @@ abstract class BoundExpression : BoundNode {
             object.ReferenceEquals(call.NonVirtualBaseTargetType, replacement.NonVirtualBaseTargetType) &&
             object.ReferenceEquals(call.AssociatedProperty, replacement.AssociatedProperty) &&
             call.IsNonVirtualBaseCall == replacement.IsNonVirtualBaseCall &&
-            call
-            .TypeArgumentSymbols
-            .Equals(replacement.TypeArgumentSymbols) && call.ArgumentRefKinds.Equals(replacement.ArgumentRefKinds)
+            call.TypeArgumentSymbols.Equals(replacement.TypeArgumentSymbols) && call.ArgumentRefKinds.Equals(
+            replacement.ArgumentRefKinds
+        )
         case call is BoundUserInstanceCallExpression when copy is BoundUserInstanceCallExpression replacement:
         object.ReferenceEquals(call.Method, replacement.Method) && object.ReferenceEquals(
             call.Receiver.Type,
@@ -374,9 +332,7 @@ abstract class BoundExpression : BoundNode {
             replacement.ConstrainedReceiverTypeParameter
         ) &&
             object.ReferenceEquals(call.ConstrainedInterfaceType, replacement.ConstrainedInterfaceType) &&
-            call
-            .MethodTypeArguments
-            .Equals(replacement.MethodTypeArguments)
+            call.MethodTypeArguments.Equals(replacement.MethodTypeArguments)
         case call is BoundBaseClassCallExpression when copy is BoundBaseClassCallExpression replacement:
         object.ReferenceEquals(call.BaseClass, replacement.BaseClass) && object.ReferenceEquals(
             call.Method,
@@ -384,9 +340,7 @@ abstract class BoundExpression : BoundNode {
         ) &&
             object.ReferenceEquals(call.Property, replacement.Property) &&
             call.IsSetterAccessor == replacement.IsSetterAccessor &&
-            call
-            .MethodTypeArguments
-            .Equals(replacement.MethodTypeArguments)
+            call.MethodTypeArguments.Equals(replacement.MethodTypeArguments)
         case call is BoundBaseInterfaceCallExpression when copy is BoundBaseInterfaceCallExpression replacement:
         object.ReferenceEquals(call.Interface, replacement.Interface) && object.ReferenceEquals(
             call.Method,
@@ -394,9 +348,7 @@ abstract class BoundExpression : BoundNode {
         ) &&
             object.ReferenceEquals(call.Property, replacement.Property) &&
             call.IsSetterAccessor == replacement.IsSetterAccessor &&
-            call
-            .MethodTypeArguments
-            .Equals(replacement.MethodTypeArguments)
+            call.MethodTypeArguments.Equals(replacement.MethodTypeArguments)
         case call is BoundClrStaticCallExpression when copy is BoundClrStaticCallExpression replacement:
         object.ReferenceEquals(call.Method, replacement.Method) && call.ArgumentRefKinds.Equals(
             replacement.ArgumentRefKinds
@@ -406,9 +358,7 @@ abstract class BoundExpression : BoundNode {
             call.Target,
             replacement.Target
         ) &&
-            call
-            .ArgumentRefKinds
-            .Equals(replacement.ArgumentRefKinds)
+            call.ArgumentRefKinds.Equals(replacement.ArgumentRefKinds)
         default: false
     }
 

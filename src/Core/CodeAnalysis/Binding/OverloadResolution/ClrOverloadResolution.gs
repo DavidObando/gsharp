@@ -496,8 +496,7 @@ internal shared class ClrOverloadResolution {
                     } else if source.IsArray &&
                         target.IsInterface &&
                         target.IsGenericType &&
-                        !ClrTypeUtilities
-                        .ImplementsInterfaceByName(source, target) {
+                        !ClrTypeUtilities.ImplementsInterfaceByName(source, target) {
                         if IsSafeArrayInterfaceVariance(target, source) {
                             return ImplicitConversionKind.Reference
                         }
@@ -1362,8 +1361,8 @@ internal shared class ClrOverloadResolution {
                 return ClrTypeUtilities.AreSame(parameterType, receiverClr)
             }
             return ClassifyImplicit(parameterType, receiverClr) != ImplicitConversionKind.None ||
-                Conversion
-                .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameters[0])).IsImplicit
+                Conversion.ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameters[0]))
+                .IsImplicit
         }
         let bounds = Dictionary[string, Type](StringComparer.Ordinal)
         var receiverMatches bool
@@ -1416,8 +1415,7 @@ internal shared class ClrOverloadResolution {
                         OpenExtensionReceiverStandardShapeMayApply(receiverClr, inputs[0].ParameterType)
                     } else {
                         IsInferenceBoundPromotion(inputs[0].ParameterType, receiverClr) ||
-                            Conversion
-                            .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(inputs[0]))
+                            Conversion.ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(inputs[0]))
                             .IsImplicit
                     }
                 ) &&
@@ -1943,8 +1941,7 @@ internal shared class ClrOverloadResolution {
             let key = (source, constraint)
             let numericDomain = constraint.IsGenericParameter && parameters.Contains(constraint) &&
                 source.IsValueType &&
-                NumericWideningLattice
-                .WideningTargets(source.FullName).Any()
+                NumericWideningLattice.WideningTargets(source.FullName).Any()
             if source.ContainsGenericParameters ||
                 !constraint.ContainsGenericParameters ||
                 (!constraint.IsGenericType && !numericDomain) ||
@@ -2590,17 +2587,14 @@ internal shared class ClrOverloadResolution {
             if (attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 ||
                 (
                 (attributes & GenericParameterAttributes.DefaultConstructorConstraint) != 0 &&
-                    terms[0]
-                    .Item1
-                    .GetConstructor(Type.EmptyTypes) == nil
+                    terms[0].Item1.GetConstructor(Type.EmptyTypes) == nil
             ) {
                 return false
             }
             if choices.Values.All((selected Type) -> !selected.ContainsGenericParameters) && terms.All(
                 (term(Type, Type, bool)) -> !term.Item2.ContainsGenericParameters
             ) &&
-                component
-                .All(
+                component.All(
                 (i int32) -> parameters[i] == arguments[i] && parameters[i].GetGenericParameterConstraints().All(
                     (constraint Type) -> !constraint.ContainsGenericParameters || constraint.IsGenericParameter
                 )
@@ -2652,8 +2646,7 @@ internal shared class ClrOverloadResolution {
                             !parameters.Any((existing Type) -> MentionsGenericParameter(existing, candidate)) &&
                             !slots.Any((existing Type) -> MentionsGenericParameter(existing, candidate)) &&
                             !arguments.Any((argument Type) -> MentionsGenericParameter(argument, candidate)) &&
-                            !receiverTerms
-                            .Any(
+                            !receiverTerms.Any(
                             (term(Type, Type, bool)) ->
                             MentionsGenericParameter(term.Item1, candidate) ||
                                 MentionsGenericParameter(term.Item2, candidate)
@@ -3028,8 +3021,9 @@ internal shared class ClrOverloadResolution {
                 target.ContainsGenericParameters &&
                 equations != nil &&
                 equationSlots != nil &&
-                equationSlots
-                .Any((slot Type) -> MentionsGenericParameter(source, slot) || MentionsGenericParameter(target, slot)) {
+                equationSlots.Any(
+                (slot Type) -> MentionsGenericParameter(source, slot) || MentionsGenericParameter(target, slot)
+            ) {
                 return UnifyExtensionReceiverConstructorEquation(source, target, equationSlots, equations)
             }
             if source.IsGenericParameter && MentionsGenericParameter(source, parameter) {
@@ -3071,8 +3065,7 @@ internal shared class ClrOverloadResolution {
             )
         }
         if source.IsArray && target.IsArray && source.GetArrayRank() == target.GetArrayRank() &&
-            source.IsSZArray == target
-            .IsSZArray {
+            source.IsSZArray == target.IsSZArray {
             let sourceElement = source.GetElementType()
             let targetElement = target.GetElementType()
             if sourceElement != nil && targetElement != nil {
@@ -3265,9 +3258,7 @@ internal shared class ClrOverloadResolution {
                         (bound Type) -> ClrTypeUtilities.AreSame(bound, source)
                     ) {
                         if NullableLifting.GetValueTypeNullableUnderlyingClr(source) != nil ||
-                            source
-                            .FullName
-                            ?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true {
+                            source.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true {
                             continue
                         }
                         if NumericWideningLattice.WideningTargets(source.FullName).Any() {
@@ -4024,8 +4015,8 @@ internal shared class ClrOverloadResolution {
         } else {
             (
                 ClassifyImplicit(closedReceiver, receiverClr) != ImplicitConversionKind.None ||
-                    Conversion
-                    .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameter)).IsImplicit
+                    Conversion.ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameter))
+                    .IsImplicit
             )
         }
     }
@@ -4456,22 +4447,12 @@ internal shared class ClrOverloadResolution {
                 return false
             }
             if parameterNullability == ReferenceNullabilityKind.NotNull &&
-                !GSharp
-                .Core
-                .CodeAnalysis
-                .Binding
-                .Binder
-                .SatisfiesNotNullConstraint(argument) {
+                !GSharp.Core.CodeAnalysis.Binding.Binder.SatisfiesNotNullConstraint(argument) {
                 return false
             }
         } else if HasDeclaredNotNullConstraint(declaredParameter) &&
             !IsMapReferenceKeyView(declaredParameter, argument) &&
-            !GSharp
-            .Core
-            .CodeAnalysis
-            .Binding
-            .Binder
-            .SatisfiesNotNullConstraint(argument) {
+            !GSharp.Core.CodeAnalysis.Binding.Binder.SatisfiesNotNullConstraint(argument) {
             return false
         }
         if (special & GenericParameterAttributes.DefaultConstructorConstraint) != 0 &&
@@ -5559,11 +5540,8 @@ internal shared class ClrOverloadResolution {
                     try {
                         closed = gmi.MakeGenericMethod(explicitTypeArgsArray)
                         if rawParameters.Any(
-                            (p ParameterInfo) -> p
-                                .ParameterType
-                                .ContainsGenericParameters &&
-                                ClrTypeUtilities
-                                .IsDelegateType(
+                            (p ParameterInfo) -> p.ParameterType.ContainsGenericParameters &&
+                                ClrTypeUtilities.IsDelegateType(
                                 Invariant.Required(
                                     UnwrapArrayElement(p.ParameterType),
                                     "an array parameter has an element type",
@@ -6746,8 +6724,7 @@ internal shared class ClrOverloadResolution {
         argumentName string,
         parameters[]ParameterInfo
     ) bool -> parameterName != nil &&
-        OverloadResolver
-        .ClrParameterNameMatches(
+        OverloadResolver.ClrParameterNameMatches(
         parameterName,
         argumentName,
         parameters.Select((parameter ParameterInfo) -> parameter.Name ?? string.Empty)
@@ -6856,9 +6833,7 @@ internal shared class ClrOverloadResolution {
         }
         for attribute in parameter.GetCustomAttributesData() {
             if (
-                attribute
-                    .AttributeType
-                    .FullName is "System.Runtime.CompilerServices.DecimalConstantAttribute" or
+                attribute.AttributeType.FullName is "System.Runtime.CompilerServices.DecimalConstantAttribute" or
                     "System.Runtime.CompilerServices.DateTimeConstantAttribute" or
                     "System.Runtime.InteropServices.OptionalAttribute"
             ) {
@@ -7781,8 +7756,7 @@ internal shared class ClrOverloadResolution {
         typeArgs = nil
         if openMethod == nil ||
             recoveredSymbols.IsDefaultOrEmpty ||
-            recoveredSymbols.Length != openMethod
-            .GetGenericArguments().Length || recoveredSymbols.Any(
+            recoveredSymbols.Length != openMethod.GetGenericArguments().Length || recoveredSymbols.Any(
             (symbol TypeSymbol?) -> symbol == nil || MemberLookup.IsSymbolicInferenceConflict(symbol)
         ) {
             return false
@@ -8011,12 +7985,7 @@ internal shared class ClrOverloadResolution {
                 }
                 if parameterNullability == ReferenceNullabilityKind.NotNull &&
                     argSymbol != nil &&
-                    !GSharp
-                    .Core
-                    .CodeAnalysis
-                    .Binding
-                    .Binder
-                    .SatisfiesNotNullConstraint(argSymbol) {
+                    !GSharp.Core.CodeAnalysis.Binding.Binder.SatisfiesNotNullConstraint(argSymbol) {
                     return false
                 }
             } else if HasDeclaredNotNullConstraint(param) {
@@ -8024,12 +7993,7 @@ internal shared class ClrOverloadResolution {
                     (
                     argSymbol != nil &&
                         !IsMapReferenceKeyView(param, argSymbol) &&
-                        !GSharp
-                        .Core
-                        .CodeAnalysis
-                        .Binding
-                        .Binder
-                        .SatisfiesNotNullConstraint(argSymbol)
+                        !GSharp.Core.CodeAnalysis.Binding.Binder.SatisfiesNotNullConstraint(argSymbol)
                 ) {
                     return false
                 }
@@ -8058,18 +8022,10 @@ internal shared class ClrOverloadResolution {
                         if userClass.IsAbstract ||
                             userClass.HasPrimaryConstructor ||
                             (
-                            !userClass
-                                .EffectiveExplicitConstructors
-                                .IsDefaultOrEmpty &&
-                                !userClass
-                                .EffectiveExplicitConstructors
-                                .Any(
-                                (constructor ConstructorSymbol) -> constructor
-                                    .Parameters
-                                    .Length == 0 &&
-                                    constructor
-                                    .Function
-                                    .Accessibility == Accessibility.Public
+                            !userClass.EffectiveExplicitConstructors.IsDefaultOrEmpty &&
+                                !userClass.EffectiveExplicitConstructors.Any(
+                                (constructor ConstructorSymbol) -> constructor.Parameters.Length == 0 &&
+                                    constructor.Function.Accessibility == Accessibility.Public
                             )
                         ) {
                             return false
@@ -8363,9 +8319,7 @@ internal shared class ClrOverloadResolution {
         try {
             let metadataRows = ClrSignatureMetadata.Constraints(param)
             return uint32(constraintIndex) < uint32(metadataRows.Length) &&
-                !metadataRows[constraintIndex]
-                .Flags
-                .IsDefaultOrEmpty &&
+                !metadataRows[constraintIndex].Flags.IsDefaultOrEmpty &&
                 metadataRows[constraintIndex].Flags[0] == NullableFlagsBuilder.Annotated
         } catch (Exception) {
             return false
@@ -8443,9 +8397,7 @@ internal shared class ClrOverloadResolution {
             let candidate = PlatformTypeSymbol.StripTopLevel(argSymbol)
             let metadataRows = ClrSignatureMetadata.Constraints(param)
             let hasRowFlags = uint32(constraintIndex) < uint32(metadataRows.Length) &&
-                !metadataRows[constraintIndex]
-                .Flags
-                .IsDefaultOrEmpty
+                !metadataRows[constraintIndex].Flags.IsDefaultOrEmpty
             let rowRootFlag uint8 = if hasRowFlags {
                 metadataRows[constraintIndex].Flags[0]
             } else {
@@ -8453,8 +8405,7 @@ internal shared class ClrOverloadResolution {
             }
             if rawConstraint.IsGenericParameter &&
                 candidate is NullableTypeSymbol &&
-                rowRootFlag != NullableFlagsBuilder
-                .Annotated {
+                rowRootFlag != NullableFlagsBuilder.Annotated {
                 let boundIndex = IndexOfGenericParameter(typeParams, rawConstraint)
                 let boundSymbol = if boundIndex >= 0 &&
                     !typeArgSymbols.IsDefaultOrEmpty &&
@@ -8467,12 +8418,7 @@ internal shared class ClrOverloadResolution {
                     nil
                 }
                 if HasDeclaredNotNullConstraint(rawConstraint) ||
-                    GSharp
-                    .Core
-                    .CodeAnalysis
-                    .Binding
-                    .Binder
-                    .SatisfiesNotNullConstraint(boundSymbol) {
+                    GSharp.Core.CodeAnalysis.Binding.Binder.SatisfiesNotNullConstraint(boundSymbol) {
                     return false
                 }
             }
@@ -9342,9 +9288,7 @@ internal shared class ClrOverloadResolution {
                     if !candidateArgument.IsGenericParameter ||
                         candidateArgument.DeclaringType is not{} owner ||
                         !SameOpenDefinitionName(owner, symbolOpenDefinition) ||
-                        candidateArgument.GenericParameterPosition >= imported
-                        .TypeArguments
-                        .Length {
+                        candidateArgument.GenericParameterPosition >= imported.TypeArguments.Length {
                         complete = false
                         break
                     }
@@ -9801,10 +9745,7 @@ internal shared class ClrOverloadResolution {
             IsVariantAssignable(target, source)
         default: target.IsGenericType &&
             source.IsGenericType &&
-            target
-            .GetGenericTypeDefinition()
-            .FullName
-            ?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) ==
+            target.GetGenericTypeDefinition().FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) ==
         true && ClrTypeUtilities.AreSame(target.GetGenericTypeDefinition(), source.GetGenericTypeDefinition()) &&
             target
             .GetGenericArguments()
@@ -10213,8 +10154,7 @@ internal shared class ClrOverloadResolution {
             // argument directly against the supplied delegate argument.
             if string.Equals(openDef.FullName, "System.Linq.Expressions.Expression`1", StringComparison.Ordinal) &&
                 paramArgs.Length == 1 &&
-                ClrTypeUtilities
-                .IsDelegateType(argumentType) {
+                ClrTypeUtilities.IsDelegateType(argumentType) {
                 return UnifyForInference(paramArgs[0], argumentType, bounds, boundKind, effectiveBounds)
             }
             // Find the argument type (or any of its base types or interfaces)
@@ -10358,8 +10298,7 @@ internal shared class ClrOverloadResolution {
             out _
         ) &&
             ChannelTypeSymbol.TryGetChannelShape(parameterSymbol, out _, out _, out _) &&
-            Conversion
-            .ClassifyNonStructural(argumentSymbol, parameterSymbol).IsImplicit
+            Conversion.ClassifyNonStructural(argumentSymbol, parameterSymbol).IsImplicit
     }
 
     /// Issue #3982 / #3989: whether the candidate's parameter at

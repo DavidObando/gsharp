@@ -266,9 +266,7 @@ class CSharpTestOracle {
                 throw InvalidOperationException(
                     path + ": the C# test oracle says " + oracle.TestCount.ToString() +
                         " test(s) but lists " +
-                        oracle.Tests!!
-                        .Count
-                        .ToString() + "; the file is truncated or was edited."
+                        oracle.Tests!!.Count.ToString() + "; the file is truncated or was edited."
                 )
             }
             if !string.Equals(oracle.AppId, appId, StringComparison.Ordinal) {
@@ -280,12 +278,8 @@ class CSharpTestOracle {
                 if oracle.TestsByFramework!!.Any(
                     (pair KeyValuePair[string, List[string]]) -> string.IsNullOrWhiteSpace(pair.Key) ||
                         pair.Value == nil ||
-                        pair
-                        .Value
-                        .Count == 0 ||
-                        pair
-                        .Value
-                        .Any(string.IsNullOrWhiteSpace)
+                        pair.Value.Count == 0 ||
+                        pair.Value.Any(string.IsNullOrWhiteSpace)
                 ) {
                     throw InvalidOperationException(
                         path + ": the C# test oracle contains an invalid per-framework test list."
@@ -310,9 +304,7 @@ class CSharpTestOracle {
                     throw InvalidOperationException(
                         path + ": the C# test oracle per-framework count " + frameworkTotal.ToString() +
                             " disagrees with testCount " +
-                            oracle
-                            .TestCount
-                            .ToString() + "."
+                            oracle.TestCount.ToString() + "."
                     )
                 }
                 let flattenedFrameworkTests = oracle.TestsByFramework!!
@@ -358,10 +350,7 @@ class CSharpTestOracle {
             }
             if text.StartsWith(".NETFramework,Version=v", StringComparison.OrdinalIgnoreCase) {
                 return "net" +
-                    text
-                    .Substring(".NETFramework,Version=v".Length)
-                    .Replace(".", string.Empty)
-                    .ToLowerInvariant()
+                    text.Substring(".NETFramework,Version=v".Length).Replace(".", string.Empty).ToLowerInvariant()
             }
             let lower = text.ToLowerInvariant()
             if lower.StartsWith("netstandard", StringComparison.Ordinal) {

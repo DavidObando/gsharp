@@ -223,8 +223,7 @@ func Main() {
                 calls,
                 (call ResolvedCall) -> call.Method!!.Name == "Read" &&
                     call.Method!!.DeclaringType == declaringType &&
-                    call.Method!!
-                    .GetParameters().Length == 1
+                    call.Method!!.GetParameters().Length == 1
             )
             Assert.Equal(typeof(Span[uint8]), Assert.Single(read.Method!!.GetParameters()).ParameterType)
             return read

@@ -192,15 +192,8 @@ class Holder BASE_TYPE {
             Assert.DoesNotContain(
                 compilation.BoundProgram.Functions[run].DescendantsAndSelf().OfType[BoundImportedCallExpression](),
                 (c BoundImportedCallExpression) ->
-                c
-                    .Function
-                    .Method
-                    .DeclaringType
-                    ?.FullName == "Gsharp.Concurrency.Blocking" &&
-                    c
-                    .Function
-                    .Method
-                    .Name == "Wait"
+                c.Function.Method.DeclaringType?.FullName == "Gsharp.Concurrency.Blocking" &&
+                    c.Function.Method.Name == "Wait"
             )
         } finally {
             Directory.Delete(root, recursive: true)
@@ -3198,9 +3191,7 @@ func Run() {
         let owner = compilation.GlobalScope.Structs.Single((type StructSymbol) -> type.Name == "Holder")
         let expected = owner.StaticMethods.Single(
             (method FunctionSymbol) -> method.Name == "Values" &&
-                method
-                .Parameters
-                .Length == 1 &&
+                method.Parameters.Length == 1 &&
                 object.ReferenceEquals(method.Parameters[0].Type, TypeSymbol.Int32)
         )
         let position = LanguageServerTestHelpers.PositionOf(source, "Values(1)")

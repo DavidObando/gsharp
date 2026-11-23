@@ -178,9 +178,7 @@ public static class Consumer
             )
             let runtimeConfig = "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":" +
                 "{\"name\":\"Microsoft.NETCore.App\",\"version\":\"" +
-                Environment
-                .Version
-                .ToString(3) + "\"}}}"
+                Environment.Version.ToString(3) + "\"}}}"
             File.WriteAllText(Path.Combine(tempDir, "Consumer.runtimeconfig.json"), runtimeConfig)
             let (exit, output) = RunDotnet(consumerPath)
             Assert.Equal(0, exit)

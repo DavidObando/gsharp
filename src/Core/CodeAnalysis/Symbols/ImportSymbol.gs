@@ -51,9 +51,7 @@ class TypeAliasSymbol : Symbol {
     /// <inheritdoc />
     /// ```
     override prop DeclaringSyntaxNodes ImmutableArray[SyntaxNode] -> if Declaration is {} declaration &&
-        !declaration
-        .Identifier
-        .IsMissing {
+        !declaration.Identifier.IsMissing {
         ImmutableArray.Create[SyntaxNode](declaration.Identifier)
     } else {
         ImmutableArray[SyntaxNode].Empty

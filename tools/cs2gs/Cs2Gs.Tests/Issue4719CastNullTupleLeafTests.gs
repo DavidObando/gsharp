@@ -773,10 +773,7 @@ public static class Obj {
         File.WriteAllText(
             Path.ChangeExtension(assemblyPath, ".runtimeconfig.json"),
             "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"" +
-                Environment
-                .Version
-                .Major
-                .ToString() +
+                Environment.Version.Major.ToString() +
                 ".0.0\"}}}"
         )
         let executed = RunDotnet(assemblyPath)
@@ -3649,10 +3646,7 @@ namespace Demo {
         File.WriteAllText(
             Path.ChangeExtension(assembly, ".runtimeconfig.json"),
             "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"" +
-                Environment
-                .Version
-                .Major
-                .ToString() +
+                Environment.Version.Major.ToString() +
                 ".0.0\"}}}"
         )
         let executed = RunDotnet(assembly)
@@ -4307,8 +4301,7 @@ public static class Obj {
         let source = CSharpProjectLoader.LoadInMemory([](string, string){("Rows.cs", (`#nullable enable
 public sealed class Rows<T> { public T Read() => default!; }
 public sealed class Consumer { public Rows<` + "$argument" + `> Value; }`))}, CSharpProjectLoader.RuntimeReferences(), "Annotations" +
-                Guid
-                .NewGuid().ToString("N"))
+                Guid.NewGuid().ToString("N"))
         Assert.True(source.BoundWithoutErrors, string.Join(Environment.NewLine, source.ErrorDiagnostics))
         Directory.CreateDirectory(this.fixtureDirectory)
         let assembly = Path.Combine(this.fixtureDirectory, source.Compilation.AssemblyName + ".dll")
@@ -4380,8 +4373,7 @@ public sealed class Outer<T> {
     }
 }
 public sealed class Consumer { public Outer<string?>.Rows<object?> Value; }`)}, CSharpProjectLoader.RuntimeReferences(), "Nested" +
-                Guid
-                .NewGuid().ToString("N"))
+                Guid.NewGuid().ToString("N"))
         Assert.True(source.BoundWithoutErrors, string.Join(Environment.NewLine, source.ErrorDiagnostics))
         Directory.CreateDirectory(this.fixtureDirectory)
         let assembly = Path.Combine(this.fixtureDirectory, source.Compilation.AssemblyName + ".dll")

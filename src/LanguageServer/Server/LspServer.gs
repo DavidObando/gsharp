@@ -1361,8 +1361,7 @@ class LspServer {
                     codeAction.TryGetProperty("resolveSupport", out var resolveSupport) &&
                     resolveSupport.ValueKind == JsonValueKind.Object &&
                     resolveSupport.TryGetProperty("properties", out var properties) &&
-                    properties.ValueKind == JsonValueKind
-                    .Array {
+                    properties.ValueKind == JsonValueKind.Array {
                     for property in properties.EnumerateArray() {
                         if property.ValueKind == JsonValueKind.String && property.GetString() == "edit" {
                             this.codeActionClientOptions.SupportsResolveEdit = true
@@ -1416,9 +1415,7 @@ class LspServer {
                 out var projectTree
             ) &&
                 projectTree != nil &&
-                projectTree
-                .Text
-                .ToString() == document.Value.SyntaxTree.Text.ToString() {
+                projectTree.Text.ToString() == document.Value.SyntaxTree.Text.ToString() {
                 projectTree
             } else {
                 document.Value.SyntaxTree
@@ -1607,8 +1604,7 @@ class LspServer {
                     iface
                 ) &&
                     structSym.Declaration is {} structDeclaration &&
-                    reported
-                    .Add(structSym) {
+                    reported.Add(structSym) {
                     // The location belongs to the tree that declares the struct, not to the request's document.
                     // A partial type is reported at its canonical declaration, which can be in another tree
                     // than the part visited here, so the URI comes from that declaration's own tree.
@@ -1835,9 +1831,7 @@ class LspServer {
             .Where((project ProjectState) -> fileDir != nil && IsWithinDirectory(fileDir, project.ProjectDirectory))
             .OrderByDescending((project ProjectState) -> project.ProjectDirectory.Length)
             .FirstOrDefault() ??
-            this
-            .workspaceState
-            .GetOrCreateImplicitProject()
+            this.workspaceState.GetOrCreateImplicitProject()
     }
 
     private func TryGet(identifier TextDocumentIdentifier, @NotNullWhen(true) out content DocumentContent?) bool {

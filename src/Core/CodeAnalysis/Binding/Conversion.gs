@@ -362,8 +362,7 @@ class Conversion {
             }
             if (sourceShape is FunctionTypeSymbol || targetShape is FunctionTypeSymbol) &&
                 MemberLookup.TryGetDelegateFunctionTypeFromSymbol(source, out var sourceSignature) &&
-                MemberLookup
-                .TryGetDelegateFunctionTypeFromSymbol(target, out var targetSignature) {
+                MemberLookup.TryGetDelegateFunctionTypeFromSymbol(target, out var targetSignature) {
                 return HaveCompatibleCallableContracts(
                     sourceShape,
                     targetShape,
@@ -375,17 +374,13 @@ class Conversion {
             let sourceFunction = sourceShape as FunctionTypeSymbol
             let targetFunction = targetShape as FunctionTypeSymbol
             if targetFunction != nil &&
-                !targetFunction
-                .Parameters
-                .IsDefaultOrEmpty &&
+                !targetFunction.Parameters.IsDefaultOrEmpty &&
                 (sourceFunction == nil || !targetFunction.AcceptsOptionalContract(sourceFunction)) {
                 return false
             }
             if invariant &&
                 sourceFunction != nil &&
-                !sourceFunction
-                .Parameters
-                .IsDefaultOrEmpty &&
+                !sourceFunction.Parameters.IsDefaultOrEmpty &&
                 (targetFunction == nil || !sourceFunction.AcceptsOptionalContract(targetFunction)) {
                 return false
             }
@@ -526,15 +521,9 @@ class Conversion {
         internal func GetPositionVariance(target TypeSymbol, index int32) TypeParameterVariance {
             let target = UnwrapNullableForVariance(target) ?? target
             if target is FunctionTypeSymbol function {
-                if index < function
-                    .ParameterTypes
-                    .Length &&
-                    !function
-                    .Parameters
-                    .IsDefaultOrEmpty &&
-                    function
-                    .Parameters[index]
-                    .RefKind != RefKind.None {
+                if index < function.ParameterTypes.Length &&
+                    !function.Parameters.IsDefaultOrEmpty &&
+                    function.Parameters[index].RefKind != RefKind.None {
                     return TypeParameterVariance.None
                 }
                 return if index < function.ParameterTypes.Length {
@@ -550,9 +539,7 @@ class Conversion {
                 ArrayTypeSymbol or
                 RectangularArrayTypeSymbol or
                 MapTypeSymbol ||
-                target
-                .ClrType
-                ?.IsArray == true {
+                target.ClrType?.IsArray == true {
                 return TypeParameterVariance.None
             }
             if NativeSliceTypes.TryGetElement(target, out _, out var isReadOnly) {
@@ -670,8 +657,7 @@ class Conversion {
                 !(from is PlatformTypeSymbol) &&
                 TryProjectTypeArgumentsToSupertype(from, to, out var projectedArguments, out var targetArguments) &&
                 !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to) &&
-                projectedArguments.Length == targetArguments
-                .Length {
+                projectedArguments.Length == targetArguments.Length {
                 var exactProjection = true
                 for var i = 0; i < projectedArguments.Length; i++ {
                     if RelatePlatformArguments(
@@ -736,8 +722,7 @@ class Conversion {
                 out var aggregateFromArguments
             ) &&
                 TryGetConstructedGenericShape(aggregateTo, out var aggregateToOpen, out var aggregateToArguments) &&
-                ClrTypeUtilities
-                .AreSame(aggregateFromOpen, aggregateToOpen) {
+                ClrTypeUtilities.AreSame(aggregateFromOpen, aggregateToOpen) {
                 if from is NullableTypeSymbol && to is not NullableTypeSymbol {
                     return Conversion.None
                 }
@@ -820,9 +805,7 @@ class Conversion {
             // shapes are excluded — they do not implement IEnumerable.
             if SequenceTypeSymbol.TryGetEnumerableInterfaceShape(from, out var fromEnumerableDefinition, out _) &&
                 fromEnumerableDefinition?.FullName == "System.Collections.Generic.IEnumerable`1" &&
-                to
-                .ClrType
-                ?.FullName == "System.Collections.IEnumerable" {
+                to.ClrType?.FullName == "System.Collections.IEnumerable" {
                 return Conversion.Implicit
             }
             // Issue #2290: a referenced (cross-assembly) type can be independently
@@ -1273,15 +1256,10 @@ class Conversion {
                     // conversions through Nullable<T>. Compound char assignment
                     // uses the explicit int32? -> char? direction; ordinary
                     // widening remains implicit.
-                    if fromNullable
-                        .UnderlyingType
-                        ?.ClrType is {IsValueType: true} fromNullableClr &&
-                        toNullable
-                        .UnderlyingType
-                        ?.ClrType is {IsValueType: true} toNullableClr &&
+                    if fromNullable.UnderlyingType?.ClrType is {IsValueType: true} fromNullableClr &&
+                        toNullable.UnderlyingType?.ClrType is {IsValueType: true} toNullableClr &&
                         NumericWideningLattice.IsNumericPrimitive(fromNullableClr.FullName) &&
-                        NumericWideningLattice
-                        .IsNumericPrimitive(toNullableClr.FullName) {
+                        NumericWideningLattice.IsNumericPrimitive(toNullableClr.FullName) {
                         let liftedUnderlying = Classify(fromNullable.UnderlyingType, toNullable.UnderlyingType)
                         if liftedUnderlying.Exists && !liftedUnderlying.IsIdentity {
                             return if liftedUnderlying.IsImplicit {
@@ -1330,8 +1308,7 @@ class Conversion {
                     }
                     if fromUnderlying is TupleTypeSymbol &&
                         toUnderlying is TupleTypeSymbol &&
-                        TypeSymbol
-                        .ContainsNeverType(fromUnderlying) {
+                        TypeSymbol.ContainsNeverType(fromUnderlying) {
                         let underlyingTupleConversion = ClassifyCore(
                             fromUnderlying,
                             toUnderlying,
@@ -1532,8 +1509,7 @@ class Conversion {
             // resolved without depending on reflection over `ClrType`.
             if from is FunctionTypeSymbol fnFromSymbolic &&
                 !(to is FunctionTypeSymbol) &&
-                MemberLookup
-                .TryGetDelegateFunctionTypeFromSymbol(
+                MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
                 Invariant.Required(to, "a delegate conversion has a target type", expression: "to"),
                 out var toFnSymbolic
             ) &&
@@ -1605,8 +1581,7 @@ class Conversion {
             let fromClr string? = from?.ClrType?.FullName
             let toClr string? = to?.ClrType?.FullName
             if fromClr != nil && toClr != nil && NumericWideningLattice.IsNumericPrimitive(fromClr) &&
-                NumericWideningLattice
-                .IsNumericPrimitive(toClr) {
+                NumericWideningLattice.IsNumericPrimitive(toClr) {
                 // Issue #5400: numeric widening does not implicitly discard value optionality.
                 if !NullableLifting.IsAnyValueTypeNullable(from as NullableTypeSymbol) &&
                     NumericWideningLattice.IsWidening(fromClr, toClr) {
@@ -1683,9 +1658,7 @@ class Conversion {
             if from is NullableTypeSymbol fromUserValueNullable && NullableLifting.IsAnyValueTypeNullable(
                 fromUserValueNullable
             ) &&
-                to
-                ?.ClrType
-                .IsSameAs(typeof(object)) == true {
+                to?.ClrType.IsSameAs(typeof(object)) == true {
                 return Conversion.Implicit
             }
             // Issues #1218/#3280: value types box implicitly to System.ValueType,
@@ -2056,12 +2029,8 @@ class Conversion {
                 if importedArray.IsSZArray != targetIsSzArray {
                     return Conversion.None
                 }
-                let sourceElement = if !fromImportedArray
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    fromImportedArray
-                    .TypeArguments
-                    .Length == 1 {
+                let sourceElement = if !fromImportedArray.TypeArguments.IsDefaultOrEmpty &&
+                    fromImportedArray.TypeArguments.Length == 1 {
                     fromImportedArray.TypeArguments[0]
                 } else {
                     MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
@@ -2077,12 +2046,8 @@ class Conversion {
                 let importedTargetElement = switch to {
                     case targetSlice is SliceTypeSymbol: targetSlice.ElementType
                     case targetArray is ArrayTypeSymbol: targetArray.ElementType
-                    case targetImported is ImportedTypeSymbol when !targetImported
-                        .TypeArguments
-                        .IsDefaultOrEmpty &&
-                        targetImported
-                        .TypeArguments
-                        .Length == 1: targetImported.TypeArguments[0]
+                    case targetImported is ImportedTypeSymbol when !targetImported.TypeArguments.IsDefaultOrEmpty &&
+                        targetImported.TypeArguments.Length == 1: targetImported.TypeArguments[0]
                     default: MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         Invariant.Required(
                             to.ClrType,
@@ -2205,12 +2170,8 @@ class Conversion {
             // must not gain broader CLR array covariance because of symbol shape.
             if from is ImportedTypeSymbol{ClrType: {IsSZArray: true} importedArrayForIface} fromImportedForIface &&
                 to?.ClrType is {IsInterface: true} {
-                let elementSym = if !fromImportedForIface
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    fromImportedForIface
-                    .TypeArguments
-                    .Length == 1 {
+                let elementSym = if !fromImportedForIface.TypeArguments.IsDefaultOrEmpty &&
+                    fromImportedForIface.TypeArguments.Length == 1 {
                     fromImportedForIface.TypeArguments[0]
                 } else {
                     TypeSymbol.FromClrTypeWithoutNullability(
@@ -2329,24 +2290,12 @@ class Conversion {
             }
             if from?.ClrType != nil &&
                 to?.ClrType != nil &&
-                !from
-                .ClrType
-                .IsValueType &&
-                !to
-                .ClrType
-                .IsValueType &&
-                !from
-                .ClrType
-                .IsPointer &&
-                !to
-                .ClrType
-                .IsPointer &&
-                !from
-                .ClrType
-                .IsByRef &&
-                !to
-                .ClrType
-                .IsByRef &&
+                !from.ClrType.IsValueType &&
+                !to.ClrType.IsValueType &&
+                !from.ClrType.IsPointer &&
+                !to.ClrType.IsPointer &&
+                !from.ClrType.IsByRef &&
+                !to.ClrType.IsByRef &&
                 ClrTypeUtilities.IsAssignableByName(to.ClrType, from.ClrType) {
                 return Conversion.Implicit
             }
@@ -2851,9 +2800,7 @@ class Conversion {
                 }
             }
             if (sourceShape is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol) ||
-                sourceShape
-                .ClrType
-                ?.IsArray == true {
+                sourceShape.ClrType?.IsArray == true {
                 if targetShape.ClrType?.IsSameAs(typeof(Array)) == true ||
                     IsElementIndependentArrayInterface(targetShape) {
                     return true
@@ -2921,9 +2868,7 @@ class Conversion {
             // IEnumerable<T> derives from the non-generic IEnumerable (#3566).
             if SequenceTypeSymbol.TryGetEnumerableInterfaceShape(sourceShape, out var enumerableDefinition, out _) &&
                 enumerableDefinition?.FullName == "System.Collections.Generic.IEnumerable`1" &&
-                targetShape
-                .ClrType
-                ?.FullName == "System.Collections.IEnumerable" {
+                targetShape.ClrType?.FullName == "System.Collections.IEnumerable" {
                 return true
             }
             if (sourceShape is ImportedTypeSymbol || TryGetConstructedGenericShape(sourceShape, out _, out _)) &&
@@ -3321,9 +3266,7 @@ class Conversion {
             case imported is ImportedTypeSymbol when imported.ClrType is {IsSZArray: true} clrArray: if !imported
                 .TypeArguments
                 .IsDefaultOrEmpty &&
-                imported
-                .TypeArguments
-                .Length == 1 {
+                imported.TypeArguments.Length == 1 {
                 imported.TypeArguments[0]
             } else {
                 MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
@@ -3435,15 +3378,9 @@ class Conversion {
                     ownParams.CastArray[TypeSymbol]()
                 }
             }
-            if s
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty &&
-                !s
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                s
-                .TypeArguments
-                .Length == enclosingParams.Length +
+            if s.EnclosingTypeArguments.IsDefaultOrEmpty &&
+                !s.TypeArguments.IsDefaultOrEmpty &&
+                s.TypeArguments.Length == enclosingParams.Length +
                 ownParams.Length {
                 return s.TypeArguments
             }
@@ -3634,12 +3571,8 @@ class Conversion {
                 for iface in gInterface.SelfAndAllBaseInterfaces() {
                     if iface == lookupTarget ||
                         (
-                        iface
-                            .TypeArguments
-                            .IsDefaultOrEmpty &&
-                            lookupTarget
-                            ?.ClrType
-                            ?.IsGenericType != true &&
+                        iface.TypeArguments.IsDefaultOrEmpty &&
+                            lookupTarget?.ClrType?.IsGenericType != true &&
                             ClrInterfaceMatches(iface, lookupTarget)
                     ) {
                         return true
@@ -3783,8 +3716,7 @@ class Conversion {
             // #4731: aliases must use the same symbolic relation AND rejection
             // guard as their imported interface spellings, never erased CLR probes.
             if (symbol is SequenceTypeSymbol or AsyncSequenceTypeSymbol) &&
-                SequenceTypeSymbol
-                .TryGetEnumerableInterfaceShape(symbol!!, out openDefinition, out var elementType) {
+                SequenceTypeSymbol.TryGetEnumerableInterfaceShape(symbol!!, out openDefinition, out var elementType) {
                 typeArguments = ImmutableArray.Create(elementType)
                 return openDefinition != nil
             }
@@ -3800,9 +3732,7 @@ class Conversion {
             }
             if shape is ImportedTypeSymbol imported &&
                 imported.OpenDefinition != nil &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !imported.TypeArguments.IsDefaultOrEmpty {
                 openDefinition = imported.OpenDefinition
                 return TryGetConstructedGenericArguments(symbol!!, out typeArguments, out _)
             }
@@ -4052,8 +3982,7 @@ class Conversion {
                 // keep the owner-aware path and never fall back to erased probes.
                 if TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments) &&
                     (!sourceOpen.IsValueType || targetOpen.IsInterface) &&
-                    ClrTypeUtilities
-                    .AreSame(sourceOpen, targetOpen) {
+                    ClrTypeUtilities.AreSame(sourceOpen, targetOpen) {
                     return AreConstructedReferenceArgumentsCompatible(
                         sourceTypeArguments,
                         targetArguments,
@@ -4935,10 +4864,8 @@ class Conversion {
             for candidate in ClrTypeUtilities.SafeGetInterfaces(definition) {
                 yield candidate
             }
-            for var current Type? = definition.BaseType;
-                current != nil &&
-                current.FullName != "System.Object";
-                current = current!!.BaseType {
+            for var current Type? = definition.BaseType; current != nil &&
+                current.FullName != "System.Object"; current = current!!.BaseType {
                 yield current
             }
         }
@@ -4972,8 +4899,7 @@ class Conversion {
             if TryGetConstructedGenericArguments(implemented, out var implementedArguments, out var implementedClr) &&
                 implementedClr != nil &&
                 implementedClr.IsGenericType == true &&
-                ClrTypeUtilities
-                .AreSame(
+                ClrTypeUtilities.AreSame(
                 if implementedClr.IsGenericTypeDefinition {
                     implementedClr
                 } else {
@@ -5741,8 +5667,7 @@ class Conversion {
             arguments = ImmutableArray[TypeSymbol].Empty
             definition = type.ClrType
             if (type is SequenceTypeSymbol || type is AsyncSequenceTypeSymbol) &&
-                SequenceTypeSymbol
-                .TryGetEnumerableInterfaceShape(type, out definition, out var elementType) {
+                SequenceTypeSymbol.TryGetEnumerableInterfaceShape(type, out definition, out var elementType) {
                 arguments = ImmutableArray.Create(elementType)
                 return true
             }
@@ -5769,8 +5694,7 @@ class Conversion {
             let positions = type.GetElementPositions()
             if !positions.IsDefaultOrEmpty &&
                 definition is {IsGenericType: true} constructed &&
-                positions.Length == constructed
-                .GetGenericArguments().Length {
+                positions.Length == constructed.GetGenericArguments().Length {
                 arguments = positions
                 return true
             }
@@ -6509,8 +6433,7 @@ class Conversion {
             var type = type
             type = type?.StripToBareShape()
             if (type is SequenceTypeSymbol or AsyncSequenceTypeSymbol) &&
-                SequenceTypeSymbol
-                .TryGetEnumerableInterfaceShape(type!!, out _, out var elementType) {
+                SequenceTypeSymbol.TryGetEnumerableInterfaceShape(type!!, out _, out var elementType) {
                 return TypeSymbol.ContainsFixedLengthArray(elementType) || TypeSymbol.ContainsFunctionPointer(
                     elementType
                 ) ||
@@ -6613,8 +6536,7 @@ class Conversion {
                 if !(fromElement is NullableTypeSymbol) &&
                     !(toElement is NullableTypeSymbol) &&
                     TupleTypeSymbol.TryGetTupleShape(fromElement, out var nestedFrom) &&
-                    TupleTypeSymbol
-                    .TryGetTupleShape(toElement, out var nestedTo) {
+                    TupleTypeSymbol.TryGetTupleShape(toElement, out var nestedTo) {
                     if !AreCrossContextIdenticalTupleElements(nestedFrom, nestedTo) {
                         return false
                     }
@@ -6941,9 +6863,7 @@ class Conversion {
         )
 
         private func IsMetadataRecoveredElement(type TypeSymbol) bool -> type is ImportedTypeSymbol &&
-            type
-            .TypeArguments
-            .IsDefaultOrEmpty == true
+            type.TypeArguments.IsDefaultOrEmpty == true
 
         // Issue #2299: element-level identity check used by
         // `TryClassifyWrappedElementIdentity`. Reference-equal elements are
@@ -7302,9 +7222,7 @@ class Conversion {
             }
             if targetInterface is not ImportedTypeSymbol imported ||
                 imported.OpenDefinition == nil ||
-                imported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                imported.TypeArguments.IsDefaultOrEmpty {
                 return false
             }
             // Cross-context fallback: walk the slice's backing CLR array
@@ -7418,9 +7336,7 @@ class Conversion {
                     var substituted TypeSymbol
                     if ifaceArg.IsGenericParameter &&
                         ifaceArg.GenericParameterPosition >= 0 &&
-                        ifaceArg.GenericParameterPosition < from
-                        .TypeArguments
-                        .Length {
+                        ifaceArg.GenericParameterPosition < from.TypeArguments.Length {
                         substituted = from.TypeArguments[ifaceArg.GenericParameterPosition]
                     } else {
                         substituted = TypeSymbol.FromClrTypeWithoutNullability(

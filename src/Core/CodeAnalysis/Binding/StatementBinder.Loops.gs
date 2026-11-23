@@ -221,8 +221,7 @@ internal partial class StatementBinder {
                     }
                     keyType = TypeSymbol.Int32
                     valueType = ExpressionBinder.GetIndexElementType(annotated) ??
-                        annotated
-                        .GetTypeArgumentSymbolForClrType(
+                        annotated.GetTypeArgumentSymbolForClrType(
                         Invariant.Required(
                             annotated.ClrType!!.GetElementType(),
                             "a single-dimensional CLR array has an element type",
@@ -230,8 +229,7 @@ internal partial class StatementBinder {
                         )
                     )
                 } else if MemberLookup.GetProjectionReceiverImportedType(annotated) is ImportedTypeSymbol projected &&
-                    MemberLookup
-                    .TryGetClrDictionaryTypes(
+                    MemberLookup.TryGetClrDictionaryTypes(
                     Invariant.Required(
                         projected.OpenDefinition ?? projected.ClrType,
                         "an imported projection receiver has a CLR type",
@@ -252,8 +250,7 @@ internal partial class StatementBinder {
                         NullabilityFreeReason.TypeStructure
                     )
                 } else if MemberLookup.GetProjectionReceiverImportedType(annotated) is ImportedTypeSymbol enumerable &&
-                    MemberLookup
-                    .TryGetClrEnumerableElementType(
+                    MemberLookup.TryGetClrEnumerableElementType(
                     Invariant.Required(
                         enumerable.OpenDefinition ?? enumerable.ClrType,
                         "an imported projection receiver has a CLR type",
@@ -269,8 +266,7 @@ internal partial class StatementBinder {
                         NullabilityFreeReason.TypeStructure
                     )
                 } else if MemberLookup.GetProjectionReceiverImportedType(annotated) is ImportedTypeSymbol pattern &&
-                    MemberLookup
-                    .TryGetClrPatternEnumerableCurrentMember(
+                    MemberLookup.TryGetClrPatternEnumerableCurrentMember(
                     Invariant.Required(
                         pattern.OpenDefinition ?? pattern.ClrType,
                         "an imported projection receiver has a CLR type",
@@ -299,8 +295,7 @@ internal partial class StatementBinder {
                 }
             }
             case openImp is ImportedTypeSymbol when openImp.OpenDefinition != nil &&
-                openImp
-                .HasSubstitutableTypeArgument {
+                openImp.HasSubstitutableTypeArgument {
                 if MemberLookup.TryGetClrDictionaryTypes(openImp.OpenDefinition!!, out var openDKey, out var openDVal) {
                     iterationKind = ForRangeKind.Dictionary
                     keyType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
@@ -1042,8 +1037,7 @@ internal partial class StatementBinder {
                 // the author almost certainly meant `<-ch`. Say so (GS0555)
                 // instead of the generic must-be-nullable GS0296.
                 if ChannelTypeSymbol.TryGetChannelShape(initializer.Type, out _, out var direction, out _) &&
-                    direction != ChannelDirection
-                    .Out {
+                    direction != ChannelDirection.Out {
                     let location = clause.Initializer.Location
                     Diagnostics.ReportWhileLetOverChannelNeedsReceive(
                         location,
@@ -1070,8 +1064,7 @@ internal partial class StatementBinder {
         if bound.IsValid &&
             isFinalBeforeGuard &&
             binding.Initializer is not ParenthesizedExpressionSyntax &&
-            IfLetBindingSupport
-            .HasAmbiguousBooleanContinuation(bound.Initializer, binding.Initializer) {
+            IfLetBindingSupport.HasAmbiguousBooleanContinuation(bound.Initializer, binding.Initializer) {
             Diagnostics.ReportIfLetGuardSplitsInitializer(
                 binding.Initializer.Location,
                 binding.Identifier.ValueText,
@@ -1350,9 +1343,7 @@ internal partial class StatementBinder {
             // `T → object` conversion ("Cannot convert type 'T' to 'object'").
             if type is ImportedTypeSymbol importedSym &&
                 importedSym.OpenDefinition != nil &&
-                !importedSym
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !importedSym.TypeArguments.IsDefaultOrEmpty {
                 let def = importedSym.OpenDefinition
                 if def.FullName == "System.Collections.Generic.IEnumerable`1" ||
                     def.FullName == "System.Collections.Generic.IEnumerator`1" ||

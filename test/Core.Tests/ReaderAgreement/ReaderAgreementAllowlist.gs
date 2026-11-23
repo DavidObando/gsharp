@@ -52,9 +52,7 @@ internal shared class ReaderAgreementAllowlist {
     internal func IsExcused(disagreement ReaderAgreementHarness.Disagreement) bool {
         let applicable = Entries.Where(
             (e ReaderAgreementAllowlist.Entry) -> (e.Tag == nil || disagreement.Tags.Contains(e.Tag)) &&
-                disagreement
-                .Results
-                .Any((r ReaderAgreementHarness.ReaderResult) -> e.Readers.Contains(r.Reader))
+                disagreement.Results.Any((r ReaderAgreementHarness.ReaderResult) -> e.Readers.Contains(r.Reader))
         )
             .ToImmutableArray()
         // Try every combination of applicable entries. One succeeds only when

@@ -110,12 +110,8 @@ internal shared class AsyncReturnTypeNormalizer {
         // symbolic result argument from the open definition + type arguments.
         if current is ImportedTypeSymbol imported &&
             imported.OpenDefinition != nil &&
-            !imported
-            .TypeArguments
-            .IsDefaultOrEmpty &&
-            imported
-            .TypeArguments
-            .Length == 1 {
+            !imported.TypeArguments.IsDefaultOrEmpty &&
+            imported.TypeArguments.Length == 1 {
             let openName = imported.OpenDefinition.FullName
             if openName == "System.Threading.Tasks.Task`1" || openName == "System.Threading.Tasks.ValueTask`1" {
                 awaited = imported.TypeArguments[0]

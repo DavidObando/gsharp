@@ -67,9 +67,7 @@ class SequenceTypeSymbol : TypeSymbol {
                     return true
                 }
                 case imported is ImportedTypeSymbol when imported.OpenDefinition != nil &&
-                    imported
-                    .TypeArguments
-                    .Length == 1 &&
+                    imported.TypeArguments.Length == 1 &&
                     IsEnumerableInterfaceDefinition(imported.OpenDefinition) {
                     openDefinition = imported.OpenDefinition
                     elementType = imported.TypeArguments[0]

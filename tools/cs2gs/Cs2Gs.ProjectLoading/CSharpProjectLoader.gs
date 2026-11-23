@@ -1016,8 +1016,7 @@ shared class CSharpProjectLoader {
                             includeSpec.Contains("@(", StringComparison.Ordinal) {
                             continue
                         }
-                        let refOutput = item.Attribute(XName?("ReferenceOutputAssembly")!!)
-                            ?.Value ??
+                        let refOutput = item.Attribute(XName?("ReferenceOutputAssembly")!!)?.Value ??
                             item
                             .Elements()
                             .FirstOrDefault(
@@ -1623,8 +1622,7 @@ shared class CSharpProjectLoader {
             return !string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
         }
         if decimal.TryParse(left, NumberStyles.Float, CultureInfo.InvariantCulture, out var leftNum) &&
-            decimal
-            .TryParse(right, NumberStyles.Float, CultureInfo.InvariantCulture, out var rightNum) {
+            decimal.TryParse(right, NumberStyles.Float, CultureInfo.InvariantCulture, out var rightNum) {
             return if op == "<" {
                 leftNum < rightNum
             } else if op == "<=" {

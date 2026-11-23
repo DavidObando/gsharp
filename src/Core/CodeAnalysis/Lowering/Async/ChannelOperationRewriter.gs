@@ -165,9 +165,6 @@ internal class ChannelOperationRewriter : BoundTreeRewriter {
         private func IsMonitorExit(expression BoundExpression) bool -> expression is BoundImportedCallExpression{
             Function: {Name: "Exit"} function
         } &&
-            function
-            .ImportedClass
-            .ClassType
-            .FullName == "System.Threading.Monitor"
+            function.ImportedClass.ClassType.FullName == "System.Threading.Monitor"
     }
 }

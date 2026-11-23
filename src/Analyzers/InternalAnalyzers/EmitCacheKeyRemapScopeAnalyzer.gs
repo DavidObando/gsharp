@@ -86,9 +86,7 @@ class EmitCacheKeyRemapScopeAnalyzer : GSharpDiagnosticAnalyzer {
                 return
             }
             if memberType is not TypeSymbol namedType ||
-                namedType
-                .ConstructedTypeArguments
-                .Length != 2 ||
+                namedType.ConstructedTypeArguments.Length != 2 ||
                 !IsDictionary(namedType) {
                 return
             }

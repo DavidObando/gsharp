@@ -2279,26 +2279,10 @@ class Consumer {
             if a == nil || b == nil {
                 return false
             }
-            return a
-                .Start
-                .Line == b
-                .Start
-                .Line &&
-                a
-                .Start
-                .Character == b
-                .Start
-                .Character &&
-                a
-                .End
-                .Line == b
-                .End
-                .Line &&
-                a
-                .End
-                .Character == b
-                .End
-                .Character
+            return a.Start.Line == b.Start.Line &&
+                a.Start.Character == b.Start.Character &&
+                a.End.Line == b.End.Line &&
+                a.End.Character == b.End.Character
         }
 
         private func FormatRange(r GSharp.LanguageServer.Protocol.Range?) string {

@@ -192,8 +192,7 @@ internal partial class ExpressionBinder {
             for method in classType.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance) {
                 if ClrTypeUtilities.EmittedMemberNameMatches(method, methodName) &&
                     method.IsGenericMethodDefinition &&
-                    method
-                    .GetGenericArguments().Length == explicitTypeArgs.Length {
+                    method.GetGenericArguments().Length == explicitTypeArgs.Length {
                     candidates.Add(method)
                 }
             }
@@ -470,9 +469,7 @@ internal partial class ExpressionBinder {
         result = nil
         let symbolicReceiver = classSymbol.SymbolicReceiver
         if symbolicReceiver?.OpenDefinition == nil ||
-            symbolicReceiver
-            .TypeArguments
-            .IsDefaultOrEmpty ||
+            symbolicReceiver.TypeArguments.IsDefaultOrEmpty ||
             !TryResolveOpenStaticMethod(symbolicReceiver.OpenDefinition, staticFn.Method, out var openMethod) {
             return false
         }
@@ -547,8 +544,7 @@ internal partial class ExpressionBinder {
             // Issue #4400: a plain argument at an `in T` slot is passed by
             // readonly reference to the symbolic pointee (`!0`), as in C#.
             if ConversionClassifier.IsImplicitInClrArgument(argument, openParameters[i]) &&
-                TypeSymbol
-                .TryGetPointeeType(symbolicParamType, out var symbolicInPointee) {
+                TypeSymbol.TryGetPointeeType(symbolicParamType, out var symbolicInPointee) {
                 convertedArgs.Add(
                     (
                         if conversions.TryRejectClrPlatformContainerArgument(
@@ -689,8 +685,7 @@ internal partial class ExpressionBinder {
                 for idx in deferredIndices {
                     let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
                     if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax &&
-                        symbolicTargets
-                        .TryGetValue(idx, out var target) {
+                        symbolicTargets.TryGetValue(idx, out var target) {
                         // Issue #2345: when this slot's return type was fully
                         // recovered (e.g. `void` for an Action-shaped
                         // parameter), bind against the real target so the
@@ -791,9 +786,7 @@ internal partial class ExpressionBinder {
                     explicitMethodTypeArguments: explicitTypeArgSymbols
                 )
             )
-            if resolution.Outcome != ClrOverloadResolution
-                .ResolutionOutcome
-                .Resolved ||
+            if resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved ||
                 resolution.Best is not{} probeMethod {
                 continue
             }
@@ -1277,8 +1270,7 @@ internal partial class ExpressionBinder {
                         !closedParameterType.ContainsGenericParameters &&
                         !closedParameterType.IsSameAs(mappedImported.ClrType) &&
                         closedParameterType.IsGenericType &&
-                        ClrTypeUtilities
-                        .AreSame(closedParameterType.GetGenericTypeDefinition(), mappedOpenDefinition) {
+                        ClrTypeUtilities.AreSame(closedParameterType.GetGenericTypeDefinition(), mappedOpenDefinition) {
                         mappedDelegate = ImportedTypeSymbol.GetConstructed(
                             closedParameterType,
                             mappedOpenDefinition,
@@ -1340,8 +1332,7 @@ internal partial class ExpressionBinder {
                     !returnHasInferredMethodTypeParameter &&
                     mappedReturn != nil &&
                     mappedReturn != TypeSymbol.Error &&
-                    !TypeSymbol
-                    .ContainsTypeParameter(mappedReturn) {
+                    !TypeSymbol.ContainsTypeParameter(mappedReturn) {
                     slotReturnTypes[idx] = mappedReturn
                     if TypeSymbol.RequiresSymbolicProjection(mappedReturn) {
                         candidateHasSymbolicType = true
@@ -1349,8 +1340,7 @@ internal partial class ExpressionBinder {
                 } else if returnGroundedInReceiver &&
                     mappedReturn != nil &&
                     mappedReturn != TypeSymbol.Error &&
-                    TypeSymbol
-                    .RequiresSymbolicProjection(mappedReturn) {
+                    TypeSymbol.RequiresSymbolicProjection(mappedReturn) {
                     // Issue #3666: the return shape is fully determined by the
                     // receiver's symbolic arguments yet still mentions a type
                     // parameter, so it stays a placeholder (the body infers it)
@@ -1493,15 +1483,13 @@ internal partial class ExpressionBinder {
                 paramIndex
             ) ??
                 ResolveMethodGenericParameterPointeeType(resolvedMethod, paramIndex, typeArgSymbols) ??
-                MemberLookup
-                .ResolveByRefParameterPointeeFromSymbolicTypeArgs(
+                MemberLookup.ResolveByRefParameterPointeeFromSymbolicTypeArgs(
                 resolvedMethod,
                 paramIndex,
                 symbolicMethodTypeArgs,
                 receiverType
             ) ??
-                ClrNullability
-                .GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape()
+                ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape()
             let syntheticParameter = RefCapabilities.CreateParameterSymbol(parameters[paramIndex], pointeeType, "value")
             let rebound = BindRefArgumentExpression(refArg, syntheticParameter)
             rebuilt ??= arguments.ToBuilder()
@@ -1785,12 +1773,8 @@ internal partial class ExpressionBinder {
                     var lambdaHandled = false
                     if !lambdaHandled &&
                         symbolicReceiver != nil &&
-                        !symbolicReceiver
-                        .TypeArguments
-                        .IsDefaultOrEmpty &&
-                        symbolicReceiver
-                        .TypeArguments
-                        .Any(TypeSymbol.RequiresSymbolicProjection) {
+                        !symbolicReceiver.TypeArguments.IsDefaultOrEmpty &&
+                        symbolicReceiver.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection) {
                         deferredArrowLambdaIndices.Add(argSlot)
                         boundArguments.Add(BoundErrorExpression(lambdaSyntax))
                         lambdaHandled = true
@@ -1926,9 +1910,7 @@ internal partial class ExpressionBinder {
             var result = bindArgumentsAndDispatch()
             if !preAppliedCallableProperty &&
                 lastSelectedCallablePropertyLoad is {} selectedPropLoad &&
-                ce
-                .Arguments
-                .Count > 0 {
+                ce.Arguments.Count > 0 {
                 lastSelectedCallablePropertyLoad = nil
                 result = Diagnostics.ReplaceDiagnosticsIn(
                     ce.Location,
@@ -3487,11 +3469,8 @@ internal partial class ExpressionBinder {
         // named arguments, point at the first unknown parameter name (if any)
         // for a more actionable diagnostic than "unable to find function".
         if !argumentNames.IsDefault &&
-            receiver
-            ?.Type
-            ?.ClrType is Type recvClr &&
-            overloads
-            .TryReportUnknownNamedArgumentForClr(
+            receiver?.Type?.ClrType is Type recvClr &&
+            overloads.TryReportUnknownNamedArgumentForClr(
             recvClr,
             methodName,
             BindingFlags.Instance | BindingFlags.Public,
@@ -3562,8 +3541,7 @@ internal partial class ExpressionBinder {
             explicitIfaceRecvType,
             out var explicitIfaceRecvClr
         ) &&
-            MemberLookup
-            .TryFindInterfaceOnlyInstanceMethod(
+            MemberLookup.TryFindInterfaceOnlyInstanceMethod(
             explicitIfaceRecvClr,
             methodName,
             explicitIfaceArgClrTypes,
@@ -3744,9 +3722,7 @@ internal partial class ExpressionBinder {
                 let paramIndex = mapping[i]
                 if paramIndex < offset ||
                     paramIndex >= parameters.Length ||
-                    !parameters[paramIndex]
-                    .ParameterType
-                    .IsByRef {
+                    !parameters[paramIndex].ParameterType.IsByRef {
                     continue
                 }
                 let inferredMethodTypeArgs = InferCandidateMethodTypeArguments(method, parameters, mapping, i)
@@ -3805,9 +3781,7 @@ internal partial class ExpressionBinder {
                 let paramIndex = mapping[i]
                 if paramIndex < offset ||
                     paramIndex >= parameters.Length ||
-                    !parameters[paramIndex]
-                    .ParameterType
-                    .IsByRef {
+                    !parameters[paramIndex].ParameterType.IsByRef {
                     continue
                 }
                 let inferredMethodTypeArgs = InferCandidateMethodTypeArguments(method, parameters, mapping, i)
@@ -4247,8 +4221,7 @@ internal partial class ExpressionBinder {
         }
         if source is TupleTypeSymbol sourceTuple &&
             target is TupleTypeSymbol targetTuple &&
-            sourceTuple.Arity == targetTuple
-            .Arity {
+            sourceTuple.Arity == targetTuple.Arity {
             let elements = ImmutableArray.CreateBuilder[TypeSymbol](targetTuple.Arity)
             var changed = false
             for var i = 0; i < targetTuple.Arity; i++ {
@@ -4304,8 +4277,7 @@ internal partial class ExpressionBinder {
                 out var position
             ) &&
                 position >= 0 &&
-                position < typeArgSymbols
-                .Length {
+                position < typeArgSymbols.Length {
                 // #4451: the same explicit-argument rule the symbolic vector
                 // applies, so an oblivious `T Echo<T>(T)` returns `string!`.
                 return MemberLookup.ApplyExplicitMethodTypeArgument(closed, position, typeArgSymbols[position])
@@ -4660,9 +4632,7 @@ internal partial class ExpressionBinder {
                             )
                         )
                     ) &&
-                        TypeIdentityComparer
-                        .Instance
-                        .Equals(definition, coreLibrary.GetType(fullName!!)) {
+                        TypeIdentityComparer.Instance.Equals(definition, coreLibrary.GetType(fullName!!)) {
                         return true
                     }
                 }
@@ -4693,11 +4663,7 @@ internal partial class ExpressionBinder {
             let leftDefinition = leftImported.OpenDefinition ?? leftImported.ClrType
             let rightDefinition = rightImported.OpenDefinition ?? rightImported.ClrType
             if !TypeIdentityComparer.Instance.Equals(leftDefinition, rightDefinition) ||
-                leftImported
-                .TypeArguments
-                .Length != rightImported
-                .TypeArguments
-                .Length {
+                leftImported.TypeArguments.Length != rightImported.TypeArguments.Length {
                 return false
             }
             if IsCanonicalFunctionDelegate(left) && IsCanonicalFunctionDelegate(right) {
@@ -4760,9 +4726,7 @@ internal partial class ExpressionBinder {
                 receiverType
             ) is ImportedTypeSymbol imp &&
                 imp.OpenDefinition != nil &&
-                !imp
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !imp.TypeArguments.IsDefaultOrEmpty {
                 receiverOpenDef = imp.OpenDefinition
                 receiverTypeArgs = imp.TypeArguments
             }
@@ -5044,9 +5008,7 @@ internal partial class ExpressionBinder {
                 receiverType
             ) is ImportedTypeSymbol imported &&
                 imported.OpenDefinition != nil &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !imported.TypeArguments.IsDefaultOrEmpty {
                 let reified Type? = imported.ReifyClosedClrType()
                 if reified != nil && !reified.ContainsGenericParameters {
                     return reified
@@ -5082,12 +5044,7 @@ internal partial class ExpressionBinder {
             for kv in a {
                 if !b.TryGetValue(kv.Key, out var other) ||
                     !SameDelegateIdentity(kv.Value.DelegateType, other.DelegateType) ||
-                    other
-                    .ParameterTypes
-                    .Length != kv
-                    .Value
-                    .ParameterTypes
-                    .Length {
+                    other.ParameterTypes.Length != kv.Value.ParameterTypes.Length {
                     return false
                 }
                 for var i = 0; i < kv.Value.ParameterTypes.Length; i++ {
@@ -5258,11 +5215,7 @@ internal partial class ExpressionBinder {
             }
             if source is not TupleTypeSymbol sourceTuple ||
                 target is not TupleTypeSymbol targetTuple ||
-                sourceTuple
-                .ElementTypes
-                .Length != targetTuple
-                .ElementTypes
-                .Length {
+                sourceTuple.ElementTypes.Length != targetTuple.ElementTypes.Length {
                 return false
             }
             for var i = 0; i < sourceTuple.ElementTypes.Length; i++ {

@@ -1049,8 +1049,7 @@ class ControlFlowGraph {
                     functionBody.Statements[^1] is BoundReturnStatement{
                     Expression: BoundVariableExpression returnExpression
                 } exitReturn &&
-                    object
-                    .ReferenceEquals(returnTempDeclaration.Variable, returnExpression.Variable) {
+                    object.ReferenceEquals(returnTempDeclaration.Variable, returnExpression.Variable) {
                     methodExitLabel = exitLabel.Label
                     methodExitReturn = exitReturn
                 }

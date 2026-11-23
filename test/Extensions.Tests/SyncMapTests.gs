@@ -283,10 +283,7 @@ open class SyncMapTests {
         Assert.DoesNotContain(
             type.GetProperties(),
             (p PropertyInfo) -> typeof(IDictionary).IsAssignableFrom(p.PropertyType) ||
-                p
-                .PropertyType
-                .Name
-                .Contains("Dictionary")
+                p.PropertyType.Name.Contains("Dictionary")
         )
     }
 }

@@ -438,10 +438,7 @@ internal shared class SuspensionInference {
             ":" +
             function.Name +
             ":" +
-            function
-            .Parameters
-            .Length
-            .ToString() +
+            function.Parameters.Length.ToString() +
             ":" +
             parameterTypes
     }

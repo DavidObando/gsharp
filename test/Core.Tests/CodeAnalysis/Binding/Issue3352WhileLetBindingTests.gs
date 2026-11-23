@@ -119,30 +119,21 @@ while let value = next {
             .Select((statement BoundStatement, index int32) -> (statement, index))
             .Single(
             (pair(statement BoundStatement, index int32)) -> pair.Item1 is BoundLabelStatement label &&
-                label
-                .Label
-                .Name
-                .StartsWith("continue", StringComparison.Ordinal)
+                label.Label.Name.StartsWith("continue", StringComparison.Ordinal)
         )
             .Item2
         let checkIndex = statements
             .Select((statement BoundStatement, index int32) -> (statement, index))
             .Single(
             (pair(statement BoundStatement, index int32)) -> pair.Item1 is BoundLabelStatement label &&
-                label
-                .Label
-                .Name
-                .StartsWith("check", StringComparison.Ordinal)
+                label.Label.Name.StartsWith("check", StringComparison.Ordinal)
         )
             .Item2
         let breakIndex = statements
             .Select((statement BoundStatement, index int32) -> (statement, index))
             .Single(
             (pair(statement BoundStatement, index int32)) -> pair.Item1 is BoundLabelStatement label &&
-                label
-                .Label
-                .Name
-                .StartsWith("break", StringComparison.Ordinal)
+                label.Label.Name.StartsWith("break", StringComparison.Ordinal)
         )
             .Item2
         Assert.True(continueIndex >= 0)

@@ -161,9 +161,7 @@ internal shared class AccessibilityChecker {
                 return true
             }
             if declaringType.ClrType is Type declaringClrType &&
-                t
-                .ImportedBaseType
-                ?.ClrType is Type importedBaseClrType &&
+                t.ImportedBaseType?.ClrType is Type importedBaseClrType &&
                 IsClrTypeInHierarchy(importedBaseClrType, declaringClrType) {
                 return true
             }
@@ -231,9 +229,7 @@ internal shared class AccessibilityChecker {
             }
             case staticField is ImplicitStaticFieldVariableSymbol {
                 declaringType = cast[TypeSymbol?](staticField.StructType) ??
-                    staticField
-                    .InterfaceType
-                    ?.Definition ??
+                    staticField.InterfaceType?.Definition ??
                     staticField.InterfaceType
                 memberName = staticField.Field.Name
                 accessibility = staticField.Field.Accessibility

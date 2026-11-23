@@ -915,10 +915,7 @@ func Value(x int32) int32 {
                     if functionBodiesOnly {
                         // An expression body is a block without braces; its statement ends the member.
                         if parent is BlockStatementSyntax block &&
-                            block
-                            .OpenBraceToken
-                            .Span
-                            .Length > 0 &&
+                            block.OpenBraceToken.Span.Length > 0 &&
                             IsInFunctionBody(tree, node) {
                             cuts.Add(statement.Span.End)
                         }

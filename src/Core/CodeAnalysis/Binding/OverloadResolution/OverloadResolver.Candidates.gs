@@ -301,10 +301,7 @@ internal partial class OverloadResolver {
         let GetCandidateSubstitution = func (candidate FunctionSymbol) Dictionary[TypeParameterSymbol, TypeSymbol]? {
             var methodSubstitution Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
             if !explicitTypeArguments.IsDefaultOrEmpty &&
-                candidate
-                .TypeParameters
-                .Length == explicitTypeArguments
-                .Length {
+                candidate.TypeParameters.Length == explicitTypeArguments.Length {
                 methodSubstitution = Dictionary[TypeParameterSymbol, TypeSymbol](explicitTypeArguments.Length)
                 for var i = 0; i < candidate.TypeParameters.Length; i++ {
                     methodSubstitution[candidate.TypeParameters[i]] = explicitTypeArguments[i]
@@ -503,10 +500,7 @@ internal partial class OverloadResolver {
         let GetCandidateSubstitution = func (candidate FunctionSymbol) Dictionary[TypeParameterSymbol, TypeSymbol]? {
             var methodSubstitution Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
             if !explicitTypeArguments.IsDefaultOrEmpty &&
-                candidate
-                .TypeParameters
-                .Length == explicitTypeArguments
-                .Length {
+                candidate.TypeParameters.Length == explicitTypeArguments.Length {
                 methodSubstitution = candidate
                     .TypeParameters
                     .Select(
@@ -886,21 +880,16 @@ internal partial class OverloadResolver {
                 // Issue #4422: a by-reference slot ranks on its storage type:
                 // an exact match beats one that differs only in reference
                 // nullability, as in C#.
-                if cand
-                    .Parameters[slot + parameterOffset]
-                    .RefKind != RefKind.None &&
+                if cand.Parameters[slot + parameterOffset].RefKind != RefKind.None &&
                     (
-                    cand
-                        .Parameters[slot + parameterOffset]
-                        .RefKind != RefKind.In ||
+                    cand.Parameters[slot + parameterOffset].RefKind != RefKind.In ||
                         boundArguments[i]?.Type is ByRefTypeSymbol
                 ) &&
                     ByRefStorageMatching.TryGetStorageType(
                     boundArguments[i],
                     cand.Parameters[slot + parameterOffset].RefKind
                 ) is {} byRefStorage &&
-                    !TypeSymbol
-                    .ContainsTypeParameter(paramType) {
+                    !TypeSymbol.ContainsTypeParameter(paramType) {
                     let exact = ByRefStorageMatching.IsExactStorageMatch(byRefStorage, paramType)
                     kinds[i] = if exact == true {
                         ClrOverloadResolution.ImplicitConversionKind.Identity
@@ -1081,9 +1070,7 @@ internal partial class OverloadResolver {
         let candidateParamLen = candidate.Parameters.Length - candidateOffset
         let otherParamLen = other.Parameters.Length - otherOffset
         let candidateFixed = if candidateParamLen > 0 &&
-            candidate
-            .Parameters[candidate.Parameters.Length - 1]
-            .IsVariadic {
+            candidate.Parameters[candidate.Parameters.Length - 1].IsVariadic {
             candidateParamLen - 1
         } else {
             candidateParamLen
@@ -1304,9 +1291,7 @@ internal partial class OverloadResolver {
                 boundArguments[i]?.Syntax is RefArgumentExpressionSyntax ||
                 (
                 callSyntax != nil &&
-                    i < callSyntax
-                    .Arguments
-                    .Count &&
+                    i < callSyntax.Arguments.Count &&
                     UnwrapNamedArgumentValue(callSyntax.Arguments[i]) is RefArgumentExpressionSyntax
             ) {
                 return false
@@ -1333,8 +1318,7 @@ internal partial class OverloadResolver {
             if lambdaSyntax?.IsAsync == true &&
                 bindLambdaWithTarget != nil &&
                 MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType!!, out var asyncTarget) &&
-                !TypeSymbol
-                .ContainsTypeParameter(asyncTarget) {
+                !TypeSymbol.ContainsTypeParameter(asyncTarget) {
                 if !IsContextuallyApplicableAsyncLambda(lambdaSyntax, asyncTarget, paramType!!) {
                     return false
                 }
@@ -1351,8 +1335,7 @@ internal partial class OverloadResolver {
             if lambdaSyntax != nil &&
                 argType is FunctionTypeSymbol{ReturnType: var lambdaReturn} argumentFunction &&
                 lambdaReturn == TypeSymbol.Error &&
-                MemberLookup
-                .TryGetLambdaTargetFunctionTypeFromSymbol(paramType!!, out var targetFunction) {
+                MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType!!, out var targetFunction) {
                 if argumentFunction.Arity != targetFunction.Arity {
                     return false
                 }
@@ -1364,9 +1347,7 @@ internal partial class OverloadResolver {
                         targetType,
                         writtenType
                     ) ||
-                        Conversion
-                        .ClassifyNonStructural(targetType, writtenType)
-                        .IsImplicit ||
+                        Conversion.ClassifyNonStructural(targetType, writtenType).IsImplicit ||
                         conversions.HasUserDefinedImplicitConversion(targetType, writtenType)
                 }
                 if !parametersCompatible {
@@ -1428,8 +1409,7 @@ internal partial class OverloadResolver {
             carrierType = substituteType(carrierType, substitution)
         }
         if isVariadic && VariadicCarriers.GetElementType(carrierType) is {} variadicTailElement &&
-            variadicTailElement != TypeSymbol
-            .Error {
+            variadicTailElement != TypeSymbol.Error {
             let elementType = variadicTailElement
             // A single trailing argument already typed as the slice itself is a
             // pass-through (`f(existingSlice)`); accept it as-is.
@@ -1825,11 +1805,7 @@ internal partial class OverloadResolver {
             paramType == nil ||
             !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var paramFn) ||
             paramFn == nil ||
-            argFn
-            .ParameterTypes
-            .Length != paramFn
-            .ParameterTypes
-            .Length {
+            argFn.ParameterTypes.Length != paramFn.ParameterTypes.Length {
             return false
         }
         let argReturn TypeSymbol? = argFn.ReturnType
@@ -2095,8 +2071,7 @@ internal partial class OverloadResolver {
             }
             if !IsNumericPrimitive(argType) &&
                 !IsNumericPrimitive(paramType) &&
-                conversions
-                .HasUserDefinedImplicitConversion(argType, paramType) {
+                conversions.HasUserDefinedImplicitConversion(argType, paramType) {
                 return ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
             }
             if paramType is NullableTypeSymbol nullableParam && argType == nullableParam.UnderlyingType {
@@ -2167,24 +2142,16 @@ internal partial class OverloadResolver {
             if numericTarget != 0 {
                 return numericTarget
             }
-            if ka == ClrOverloadResolution
-                .ImplicitConversionKind
-                .UserDefinedImplicit &&
-                kb == ClrOverloadResolution
-                .ImplicitConversionKind
-                .Reference &&
+            if ka == ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit &&
+                kb == ClrOverloadResolution.ImplicitConversionKind.Reference &&
                 paramA != nil &&
                 paramB != nil &&
                 IsNullTolerantObjectTarget(paramB) &&
                 !IsNullTolerantObjectTarget(paramA) {
                 return -1
             }
-            if kb == ClrOverloadResolution
-                .ImplicitConversionKind
-                .UserDefinedImplicit &&
-                ka == ClrOverloadResolution
-                .ImplicitConversionKind
-                .Reference &&
+            if kb == ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit &&
+                ka == ClrOverloadResolution.ImplicitConversionKind.Reference &&
                 paramA != nil &&
                 paramB != nil &&
                 IsNullTolerantObjectTarget(paramA) &&
@@ -2223,9 +2190,7 @@ internal partial class OverloadResolver {
             // more-derived reference parameter win (Animal over object; Type? over
             // object). If neither target converts to the other (genuinely unrelated
             // reference types), leave the tie (0) so real ambiguity is preserved.
-            if ka == ClrOverloadResolution
-                .ImplicitConversionKind
-                .Reference &&
+            if ka == ClrOverloadResolution.ImplicitConversionKind.Reference &&
                 paramA != nil &&
                 paramB != nil &&
                 !object.ReferenceEquals(paramA, paramB) {
@@ -2242,9 +2207,7 @@ internal partial class OverloadResolver {
             // converts implicitly to object and object does not convert back, so
             // Payload wins; genuinely unrelated targets still tie and stay
             // ambiguous.
-            if ka == ClrOverloadResolution
-                .ImplicitConversionKind
-                .UserDefinedImplicit &&
+            if ka == ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit &&
                 paramA != nil &&
                 paramB != nil &&
                 !object.ReferenceEquals(paramA, paramB) {
@@ -2320,9 +2283,7 @@ internal partial class OverloadResolver {
             return 0
         }
 
-        private func IsNumericPrimitive(type TypeSymbol) bool -> type
-            ?.ClrType
-            ?.FullName is string fullName &&
+        private func IsNumericPrimitive(type TypeSymbol) bool -> type?.ClrType?.FullName is string fullName &&
             NumericWideningLattice.IsNumericPrimitive(fullName)
 
         private func IsNullTolerantObjectTarget(type TypeSymbol) bool {

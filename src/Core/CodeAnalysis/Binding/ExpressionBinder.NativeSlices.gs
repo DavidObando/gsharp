@@ -220,9 +220,7 @@ internal partial class ExpressionBinder {
         for argument in arguments {
             var sourceElement TypeSymbol? = GetArraySliceElementType(argument.Type)
             if name == "TryFromMemory" &&
-                argument
-                .Type
-                .ClrType is {IsGenericType: true} clr &&
+                argument.Type.ClrType is {IsGenericType: true} clr &&
                 (clr.GetGenericTypeDefinition().FullName is "System.Memory`1" or "System.ReadOnlyMemory`1") {
                 sourceElement = if argument.Type is NullabilityAnnotatedTypeSymbol annotated {
                     annotated.GetTypeArgumentSymbol(0)
@@ -452,8 +450,7 @@ internal partial class ExpressionBinder {
         }
 
         if syntax.BufferType is {ReadOnlySliceModifier: nil, Identifier: {} name} ordinaryType &&
-            !binderCtx
-            .CanUseNativeBufferAlias($scope, name, getCurrentFunction(), expression: true) {
+            !binderCtx.CanUseNativeBufferAlias($scope, name, getCurrentFunction(), expression: true) {
             return BindOrdinaryBufferCollectionLiteral(syntax, ordinaryType, name)
         }
         let type TypeSymbol? = bindTypeClause(

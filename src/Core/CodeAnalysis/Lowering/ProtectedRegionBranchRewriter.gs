@@ -88,9 +88,7 @@ internal shared class ProtectedRegionBranchRewriter {
                     continue
                 }
                 var commonDepth = 0
-                while commonDepth < branch
-                    .Regions
-                    .Length &&
+                while commonDepth < branch.Regions.Length &&
                     commonDepth < targetRegions.Length &&
                     object.ReferenceEquals(branch.Regions[commonDepth], targetRegions[commonDepth]) {
                     commonDepth++

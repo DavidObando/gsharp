@@ -297,9 +297,7 @@ internal shared class SymbolDocumentationIdProvider {
                 return
             }
             case importedType is ImportedTypeSymbol when importedType.OpenDefinition != nil &&
-                !importedType
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !importedType.TypeArguments.IsDefaultOrEmpty {
                 AppendClrConstructedTypeReference(
                     builder,
                     importedType.OpenDefinition!!,
@@ -363,9 +361,7 @@ internal shared class SymbolDocumentationIdProvider {
                 "System.Func"
             }
         )
-        let argumentCount = type
-            .ParameterTypes
-            .Length +
+        let argumentCount = type.ParameterTypes.Length +
             (
             if returnsVoid {
                 0

@@ -28,10 +28,7 @@ import System.Reflection.Metadata.Ecma335
 internal partial class MethodBodyEmitter {
     private func IsHeapPromotedFixedBufferVariable(variable VariableSymbol) bool -> this.asyncFieldMap != nil ||
         this.iteratorEmitCtx != nil ||
-        this
-        .enclosingClosure
-        ?.CaptureFields
-        .ContainsKey(variable) == true ||
+        this.enclosingClosure?.CaptureFields.ContainsKey(variable) == true ||
         object.ReferenceEquals(variable, this.structThisParameter)
 
     private func EmitLoadVariable(variable VariableSymbol) {
@@ -81,11 +78,7 @@ internal partial class MethodBodyEmitter {
         // <Program>; load via ldsfld so cross-method access (and reads
         // from other assemblies) share storage.
         if variable is GlobalVariableSymbol gv &&
-            this
-            .outer
-            .cache
-            .GlobalFieldDefs
-            .TryGetValue(gv, out var fieldHandle) {
+            this.outer.cache.GlobalFieldDefs.TryGetValue(gv, out var fieldHandle) {
             this.il.OpCode(ILOpCode.Ldsfld)
             this.il.Token(fieldHandle)
             return
@@ -124,15 +117,8 @@ internal partial class MethodBodyEmitter {
         // closure receiver UNDER it. Use a temp local of the value type
         // to swap stack order without spawning a scratch local field.
         if this.enclosingClosure == nil ||
-            !this
-            .enclosingClosure
-            .CaptureFields
-            .TryGetValue(variable, out var capField) ||
-            !this
-            .outer
-            .cache
-            .StructFieldDefs
-            .TryGetValue(capField, out var capFieldHandle) {
+            !this.enclosingClosure.CaptureFields.TryGetValue(variable, out var capField) ||
+            !this.outer.cache.StructFieldDefs.TryGetValue(capField, out var capFieldHandle) {
             return false
         }
         return false
@@ -183,11 +169,7 @@ internal partial class MethodBodyEmitter {
         // the entry-point method body).
         if variable is GlobalVariableSymbol gv &&
             (!gv.IsConst || this.outer.emitCtx.CurrentStaticConstructorOwner is PackageSymbol) &&
-            this
-            .outer
-            .cache
-            .GlobalFieldDefs
-            .TryGetValue(gv, out var fieldHandle) {
+            this.outer.cache.GlobalFieldDefs.TryGetValue(gv, out var fieldHandle) {
             this.il.OpCode(ILOpCode.Stsfld)
             this.il.Token(fieldHandle)
             return
@@ -483,10 +465,7 @@ internal partial class MethodBodyEmitter {
         // back to value form otherwise (CLI permits ldfld on a value-type
         // value on stack).
         let receiverIsClass = (fa.Receiver!!.Type is StructSymbol rs && rs.IsClass) ||
-            fa.Receiver!!
-            .Type
-            ?.ClrType
-            ?.IsValueType == false
+            fa.Receiver!!.Type?.ClrType?.IsValueType == false
         if !receiverIsClass && fa.Receiver is BoundDereferenceExpression deref && TypeSymbol.IsUnmanagedPointer(
             deref.Operand.Type
         ) {
@@ -574,8 +553,7 @@ internal partial class MethodBodyEmitter {
             // the write. The field is re-read through the address afterwards to
             // leave the assigned value as the expression result.
             let addressReceiver BoundExpression? = if fas.ReceiverExpression is BoundDereferenceExpression drefRecv &&
-                !BoundNodeForm
-                .DeclaringType(fas).IsClass && TypeSymbol.IsUnmanagedPointer(drefRecv.Operand.Type) {
+                !BoundNodeForm.DeclaringType(fas).IsClass && TypeSymbol.IsUnmanagedPointer(drefRecv.Operand.Type) {
                 drefRecv.Operand
             } else {
                 default(BoundExpression?)
@@ -617,9 +595,7 @@ internal partial class MethodBodyEmitter {
             this.il.StoreLocal(valueSlot)
             let exprDeclaringStruct = BoundNodeForm.DeclaringType(fas)
             if !exprDeclaringStruct.IsClass &&
-                fas
-                .Field
-                .IsReadOnly &&
+                fas.Field.IsReadOnly &&
                 exprDeclaringStruct.ClrType == nil &&
                 this
                 .outer
@@ -827,11 +803,7 @@ internal partial class MethodBodyEmitter {
                     .outer
                     .userTokens
                     .ResolveUserPropertyAccessorToken(getterContainer, access.Property, wantSetter: false)
-            } else if this
-                .outer
-                .cache
-                .PropertyAccessorHandles
-                .TryGetValue(access.Property, out var handles) &&
+            } else if this.outer.cache.PropertyAccessorHandles.TryGetValue(access.Property, out var handles) &&
                 (handles.Getter != nil) {
                 getterHandle = handles.Getter!!
             } else if access.StructType is StructSymbol importedGetterContainer &&
@@ -914,11 +886,7 @@ internal partial class MethodBodyEmitter {
                     .outer
                     .userTokens
                     .ResolveUserPropertyAccessorToken(setterContainer, assn.Property, wantSetter: true)
-            } else if this
-                .outer
-                .cache
-                .PropertyAccessorHandles
-                .TryGetValue(assn.Property, out var handles) &&
+            } else if this.outer.cache.PropertyAccessorHandles.TryGetValue(assn.Property, out var handles) &&
                 (handles.Setter != nil) {
                 setterHandle = handles.Setter!!
             } else if assn.StructType is StructSymbol structType &&
@@ -994,9 +962,7 @@ internal partial class MethodBodyEmitter {
         if symbolicNullable != nil && NullableLifting.IsAnyValueTypeNullable(symbolicNullable) &&
             propertyOwner != nil &&
             propertyOwner.IsGenericType &&
-            propertyOwner
-            .GetGenericTypeDefinition()
-            .FullName == "System.Nullable`1" &&
+            propertyOwner.GetGenericTypeDefinition().FullName == "System.Nullable`1" &&
             (property.Name == "Value" || property.Name == "HasValue") {
             return if property.Name == "Value" {
                 this.GetNullableValueRef(symbolicNullable)
@@ -1319,17 +1285,10 @@ internal partial class MethodBodyEmitter {
         // Route the read through the non-generic System.Collections.IList /
         // IDictionary interfaces, which return the element as System.Object —
         // exactly the erased shape of the type parameter.
-        if idx
-            .Target
-            .Type is ImportedTypeSymbol erasedGen &&
+        if idx.Target.Type is ImportedTypeSymbol erasedGen &&
             erasedGen.HasTypeParameterArgument &&
-            idx
-            .Target
-            .Type
-            .ClrType is Type erasedClr &&
-            idx
-            .Arguments
-            .Length == 1 {
+            idx.Target.Type.ClrType is Type erasedClr &&
+            idx.Arguments.Length == 1 {
             // Issue #3705 (family 3): `erasedClr` is an imported type, so it is
             // a MetadataLoadContext type on every `/reference:` compile — a
             // host `typeof(IList).IsAssignableFrom(...)` is silently false
@@ -1769,24 +1728,14 @@ internal partial class MethodBodyEmitter {
     private func TryEmitBoxedTypeParameterReceiver(receiver BoundExpression, referenceOwner TypeSymbol?) bool {
         // Interface or base dispatch preserves boxed value storage without constructing a generic managed pointer.
         if referenceOwner == nil ||
-            !GSharp
-            .Core
-            .CodeAnalysis
-            .Binding
-            .Binder
-            .IsReferenceTypeForConstraint(referenceOwner.StripToBareShape()) {
+            !GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(referenceOwner.StripToBareShape()) {
             return false
         }
         let receiverType = receiver.Type.StripToBareShape()
         let storage = if GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.IsBoxedTypeParameterReceiver(receiver) {
             GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.GetReceiverStorageView(receiver)
         } else if receiverType is not TypeParameterSymbol &&
-            GSharp
-            .Core
-            .CodeAnalysis
-            .Binding
-            .Binder
-            .IsReferenceTypeForConstraint(receiverType) {
+            GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(receiverType) {
             receiver
         } else {
             default(BoundExpression?)
@@ -1893,9 +1842,7 @@ internal partial class MethodBodyEmitter {
         let declaredType = bve.Variable.Type
         let effectiveType = bve.Type
         if bve.NarrowedType == nil || ReflectionMetadataEmitter.IsValueTypeSymbol(declaredType) ||
-            declaredType
-            ?.ClrType
-            ?.IsValueType == true ||
+            declaredType?.ClrType?.IsValueType == true ||
             !(
             ReflectionMetadataEmitter.IsValueTypeSymbol(effectiveType) || effectiveType?.ClrType?.IsValueType == true
         ) {
@@ -1966,11 +1913,7 @@ internal partial class MethodBodyEmitter {
         // Issue #408 / #191: top-level globals are emitted as static fields
         // on <Program>; their address is taken with ldsflda.
         if variable is GlobalVariableSymbol{IsConst: false} gv &&
-            this
-            .outer
-            .cache
-            .GlobalFieldDefs
-            .TryGetValue(gv, out var fieldHandle) {
+            this.outer.cache.GlobalFieldDefs.TryGetValue(gv, out var fieldHandle) {
             this.il.OpCode(ILOpCode.Ldsflda)
             this.il.Token(fieldHandle)
             return true
@@ -2002,10 +1945,7 @@ internal partial class MethodBodyEmitter {
         }
         // Load receiver address, then ldflda.
         let receiverIsClass = (fa.Receiver.Type is StructSymbol rs && rs.IsClass) ||
-            fa.Receiver!!
-            .Type
-            ?.ClrType
-            ?.IsValueType == false
+            fa.Receiver!!.Type?.ClrType?.IsValueType == false
         if preserveStorage {
             this.EmitExplicitFieldReceiver(fa.Receiver!!)
         } else if !receiverIsClass && fa.Receiver is BoundDereferenceExpression deref && TypeSymbol.IsUnmanagedPointer(
@@ -2025,15 +1965,13 @@ internal partial class MethodBodyEmitter {
             this.EmitFieldAddress(nested)
         } else if !receiverIsClass &&
             fa.Receiver is BoundClrPropertyAccessExpression clrChainReceiver &&
-            this
-            .TryEmitAddressableClrFieldAddress(clrChainReceiver) {
+            this.TryEmitAddressableClrFieldAddress(clrChainReceiver) {
             // Issue #3185: the receiver is a prior-cell submission global (or
             // a CLR field chain rooted at one); its address is on the stack.
 
         } else if !receiverIsClass &&
             fa.Receiver is BoundIndexExpression elementReceiver &&
-            elementReceiver
-            .IsArrayBackedElementAccess {
+            elementReceiver.IsArrayBackedElementAccess {
             // Issue #3292: the receiver is an array/slice element — root the
             // address chain at the element (`ldelema`) so the field write
             // mutates the stored element in place.
@@ -2107,16 +2045,8 @@ internal partial class MethodBodyEmitter {
     }
 
     private func TryGetEmittedFieldDefHandle(field FieldSymbol, out handle FieldDefinitionHandle) bool ->
-    this
-        .outer
-        .cache
-        .StructFieldDefs
-        .TryGetValue(field, out handle) ||
-        this
-        .outer
-        .cache
-        .DeclaredFieldDefs
-        .TryGetValue(field, out handle)
+    this.outer.cache.StructFieldDefs.TryGetValue(field, out handle) ||
+        this.outer.cache.DeclaredFieldDefs.TryGetValue(field, out handle)
 
     /// ADR-0039: Emits ldelema for array element address.
     private func EmitLoadElementAddress(elementType TypeSymbol) {

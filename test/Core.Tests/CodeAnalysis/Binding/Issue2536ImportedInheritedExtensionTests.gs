@@ -40,9 +40,7 @@ interface IItems : IReadOnlyCollection[Item] {
             importedItems.GetInterfaces(),
             (type Type) -> type.IsGenericType && type.GetGenericTypeDefinition()
                 .FullName == typeof(IReadOnlyCollection[_]).FullName &&
-                type
-                .GetGenericArguments()[0]
-                .FullName == "Issue2536.Contracts.Item"
+                type.GetGenericArguments()[0].FullName == "Issue2536.Contracts.Item"
         )
         let consumer = Compilation(resolver, SyntaxTree.Parse(SourceText.From(`package Issue2536.Consumer
 import Issue2536.Contracts

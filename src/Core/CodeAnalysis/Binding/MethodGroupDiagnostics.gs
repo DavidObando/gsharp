@@ -23,9 +23,7 @@ internal shared class MethodGroupDiagnostics {
 
         override func VisitExpression(node BoundExpression?) {
             if node is BoundFunctionPointerFromMethodExpression pointer &&
-                pointer
-                .Method
-                .HasCaptures &&
+                pointer.Method.HasCaptures &&
                 pointer.Syntax is UnaryExpressionSyntax syntax {
                 diagnostics.ReportFunctionPointerAddressOfMismatch(
                     syntax.OperatorToken.Location,

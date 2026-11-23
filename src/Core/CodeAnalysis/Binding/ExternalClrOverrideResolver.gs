@@ -99,8 +99,7 @@ internal shared class ExternalClrOverrideResolver {
             if importedIsSuspending != isSuspending || (importedIsSuspending && !hasHiddenContext) {
                 continue
             }
-            if method.GetGenericArguments()
-                .Length != typeParameters.Length ||
+            if method.GetGenericArguments().Length != typeParameters.Length ||
                 !ParametersMatch(methodParameters, parameters, typeSubstitutions, method, methodTypeArguments) ||
                 !ReturnMatches(
                 ClrNullability.GetSignatureType(method.ReturnParameter),
@@ -655,9 +654,7 @@ internal shared class ExternalClrOverrideResolver {
     private func BuildTypeArgumentSubstitutions(externalBase TypeSymbol?) ImmutableArray[TypeArgumentSubstitution] {
         let root = TypeArgumentSubstitution(GetReflectionBaseType(externalBase), GetSymbolicTypeArguments(externalBase))
         if externalBase is not ImportedTypeSymbol{OpenDefinition: not nil} imported ||
-            imported
-            .TypeArguments
-            .IsDefaultOrEmpty {
+            imported.TypeArguments.IsDefaultOrEmpty {
             return ImmutableArray.Create(root)
         }
         let substitutions = ImmutableArray.CreateBuilder[TypeArgumentSubstitution]()

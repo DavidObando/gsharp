@@ -76,9 +76,7 @@ open class SpillSequenceSpillerTests {
                 result.Statements,
                 (statement BoundStatement) -> statement is BoundVariableDeclaration declaration &&
                     declaration.Variable != resultVariable &&
-                    declaration
-                    .Variable
-                    .Type == referenceType &&
+                    declaration.Variable.Type == referenceType &&
                     declaration.Initializer is BoundDefaultExpression
             )
         )
@@ -223,10 +221,7 @@ open class SpillSequenceSpillerTests {
         var hasReceiverSpill = false
         for s in result.Statements {
             if s is BoundVariableDeclaration d &&
-                d
-                .Variable
-                .Name
-                .StartsWith(GeneratedNames.SpillTempPrefix) &&
+                d.Variable.Name.StartsWith(GeneratedNames.SpillTempPrefix) &&
                 d.Initializer is BoundCallExpression {
                 hasReceiverSpill = true
                 break

@@ -160,20 +160,8 @@ internal shared class DiagnosticDeltaCalculator {
                         r.Id == effective.Id &&
                         r.Message == effective.Message &&
                         r.Severity == effective.Severity &&
-                        r
-                        .Location
-                        .Span
-                        .Start == effective
-                        .Location
-                        .Span
-                        .Start &&
-                        r
-                        .Location
-                        .Span
-                        .Length == effective
-                        .Location
-                        .Span
-                        .Length {
+                        r.Location.Span.Start == effective.Location.Span.Start &&
+                        r.Location.Span.Length == effective.Location.Span.Length {
                         found = index
                         break
                     }
@@ -247,20 +235,8 @@ internal shared class DiagnosticDeltaCalculator {
             if object.ReferenceEquals(candidate.Location.Text, d.Location.Text) &&
                 candidate.Id == d.Id &&
                 candidate.Message == d.Message &&
-                candidate
-                .Location
-                .Span
-                .Start == d
-                .Location
-                .Span
-                .Start &&
-                candidate
-                .Location
-                .Span
-                .Length == d
-                .Location
-                .Span
-                .Length {
+                candidate.Location.Span.Start == d.Location.Span.Start &&
+                candidate.Location.Span.Length == d.Location.Span.Length {
                 return true
             }
         }
@@ -275,20 +251,8 @@ internal shared class DiagnosticDeltaCalculator {
                         (
                         s.Id == d.Id &&
                             s.Message == d.Message &&
-                            s
-                            .Location
-                            .Span
-                            .Start == d
-                            .Location
-                            .Span
-                            .Start &&
-                            s
-                            .Location
-                            .Span
-                            .Length == d
-                            .Location
-                            .Span
-                            .Length
+                            s.Location.Span.Start == d.Location.Span.Start &&
+                            s.Location.Span.Length == d.Location.Span.Length
                     ) {
                         return true
                     }

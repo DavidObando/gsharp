@@ -591,31 +591,11 @@ internal shared class IncrementalGlobalScopeReuse {
         .Length == right
         .Fields
         .Length &&
-        left
-        .Properties
-        .Length == right
-        .Properties
-        .Length &&
-        left
-        .Events
-        .Length == right
-        .Events
-        .Length &&
-        left
-        .Methods
-        .Length == right
-        .Methods
-        .Length &&
-        left
-        .NestedTypes
-        .Length == right
-        .NestedTypes
-        .Length &&
-        left
-        .SharedInitializers
-        .Length == right
-        .SharedInitializers
-        .Length &&
+        left.Properties.Length == right.Properties.Length &&
+        left.Events.Length == right.Events.Length &&
+        left.Methods.Length == right.Methods.Length &&
+        left.NestedTypes.Length == right.NestedTypes.Length &&
+        left.SharedInitializers.Length == right.SharedInitializers.Length &&
         (left.SharedBlock?.Methods.Length ?? -1) == (right.SharedBlock?.Methods.Length ?? -1) &&
         (left.SharedBlock?.Fields.Length ?? -1) == (right.SharedBlock?.Fields.Length ?? -1)
 

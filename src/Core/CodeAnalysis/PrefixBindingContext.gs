@@ -174,9 +174,7 @@ internal sealed class PrefixCut {
             if next == nil {
                 return false
             }
-            if next
-                .Span
-                .Start >= memberStart &&
+            if next.Span.Start >= memberStart &&
                 (next is LambdaExpressionSyntax || next is FunctionLiteralExpressionSyntax) {
                 return true
             }
@@ -461,9 +459,7 @@ internal shared class PrefixBindingContext {
                 if object.ReferenceEquals(sibling, current) {
                     after = true
                 } else if after &&
-                    sibling
-                    .Span
-                    .Start < cut.Cut &&
+                    sibling.Span.Start < cut.Cut &&
                     !(sibling is SyntaxToken token && token.IsSealedAtCut) {
                     return false
                 }

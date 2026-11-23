@@ -324,8 +324,7 @@ open partial class Parser {
             if Current.Kind == SyntaxKind.PublicKeyword ||
                 Current.Kind == SyntaxKind.InternalKeyword ||
                 Current.Kind == SyntaxKind.PrivateKeyword ||
-                Current.Kind == SyntaxKind
-                .ProtectedKeyword {
+                Current.Kind == SyntaxKind.ProtectedKeyword {
                 var ahead = 1
                 while Peek(ahead).Kind == SyntaxKind.OpenKeyword || Peek(ahead).Kind == SyntaxKind.OverrideKeyword {
                     ahead++
@@ -1019,8 +1018,7 @@ open partial class Parser {
         var parseNextParameter = true
         while parseNextParameter &&
             Current.Kind != SyntaxKind.CloseSquareBracketToken &&
-            Current.Kind != SyntaxKind
-            .EndOfFileToken {
+            Current.Kind != SyntaxKind.EndOfFileToken {
             let parameter = ParseParameter()
             nodesAndSeparators.Add(parameter)
             if Current.Kind == SyntaxKind.CommaToken {
@@ -1136,8 +1134,7 @@ open partial class Parser {
                 var paramIdentifier SyntaxToken? = nil
                 var closeParen SyntaxToken? = nil
                 if (accessorKeyword.Text == "set" || accessorKeyword.Text == "init") &&
-                    Current.Kind == SyntaxKind
-                    .OpenParenthesisToken {
+                    Current.Kind == SyntaxKind.OpenParenthesisToken {
                     openParen = MatchToken(SyntaxKind.OpenParenthesisToken)
                     paramIdentifier = MatchToken(SyntaxKind.IdentifierToken)
                     closeParen = MatchToken(SyntaxKind.CloseParenthesisToken)
@@ -1816,8 +1813,7 @@ open partial class Parser {
         var parseNext = true
         while parseNext &&
             Current.Kind != SyntaxKind.CloseSquareBracketToken &&
-            Current.Kind != SyntaxKind
-            .EndOfFileToken {
+            Current.Kind != SyntaxKind.EndOfFileToken {
             nodesAndSeparators.Add(ParseTypeParameter())
             if Current.Kind == SyntaxKind.CommaToken {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken))
@@ -1859,8 +1855,7 @@ open partial class Parser {
                 k == SyntaxKind.ClassKeyword ||
                 k == SyntaxKind.StructKeyword ||
                 k == SyntaxKind.QuestionToken ||
-                k == SyntaxKind
-                .DotToken {
+                k == SyntaxKind.DotToken {
                 // `init` is lexed as an identifier; consume an optional `()` pair
                 // when this identifier is the contextual `init` constraint keyword.
                 if k == SyntaxKind.IdentifierToken && Peek(ahead).Text == "init" && Peek(
@@ -1982,8 +1977,7 @@ open partial class Parser {
                         var parseNext = true
                         while parseNext &&
                             Current.Kind != SyntaxKind.CloseSquareBracketToken &&
-                            Current.Kind != SyntaxKind
-                            .EndOfFileToken {
+                            Current.Kind != SyntaxKind.EndOfFileToken {
                             nodesAndSeparators.Add(ParseTypeClause())
                             if Current.Kind == SyntaxKind.CommaToken {
                                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken))
@@ -2365,8 +2359,7 @@ open partial class Parser {
         var parseNextParameter = true
         while parseNextParameter &&
             Current.Kind != SyntaxKind.CloseParenthesisToken &&
-            Current.Kind != SyntaxKind
-            .EndOfFileToken {
+            Current.Kind != SyntaxKind.EndOfFileToken {
             let parameter = ParseParameter()
             nodesAndSeparators.Add(parameter)
             if Current.Kind == SyntaxKind.CommaToken {

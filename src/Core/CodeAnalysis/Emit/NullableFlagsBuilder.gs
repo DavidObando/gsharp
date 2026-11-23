@@ -306,8 +306,7 @@ internal shared class NullableFlagsBuilder {
                     var projectedArguments = imported.TypeArguments
                     if projectedArguments.IsDefaultOrEmpty &&
                         importedClr.IsGenericType &&
-                        !importedClr
-                        .IsGenericTypeDefinition {
+                        !importedClr.IsGenericTypeDefinition {
                         projectedArguments = importedClr
                             .GetGenericArguments()
                             .Select(TypeSymbol.FromClrType)
@@ -544,9 +543,7 @@ internal shared class NullableFlagsBuilder {
             type is SequenceTypeSymbol ||
             type is AsyncSequenceTypeSymbol ||
             type is DelegateTypeSymbol &&
-            type
-            .TypeArguments
-            .IsDefaultOrEmpty == false {
+            type.TypeArguments.IsDefaultOrEmpty == false {
             builder.Add(NotAnnotated)
             AppendGenericArguments(type, builder)
             return

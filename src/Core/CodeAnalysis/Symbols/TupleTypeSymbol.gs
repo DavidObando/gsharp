@@ -220,8 +220,7 @@ class TupleTypeSymbol : TypeSymbol {
                 return if targetType != nil && targetType != TypeSymbol.Error && !TypeSymbol.ContainsNullLiteralType(
                     targetType
                 ) &&
-                    Conversion
-                    .Classify(TypeSymbol.Null, targetType).IsImplicit {
+                    Conversion.Classify(TypeSymbol.Null, targetType).IsImplicit {
                     targetType
                 } else {
                     cast[TypeSymbol](NullableTypeSymbol.Get(TypeSymbol.Object))

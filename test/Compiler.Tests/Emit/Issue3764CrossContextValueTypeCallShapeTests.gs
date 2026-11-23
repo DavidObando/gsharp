@@ -100,9 +100,7 @@ open class Issue3764CrossContextValueTypeCallShapeTests {
         let format = Assert.Single(
             metadata.MemberReferences.Select(metadata.GetMemberReference),
             (member MemberReference) -> metadata.GetString(member.Name) == "Format" &&
-                member
-                .Parent
-                .Kind == HandleKind.TypeReference &&
+                member.Parent.Kind == HandleKind.TypeReference &&
                 metadata.GetString(metadata.GetTypeReference(TypeReferenceHandle(member.Parent)).Name) == "String"
         )
         let stringType = metadata.GetTypeReference(TypeReferenceHandle(format.Parent))

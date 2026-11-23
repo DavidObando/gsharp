@@ -414,17 +414,9 @@ open class Issue5185ChildSourceOrderTests {
                 if count > 0 {
                     Assert.Same(node.GetChild(0).GetFirstToken(), node.GetFirstToken())
                     let isNegatedIs = node is UnaryExpressionSyntax unary &&
-                        unary
-                        .OperatorToken
-                        .Kind == SyntaxKind.BangToken &&
+                        unary.OperatorToken.Kind == SyntaxKind.BangToken &&
                         unary.Operand is IsExpressionSyntax &&
-                        unary
-                        .Operand
-                        .Span
-                        .Start < unary
-                        .OperatorToken
-                        .Span
-                        .Start
+                        unary.Operand.Span.Start < unary.OperatorToken.Span.Start
                     if !isNegatedIs {
                         Assert.Same(node.GetChild(count - 1).GetLastToken(), node.GetLastToken())
                     }

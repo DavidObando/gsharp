@@ -247,8 +247,7 @@ internal class AssemblyAttributeEmitter {
     private func EmitNativeProtocolDeclarations(assemblyHandle AssemblyDefinitionHandle) {
         let assemblyIdentity = (this.emitCtx.AssemblyNameOverride ?? this.emitCtx.Program.PackageName ?? "Default") +
             ", Version=" +
-            this
-            .ParseAssemblyVersion().ToString() + ", Culture=neutral, PublicKeyToken=null"
+            this.ParseAssemblyVersion().ToString() + ", Culture=neutral, PublicKeyToken=null"
         let declarations = this
             .emitCtx
             .Program
@@ -508,9 +507,9 @@ internal class AssemblyAttributeEmitter {
                         .Properties
                         .Where(
                         (property PropertySymbol) -> property.BackingField != nil &&
-                            type
-                            .PrimaryConstructorParameters
-                            .Any((parameter ParameterSymbol) -> parameter.Name == property.Name)
+                            type.PrimaryConstructorParameters.Any(
+                            (parameter ParameterSymbol) -> parameter.Name == property.Name
+                        )
                     )
                         .Select((property PropertySymbol) -> property.BackingField!!)
                 } else {

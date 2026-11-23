@@ -251,9 +251,7 @@ internal class DefaultInterpolatedStringHandlerShape {
             for candidate in handlerType.GetConstructors(BindingFlags.Public | BindingFlags.Instance) {
                 let parameters = candidate.GetParameters()
                 if parameters.Length == 2 && parameters[0].ParameterType.IsSameAs(typeof(int32)) &&
-                    parameters[1]
-                    .ParameterType
-                    .IsSameAs(typeof(int32)) {
+                    parameters[1].ParameterType.IsSameAs(typeof(int32)) {
                     return candidate
                 }
             }
@@ -265,11 +263,9 @@ internal class DefaultInterpolatedStringHandlerShape {
                 let parameters = candidate.GetParameters()
                 if candidate.Name == "AppendLiteral" &&
                     !candidate.IsGenericMethodDefinition &&
-                    candidate
-                    .ReturnType
-                    .IsSameAs(typeof(Void)) && parameters.Length == 1 && parameters[0].ParameterType.IsSameAs(
-                    typeof(string)
-                ) {
+                    candidate.ReturnType.IsSameAs(typeof(Void)) &&
+                    parameters.Length == 1 &&
+                    parameters[0].ParameterType.IsSameAs(typeof(string)) {
                     return candidate
                 }
             }
@@ -280,9 +276,7 @@ internal class DefaultInterpolatedStringHandlerShape {
             for candidate in handlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
                 if candidate.Name == "ToStringAndClear" &&
                     !candidate.IsGenericMethodDefinition &&
-                    candidate
-                    .ReturnType
-                    .IsSameAs(typeof(string)) && candidate.GetParameters().Length == 0 {
+                    candidate.ReturnType.IsSameAs(typeof(string)) && candidate.GetParameters().Length == 0 {
                     return candidate
                 }
             }
@@ -308,9 +302,7 @@ internal class DefaultInterpolatedStringHandlerShape {
             for candidate in handlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
                 if candidate.Name != "AppendFormatted" ||
                     !candidate.IsGenericMethodDefinition ||
-                    !candidate
-                    .ReturnType
-                    .IsSameAs(typeof(Void)) || candidate.GetGenericArguments().Length != 1 {
+                    !candidate.ReturnType.IsSameAs(typeof(Void)) || candidate.GetGenericArguments().Length != 1 {
                     continue
                 }
                 let parameters = candidate.GetParameters()

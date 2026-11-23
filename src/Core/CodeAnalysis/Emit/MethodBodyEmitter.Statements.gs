@@ -160,10 +160,7 @@ internal partial class MethodBodyEmitter {
             expression: "node.SourceVariable"
         )
         let sourceSlot = this.locals[sourceVariable]
-        let sourceClr = node
-            .PinnedSource
-            .Type
-            ?.ClrType ??
+        let sourceClr = node.PinnedSource.Type?.ClrType ??
             throw InvalidOperationException("Span-like fixed source '${node.PinnedSource.Type?.Name}' has no CLR type.")
         let getPinnableReference = sourceClr.GetMethod(
             "GetPinnableReference",

@@ -69,9 +69,7 @@ partial class TestParityStage : IMigrationStage {
         if IsLibraryEligible(context) {
             return await this.RunLibraryParityAsync(context, cancellationToken).ConfigureAwait(false)
         }
-        if context
-            .Options
-            .OutputLayout == MigrationOutputLayout.Repository &&
+        if context.Options.OutputLayout == MigrationOutputLayout.Repository &&
             IsMirroredTestProject(context.IsTestProject, context.App.ProjectPath) {
             return this.RunMirroredTestProject(context)
         }
@@ -411,9 +409,7 @@ stderr:
             TestsName: libraryName + ".Tests",
             TestsRootNamespace: libraryName.Replace('-', '_') + ".Tests",
             TestFiles: tests.Files,
-            SdkVersion: context
-                .Options
-                .RepositorySdkVersion ??
+            SdkVersion: context.Options.RepositorySdkVersion ??
                 (
                 if context.Options.OutputLayout == MigrationOutputLayout.Repository {
                     context.Options.SdkVersion
@@ -641,10 +637,7 @@ stderr:
                 .OfType[MethodDeclarationSyntax]()
                 .Count(
                 (method MethodDeclarationSyntax) -> HasFactAttribute(method) &&
-                    method
-                    .Ancestors()
-                    .OfType[TypeDeclarationSyntax]()
-                    .All(IsDiscoverableTestClass)
+                    method.Ancestors().OfType[TypeDeclarationSyntax]().All(IsDiscoverableTestClass)
             )
         }
 
@@ -655,14 +648,10 @@ stderr:
         /// class only through its closures. Anything uncertain is left uncounted so
         /// the bound stays a bound.
         private func IsDiscoverableTestClass(type TypeDeclarationSyntax) bool -> type.TypeParameterList == nil &&
-            type
-            .Modifiers
-            .Any((m SyntaxToken) -> m.IsKind(SyntaxKind.PublicKeyword)) && !type.Modifiers.Any(
+            type.Modifiers.Any((m SyntaxToken) -> m.IsKind(SyntaxKind.PublicKeyword)) && !type.Modifiers.Any(
             (m SyntaxToken) -> m.IsKind(SyntaxKind.AbstractKeyword)
         ) &&
-            !type
-            .Modifiers
-            .Any((m SyntaxToken) -> m.IsKind(SyntaxKind.StaticKeyword))
+            !type.Modifiers.Any((m SyntaxToken) -> m.IsKind(SyntaxKind.StaticKeyword))
 
         private func HasFactAttribute(method MethodDeclarationSyntax) bool -> method
             .AttributeLists
@@ -687,9 +676,7 @@ stderr:
             )
         )
 
-        private func IsStdoutEligible(context StageExecutionContext) bool -> context
-            .App
-            .TargetKind == TargetKind.Exe &&
+        private func IsStdoutEligible(context StageExecutionContext) bool -> context.App.TargetKind == TargetKind.Exe &&
             !string.IsNullOrEmpty(context.App.StdoutGolden) && File.Exists(context.App.StdoutGolden)
 
         private func IsLibraryEligible(context StageExecutionContext) bool -> !string.IsNullOrEmpty(

@@ -39,9 +39,7 @@ internal partial class DeclarationBinder {
                                     "set_"
                                 }
                             ) +
-                                requirement
-                                .Property
-                                .Name
+                                requirement.Property.Name
                         )
                     }
                 }
@@ -159,9 +157,7 @@ internal partial class DeclarationBinder {
                     let target = method.ExplicitInterfaceClauseTarget
                     if !method.HasExplicitInterfaceClause ||
                         target is InterfaceSymbol ||
-                        target
-                        ?.ClrType
-                        ?.IsInterface != true {
+                        target?.ClrType?.IsInterface != true {
                         continue
                     }
                     for slot in target.ClrType.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
@@ -215,9 +211,7 @@ internal partial class DeclarationBinder {
                     let target = property.ExplicitInterfaceClauseTarget
                     if !property.HasExplicitInterfaceClause ||
                         target is InterfaceSymbol ||
-                        target
-                        ?.ClrType
-                        ?.IsInterface != true {
+                        target?.ClrType?.IsInterface != true {
                         continue
                     }
                     for slot in target.ClrType.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
@@ -272,9 +266,7 @@ internal partial class DeclarationBinder {
                     let target = eventSymbol.ExplicitInterfaceClauseTarget
                     if !eventSymbol.HasExplicitInterfaceClause ||
                         target is InterfaceSymbol ||
-                        target
-                        ?.ClrType
-                        ?.IsInterface != true {
+                        target?.ClrType?.IsInterface != true {
                         continue
                     }
                     for slot in target.ClrType.GetEvents(BindingFlags.Public | BindingFlags.Instance) {
@@ -296,9 +288,7 @@ internal partial class DeclarationBinder {
                     let target = method.ExplicitInterfaceClauseTarget
                     if !method.HasExplicitInterfaceClause ||
                         target is InterfaceSymbol ||
-                        target
-                        ?.ClrType
-                        ?.IsInterface != true {
+                        target?.ClrType?.IsInterface != true {
                         continue
                     }
                     let targetClr = target.ClrType
@@ -338,9 +328,7 @@ internal partial class DeclarationBinder {
                     let target = property.ExplicitInterfaceClauseTarget
                     if !property.HasExplicitInterfaceClause ||
                         target is InterfaceSymbol ||
-                        target
-                        ?.ClrType
-                        ?.IsInterface != true {
+                        target?.ClrType?.IsInterface != true {
                         continue
                     }
                     for slot in ClrTypeUtilities.SafeGetProperties(
@@ -371,9 +359,7 @@ internal partial class DeclarationBinder {
                     let target = eventSymbol.ExplicitInterfaceClauseTarget
                     if !eventSymbol.HasExplicitInterfaceClause ||
                         target is InterfaceSymbol ||
-                        target
-                        ?.ClrType
-                        ?.IsInterface != true {
+                        target?.ClrType?.IsInterface != true {
                         continue
                     }
                     for slot in ClrTypeUtilities.SafeGetEvents(
@@ -1948,9 +1934,7 @@ internal partial class DeclarationBinder {
                     SymbolDisplay.ToTypeDisplayString(declaringType)
                 }
                 VerifyClrInterfaceMember(
-                    isRequired: slot
-                        .Method
-                        .IsAbstract &&
+                    isRequired: slot.Method.IsAbstract &&
                         !ImportedBaseImplementsClrInterface(structSymbol, slot.SlotOwner),
                     findImplementation: () -> FindClrInterfaceMethodImplementation(structSymbol, slot),
                     validateImplementation: (implementation FunctionSymbol) -> ValidateUnscopedRefContract(
@@ -2099,20 +2083,17 @@ internal partial class DeclarationBinder {
                 symbolicArgs.Length == 1 &&
                 symbolicArgs[0] is StructSymbol equatableSelf &&
                 (
-                equatableSelf
-                    .EnclosingTypeArguments
-                    .IsDefaultOrEmpty ||
-                    equatableSelf
-                    .EnclosingTypeArguments
-                    .SequenceEqual[TypeSymbol](StructSymbol.CollectEnclosingTypeParameters(structSymbol))
+                equatableSelf.EnclosingTypeArguments.IsDefaultOrEmpty ||
+                    equatableSelf.EnclosingTypeArguments.SequenceEqual[TypeSymbol](
+                    StructSymbol.CollectEnclosingTypeParameters(structSymbol)
+                )
             ) &&
                 ConformanceSignaturesEquivalent(
                 equatableSelf,
                 StructSymbol.Construct(structSymbol, structSymbol.TypeParameters.Cast[TypeSymbol]().ToImmutableArray())
             ) &&
                 openMethod.Name == "Equals" &&
-                openMethod
-                .GetParameters().Length == 1 {
+                openMethod.GetParameters().Length == 1 {
                 continue
             }
             let erasedSlot = if interfaceType.ClrType == nil {
@@ -2317,8 +2298,7 @@ internal partial class DeclarationBinder {
             if interfaceType is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol declaredTypeParameter} &&
                 !declaredTypeParameter.HasValueTypeConstraint &&
                 substituted is NullableTypeSymbol substitutedNullable &&
-                NullableLifting
-                .IsAnyValueTypeNullable(substitutedNullable) {
+                NullableLifting.IsAnyValueTypeNullable(substitutedNullable) {
                 return GetInterfacePropertySlotType(interfaceType, typeParameterMap)
             }
             return if interfaceType is NullableTypeSymbol {
@@ -2466,11 +2446,7 @@ internal partial class DeclarationBinder {
                         )
                     ) ||
                         candidate.IsIndexer != interfaceProperty.IsIndexer ||
-                        candidate
-                        .Parameters
-                        .Length != interfaceProperty
-                        .Parameters
-                        .Length {
+                        candidate.Parameters.Length != interfaceProperty.Parameters.Length {
                         continue
                     }
                     var parameterTypesMatch = true
@@ -2535,9 +2511,7 @@ internal partial class DeclarationBinder {
                 if candidate.Name != interfaceProperty.Name || RefCapabilities.GetReturnRefKind(
                     candidate
                 ) != interfaceProperty.ReturnRefKind ||
-                    candidateParameters.Length != interfaceProperty
-                    .Parameters
-                    .Length ||
+                    candidateParameters.Length != interfaceProperty.Parameters.Length ||
                     (interfaceProperty.HasGetter && candidate.GetGetMethod(nonPublic: false) == nil) ||
                     (interfaceProperty.HasSetter && candidate.GetSetMethod(nonPublic: false) == nil) ||
                     (
@@ -3055,8 +3029,7 @@ internal partial class DeclarationBinder {
                         (
                         object.ReferenceEquals(current, structSymbol) || candidate.Accessibility == Accessibility.Public
                     ) &&
-                        MemberLookup
-                        .PropertyMatchesClrInterfaceSignature(candidate, slotOwnerSymbol, slotProperty) {
+                        MemberLookup.PropertyMatchesClrInterfaceSignature(candidate, slotOwnerSymbol, slotProperty) {
                         implementation = candidate
                         declaringType = current
                         return true
@@ -3206,9 +3179,7 @@ internal partial class DeclarationBinder {
                 }
                 for candidate in c.Methods {
                     if MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate) &&
-                        candidate.Name == slot
-                        .Method
-                        .Name &&
+                        candidate.Name == slot.Method.Name &&
                         MemberLookup.MethodSatisfiesClrSlot(candidate, slot) {
                         return candidate
                     }
@@ -3447,16 +3418,12 @@ internal partial class DeclarationBinder {
                             (
                             property.Accessibility != Accessibility.Public ||
                                 (
-                                clrProperty
-                                    .GetMethod
-                                    ?.IsAbstract == true &&
+                                clrProperty.GetMethod?.IsAbstract == true &&
                                     property.HasGetter &&
                                     property.GetterAccessibility != Accessibility.Public
                             ) ||
                                 (
-                                clrProperty
-                                    .SetMethod
-                                    ?.IsAbstract == true &&
+                                clrProperty.SetMethod?.IsAbstract == true &&
                                     property.HasSetter &&
                                     property.SetterAccessibility != Accessibility.Public
                             )

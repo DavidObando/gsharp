@@ -143,9 +143,7 @@ class IlVerifyStage : IMigrationStage {
                 string.Join(", ", result.IncompleteMembers)
             }
             let message = "Verification incomplete: ilverify exited abnormally with code " +
-                result
-                .ExitCode
-                .ToString() +
+                result.ExitCode.ToString() +
                 ". Excluded crashing members: " +
                 excluded +
                 ". Findings from non-crashing members are reported separately. Output: " +

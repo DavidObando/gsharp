@@ -79,12 +79,8 @@ internal shared class ConditionalReturnNarrowing {
         // legitimately produce nil from a non-nil operand.
         while argument is BoundConversionExpression conversion &&
             conversion.Type is NullableTypeSymbol widened &&
-            conversion
-            .Expression
-            .Type != nil &&
-            widened.UnderlyingType == conversion
-            .Expression
-            .Type {
+            conversion.Expression.Type != nil &&
+            widened.UnderlyingType == conversion.Expression.Type {
             argument = conversion.Expression
         }
         var type TypeSymbol? = argument.Type

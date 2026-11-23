@@ -672,14 +672,8 @@ internal shared class GSharpProjectTransformer {
 
     private func RewriteCSharpMetadata(document XDocument) {
         for metadata in document.Descendants().Where(
-            (element XElement) -> element
-                .Name
-                .LocalName
-                .Equals("LastGenOutput", StringComparison.OrdinalIgnoreCase) ||
-                element
-                .Name
-                .LocalName
-                .Equals("DependentUpon", StringComparison.OrdinalIgnoreCase)
+            (element XElement) -> element.Name.LocalName.Equals("LastGenOutput", StringComparison.OrdinalIgnoreCase) ||
+                element.Name.LocalName.Equals("DependentUpon", StringComparison.OrdinalIgnoreCase)
         ) {
             metadata.Value = RewriteCSharpSpecs(metadata.Value)
         }

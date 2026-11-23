@@ -1780,9 +1780,7 @@ public class BodyOnly { public var Items []int32 }
         let marker = Assert.Single(
             metadata.GetCustomAttributesData().Where(
                 (attribute CustomAttributeData) ->
-                attribute
-                    .AttributeType
-                    .FullName == "System.Reflection.AssemblyMetadataAttribute" &&
+                attribute.AttributeType.FullName == "System.Reflection.AssemblyMetadataAttribute" &&
                     cast[string](attribute.ConstructorArguments[0].Value) == "GSharp.MagicCollectionFields"
             )
         )

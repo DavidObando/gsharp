@@ -284,9 +284,7 @@ shared class SemanticLookup {
                     (token.Parent is StructLiteralExpressionSyntax sl && TokenMatches(sl.TypeIdentifier, token))
             ) &&
                 token.SyntaxTree != nil &&
-                !this
-                .globals
-                .ContainsKey(token.Text) && SemanticLookup.ResolveImportedClrType(
+                !this.globals.ContainsKey(token.Text) && SemanticLookup.ResolveImportedClrType(
                 token.SyntaxTree,
                 this.compilation,
                 token
@@ -500,18 +498,8 @@ shared class SemanticLookup {
                 this
                     .GetAccessorsForTree(tree)
                     .Where(
-                    (a AccessorExpressionSyntax) -> a
-                        .RightPart
-                        .Span
-                        .Start <= token
-                        .Span
-                        .Start &&
-                        token
-                        .Span
-                        .End <= a
-                        .RightPart
-                        .Span
-                        .End
+                    (a AccessorExpressionSyntax) -> a.RightPart.Span.Start <= token.Span.Start &&
+                        token.Span.End <= a.RightPart.Span.End
                 )
                     .OrderBy((a AccessorExpressionSyntax) -> a.Span.Length)
             }
@@ -830,16 +818,8 @@ shared class SemanticLookup {
                 }
                 return candidate != nil &&
                     token != nil &&
-                    candidate
-                    .Span
-                    .Start == token
-                    .Span
-                    .Start &&
-                    candidate
-                    .Span
-                    .End == token
-                    .Span
-                    .End &&
+                    candidate.Span.Start == token.Span.Start &&
+                    candidate.Span.End == token.Span.End &&
                     string.Equals(candidate.Text, token.Text, StringComparison.Ordinal)
             }
 
@@ -1088,15 +1068,9 @@ shared class SemanticLookup {
         }
         // Issue #5899: do not match the adjacent token when the caret sits on a dropped grouping parenthesis.
         if best != nil &&
-            best
-            .Span
-            .End == position &&
-            best
-            .Span
-            .Start < position &&
-            position < tree
-            .Text
-            .Length &&
+            best.Span.End == position &&
+            best.Span.Start < position &&
+            position < tree.Text.Length &&
             (tree.Text[position] == '(' || tree.Text[position] == ')') {
             return nil
         }

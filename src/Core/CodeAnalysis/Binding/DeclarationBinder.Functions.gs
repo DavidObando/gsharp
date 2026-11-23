@@ -171,9 +171,7 @@ internal partial class DeclarationBinder {
         let owner = candidateStruct.Definition ?? candidateStruct
         if $package == nil ||
             !owner.IsGenericDefinition ||
-            owner
-            .TypeParameters
-            .Length != typeArguments.Count ||
+            owner.TypeParameters.Length != typeArguments.Count ||
             !string.Equals(owner.PackageName, $package.Name, StringComparison.Ordinal) {
             return ImmutableArray[TypeParameterSymbol].Empty
         }
@@ -191,11 +189,7 @@ internal partial class DeclarationBinder {
                 argument.IsChannel ||
                 argument.IsPointer ||
                 argument.IsSequence ||
-                argument
-                .Identifier
-                .ValueText != owner
-                .TypeParameters[i]
-                .Name {
+                argument.Identifier.ValueText != owner.TypeParameters[i].Name {
                 return ImmutableArray[TypeParameterSymbol].Empty
             }
         }
@@ -830,11 +824,8 @@ internal partial class DeclarationBinder {
         }
         if !(bindTypeOfExpression(typeOfSyntax) is BoundTypeOfExpression{OperandType: StructSymbol ownerStruct}) ||
             !ownerStruct.IsClass ||
-            !ownerStruct
-            .TypeParameters
-            .IsDefaultOrEmpty ||
-            !string
-            .Equals(ownerStruct.PackageName, $package.Name, StringComparison.Ordinal) {
+            !ownerStruct.TypeParameters.IsDefaultOrEmpty ||
+            !string.Equals(ownerStruct.PackageName, $package.Name, StringComparison.Ordinal) {
             // A struct is rejected too: ECMA-334 §13.6.9 (and
             // MemberLookup.IsStaticClass on the importing side) requires an
             // extension method's container be a CLASS, so a value-type owner
@@ -1028,8 +1019,7 @@ internal partial class DeclarationBinder {
                 continue
             }
             if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(existing.Parameters[0].Type, sourceType) &&
-                TypeSymbol
-                .AreRuntimeEquivalentIgnoringReferenceNullability(existing.Type, targetType) {
+                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(existing.Type, targetType) {
                 Diagnostics.ReportDuplicateConversionOperator(syntax.Identifier.Location, sourceType, targetType)
                 return
             }
@@ -1576,10 +1566,7 @@ internal partial class DeclarationBinder {
             return declaredType
         }
         if syntax.Body == nil ||
-            syntax
-            .Body
-            .Statements
-            .Length != 1 ||
+            syntax.Body.Statements.Length != 1 ||
             !(syntax.Body.Statements[0] is ReturnStatementSyntax{Expression: AnonymousClassExpressionSyntax anon}) {
             return declaredType
         }
@@ -1670,15 +1657,11 @@ internal partial class DeclarationBinder {
                 (structSymbol.Properties.IsDefaultOrEmpty || !HasAnyExplicitInterfaceClause(structSymbol.Properties)) &&
                 (structSymbol.Events.IsDefaultOrEmpty || !HasAnyExplicitInterfaceClause(structSymbol.Events)) &&
                 (
-                structSymbol
-                    .StaticMethods
-                    .IsDefaultOrEmpty ||
+                structSymbol.StaticMethods.IsDefaultOrEmpty ||
                     !HasAnyExplicitInterfaceClause(structSymbol.StaticMethods)
             ) &&
                 (
-                structSymbol
-                    .StaticProperties
-                    .IsDefaultOrEmpty ||
+                structSymbol.StaticProperties.IsDefaultOrEmpty ||
                     !HasAnyExplicitInterfaceClause(structSymbol.StaticProperties)
             ) &&
                 (
@@ -2516,8 +2499,7 @@ internal partial class DeclarationBinder {
         ) bool {
             let baseIsAsync = baseMethod.IsAsync
             if AsyncIteratorDetection.IsAsyncIteratorReturnType(baseMethod.Type) &&
-                AsyncIteratorDetection
-                .IsAsyncIteratorReturnType(derivedReturnType) {
+                AsyncIteratorDetection.IsAsyncIteratorReturnType(derivedReturnType) {
                 return ConformanceSignaturesEquivalent(baseMethod.Type, derivedReturnType, typeParamMap)
             }
             if baseMethod.IsAsyncVoid || derivedIsAsyncVoid {
@@ -3271,8 +3253,7 @@ internal partial class DeclarationBinder {
             if a is FunctionPointerTypeSymbol || b is FunctionPointerTypeSymbol {
                 return a is FunctionPointerTypeSymbol leftPointer &&
                     b is FunctionPointerTypeSymbol rightPointer &&
-                    leftPointer
-                    .SignatureEquals(
+                    leftPointer.SignatureEquals(
                     rightPointer,
                     (left TypeSymbol, right TypeSymbol) -> TypeSignaturesEquivalent(left, right, typeParamMap)
                 )
@@ -3423,12 +3404,8 @@ internal partial class DeclarationBinder {
                 }
                 if pa.OpenDefinition != nil ||
                     pb.OpenDefinition != nil ||
-                    !pa
-                    .TypeArguments
-                    .IsDefaultOrEmpty ||
-                    !pb
-                    .TypeArguments
-                    .IsDefaultOrEmpty {
+                    !pa.TypeArguments.IsDefaultOrEmpty ||
+                    !pb.TypeArguments.IsDefaultOrEmpty {
                     return false
                 }
                 // Otherwise (both sides expressed as plain closed CLR types)
@@ -3437,12 +3414,8 @@ internal partial class DeclarationBinder {
                     !TypeSymbol.ContainsSameCompilationUserType(pa) && !TypeSymbol.ContainsSameCompilationUserType(
                     pb
                 ) &&
-                    pa
-                    .ClrType
-                    ?.ContainsGenericParameters != true &&
-                    pb
-                    .ClrType
-                    ?.ContainsGenericParameters != true &&
+                    pa.ClrType?.ContainsGenericParameters != true &&
+                    pb.ClrType?.ContainsGenericParameters != true &&
                     (
                     conformanceMatchingDepth == 0 ||
                         (!TypeSymbol.ContainsFixedLengthArray(pa) && !TypeSymbol.ContainsFixedLengthArray(pb))
@@ -3471,12 +3444,8 @@ internal partial class DeclarationBinder {
             // Conformance spans runtime and metadata-load contexts. Exact storage checks keep their existing identity rule.
             return a.ClrType != nil &&
                 b.ClrType != nil &&
-                !a
-                .ClrType
-                .ContainsGenericParameters &&
-                !b
-                .ClrType
-                .ContainsGenericParameters &&
+                !a.ClrType.ContainsGenericParameters &&
+                !b.ClrType.ContainsGenericParameters &&
                 (
                 a.ClrType == b.ClrType ||
                     (conformanceMatchingDepth > 0 && ClrTypeUtilities.AreSame(a.ClrType, b.ClrType))
@@ -3503,9 +3472,7 @@ internal partial class DeclarationBinder {
                 }
             }
             if imported.OpenDefinition == nil &&
-                imported
-                .TypeArguments
-                .IsDefaultOrEmpty &&
+                imported.TypeArguments.IsDefaultOrEmpty &&
                 imported.ClrType is {
                 IsGenericType: true,
                 IsGenericTypeDefinition: false,

@@ -346,9 +346,7 @@ public func BuildOther() Reader { return adapt[Reader](Source(3)) }`, "other.gs"
                 .Structs
                 .Where(
                 (type StructSymbol) -> type.Name.StartsWith("<>AnonClass", StringComparison.Ordinal) ||
-                    type
-                    .Name
-                    .StartsWith("<>Adapter", StringComparison.Ordinal)
+                    type.Name.StartsWith("<>Adapter", StringComparison.Ordinal)
             )
                 .ToArray()
             Assert.Equal(2, syntheticTypes.Length)

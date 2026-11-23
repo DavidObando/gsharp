@@ -139,14 +139,8 @@ internal partial class ExpressionBinder {
             return false
         }
         for var i = 0; i < candidate.Parameters.Length; i++ {
-            if existing
-                .Indexer
-                .Parameters[i]
-                .RefKind != candidate
-                .Parameters[i]
-                .RefKind ||
-                !DeclarationBinder
-                .TypeSignaturesEquivalent(
+            if existing.Indexer.Parameters[i].RefKind != candidate.Parameters[i].RefKind ||
+                !DeclarationBinder.TypeSignaturesEquivalent(
                 SubstituteIndexerType(existing.Indexer.Parameters[i].Type, existing.Substitution),
                 SubstituteIndexerType(candidate.Parameters[i].Type, candidateSubstitution)
             ) {
@@ -613,9 +607,7 @@ internal partial class ExpressionBinder {
     ) BoundExpression? {
         var target = target
         if (target.Type is ImportedTypeSymbol or NullabilityAnnotatedTypeSymbol) &&
-            target
-            .Type
-            .ClrType is {} clrTarget {
+            target.Type.ClrType is {} clrTarget {
             return TryBindMultiIndexClrAssignment(
                 target,
                 clrTarget,
@@ -795,11 +787,9 @@ internal partial class ExpressionBinder {
                     elementType = verifiedCall.Type
                 }
             }
-            for var i = 0;
-                i < verifiedConvertedArguments.Length &&
+            for var i = 0; i < verifiedConvertedArguments.Length &&
                 i < indexSyntaxes.Count &&
-                i < preBound.Length;
-                i++ {
+                i < preBound.Length; i++ {
                 if !object.ReferenceEquals(verifiedConvertedArguments[i], preBound[i]) {
                     ApplySubExpressionNarrowingEffects(indexSyntaxes[i], verifiedConvertedArguments[i])
                 }

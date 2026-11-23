@@ -262,9 +262,7 @@ internal shared class NativeProtocolSafety {
                     return false
                 }
                 return ContainsDependency(named.ReturnType, includeStorage, seen, importedDelegates) ||
-                    named
-                    .Parameters
-                    .Any(
+                    named.Parameters.Any(
                     (parameter ParameterSymbol) -> ContainsDependency(
                         parameter.Type,
                         includeStorage,
@@ -405,8 +403,7 @@ internal shared class NativeProtocolSafety {
                 "native protocol boundaries require explicit P/P? presence, not an oblivious platform contract"
             )
         }
-        if NativeProtocolOperations.GetProtocol(type)
-            ?.ClrType is {} imported &&
+        if NativeProtocolOperations.GetProtocol(type)?.ClrType is {} imported &&
             !NativeProtocolMetadata
             .Read(imported.Assembly)
             .Protocols
@@ -419,8 +416,7 @@ internal shared class NativeProtocolSafety {
         let shape = StorageShape(type)
         let tuple = shape is TupleTypeSymbol ||
             shape.ClrType is {IsGenericType: true} generic &&
-            generic
-            .GetGenericTypeDefinition().FullName is {} name && name.StartsWith(
+            generic.GetGenericTypeDefinition().FullName is {} name && name.StartsWith(
             "System.ValueTuple`",
             System.StringComparison.Ordinal
         )
@@ -577,22 +573,16 @@ internal shared class NativeProtocolSafety {
                         call.Method,
                         ContainsSavedProtocol(call.Receiver.Type) ||
                             ContainsSavedProtocol(call.Type) ||
-                            call
-                            .Arguments
-                            .Any((argument BoundExpression) -> ContainsSavedProtocol(argument.Type)),
+                            call.Arguments.Any((argument BoundExpression) -> ContainsSavedProtocol(argument.Type)),
                         location,
                         diagnostics
                     )
                 }
-                if call
-                    .Method
-                    .IsGenericMethod &&
-                    !call
-                    .TypeArgumentSymbols
-                    .IsDefaultOrEmpty &&
-                    call
-                    .TypeArgumentSymbols
-                    .Any((argument TypeSymbol?) -> argument != nil && ContainsSavedProtocol(argument)) {
+                if call.Method.IsGenericMethod &&
+                    !call.TypeArgumentSymbols.IsDefaultOrEmpty &&
+                    call.TypeArgumentSymbols.Any(
+                    (argument TypeSymbol?) -> argument != nil && ContainsSavedProtocol(argument)
+                ) {
                     diagnostics.ReportNativeProtocol(
                         location,
                         "native protocol generic invocation contracts are not admitted"
@@ -625,12 +615,10 @@ internal shared class NativeProtocolSafety {
                     ContainsSavedProtocol(call.Type) || call.Arguments.Any(
                         (argument BoundExpression) -> ContainsSavedProtocol(argument.Type)
                     ) ||
-                        !call
-                        .TypeArgumentSymbols
-                        .IsDefaultOrEmpty &&
-                        call
-                        .TypeArgumentSymbols
-                        .Any((argument TypeSymbol?) -> argument != nil && ContainsSavedProtocol(argument)),
+                        !call.TypeArgumentSymbols.IsDefaultOrEmpty &&
+                        call.TypeArgumentSymbols.Any(
+                        (argument TypeSymbol?) -> argument != nil && ContainsSavedProtocol(argument)
+                    ),
                     location,
                     diagnostics
                 )
@@ -694,9 +682,7 @@ internal shared class NativeProtocolSafety {
                     getter,
                     ContainsSavedProtocol(access.Type) ||
                         ContainsSavedProtocol(access.Target.Type) ||
-                        access
-                        .Arguments
-                        .Any((argument BoundExpression) -> ContainsSavedProtocol(argument.Type)),
+                        access.Arguments.Any((argument BoundExpression) -> ContainsSavedProtocol(argument.Type)),
                     location,
                     diagnostics
                 )
@@ -710,9 +696,7 @@ internal shared class NativeProtocolSafety {
                         ContainsSavedProtocol(assignment.Target.Type) ||
                         assignment.TargetExpression != nil &&
                         ContainsSavedProtocol(assignment.TargetExpression.Type) ||
-                        assignment
-                        .Arguments
-                        .Any((argument BoundExpression) -> ContainsSavedProtocol(argument.Type)),
+                        assignment.Arguments.Any((argument BoundExpression) -> ContainsSavedProtocol(argument.Type)),
                     location,
                     diagnostics
                 )
@@ -726,34 +710,22 @@ internal shared class NativeProtocolSafety {
                 ContainsSavedProtocol(call.Receiver.Type) {
                 diagnostics.ReportNativeProtocol(location, "native-bearing aggregate equality/hash is not admitted")
             }
-            case call is BoundCallExpression when call
-                .Function
-                .IsGeneric &&
+            case call is BoundCallExpression when call.Function.IsGeneric &&
                 (
                 call.Arguments.Any((argument BoundExpression) -> ContainsSavedProtocol(argument.Type)) ||
-                    !call
-                    .MethodTypeArguments
-                    .IsDefaultOrEmpty &&
-                    call
-                    .MethodTypeArguments
-                    .Any((argument TypeSymbol) -> ContainsSavedProtocol(argument))
+                    !call.MethodTypeArguments.IsDefaultOrEmpty &&
+                    call.MethodTypeArguments.Any((argument TypeSymbol) -> ContainsSavedProtocol(argument))
             ) {
                 diagnostics.ReportNativeProtocol(
                     location,
                     "native protocol generic invocation contracts are not admitted"
                 )
             }
-            case call is BoundUserInstanceCallExpression when call
-                .Method
-                .IsGeneric &&
+            case call is BoundUserInstanceCallExpression when call.Method.IsGeneric &&
                 (
                 call.Arguments.Any((argument BoundExpression) -> ContainsSavedProtocol(argument.Type)) ||
-                    !call
-                    .MethodTypeArguments
-                    .IsDefaultOrEmpty &&
-                    call
-                    .MethodTypeArguments
-                    .Any((argument TypeSymbol) -> ContainsSavedProtocol(argument))
+                    !call.MethodTypeArguments.IsDefaultOrEmpty &&
+                    call.MethodTypeArguments.Any((argument TypeSymbol) -> ContainsSavedProtocol(argument))
             ) {
                 diagnostics.ReportNativeProtocol(
                     location,
@@ -794,10 +766,7 @@ internal shared class NativeProtocolSafety {
 
     private func HasValidatedForeignContract(member MemberInfo) bool ->
     NativeProtocolMetadata.HasSupportedFeatureMarker(member) &&
-        NativeProtocolMetadata
-        .Read(member.Module.Assembly)
-        .Manifest
-        .ValueKind !=
+        NativeProtocolMetadata.Read(member.Module.Assembly).Manifest.ValueKind !=
     System.Text.Json.JsonValueKind.Undefined
 
     private func IsEqualityMember(name string) bool ->

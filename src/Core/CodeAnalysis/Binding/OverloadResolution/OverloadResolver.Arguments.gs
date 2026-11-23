@@ -104,8 +104,7 @@ internal partial class OverloadResolver {
         if resolvedParamsElement == nil &&
             !symbolicMethodTypeArgs.IsDefaultOrEmpty &&
             parameters[paramsIndex].Member is MethodInfo paramsMethod &&
-            paramsMethod
-            .IsGenericMethod {
+            paramsMethod.IsGenericMethod {
             let openMethod = if paramsMethod.IsGenericMethodDefinition {
                 paramsMethod
             } else {
@@ -235,9 +234,7 @@ internal partial class OverloadResolver {
         let conversionSyntaxIndex = sourceIndex - receiverArgCount
         let location = if callSyntax != nil &&
             conversionSyntaxIndex >= 0 &&
-            conversionSyntaxIndex < callSyntax
-            .Arguments
-            .Count {
+            conversionSyntaxIndex < callSyntax.Arguments.Count {
             callSyntax.Arguments[conversionSyntaxIndex].Location
         } else {
             callSyntax?.Location ?? default(TextLocation)
@@ -496,8 +493,7 @@ internal partial class OverloadResolver {
             argument.Type != nil &&
             argument.Type != TypeSymbol.Error &&
             argument.Type != expectedType &&
-            !Conversion
-            .Classify(
+            !Conversion.Classify(
             argument.Type,
             Invariant.Required(
                 expectedType,
@@ -1819,9 +1815,7 @@ internal partial class OverloadResolver {
         private func IsByRefInterpolatedHandlerArgument(argument BoundExpression, expected RefKind) bool {
             return argument is BoundInterpolatedStringExpression interp &&
                 interp.Handler != nil &&
-                interp
-                .Handler
-                .HandlerRefKind == expected
+                interp.Handler.HandlerRefKind == expected
         }
     }
 }

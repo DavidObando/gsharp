@@ -359,9 +359,7 @@ internal shared class IfLetBindingSupport {
             if source is ConditionalExpressionSyntax conditional {
                 nextSource = conditional.WhenFalse
             } else if source is BinaryExpressionSyntax binary &&
-                binary
-                .OperatorToken
-                .Kind == SyntaxKind.QuestionQuestionToken {
+                binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
                 nextSource = binary.Right
             } else {
                 var isAssignment = false

@@ -352,8 +352,7 @@ internal shared class CrossAssemblyDefinitionResolver {
                 "${Path.DirectorySeparatorChar}obj${Path.DirectorySeparatorChar}",
                 StringComparison.OrdinalIgnoreCase
             ) ||
-                file
-                .Contains(
+                file.Contains(
                 "${Path.DirectorySeparatorChar}bin${Path.DirectorySeparatorChar}",
                 StringComparison.OrdinalIgnoreCase
             ) {

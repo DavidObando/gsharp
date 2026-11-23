@@ -570,9 +570,7 @@ internal partial class ExpressionBinder {
                         let inCtor = fn != nil &&
                             fn.Name == ".ctor" &&
                             fn.ThisParameter != nil &&
-                            !fieldAccess
-                            .Field
-                            .IsStatic
+                            !fieldAccess.Field.IsStatic
                         let receiverIsThis = fieldAccess.Receiver == nil ||
                             (
                             fieldAccess.Receiver is BoundVariableExpression rbve &&
@@ -655,8 +653,11 @@ internal partial class ExpressionBinder {
                     // declares the property.
                     if propAccess.StructType is {} propertyReceiverType &&
                         FindPropertyDeclaringType(propertyReceiverType, propAccess.Property) is {} propertyOwner &&
-                        !AccessibilityChecker
-                        .IsAccessible(propAccess.Property.SetterAccessibility, propertyOwner, function) {
+                        !AccessibilityChecker.IsAccessible(
+                        propAccess.Property.SetterAccessibility,
+                        propertyOwner,
+                        function
+                    ) {
                         Diagnostics.ReportMemberInaccessible(
                             syntax.OperatorToken.Location,
                             propAccess.Property.Name,
@@ -920,9 +921,7 @@ internal partial class ExpressionBinder {
                 {
                     if userIndexer.SetterSymbol == nil &&
                         !(
-                        userIdx
-                            .Receiver
-                            .Type is StructSymbol &&
+                        userIdx.Receiver.Type is StructSymbol &&
                             userIndexer.GetterSymbol is {ReturnRefKind: RefKind.Ref}
                     ) {
                         Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, "this[]")
@@ -1066,9 +1065,7 @@ internal partial class ExpressionBinder {
                     // The same derived-member visibility plain `base.P = v` uses:
                     // public, protected, or a friend assembly's internal setter.
                     let setter MethodInfo? = clrBaseProperty.SetMethod
-                    let friendInternals = clrBaseProperty
-                        .DeclaringType
-                        ?.Assembly is {} declaringAssembly &&
+                    let friendInternals = clrBaseProperty.DeclaringType?.Assembly is {} declaringAssembly &&
                         $scope.CanAccessInternalMembers(declaringAssembly)
                     if setter == nil || setter.IsAbstract || !ClrMemberVisibility.IsVisibleFromDerived(
                         setter,
@@ -1101,9 +1098,7 @@ internal partial class ExpressionBinder {
     /// @param property The imported property.
     /// @returns `true` when the setter is callable here.
     private func HasCallableClrSetter(property PropertyInfo, receiver BoundExpression?) bool {
-        let friendInternals = property
-            .DeclaringType
-            ?.Assembly is {} declaringAssembly &&
+        let friendInternals = property.DeclaringType?.Assembly is {} declaringAssembly &&
             $scope.CanAccessInternalMembers(declaringAssembly)
         let visible MethodInfo? = if IsFamilyAccessibleClrMember(property.DeclaringType, receiver) {
             ClrMemberVisibility.GetDerivedVisibleSetter(property, friendInternals)
@@ -1343,9 +1338,7 @@ internal partial class ExpressionBinder {
             }
             case block is BoundBlockExpression {
                 if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
-                    resultVar
-                    .Name
-                    .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                    resultVar.Name.StartsWith("<blockResult", StringComparison.Ordinal) &&
                     TryRewriteNonNilCleanupBlockResult(
                     block.Statements,
                     resultVar,
@@ -1379,13 +1372,8 @@ internal partial class ExpressionBinder {
                     !ProvesNonNil(op.Type, underlying) {
                     return false
                 }
-                let rightLocation = coalesce
-                    .Right
-                    .Syntax
-                    ?.Location ??
-                    coalesce
-                    .Syntax
-                    ?.Location ??
+                let rightLocation = coalesce.Right.Syntax?.Location ??
+                    coalesce.Syntax?.Location ??
                     default(TextLocation)
                 let convertedRight = if rewrittenRight!!.Type == op.Type || rewrittenRight!!.Type == TypeSymbol.Never {
                     rewrittenRight!!
@@ -1545,9 +1533,7 @@ internal partial class ExpressionBinder {
                 }
                 case block is BoundBlockExpression {
                     if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
-                        resultVar
-                        .Name
-                        .StartsWith("<blockResult", StringComparison.Ordinal) {
+                        resultVar.Name.StartsWith("<blockResult", StringComparison.Ordinal) {
                         return CleanupBlockResultProvesNonNil(block.Statements, resultVar, rhsTargetType, underlying)
                     }
                     return RhsArmsProveNonNil(block.Expression, rhsTargetType, underlying)

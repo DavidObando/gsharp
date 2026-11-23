@@ -41,8 +41,7 @@ class ManagedLocationKey : IEquatable[ManagedLocationKey] {
 
     func Equals(other ManagedLocationKey?) bool -> other != nil && object.ReferenceEquals(owner, other.owner) &&
         index == other.index &&
-        path
-        .AsSpan().SequenceEqual(other.path)
+        path.AsSpan().SequenceEqual(other.path)
 
     override func Equals(obj object?) bool -> obj is ManagedLocationKey other && Equals(other)
 

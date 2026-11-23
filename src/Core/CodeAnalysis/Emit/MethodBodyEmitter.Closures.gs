@@ -167,11 +167,7 @@ internal partial class MethodBodyEmitter {
         // reflection types are erased and cannot be compared.
         if !sourceNeedsSymbolic &&
             !(symbolicTargetCtorRef != nil) &&
-            this
-            .outer
-            .signatures
-            .ResolveDelegateClrType(sourceFn)
-            .Equals(targetDelegateType) {
+            this.outer.signatures.ResolveDelegateClrType(sourceFn).Equals(targetDelegateType) {
             this.EmitExpression(source)
             return
         }
@@ -371,9 +367,7 @@ internal partial class MethodBodyEmitter {
             let closureIsGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(constructedClosure)
             var cachedFieldToken = default(EntityHandle)
             var hitLabel = default(LabelHandle)
-            let useCachedField = literal
-                .CapturedVariables
-                .IsEmpty &&
+            let useCachedField = literal.CapturedVariables.IsEmpty &&
                 closure.CachedDelegateField is {Type: DelegateTypeSymbol} cachedField &&
                 this.TryResolveCachedDelegateFieldToken(
                 constructedClosure,
@@ -489,16 +483,8 @@ internal partial class MethodBodyEmitter {
         if methodGroup.Receiver?.Type is StructSymbol receiverStruct && function.ReceiverType is StructSymbol {
             let owner = ResolveUserInstanceMethodOwner(receiverStruct, function)
             ftnToken = this.outer.userTokens.ResolveUserInstanceMethodToken(owner, function)
-        } else if this
-            .outer
-            .cache
-            .FunctionHandles
-            .TryGetValue(function, out var staticHandle) ||
-            this
-            .outer
-            .cache
-            .MethodHandles
-            .TryGetValue(function, out staticHandle) {
+        } else if this.outer.cache.FunctionHandles.TryGetValue(function, out var staticHandle) ||
+            this.outer.cache.MethodHandles.TryGetValue(function, out staticHandle) {
             ftnToken = staticHandle
         } else {
             throw InvalidOperationException("Method group '${function.Name}' has no emitted MethodDef.")
@@ -511,8 +497,7 @@ internal partial class MethodBodyEmitter {
         // receiver's type.
         if methodGroup.Receiver == nil &&
             methodGroup.StaticOwnerType is {} staticOwnerType &&
-            ReflectionMetadataEmitter
-            .IsUserGenericTypeReference(staticOwnerType) {
+            ReflectionMetadataEmitter.IsUserGenericTypeReference(staticOwnerType) {
             ftnToken = this.outer.userTokens.ResolveUserStaticMethodToken(staticOwnerType, function)
         }
         if function.IsGeneric {
@@ -579,9 +564,7 @@ internal partial class MethodBodyEmitter {
         // to the event's actual delegate type so the AddEventHandler call
         // is type-correct.
         if subscription.Handler is BoundFunctionLiteralExpression literalHandler &&
-            subscription
-            .Event
-            .EventHandlerType != nil {
+            subscription.Event.EventHandlerType != nil {
             let mappedDelegateType = this.outer.signatures.MapToReferenceClrType(subscription.Event.EventHandlerType)
             this.EmitFunctionLiteral(literalHandler, mappedDelegateType)
         } else {
@@ -650,9 +633,7 @@ internal partial class MethodBodyEmitter {
                 symbolicDelegateCtorRef: this.outer.memberRefs.GetConstructedDelegateCtorRef(symbolicDelegate)
             )
         } else if node.Handler is BoundFunctionLiteralExpression literalHandlerWithClrType &&
-            node
-            .EventType
-            ?.ClrType != nil {
+            node.EventType?.ClrType != nil {
             let mappedDelegateType = this.outer.signatures.MapToReferenceClrType(node.EventType.ClrType)
             this.EmitFunctionLiteral(literalHandlerWithClrType, mappedDelegateType)
         } else {
@@ -861,9 +842,7 @@ internal partial class MethodBodyEmitter {
             let closureIsGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(constructedClosure)
             var cachedFieldToken = default(EntityHandle)
             var hitLabel = default(LabelHandle)
-            let useCachedField = literal
-                .CapturedVariables
-                .IsEmpty &&
+            let useCachedField = literal.CapturedVariables.IsEmpty &&
                 closure.CachedDelegateField is {} cachedField &&
                 this.CachedDelegateMatchesTarget(
                 literal,
@@ -934,21 +913,13 @@ internal partial class MethodBodyEmitter {
                 this.il.Token(symbolicDelegateCtorRef)
             } else if overrideDelegateType == nil &&
                 (
-                literal
-                    .FunctionType
-                    .ClrType == nil ||
-                    this
-                    .outer
-                    .userTokens
-                    .FunctionTypeNeedsSymbolicDelegate(literal.FunctionType)
+                literal.FunctionType.ClrType == nil ||
+                    this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(literal.FunctionType)
             ) {
                 this.il.Token(this.outer.memberRefs.GetFunctionDelegateCtorRef(literal.FunctionType))
             } else {
                 let delegateTypeC = overrideDelegateType ??
-                    this
-                    .outer
-                    .signatures
-                    .ResolveDelegateClrType(literal.FunctionType)
+                    this.outer.signatures.ResolveDelegateClrType(literal.FunctionType)
                 this.il.Token(this.outer.memberRefs.GetDelegateCtorReference(delegateTypeC))
             }
             if useCachedField {
@@ -977,21 +948,13 @@ internal partial class MethodBodyEmitter {
             this.il.Token(symbolicDelegateCtorRef)
         } else if overrideDelegateType == nil &&
             (
-            literal
-                .FunctionType
-                .ClrType == nil ||
-                this
-                .outer
-                .userTokens
-                .FunctionTypeNeedsSymbolicDelegate(literal.FunctionType)
+            literal.FunctionType.ClrType == nil ||
+                this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(literal.FunctionType)
         ) {
             this.il.Token(this.outer.memberRefs.GetFunctionDelegateCtorRef(literal.FunctionType))
         } else {
             let delegateType = overrideDelegateType ??
-                this
-                .outer
-                .signatures
-                .ResolveDelegateClrType(literal.FunctionType)
+                this.outer.signatures.ResolveDelegateClrType(literal.FunctionType)
             this.il.Token(this.outer.memberRefs.GetDelegateCtorReference(delegateType))
         }
     }
@@ -1056,16 +1019,8 @@ internal partial class MethodBodyEmitter {
         if methodGroup.Function is not{IsExtension: true} function || methodGroup.Receiver is not{} receiver {
             return false
         }
-        if !this
-            .outer
-            .cache
-            .FunctionHandles
-            .TryGetValue(function, out var methodHandle) &&
-            !this
-            .outer
-            .cache
-            .MethodHandles
-            .TryGetValue(function, out methodHandle) {
+        if !this.outer.cache.FunctionHandles.TryGetValue(function, out var methodHandle) &&
+            !this.outer.cache.MethodHandles.TryGetValue(function, out methodHandle) {
             throw InvalidOperationException("Extension method group '${function.Name}' has no emitted MethodDef.")
         }
         var targetMethodHandle EntityHandle = methodHandle
@@ -1103,9 +1058,7 @@ internal partial class MethodBodyEmitter {
             throw InvalidOperationException(
             "CLR method group '${methodGroup.MethodName}' reached emit without overload resolution."
         )
-        let hostDelegate = methodGroup
-            .DelegateType
-            ?.ClrType ??
+        let hostDelegate = methodGroup.DelegateType?.ClrType ??
             throw InvalidOperationException(
             "CLR method group '${methodGroup.MethodName}' has no resolved target delegate type."
         )
@@ -1242,8 +1195,7 @@ internal partial class MethodBodyEmitter {
             if cachedType is ImportedTypeSymbol constructed &&
                 constructed.OpenDefinition != nil &&
                 constructed.HasSubstitutableTypeArgument &&
-                ClrTypeUtilities
-                .IsDelegateType(constructed.ClrType) {
+                ClrTypeUtilities.IsDelegateType(constructed.ClrType) {
                 return this.outer.memberRefs.GetConstructedDelegateCtorRef(constructed) == symbolicDelegateCtorRef
             }
             return false
