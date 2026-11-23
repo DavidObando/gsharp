@@ -116,7 +116,7 @@ internal class FunctionEmitter {
             workspaceBytes: Math.Max(100663296, largestBody * 128)
         )
         CompilationMeasurements.Count("emit.method-bodies.observed-workers", budget.LastObservedWorkers)
-        if budget.LastObservedWorkers > 1 {
+        if budget.LastScheduledWorkers > 1 {
             CompilationMeasurements.Count("emit.method-bodies.parallel-batches")
         }
         budget.CancellationToken.ThrowIfCancellationRequested()
