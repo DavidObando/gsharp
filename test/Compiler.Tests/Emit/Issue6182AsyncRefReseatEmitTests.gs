@@ -1403,6 +1403,37 @@ Console.WriteLine("${run(true).GetAwaiter().GetResult()}|${run(false).GetAwaiter
     }
 
     @Fact
+    func DownstreamSingleDefinitionPointer_AfterPointerAliasCycle_VerifyAndExecute() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package DownstreamSingleDefAfterCycle6182
+import System
+import System.Threading.Tasks
+
+async func run(chooseSecond bool) Task[string] {
+    var x = 10
+    var y = 77
+    var p = &x
+    if chooseSecond {
+        p = &y
+    }
+    var ref alias = *p
+    if false {
+        p = &alias
+    }
+    var q = &alias
+    var s = q
+    let pre = *s
+    s = &x
+    await Task.Yield()
+    return "${pre}:${*s}"
+}
+
+Console.WriteLine("${run(false).GetAwaiter().GetResult()}|${run(true).GetAwaiter().GetResult()}")`, "DownstreamSingleDefAfterCycle6182", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("10:10|77:10\n", fixture.Run(dll))
+    }
+
+    @Fact
     func ManagedPointerDefault_EmitAndExecute_WithStrictILVerify() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let templateDll = fixture.Compile(`package Template6182

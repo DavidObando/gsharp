@@ -1792,6 +1792,8 @@ shared class RefInitializationHoister {
             }
         }
         var currentBody = body
+        var currentDeclarations = collector.Declarations
+        var currentAssignmentCounts = collector.AssignmentCounts
         var tempCounter = 0
         while remaining.Count > 0 {
             let batch = Dictionary[LocalVariableSymbol, RefLocalInfo]()
@@ -1806,12 +1808,12 @@ shared class RefInitializationHoister {
                     }
                 }
                 if !blocked {
-                    let assignCount = if collector.AssignmentCounts.TryGetValue(local, out var c) {
+                    let assignCount = if currentAssignmentCounts.TryGetValue(local, out var c) {
                         c
                     } else {
                         0
                     }
-                    collector.Declarations.TryGetValue(local, out var decl)
+                    currentDeclarations.TryGetValue(local, out var decl)
                     let isSingleAddressInit = assignCount == 0 && decl?.Initializer is BoundAddressOfExpression
                     let tagLocal = if !isSingleAddressInit {
                         LocalVariableSymbol("<refSlot>__${tempCounter++}", isReadOnly: false, TypeSymbol.Int32)
@@ -1898,6 +1900,12 @@ shared class RefInitializationHoister {
                     remaining.RemoveAt(i)
                     remainingSet.Remove(local)
                 }
+            }
+            if remaining.Count > 0 {
+                let roundCollector = Collector()
+                roundCollector.Visit(currentBody)
+                currentDeclarations = roundCollector.Declarations
+                currentAssignmentCounts = roundCollector.AssignmentCounts
             }
         }
         return currentBody
