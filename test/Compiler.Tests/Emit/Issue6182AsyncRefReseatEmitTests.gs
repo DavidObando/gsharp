@@ -868,11 +868,29 @@ async func cyclicNativeAliasesWriteThrough(flag bool) Task[string] {
     return "${a}:${b}:${stored}:${*p}"
 }
 
+async func loopVarRefConditionalInitInPointerCycle() Task[string] {
+    var arr = []int32{10, 20, 30}
+    var p = &arr[0]
+    var results = ""
+    for var i = 0; i < 2; i++ {
+        var idx = i
+        var ref alias = (i == 0 ? *p : arr[2])
+        if false {
+            p = &alias
+        }
+        results += "${alias}:"
+        p = &arr[idx + 1]
+    }
+    await Task.Yield()
+    return "${results}${*p}"
+}
+
 Console.WriteLine(loopVarRefAndPointerCycleOverwrittenBeforeAwait().GetAwaiter().GetResult())
 Console.WriteLine(cyclicNativeAliasesWriteThrough(false).GetAwaiter().GetResult())
-Console.WriteLine(cyclicNativeAliasesWriteThrough(true).GetAwaiter().GetResult())`, "LoopVarRefPointerCycle6182", executable: true)
+Console.WriteLine(cyclicNativeAliasesWriteThrough(true).GetAwaiter().GetResult())
+Console.WriteLine(loopVarRefConditionalInitInPointerCycle().GetAwaiter().GetResult())`, "LoopVarRefPointerCycle6182", executable: true)
         IlVerifier.Verify(dll)
-        Assert.Equal("10:20\n50:77:50:50\n50:77:50:77\n", fixture.Run(dll))
+        Assert.Equal("10:20\n50:77:50:50\n50:77:50:77\n10:30:30\n", fixture.Run(dll))
 
         let (code, output) = fixture.TryCompile(`package LoopVarRefPointerCycleReject6182
 import System.Threading.Tasks

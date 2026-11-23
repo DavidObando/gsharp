@@ -448,6 +448,7 @@ shared class RefInitializationHoister {
         private let crossing HashSet[VariableSymbol]
         private var tempCounter int32
         private let activeDeclarations List[BoundStatement] = List[BoundStatement]()
+        private let deferredCopies HashSet[BoundAssignmentExpression] = HashSet[BoundAssignmentExpression]()
         private let sharedSites List[SharedSite]?
         private var stagedTemps List[LocalVariableSymbol]? = nil
 
@@ -465,6 +466,7 @@ shared class RefInitializationHoister {
 
         prop TempCounter int32 -> tempCounter
         prop ActiveDeclarations IReadOnlyList[BoundStatement] -> activeDeclarations
+        prop DeferredCopies HashSet[BoundAssignmentExpression] -> deferredCopies
 
         protected override func RewriteBlockExpression(node BoundBlockExpression) BoundExpression {
             var statementBuilder ImmutableArray[BoundStatement].Builder? = nil
@@ -647,7 +649,9 @@ shared class RefInitializationHoister {
                 return
             }
             if sharedSites != nil && TryGetSharedSourceTag(info, rhs, out _) {
-                statements.Add(BoundExpressionStatement(syntax, BoundAssignmentExpression(nil, local, rhs)))
+                let deferredCopy = BoundAssignmentExpression(nil, local, rhs)
+                deferredCopies.Add(deferredCopy)
+                statements.Add(BoundExpressionStatement(syntax, deferredCopy))
                 rebuiltTemplate = nil
                 return
             }
@@ -1432,9 +1436,14 @@ shared class RefInitializationHoister {
 
     private class CopyRewriter : BoundTreeRewriter {
         private let refLocals Dictionary[LocalVariableSymbol, RefLocalInfo]
+        private let deferredCopies HashSet[BoundAssignmentExpression]
 
-        init(refLocals Dictionary[LocalVariableSymbol, RefLocalInfo]) {
+        init(
+            refLocals Dictionary[LocalVariableSymbol, RefLocalInfo],
+            deferredCopies HashSet[BoundAssignmentExpression]
+        ) {
             this.refLocals = refLocals
+            this.deferredCopies = deferredCopies
         }
 
         protected override func RewriteBlockExpression(node BoundBlockExpression) BoundExpression {
@@ -1491,7 +1500,7 @@ shared class RefInitializationHoister {
         protected override func RewriteExpressionStatement(node BoundExpressionStatement) BoundStatement {
             if node.Expression is BoundAssignmentExpression assign &&
                 assign.Variable is LocalVariableSymbol destLocal &&
-                destLocal.RefKind == RefKind.None &&
+                (destLocal.RefKind == RefKind.None || deferredCopies.Contains(assign)) &&
                 refLocals.TryGetValue(destLocal, out var destInfo) && RefInitializationHoister.TryGetAliasLocal(
                 assign.Expression,
                 out var srcLocal
@@ -1510,7 +1519,7 @@ shared class RefInitializationHoister {
 
         protected override func RewriteAssignmentExpression(node BoundAssignmentExpression) BoundExpression {
             if node.Variable is LocalVariableSymbol destLocal &&
-                destLocal.RefKind == RefKind.None &&
+                (destLocal.RefKind == RefKind.None || deferredCopies.Contains(node)) &&
                 refLocals.TryGetValue(destLocal, out var destInfo) && RefInitializationHoister.TryGetAliasLocal(
                 node.Expression,
                 out var srcLocal
@@ -1870,7 +1879,7 @@ shared class RefInitializationHoister {
                         }
                     }
                 }
-                let copyRewriter = CopyRewriter(batch)
+                let copyRewriter = CopyRewriter(batch, defRewriter.DeferredCopies)
                 currentBody = cast[BoundBlockStatement](copyRewriter.RewriteStatement(currentBody))
             }
             if extraDeclarations.Count > 0 {
