@@ -142,14 +142,15 @@ internal partial class ExpressionBinder {
                     syntax.OperatorToken.Text,
                     candidateCount: 2
                 )
-                return BoundErrorExpression(nil)
+                return BoundErrorExpression.WithFailedOperands(boundOperand)
             }
             Diagnostics.ReportUndefinedUnaryOperator(
                 syntax.OperatorToken.Location,
                 syntax.OperatorToken.Text,
                 boundOperand.Type ?? TypeSymbol.Error
             )
-            return BoundErrorExpression(nil)
+            // The operand keeps its answers in the semantic model (#6187).
+            return BoundErrorExpression.WithFailedOperands(boundOperand)
         }
         // Issue #2023: unary negation on an integral operand bound inside a
         // `checked` context traps on overflow (e.g. `checked(-int.MinValue)`),
@@ -719,6 +720,22 @@ internal partial class ExpressionBinder {
         )
     }
 
+    /// Creates the error of a conditional expression that did not bind. The condition and the
+    /// branches keep their answers in the semantic model (#6187).
+    /// @param condition The bound condition.
+    /// @param whenTrue The bound true branch.
+    /// @param whenFalse The bound false branch.
+    /// @returns The error expression.
+    private func FailedConditional(
+        condition BoundExpression,
+        whenTrue BoundExpression,
+        whenFalse BoundExpression
+    ) BoundErrorExpression {
+        let error = BoundErrorExpression.WithFailedOperands(condition, whenTrue)
+        error.KeepOperands(whenFalse)
+        return error
+    }
+
     private func BindConditionalExpressionCore(
         syntax ConditionalExpressionSyntax,
         targetType TypeSymbol?,
@@ -821,11 +838,13 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportBareDefaultNoTargetType(
                 (cast[DefaultExpressionSyntax](syntax.WhenTrue)).DefaultKeyword.Location
             )
-            return BoundErrorExpression(nil)
+            // The condition keeps its answers in the semantic model (#6187).
+            return BoundErrorExpression.WithFailedOperands(condition)
         } else if trueIsBareDefault {
             whenFalse = bindWhenFalse(nil)
             if whenFalse is BoundErrorExpression {
-                return BoundErrorExpression(nil)
+                // The condition and the bound branch keep their answers in the semantic model (#6187).
+                return BoundErrorExpression.WithFailedOperands(condition, whenFalse)
             }
             TruncateBranchSiblingExpressions(afterCondition)
             falseExit = CaptureExpressionNarrowingFrames()
@@ -848,7 +867,8 @@ internal partial class ExpressionBinder {
         } else if falseIsBareDefault {
             whenTrue = bindWhenTrue(nil)
             if whenTrue is BoundErrorExpression {
-                return BoundErrorExpression(nil)
+                // The condition and the bound branch keep their answers in the semantic model (#6187).
+                return BoundErrorExpression.WithFailedOperands(condition, whenTrue)
             }
             TruncateBranchSiblingExpressions(afterCondition)
             thenExit = CaptureExpressionNarrowingFrames()
@@ -892,7 +912,7 @@ internal partial class ExpressionBinder {
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             let _ = ReportUnresolvedTargetlessValues(whenTrue)
             let _ = ReportUnresolvedTargetlessValues(whenFalse)
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         let thenCompletes = whenTrue.Type != TypeSymbol.Never
         let falseCompletes = whenFalse.Type != TypeSymbol.Never
@@ -912,7 +932,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 return BoundErrorExpression(syntax)
             }
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
@@ -928,7 +948,7 @@ internal partial class ExpressionBinder {
                 whenTrue.Type?.Name ?? "?",
                 whenFalse.Type?.Name ?? "?"
             )
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         RestoreExpressionNarrowingFrames(thenExit)
         let convertedTrue = ConvertConditionalBranchWithNarrowing(
@@ -955,7 +975,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 return BoundErrorExpression(syntax)
             }
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         return BoundConditionalExpression(nil, condition, convertedTrue, convertedFalse, resultType)
     }
@@ -1937,7 +1957,13 @@ internal partial class ExpressionBinder {
             coalesceDiagMark,
             preLeftEffectsNarrowing
         )
-        if deferTargetlessCoalesce && IsDeferredBranchyArgumentPlaceholder(operation, out _) {
+        let isDeferredPlaceholder = deferTargetlessCoalesce && IsDeferredBranchyArgumentPlaceholder(operation, out _)
+        if operation is BoundErrorExpression failedOperation && !isDeferredPlaceholder {
+            // The operands keep their answers in the semantic model (#6187). A deferred `??` is bound
+            // again with its target type.
+            failedOperation.KeepOperands(boundLeft, boundRight)
+        }
+        if isDeferredPlaceholder {
             Diagnostics.RestoreSuppressionsTo(coalesceSuppressionMark)
         } else if operation is BoundBinaryExpression binOp &&
             binOp

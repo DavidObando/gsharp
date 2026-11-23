@@ -3312,7 +3312,14 @@ internal partial class ExpressionBinder {
                     indexRead.Type,
                     rhsBound.Type
                 )
-                return BoundErrorExpression(nil)
+                // The receiver, the index and the value keep their answers in the semantic model
+                // (#6187). The receiver and the index are in the temporaries' initializers.
+                let failedCompound = BoundErrorExpression.WithFailedOperands(
+                    previousDeclaration?.Initializer ?? indexRead,
+                    rhsBound
+                )
+                KeepCapturedOperands(failedCompound, statements)
+                return failedCompound
             }
             assignment = if addressTemp != nil {
                 cast[BoundExpression](
