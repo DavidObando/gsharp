@@ -198,6 +198,15 @@ namespace Demo
             item.ReadonlyChild != null && item.ReadonlyChild.Value == 0 &&
             item.InitChild != null && item.InitChild.Value == 0;
 
+        public static bool InterpolationIntBefore(Node item, int n) =>
+            item.Child != null && $"{n}{item.Child.Value}".Length > 0;
+
+        public static bool InterpolationFormattedPrimitiveBefore(Node item, int n) =>
+            item.Child != null && $"{n:X}{item.Child.Value}".Length > 0;
+
+        public static bool InterpolationObjectAfter(Node item, object formatter) =>
+            item.Child != null && $"{item.Child.Value}{formatter}".Length > 0;
+
         public static void Main()
         {
             var leaf = new Node(null, 0);
@@ -216,7 +225,10 @@ namespace Demo
                 CallAfterRead(item) + "|" +
                 CallInLeftSibling(item) + "|" +
                 SeparateFieldWriteBefore(item, other) + "|" +
-                ReadonlyAndInitLinks(item));
+                ReadonlyAndInitLinks(item) + "|" +
+                InterpolationIntBefore(item, 42) + "|" +
+                InterpolationFormattedPrimitiveBefore(item, 15) + "|" +
+                InterpolationObjectAfter(item, "fmt"));
         }
     }
 }
@@ -231,7 +243,7 @@ namespace Demo
             verifyAssembly: (assembly string) -> {
                 Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
             },
-            expectedOutput: "True|True|True|True|True|True|True|True|True|True|True|True"
+            expectedOutput: "True|True|True|True|True|True|True|True|True|True|True|True|True|True|True"
         )
     }
 
@@ -262,6 +274,12 @@ namespace Demo
             backing = child;
             Value = value;
         }
+    }
+
+    public enum Tag
+    {
+        First,
+        Second
     }
 
     public sealed class Holder
@@ -361,6 +379,12 @@ namespace Demo
             return (item.Child != null && Touch(ref other.Value)) && item.Child.Value == 0;
         }
 
+        public static bool InterpolationObjectBefore(Node item, object formatter) =>
+            item.Child != null && $"{formatter}{item.Child.Value}".Length > 0;
+
+        public static bool InterpolationEnumBefore(Node item, Tag tag) =>
+            item.Child != null && $"{tag}{item.Child.Value}".Length > 0;
+
         public static void Main()
         {
             var leaf = new Node(null, 0);
@@ -389,6 +413,8 @@ namespace Demo
                 LambdaInsideAnd(item) + "|" +
                 AssertedGuardReceiverBeforeLocalGuard(item) + "|" +
                 MutableRootWithByRefFieldCallInLeft(item, other) + "|" +
+                InterpolationObjectBefore(item, "fmt") + "|" +
+                InterpolationEnumBefore(item, Tag.First) + "|" +
                 box.StructThisWriteInRight(item) + "|" +
                 box.StructThisWriteInLeft(item));
         }
@@ -420,7 +446,9 @@ namespace Demo
                     "EmptyBracesPattern",
                     "LambdaInsideAnd",
                     "AssertedGuardReceiverBeforeLocalGuard",
-                    "MutableRootWithByRefFieldCallInLeft"
+                    "MutableRootWithByRefFieldCallInLeft",
+                    "InterpolationObjectBefore",
+                    "InterpolationEnumBefore"
                 }
                 for var i = 0; i < methodNames.Length; i++ {
                     let start = printed.IndexOf("func " + methodNames[i] + "(", StringComparison.Ordinal)
@@ -439,7 +467,7 @@ namespace Demo
             verifyAssembly: (assembly string) -> {
                 Issue5585ReadonlyNullArgumentTests.VerifyStrictIL(assembly)
             },
-            expectedOutput: "True|True|True|True|True|True|nre|True|True|True|True|False|True|True|True|True|True|True|True|True|True"
+            expectedOutput: "True|True|True|True|True|True|nre|True|True|True|True|False|True|True|True|True|True|True|True|True|True|True|True"
         )
     }
 }

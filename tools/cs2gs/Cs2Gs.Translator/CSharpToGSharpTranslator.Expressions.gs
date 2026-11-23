@@ -14830,6 +14830,10 @@ partial class CSharpToGSharpTranslator {
                     !(this.IsClosureBoundary(n) || this.IsDroppedStatementOrLoopClause(n))
             }
             for candidate in rightOperand.DescendantNodesAndSelf(OutsideNestedFunctions) {
+                if candidate is Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax interpolation &&
+                    interpolation.Span.Contains(expression.Span) && this.InterpolationUsesHandler(interpolation) {
+                    return true
+                }
                 if EvaluationEffectEnd(candidate) > expression.SpanStart {
                     continue
                 }
@@ -14914,6 +14918,9 @@ partial class CSharpToGSharpTranslator {
             }
             if this.IsUnevaluatedNameOfOperand(node) || this.IsErasedNameOf(node) {
                 return false
+            }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.InterpolationSyntax hole {
+                return this.InterpolationHoleRunsUserCode(hole)
             }
             if !rootIsByReference && !rootIsClosureAssigned && this.IsSeparateStorageWriteNode(node) &&
                 !this.WriteCandidateHasByReferenceRootMismatch(node, targetIsThisRoot, targetRoot) &&
@@ -16588,6 +16595,20 @@ partial class CSharpToGSharpTranslator {
         private func InterpolatedStringRunsUserCode(
             interpolation Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax
         ) bool {
+            if this.InterpolationUsesHandler(interpolation) {
+                return true
+            }
+            for hole in interpolation.Contents.OfType[Microsoft.CodeAnalysis.CSharp.Syntax.InterpolationSyntax]() {
+                if this.InterpolationHoleRunsUserCode(hole) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func InterpolationUsesHandler(
+            interpolation Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax
+        ) bool {
             var operation = this.context.SemanticModel.GetOperation(interpolation)
             while operation != nil && operation.Syntax.Span.Contains(interpolation.Span) {
                 if operation is IInterpolatedStringHandlerCreationOperation {
@@ -16595,25 +16616,22 @@ partial class CSharpToGSharpTranslator {
                 }
                 operation = operation.Parent
             }
-            for hole in interpolation.Contents.OfType[Microsoft.CodeAnalysis.CSharp.Syntax.InterpolationSyntax]() {
-                let holeType = this.context.GetTypeInfo(hole.Expression).Type
-                if holeType == nil {
-                    return true
-                }
-                if holeType.SpecialType == SpecialType.System_String || holeType.TypeKind == TypeKind.Pointer {
-                    continue
-                }
-                if holeType.TypeKind != TypeKind.Enum &&
-                    (
-                    this.IsBuiltInPrimitive(hole.Expression) ||
-                        holeType.SpecialType is SpecialType.System_IntPtr or
-                        SpecialType.System_UIntPtr
-                ) {
-                    continue
-                }
+            return false
+        }
+
+        private func InterpolationHoleRunsUserCode(hole Microsoft.CodeAnalysis.CSharp.Syntax.InterpolationSyntax) bool {
+            let holeType = this.context.GetTypeInfo(hole.Expression).Type
+            if holeType == nil {
                 return true
             }
-            return false
+            if holeType.SpecialType == SpecialType.System_String || holeType.TypeKind == TypeKind.Pointer {
+                return false
+            }
+            return holeType.TypeKind == TypeKind.Enum ||
+                (
+                !this.IsBuiltInPrimitive(hole.Expression) &&
+                    holeType.SpecialType is not(SpecialType.System_IntPtr or SpecialType.System_UIntPtr)
+            )
         }
 
         // Mirrors gsc's HasMemberStorageWrite (#6124): separate source field and auto-property writes keep facts.
