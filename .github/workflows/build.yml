@@ -46,6 +46,8 @@ jobs:
         run: python3 build/test-ci-selection.py
       - name: Test fixed-array artifact workspace guard
         run: python3 build/test-fixed-array-aot-workspace.py
+      - name: Test artifact manifest verification
+        run: python3 build/test-artifact-manifest.py
       - name: Select affected components
         id: select
         run: python3 build/ci-selection.py
@@ -166,8 +168,11 @@ jobs:
         # list before it pushes.
         run: python3 build/release-publish.py verify --nuget-only --nupkgs out/bin/Release/nupkgs
 
+      - name: Write NuGet package artifact manifest
+        run: bash build/artifact-manifest.sh write out/bin/Release/nupkgs --require-r2r-packages
+
       - name: Upload NuGet packages
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: nuget-packages
           # Include .snupkg symbol packages alongside .nupkg so they survive
@@ -306,13 +311,18 @@ jobs:
         run: dotnet restore csharp-source/GSharp.sln --locked-mode
 
       - name: Download built test outputs
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: test-build-outputs
           path: ${{ runner.temp }}/test-build-outputs
 
-      - name: Extract built test outputs
+      - name: Verify and extract built test outputs
         run: |
+          bash build/artifact-manifest.sh verify "$RUNNER_TEMP/test-build-outputs"
+          if [[ -d csharp-source && ! -f "$RUNNER_TEMP/test-build-outputs/csharp-out.tar" ]]; then
+            echo "FAIL: csharp-source is checked out but csharp-out.tar is missing from test-build-outputs" >&2
+            exit 1
+          fi
           rm -rf out
           tar -xf "$RUNNER_TEMP/test-build-outputs/out.tar"
           if [[ -f "$RUNNER_TEMP/test-build-outputs/csharp-out.tar" && -d csharp-source ]]; then
@@ -413,14 +423,14 @@ jobs:
 
       - name: Upload test results
         if: always() && env.GSHARP_5393_PRIVATE_ROUTE != 'true'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-${{ matrix.name }}
           path: TestResults/**/*
 
       - name: Upload sanitized core diagnostics
         if: always() && env.GSHARP_5393_DIAGNOSTIC == 'true' && steps.diagnostic5393.outcome == 'success'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: core-diagnostics-5393
           if-no-files-found: error
@@ -530,13 +540,14 @@ jobs:
           if [[ -d csharp-source/out ]]; then
             tar -cf "$RUNNER_TEMP/test-build-outputs/csharp-out.tar" -C csharp-source out
           fi
+          bash build/artifact-manifest.sh write "$RUNNER_TEMP/test-build-outputs"
 
       - name: Upload built test outputs
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: test-build-outputs
           retention-days: 1
-          path: ${{ runner.temp }}/test-build-outputs/*.tar
+          path: ${{ runner.temp }}/test-build-outputs/*
 
   harness:
     needs: select
@@ -746,7 +757,7 @@ jobs:
 
       - name: Upload migration report
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: cs2gs-corpus-report
           path: |
@@ -851,7 +862,7 @@ jobs:
           npx vsce package --no-dependencies "${flags[@]}" -o vscode-gsharp.vsix
 
       - name: Upload VSIX
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: vscode-gsharp-vsix
           path: src/vscode-gsharp/vscode-gsharp.vsix
@@ -889,7 +900,7 @@ jobs:
         run: dotnet test src\vs-gsharp\test\VsGsharp.UnitTests\VsGsharp.UnitTests.csproj --configuration Release --no-build
 
       - name: Upload Visual Studio VSIX
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: visual-studio-gsharp-vsix
           path: src/vs-gsharp/src/VsGsharp/bin/Release/net472/GSharp.VisualStudio.vsix
@@ -922,10 +933,14 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Download NuGet packages
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: nuget-packages
           path: ./.nugs
+
+      - name: Verify NuGet packages artifact
+        shell: bash
+        run: bash build/artifact-manifest.sh verify ./.nugs --require-r2r-packages
 
       - name: Pin global.json to the in-tree Gsharp.NET.Sdk
         id: pin
@@ -1171,10 +1186,14 @@ jobs:
           global-json-file: global.json
 
       - name: Download NuGet packages
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: nuget-packages
           path: ./nupkgs-smoke
+
+      - name: Verify NuGet packages artifact
+        shell: bash
+        run: bash build/artifact-manifest.sh verify ./nupkgs-smoke --require-r2r-packages
 
       # The script takes its expectations from the host it runs on. Check that this host is the one
       # that the matrix entry names, so that an emulated or unsupported host cannot pass for another RID.
@@ -1232,19 +1251,22 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Download NuGet packages
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: nuget-packages
           path: ./nupkgs
 
+      - name: Verify NuGet packages artifact
+        run: bash build/artifact-manifest.sh verify ./nupkgs --require-r2r-packages
+
       - name: Download VSIX
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: vscode-gsharp-vsix
           path: ./vsix
 
       - name: Download Visual Studio VSIX
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: visual-studio-gsharp-vsix
           path: ./vsix
@@ -1261,20 +1283,25 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v5
+
       - name: Download NuGet packages
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: nuget-packages
           path: ./nupkgs
 
+      - name: Verify NuGet packages artifact
+        run: bash build/artifact-manifest.sh verify ./nupkgs --require-r2r-packages
+
       - name: Download VSIX
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: vscode-gsharp-vsix
           path: ./vsix
 
       - name: Download Visual Studio VSIX
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: visual-studio-gsharp-vsix
           path: ./vsix
@@ -1305,10 +1332,13 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Download NuGet packages
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: nuget-packages
           path: ./nupkgs
+
+      - name: Verify NuGet packages artifact
+        run: bash build/artifact-manifest.sh verify ./nupkgs --require-r2r-packages
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
@@ -1347,10 +1377,13 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Download NuGet packages
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: nuget-packages
           path: ./nupkgs
+
+      - name: Verify NuGet packages artifact
+        run: bash build/artifact-manifest.sh verify ./nupkgs --require-r2r-packages
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
@@ -1386,7 +1419,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Download VSIX
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: vscode-gsharp-vsix
           path: ./vsix
@@ -1429,7 +1462,7 @@ jobs:
           python-version: '3.13'
 
       - name: Download Visual Studio VSIX
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: visual-studio-gsharp-vsix
           path: ./vsix
