@@ -698,6 +698,17 @@ shared class RefInitializationHoister {
                 EmitAssignmentStatements(local, info, block.Expression, syntax, statements, out rebuiltTemplate)
                 return
             }
+            if rhs is BoundConditionalAddressExpression condAddr && RequiresBranchLowering(info, local, condAddr) {
+                let asCondExpr = BoundConditionalExpression(
+                    condAddr.Syntax,
+                    condAddr.Condition,
+                    BoundAddressOfExpression(condAddr.Syntax, condAddr.WhenTrueOperand),
+                    BoundAddressOfExpression(condAddr.Syntax, condAddr.WhenFalseOperand),
+                    condAddr.Type
+                )
+                EmitAssignmentStatements(local, info, asCondExpr, syntax, statements, out rebuiltTemplate)
+                return
+            }
             if rhs is BoundConditionalExpression condExpr &&
                 (
                 RequiresBranchLowering(info, local, condExpr.WhenTrue) ||
@@ -826,6 +837,18 @@ shared class RefInitializationHoister {
             if current is BoundConditionalExpression condExpr {
                 return RequiresBranchLowering(info, local, condExpr.WhenTrue) ||
                     RequiresBranchLowering(info, local, condExpr.WhenFalse)
+            }
+            if current is BoundConditionalAddressExpression condAddr {
+                return RequiresBranchLowering(
+                    info,
+                    local,
+                    BoundAddressOfExpression(condAddr.Syntax, condAddr.WhenTrueOperand)
+                ) ||
+                    RequiresBranchLowering(
+                    info,
+                    local,
+                    BoundAddressOfExpression(condAddr.Syntax, condAddr.WhenFalseOperand)
+                )
             }
             return false
         }
@@ -1749,9 +1772,10 @@ shared class RefInitializationHoister {
             }
             var sharedSites List[SharedSite]? = nil
             if batch.Count == 0 {
-                // Partition cyclic aliases into same-typed connected components so
-                // independent pointee types never share a branch-join dispatch table.
-                let componentSet = CollectSameTypeComponent(remaining, remainingSet, collector.Dependencies)
+                // Partition cyclic aliases into same-typed sink SCCs so
+                // independent pointee types never share a branch-join dispatch
+                // table and upstream dependents wait for downstream cycles.
+                let componentSet = CollectSameTypeSinkComponent(remaining, remainingSet, collector.Dependencies)
                 sharedSites = List[SharedSite]()
                 for local in remaining {
                     if componentSet.Contains(local) {
@@ -1828,30 +1852,110 @@ shared class RefInitializationHoister {
         return currentBody
     }
 
-    private func CollectSameTypeComponent(
+    private func StrongConnectSinkScc(
+        v LocalVariableSymbol,
+        remaining List[LocalVariableSymbol],
+        remainingSet HashSet[LocalVariableSymbol],
+        dependencies Dictionary[LocalVariableSymbol, HashSet[LocalVariableSymbol]],
+        indices Dictionary[LocalVariableSymbol, int32],
+        lowlink Dictionary[LocalVariableSymbol, int32],
+        onStack HashSet[LocalVariableSymbol],
+        stack List[LocalVariableSymbol],
+        ref nextIndex int32,
+        ref sinkScc HashSet[LocalVariableSymbol]?
+    ) {
+        indices[v] = nextIndex
+        lowlink[v] = nextIndex
+        nextIndex++
+        stack.Add(v)
+        onStack.Add(v)
+        if dependencies.TryGetValue(v, out var deps) {
+            for w in remaining {
+                if !remainingSet.Contains(w) || !deps.Contains(w) {
+                    continue
+                }
+                if !indices.TryGetValue(w, out var wIdx) {
+                    StrongConnectSinkScc(
+                        w,
+                        remaining,
+                        remainingSet,
+                        dependencies,
+                        indices,
+                        lowlink,
+                        onStack,
+                        stack,
+                        ref nextIndex,
+                        ref sinkScc
+                    )
+                    if sinkScc != nil {
+                        return
+                    }
+                    if lowlink[w] < lowlink[v] {
+                        lowlink[v] = lowlink[w]
+                    }
+                } else if onStack.Contains(w) && wIdx < lowlink[v] {
+                    lowlink[v] = wIdx
+                }
+            }
+        }
+        if lowlink[v] == indices[v] {
+            let scc = HashSet[LocalVariableSymbol]()
+            while true {
+                let top = stack[stack.Count - 1]
+                stack.RemoveAt(stack.Count - 1)
+                onStack.Remove(top)
+                scc.Add(top)
+                if object.ReferenceEquals(top, v) {
+                    break
+                }
+            }
+            sinkScc = scc
+        }
+    }
+
+    private func CollectSameTypeSinkComponent(
         remaining List[LocalVariableSymbol],
         remainingSet HashSet[LocalVariableSymbol],
         dependencies Dictionary[LocalVariableSymbol, HashSet[LocalVariableSymbol]]
     ) HashSet[LocalVariableSymbol] {
-        let seed = remaining[0]
-        let seedPointee = GetPointeeType(seed)
-        let component = HashSet[LocalVariableSymbol]{seed}
-        let queue = Queue[LocalVariableSymbol]()
-        queue.Enqueue(seed)
-        while queue.Count > 0 {
-            let current = queue.Dequeue()
-            for candidate in remaining {
-                if component.Contains(candidate) || GetPointeeType(candidate) != seedPointee {
-                    continue
-                }
-                let forward = dependencies.TryGetValue(current, out var currentDeps) && currentDeps.Contains(candidate)
-                let backward = dependencies.TryGetValue(candidate, out var candidateDeps) && candidateDeps.Contains(
-                    current
+        var nextIndex = 0
+        let indices = Dictionary[LocalVariableSymbol, int32]()
+        let lowlink = Dictionary[LocalVariableSymbol, int32]()
+        let onStack = HashSet[LocalVariableSymbol]()
+        let stack = List[LocalVariableSymbol]()
+        var sinkScc HashSet[LocalVariableSymbol]? = nil
+        for node in remaining {
+            if !indices.ContainsKey(node) {
+                StrongConnectSinkScc(
+                    node,
+                    remaining,
+                    remainingSet,
+                    dependencies,
+                    indices,
+                    lowlink,
+                    onStack,
+                    stack,
+                    ref nextIndex,
+                    ref sinkScc
                 )
-                if (forward || backward) && remainingSet.Contains(candidate) {
-                    component.Add(candidate)
-                    queue.Enqueue(candidate)
+                if sinkScc != nil {
+                    break
                 }
+            }
+        }
+        let sccSet = sinkScc!!
+        var seed = remaining[0]
+        for candidate in remaining {
+            if sccSet.Contains(candidate) {
+                seed = candidate
+                break
+            }
+        }
+        let seedPointee = GetPointeeType(seed)
+        let component = HashSet[LocalVariableSymbol]()
+        for candidate in remaining {
+            if sccSet.Contains(candidate) && GetPointeeType(candidate) == seedPointee {
+                component.Add(candidate)
             }
         }
         return component

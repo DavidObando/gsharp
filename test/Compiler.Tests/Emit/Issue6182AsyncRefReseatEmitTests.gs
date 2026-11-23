@@ -1277,6 +1277,69 @@ Console.WriteLine(run().GetAwaiter().GetResult())`, "NullRefCondSelfReseat6182",
     }
 
     @Fact
+    func CrossTypeCycleOrdering_SinkComponentHoistedFirst_SnapshotsTarget() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package CrossTypeCycleOrder6182
+import System
+import System.Threading.Tasks
+
+struct Pair {
+    var A int32
+    var B int32
+}
+
+async func run(flag bool) Task[string] {
+    var s1 = Pair{A: 10, B: 20}
+    var s2 = Pair{A: 99, B: 88}
+    var x = 1
+    var y = 2
+    var r = &x
+    var t = &y
+    if false {
+        r = t
+        t = r
+    }
+    var p = &s1
+    var q = &s2
+    if false {
+        p = q
+        q = p
+    }
+    r = &((*p).A)
+    if flag {
+        p = &s2
+    }
+    await Task.Yield()
+    return "${*r}:${*t}:${(*p).A}:${(*q).B}"
+}
+
+Console.WriteLine("${run(true).GetAwaiter().GetResult()}|${run(false).GetAwaiter().GetResult()}")`, "CrossTypeCycleOrder6182", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("10:2:99:88|10:2:10:88\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func ConditionalAddressSelfAlias_PreservesActiveTargetAcrossAwait() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package CondAddrSelfAlias6182
+import System
+import System.Threading.Tasks
+
+async func run(keep bool) Task[int32] {
+    var x = 10
+    var y = 77
+    var p = &x
+    p = &(keep ? *p : y)
+    await Task.Yield()
+    return *p
+}
+
+Console.WriteLine("${run(true).GetAwaiter().GetResult()}:${run(false).GetAwaiter().GetResult()}")`, "CondAddrSelfAlias6182", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("10:77\n", fixture.Run(dll))
+    }
+
+    @Fact
     func ManagedPointerDefault_EmitAndExecute_WithStrictILVerify() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let templateDll = fixture.Compile(`package Template6182
