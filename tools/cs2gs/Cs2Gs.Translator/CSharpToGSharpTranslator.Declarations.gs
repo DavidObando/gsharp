@@ -49,9 +49,7 @@ partial class CSharpToGSharpTranslator {
             // `Convert.ToInt64` throws `OverflowException` on a `ulong` constant
             // above `long.MaxValue` (e.g. a `[Flags] enum X : ulong` high-bit
             // member), which would otherwise crash the translator.
-            let underlyingType = (symbol as INamedTypeSymbol)
-                ?.EnumUnderlyingType
-                ?.SpecialType ??
+            let underlyingType = (symbol as INamedTypeSymbol)?.EnumUnderlyingType?.SpecialType ??
                 SpecialType.System_Int32
             // Issue #1912: explicit case values (`Banana = 2`, `Unknown = -1`, a
             // `[Flags]` bit-combination, or an alias like `DefaultError =
@@ -169,12 +167,8 @@ partial class CSharpToGSharpTranslator {
                         // identifier — the same patternBindings substitution
                         // used for pattern-bound locals — for the duration of
                         // the entry body's translation only.
-                        let renamedArgs = entryPoint!!
-                            .Parameters
-                            .Length == 1 &&
-                            entryPoint!!
-                            .Parameters[0]
-                            .Name != "args"
+                        let renamedArgs = entryPoint!!.Parameters.Length == 1 &&
+                            entryPoint!!.Parameters[0].Name != "args"
                         if renamedArgs {
                             this.state.PatternBindings[entryPoint!!.Parameters[0]] = IdentifierExpression("args")
                         }
@@ -364,8 +358,7 @@ partial class CSharpToGSharpTranslator {
                     if statement is LocalFunctionStatementSyntax localFunction && this.context.GetDeclaredSymbol(
                         localFunction
                     ) is IMethodSymbol localSymbol &&
-                        topLevelHoistedStatements
-                        .Contains(localFunction) {
+                        topLevelHoistedStatements.Contains(localFunction) {
                         let hoisted GMember? = this.TranslateTopLevelLocalFunctionAsFunc(localFunction, localSymbol)
                         if hoisted != nil {
                             funcs.Add(hoisted)
@@ -443,8 +436,7 @@ partial class CSharpToGSharpTranslator {
             // and every such write targets the backing field.
             if symbol is IPropertySymbol property &&
                 IsWriteTarget(node) &&
-                this
-                .IsBackingFieldLoweredGetOnlyAutoProperty(property) {
+                this.IsBackingFieldLoweredGetOnlyAutoProperty(property) {
                 return this.RegisterSynthesizedPropertyBackingField(property, primaryCtorParamNames: nil)
             }
             return this.EmittedName(symbol, token.ValueText, context)
@@ -460,9 +452,7 @@ partial class CSharpToGSharpTranslator {
                 property!!.GetMethod == nil ||
                 property!!.IsAbstract ||
                 property!!.IsIndexer ||
-                property!!
-                .ContainingType
-                ?.TypeKind == TypeKind.Interface {
+                property!!.ContainingType?.TypeKind == TypeKind.Interface {
                 return false
             }
             return property!!
@@ -581,9 +571,7 @@ partial class CSharpToGSharpTranslator {
         /// @param owner The static member's containing type.
         /// @returns `true` when the owner is a `using static` target.
         private func IsStaticUsingTarget(owner INamedTypeSymbol?) bool -> owner != nil &&
-            this
-            .staticUsingTargets
-            .Contains(owner.OriginalDefinition)
+            this.staticUsingTargets.Contains(owner.OriginalDefinition)
 
         private func MapVisibility(
             symbol ISymbol?,
@@ -829,15 +817,10 @@ partial class CSharpToGSharpTranslator {
             for member in node.Members {
                 // The get-only auto-property initializers are exactly what moves
                 // into the `init(...)` body, so reads there are fine.
-                if member is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .PropertyDeclarationSyntax property &&
+                if member is Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax property &&
                     property.Initializer != nil &&
-                    !property
-                    .Modifiers
-                    .Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword) && IsGetOnlyAutoProperty(property) {
+                    !property.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword) &&
+                    IsGetOnlyAutoProperty(property) {
                     continue
                 }
                 for identifier in member.DescendantNodesAndSelf().OfType[IdentifierNameSyntax]() {
@@ -1046,8 +1029,7 @@ partial class CSharpToGSharpTranslator {
                 node.SyntaxTree,
                 this.projectDirectory
             ) &&
-                CSharpToGSharpTranslator
-                .IsRegexGeneratorDeclaration(symbol) {
+                CSharpToGSharpTranslator.IsRegexGeneratorDeclaration(symbol) {
                 let (retained, regenerated) = this.GetRegexGeneratorImplementationState(node.SyntaxTree)
                 if !retained {
                     return nil
@@ -1180,8 +1162,7 @@ partial class CSharpToGSharpTranslator {
             ]? = nil
             if !lift.DropConstructor &&
                 kind == TypeDeclarationKind.DataStruct &&
-                mergedMembers
-                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax]().Any(
+                mergedMembers.OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax]().Any(
                 (c Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax) -> !c.Modifiers.Any(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
                 )
@@ -1270,8 +1251,7 @@ partial class CSharpToGSharpTranslator {
                     .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax]() {
                     using let loweredModelScope = this.context.UseSemanticModelFor(loweredCandidate.SyntaxTree)
                     if this.context.GetDeclaredSymbol(loweredCandidate) is IPropertySymbol loweredSymbol &&
-                        this
-                        .IsBackingFieldLoweredGetOnlyAutoProperty(loweredSymbol) {
+                        this.IsBackingFieldLoweredGetOnlyAutoProperty(loweredSymbol) {
                         this.RegisterSynthesizedPropertyBackingField(loweredSymbol, primaryCtorParamNames)
                     }
                 }
@@ -1310,9 +1290,7 @@ partial class CSharpToGSharpTranslator {
                 if lift.FieldInitializers.Count > 0 || lift.FieldsAsPrimaryParameters.Count > 0 {
                     for memberSymbol in symbol.GetMembers().OfType[IFieldSymbol]() {
                         if lift.FieldInitializers.ContainsKey(memberSymbol.Name) ||
-                            lift
-                            .FieldsAsPrimaryParameters
-                            .Contains(memberSymbol.Name) {
+                            lift.FieldsAsPrimaryParameters.Contains(memberSymbol.Name) {
                             this.state.LiftedFieldInitializers.Add(memberSymbol)
                         }
                     }
@@ -1329,8 +1307,7 @@ partial class CSharpToGSharpTranslator {
                 membersToTranslate.AddRange(
                     ownedExtensionMethods.Where(
                         (method MethodDeclarationSyntax) -> this.CanLowerOwnedExtension(method) &&
-                            !this
-                            .IsPreservedOwnedExtension(
+                            !this.IsPreservedOwnedExtension(
                             this
                                 .context
                                 .GetOwnedSemanticModel(method.SyntaxTree, this.context.Compilation)
@@ -1438,8 +1415,7 @@ partial class CSharpToGSharpTranslator {
                         // which is a duplicate, not a fix. That owner already
                         // keeps its identity by construction, so skip tagging.
                         if this.context.GetDeclaredSymbol(member) is IMethodSymbol extensionMethodSymbol &&
-                            CSharpToGSharpTranslator
-                            .RequiresOwnerScopedExtension(extensionMethodSymbol) {
+                            CSharpToGSharpTranslator.RequiresOwnerScopedExtension(extensionMethodSymbol) {
                             this.state.PendingTopLevelDeclarations.Add(translated)
                             continue
                         }
@@ -1684,14 +1660,13 @@ partial class CSharpToGSharpTranslator {
                     kind == TypeDeclarationKind.DataStruct
             ) &&
                 symbol != nil &&
-                this
-                .ShouldAttachOwnedExtensions(node, symbol) {
+                this.ShouldAttachOwnedExtensions(node, symbol) {
                 if kind == TypeDeclarationKind.Class {
                     for inheritedContract in this.GetInheritedImportedDeconstructContractMethods(symbol) {
                         if this.TypeContainsPointerOrFunctionPointer(inheritedContract.ReturnType) ||
-                            inheritedContract
-                            .Parameters
-                            .Any((p IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(p.Type)) {
+                            inheritedContract.Parameters.Any(
+                            (p IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(p.Type)
+                        ) {
                             isUnsafe = true
                         }
                         members.Add(
@@ -1711,12 +1686,8 @@ partial class CSharpToGSharpTranslator {
                 let emittedExplicitAdapterKeys = HashSet[string](StringComparer.Ordinal)
                 for existingMethod in members.OfType[MethodDeclaration]() {
                     if existingMethod.ExplicitInterfaceType == nil &&
-                        existingMethod
-                        .Parameters
-                        .Count == 0 &&
-                        existingMethod
-                        .TypeParameters
-                        .Count == 0 {
+                        existingMethod.Parameters.Count == 0 &&
+                        existingMethod.TypeParameters.Count == 0 {
                         let existingReturn = if existingMethod.ReturnType != nil {
                             GSharpPrinter.RenderTypeReference(existingMethod.ReturnType)
                         } else {
@@ -1827,8 +1798,7 @@ partial class CSharpToGSharpTranslator {
             if symbol != nil &&
                 symbol.TypeKind != TypeKind.Interface &&
                 !isStaticClass &&
-                this
-                .ShouldAttachOwnedExtensions(node, symbol) {
+                this.ShouldAttachOwnedExtensions(node, symbol) {
                 this.AddErasedGenericInterfacePropertyBridges(symbol, members, node.GetLocation())
             }
             // ADR-0145 (§C/§D) / issue #3410: default preserve mode carries the
@@ -1938,18 +1908,11 @@ partial class CSharpToGSharpTranslator {
                         continue
                     }
                     if symbol.FindImplementationForInterfaceMember(ifaceProp) is not IPropertySymbol impl ||
-                        !impl
-                        .ExplicitInterfaceImplementations
-                        .IsDefaultOrEmpty {
+                        !impl.ExplicitInterfaceImplementations.IsDefaultOrEmpty {
                         continue
                     }
                     let implEmitsNullable = (
-                        impl
-                            .Type
-                            .NullableAnnotation == Microsoft
-                            .CodeAnalysis
-                            .NullableAnnotation
-                            .Annotated &&
+                        impl.Type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
                             CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(impl.Type)
                     ) ||
                         this.ShouldPromoteToNullableReference(impl)
@@ -2084,12 +2047,10 @@ partial class CSharpToGSharpTranslator {
                 ) &&
                     p.ExpressionBody == nil &&
                     p.AccessorList != nil &&
-                    p.AccessorList!!
-                    .Accessors
-                    .All((a AccessorDeclarationSyntax) -> a.Body == nil && a.ExpressionBody == nil) &&
-                    p.AccessorList!!
-                    .Accessors
-                    .Any(
+                    p.AccessorList!!.Accessors.All(
+                    (a AccessorDeclarationSyntax) -> a.Body == nil && a.ExpressionBody == nil
+                ) &&
+                    p.AccessorList!!.Accessors.Any(
                     (a AccessorDeclarationSyntax) -> a.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.GetAccessorDeclaration
                     )
@@ -2126,11 +2087,7 @@ partial class CSharpToGSharpTranslator {
                 // Use the semantic model (not a syntactic guess, per the
                 // "never guess" rule) to tell the two shapes apart.
                 if prop.Initializer != nil &&
-                    !this
-                    .context
-                    .SemanticModel
-                    .GetConstantValue(prop.Initializer!!.Value)
-                    .HasValue {
+                    !this.context.SemanticModel.GetConstantValue(prop.Initializer!!.Value).HasValue {
                     // A `data struct` has no always-available parameterless
                     // constructor distinct from its primary constructor (a
                     // value type's zero-arg construction goes through the
@@ -2207,10 +2164,7 @@ partial class CSharpToGSharpTranslator {
             attachSynthHelpers bool = true
         ) ConstructorLift {
             let memberCount = members.Count
-            if this
-                .state
-                .CachedConstructorLifts
-                .TryGetValue(node, out var cached) &&
+            if this.state.CachedConstructorLifts.TryGetValue(node, out var cached) &&
                 cached is (CachedMemberCount int32, Lift ConstructorLift) entry &&
                 entry.CachedMemberCount == memberCount {
                 if attachSynthHelpers {
@@ -2320,19 +2274,13 @@ partial class CSharpToGSharpTranslator {
             this.state.CurrentBodyScope = ctor
             try {
                 for statement in ctor.Body!!.Statements {
-                    if statement is not Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .ExpressionStatementSyntax exprStatement ||
+                    if statement is not Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax exprStatement ||
                         exprStatement.Expression is not Microsoft
                         .CodeAnalysis
                         .CSharp
                         .Syntax
                         .AssignmentExpressionSyntax assignment ||
-                        !assignment
-                        .OperatorToken
-                        .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsToken) {
+                        !assignment.OperatorToken.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsToken) {
                         return ConstructorLift.None
                     }
                     // The assignment target is either a backing field or an
@@ -2344,17 +2292,13 @@ partial class CSharpToGSharpTranslator {
                     let leftSymbol = this.context.GetSymbolInfo(assignment.Left).Symbol!!
                     if leftSymbol is IFieldSymbol fieldSymbol &&
                         !fieldSymbol.IsStatic &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(fieldSymbol.ContainingType, symbol) {
+                        SymbolEqualityComparer.Default.Equals(fieldSymbol.ContainingType, symbol) {
                         targetName = fieldSymbol.Name
                         targetType = fieldSymbol.Type
                         targetProperty = nil
                     } else if leftSymbol is IPropertySymbol propertySymbol &&
                         !propertySymbol.IsStatic &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(propertySymbol.ContainingType, symbol) {
+                        SymbolEqualityComparer.Default.Equals(propertySymbol.ContainingType, symbol) {
                         targetName = propertySymbol.Name
                         targetType = propertySymbol.Type
                         targetProperty = propertySymbol
@@ -2366,13 +2310,8 @@ partial class CSharpToGSharpTranslator {
                     }
                     // `target = ctorParam` → lift to a primary-constructor parameter.
                     if assignment.Right is IdentifierNameSyntax rightId &&
-                        this
-                        .context
-                        .GetSymbolInfo(rightId)
-                        .Symbol is IParameterSymbol paramSymbol &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(paramSymbol.ContainingSymbol, ctorSymbol) {
+                        this.context.GetSymbolInfo(rightId).Symbol is IParameterSymbol paramSymbol &&
+                        SymbolEqualityComparer.Default.Equals(paramSymbol.ContainingSymbol, ctorSymbol) {
                         if paramToTarget.ContainsKey(paramSymbol) {
                             return ConstructorLift.None
                         }
@@ -2560,9 +2499,7 @@ partial class CSharpToGSharpTranslator {
             // ponytail: prove only straight-line constructor prefixes on sealed,
             // object-based types without finalizers; all other shapes keep fresh zeros.
             if !owner.IsSealed ||
-                owner
-                .BaseType
-                ?.SpecialType != SpecialType.System_Object ||
+                owner.BaseType?.SpecialType != SpecialType.System_Object ||
                 owner
                 .GetMembers()
                 .OfType[IMethodSymbol]()
@@ -2570,12 +2507,8 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             for constructor in owner.InstanceConstructors {
-                if constructor
-                    .DeclaringSyntaxReferences
-                    .Length != 1 ||
-                    constructor
-                    .DeclaringSyntaxReferences[0]
-                    .GetSyntax() is not Microsoft
+                if constructor.DeclaringSyntaxReferences.Length != 1 ||
+                    constructor.DeclaringSyntaxReferences[0].GetSyntax() is not Microsoft
                     .CodeAnalysis
                     .CSharp
                     .Syntax
@@ -2601,8 +2534,7 @@ partial class CSharpToGSharpTranslator {
                         .CSharp
                         .Syntax
                         .AssignmentExpressionSyntax assignment &&
-                        assignment
-                        .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) {
+                        assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) {
                         let left = StripParentheses(assignment.Left)
                         let directReceiver = left is IdentifierNameSyntax ||
                             (
@@ -2610,14 +2542,9 @@ partial class CSharpToGSharpTranslator {
                                 StripParentheses(access.Expression) is ThisExpressionSyntax
                         )
                         if directReceiver &&
-                            this
-                            .context
-                            .GetSymbolInfo(left)
-                            .Symbol is IFieldSymbol assigned &&
+                            this.context.GetSymbolInfo(left).Symbol is IFieldSymbol assigned &&
                             !assigned.IsStatic &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(assigned.ContainingType, owner) {
+                            SymbolEqualityComparer.Default.Equals(assigned.ContainingType, owner) {
                             if this.ReferencesInstanceMember(assignment.Right, owner) {
                                 return false
                             }
@@ -2767,11 +2694,7 @@ partial class CSharpToGSharpTranslator {
                     node
                 }
                 while true {
-                    if current!!.Parent is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .ParenthesizedExpressionSyntax ||
+                    if current!!.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax ||
                         (
                         includeAddress &&
                             current!!.Parent is PostfixUnaryExpressionSyntax suppression &&
@@ -2805,9 +2728,7 @@ partial class CSharpToGSharpTranslator {
                     case argument is ArgumentSyntax: includeAddress &&
                         (
                         argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) ||
-                            argument
-                            .RefKindKeyword
-                            .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword)
+                            argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword)
                     )
                     default: false
                 }
@@ -2957,19 +2878,11 @@ partial class CSharpToGSharpTranslator {
                         m is Microsoft.CodeAnalysis.CSharp.Syntax.FieldDeclarationSyntax field && !field.Modifiers.Any(
                             Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
                         ) &&
-                            !field
-                            .Modifiers
-                            .Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ConstKeyword)
+                            !field.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ConstKeyword)
                     ) ||
                         (
-                        m is Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .PropertyDeclarationSyntax property &&
-                            !property
-                            .Modifiers
-                            .Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword)
+                        m is Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax property &&
+                            !property.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword)
                     )
                 )
                 return !hasPositional && !hasDataMember
@@ -2992,12 +2905,10 @@ partial class CSharpToGSharpTranslator {
                     ) &&
                         p.ExpressionBody == nil &&
                         p.AccessorList != nil &&
-                        p.AccessorList!!
-                        .Accessors
-                        .All((a AccessorDeclarationSyntax) -> a.Body == nil && a.ExpressionBody == nil) &&
-                        p.AccessorList!!
-                        .Accessors
-                        .Any(
+                        p.AccessorList!!.Accessors.All(
+                        (a AccessorDeclarationSyntax) -> a.Body == nil && a.ExpressionBody == nil
+                    ) &&
+                        p.AccessorList!!.Accessors.Any(
                         (a AccessorDeclarationSyntax) -> a.IsKind(
                             Microsoft.CodeAnalysis.CSharp.SyntaxKind.GetAccessorDeclaration
                         )
@@ -3103,15 +3014,8 @@ partial class CSharpToGSharpTranslator {
             private func IsExtensionMethodDeclaration(
                 member MemberDeclarationSyntax
             ) bool -> member is MethodDeclarationSyntax method &&
-                method
-                .ParameterList
-                .Parameters
-                .Count > 0 &&
-                method
-                .ParameterList
-                .Parameters[0]
-                .Modifiers
-                .Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ThisKeyword)
+                method.ParameterList.Parameters.Count > 0 &&
+                method.ParameterList.Parameters[0].Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ThisKeyword)
 
             private func InheritsFromOrEquals(type INamedTypeSymbol, candidateBase INamedTypeSymbol) bool {
                 for var current INamedTypeSymbol? = type; current != nil; current = current!!.BaseType {

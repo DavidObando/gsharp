@@ -147,26 +147,21 @@ class Issue4777InheritedDataEqualityTranslationTests {
                         return type
                             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
                             .Where(
-                            (method MethodInfo) -> method.Name == "Equals" && method.GetParameters()
-                                .Length == 1 &&
-                                method
-                                .GetParameters()[0]
-                                .ParameterType != typeof(object)
+                            (method MethodInfo) -> method.Name == "Equals" && method.GetParameters().Length == 1 &&
+                                method.GetParameters()[0].ParameterType != typeof(object)
                         )
                             .Select(
                             (method MethodInfo) -> {
                                 let parameter = Assert.Single(method.GetParameters())
                                 return type.FullName + "|" + method.ToString() + "|" + method.Attributes.ToString() +
                                     "|" +
-                                    method
-                                    .GetBaseDefinition()
-                                    .DeclaringType!!.FullName +
+                                    method.GetBaseDefinition().DeclaringType!!.FullName +
                                     "|" +
                                     parameter.Name +
                                     "|" +
-                                    parameter
-                                    .Attributes
-                                    .ToString() + "|" + NullabilityInfoContext().Create(parameter).ReadState.ToString()
+                                    parameter.Attributes.ToString() +
+                                    "|" +
+                                    NullabilityInfoContext().Create(parameter).ReadState.ToString()
                             }
                         )
                     }
@@ -338,18 +333,14 @@ class Issue4777InheritedDataEqualityTranslationTests {
                             "(" +
                             string.Join(",", signature.ParameterTypes) + ")" + "|" + signature.Header.ToString() +
                             "|" +
-                            signature
-                            .GenericParameterCount
-                            .ToString()
+                            signature.GenericParameterCount.ToString()
                     )
                     for parameterHandle in method.GetParameters() {
                         let parameter = metadata.GetParameter(parameterHandle)
                         rows.Add(
                             parameter.SequenceNumber.ToString() + "|" + metadata.GetString(parameter.Name) +
                                 "|" +
-                                parameter
-                                .Attributes
-                                .ToString()
+                                parameter.Attributes.ToString()
                         )
                         for attributeHandle in parameter.GetCustomAttributes() {
                             let attribute = metadata.GetCustomAttribute(attributeHandle)
@@ -404,9 +395,7 @@ class Issue4777InheritedDataEqualityTranslationTests {
             }
             return owner + "|" + name + "|" + signature.ReturnType + "(" + string.Join(",", signature.ParameterTypes) +
                 ")|" +
-                signature
-                .Header
-                .ToString()
+                signature.Header.ToString()
         }
 
         private func LoadActualImage(context AssemblyLoadContext, path string) Assembly {

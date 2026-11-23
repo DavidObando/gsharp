@@ -1345,12 +1345,8 @@ class NoteAttribute(Text string) : Attribute {
                     .AttributeType
                     .Namespace
                     ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true ||
-                    candidate
-                    .AttributeType
-                    .Name == "NoteAttribute" ||
-                    candidate
-                    .AttributeType
-                    .Name == "StampAttribute"
+                    candidate.AttributeType.Name == "NoteAttribute" ||
+                    candidate.AttributeType.Name == "StampAttribute"
             )
             // Projected to a name WHILE the context is alive: a reflection `Type`
             // read after the load context is disposed throws.
@@ -1396,13 +1392,8 @@ class NoteAttribute(Text string) : Attribute {
             let assembly = context.LoadFromAssemblyPath(assemblyPath)
             let target = assembly.GetTypes().Single((candidate Type) -> candidate.Name == typeName)
             let attribute = target.GetCustomAttributesData().Single(
-                (candidate CustomAttributeData) -> candidate
-                    .AttributeType
-                    .Namespace == "P" ||
-                    candidate
-                    .AttributeType
-                    .Namespace
-                    ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
+                (candidate CustomAttributeData) -> candidate.AttributeType.Namespace == "P" ||
+                    candidate.AttributeType.Namespace?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
             )
             if attribute.AttributeType.IsGenericType {
                 let loadContext = System.Runtime.Loader.AssemblyLoadContext(nil, isCollectible: true)
@@ -1435,13 +1426,8 @@ class NoteAttribute(Text string) : Attribute {
             let assembly = context.LoadFromAssemblyPath(assemblyPath)
             let target = assembly.GetTypes().Single((candidate Type) -> candidate.Name == typeName)
             let attribute = target.GetCustomAttributesData().Single(
-                (candidate CustomAttributeData) -> candidate
-                    .AttributeType
-                    .Namespace == "P" ||
-                    candidate
-                    .AttributeType
-                    .Namespace
-                    ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
+                (candidate CustomAttributeData) -> candidate.AttributeType.Namespace == "P" ||
+                    candidate.AttributeType.Namespace?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
             )
             let parameter = Assert.Single(attribute.Constructor.GetParameters())
             let argument = Assert.Single(attribute.ConstructorArguments)
@@ -1458,13 +1444,8 @@ class NoteAttribute(Text string) : Attribute {
             let assembly = context.LoadFromAssemblyPath(assemblyPath)
             let target = assembly.GetTypes().Single((candidate Type) -> candidate.Name == typeName)
             let attribute = target.GetCustomAttributesData().Single(
-                (candidate CustomAttributeData) -> candidate
-                    .AttributeType
-                    .Namespace == "P" ||
-                    candidate
-                    .AttributeType
-                    .Namespace
-                    ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
+                (candidate CustomAttributeData) -> candidate.AttributeType.Namespace == "P" ||
+                    candidate.AttributeType.Namespace?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
             )
             return attribute.Constructor.GetParameters().Length
         }
@@ -1479,13 +1460,8 @@ class NoteAttribute(Text string) : Attribute {
             let assembly = context.LoadFromAssemblyPath(assemblyPath)
             let target = assembly.GetTypes().Single((candidate Type) -> candidate.Name == typeName)
             let attribute = target.GetCustomAttributesData().Single(
-                (candidate CustomAttributeData) -> candidate
-                    .AttributeType
-                    .Namespace == "P" ||
-                    candidate
-                    .AttributeType
-                    .Namespace
-                    ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
+                (candidate CustomAttributeData) -> candidate.AttributeType.Namespace == "P" ||
+                    candidate.AttributeType.Namespace?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
             )
             let outer = Assert.Single(attribute.ConstructorArguments)
             let elements = cast[IEnumerable[CustomAttributeTypedArgument]](outer.Value!!).ToArray()
@@ -1521,12 +1497,8 @@ class NoteAttribute(Text string) : Attribute {
                     .AttributeType
                     .Namespace
                     ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true ||
-                    attribute
-                    .AttributeType
-                    .Name == "NoteAttribute" ||
-                    attribute
-                    .AttributeType
-                    .Name == "StampAttribute"
+                    attribute.AttributeType.Name == "NoteAttribute" ||
+                    attribute.AttributeType.Name == "StampAttribute"
             )
                 .Select((attribute CustomAttributeData) -> attribute.AttributeType.Name)
                 .ToArray()

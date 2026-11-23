@@ -506,12 +506,12 @@ shared class SnippetTranslator {
         unitIndex int32
     ) int32 {
         var ordinal = 0
-        for var i = renaming.Source.IndexOf(marked.Text, StringComparison.Ordinal);
-            i >= 0 &&
-            i < marked.Start;
-            i = renaming
-            .Source
-            .IndexOf(marked.Text, i + marked.Text.Length, StringComparison.Ordinal) {
+        for var i = renaming.Source.IndexOf(marked.Text, StringComparison.Ordinal); i >= 0 &&
+            i < marked.Start; i = renaming.Source.IndexOf(
+            marked.Text,
+            i + marked.Text.Length,
+            StringComparison.Ordinal
+        ) {
             if BelongsToUnit(document, renaming.OriginalOffset(i), packages, unitIndex) {
                 ordinal++
             }
@@ -554,11 +554,7 @@ shared class SnippetTranslator {
             (
                 expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
             ) -> expression.SpanStart == marked.Start &&
-                expression
-                .Span
-                .Length == marked
-                .Text
-                .Length
+                expression.Span.Length == marked.Text.Length
         )
         if markedExpression == nil {
             return -1
@@ -602,10 +598,7 @@ shared class SnippetTranslator {
             } else if token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultKeyword) {
                 tokens.Add("default")
             } else if token.Parent is PredefinedTypeSyntax type &&
-                document
-                .SemanticModel
-                .GetTypeInfo(type)
-                .Type is {} symbol &&
+                document.SemanticModel.GetTypeInfo(type).Type is {} symbol &&
                 CSharpTypeMapper.GetPredefinedName(symbol.SpecialType) is {} predefined {
                 tokens.Add(predefined)
             } else {

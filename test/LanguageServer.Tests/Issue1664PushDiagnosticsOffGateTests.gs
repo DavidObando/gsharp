@@ -182,9 +182,9 @@ open class Issue1664PushDiagnosticsOffGateTests {
                 lock publishes {
                     return publishes.Any(
                         (p(Uri string, Diagnostics IReadOnlyList[Diagnostic])) -> p.Uri == uri.ToString() &&
-                            !p
-                            .Diagnostics
-                            .Any((d Diagnostic) -> d.Message.Contains("Not all code paths", StringComparison.Ordinal))
+                            !p.Diagnostics.Any(
+                            (d Diagnostic) -> d.Message.Contains("Not all code paths", StringComparison.Ordinal)
+                        )
                     )
                 }
             }

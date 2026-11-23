@@ -52,18 +52,8 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 return true
             }
             return object.ReferenceEquals(diagnostic.Location.Text, owner.Text) &&
-                diagnostic
-                .Location
-                .Span
-                .Start >= owner
-                .Span
-                .Start &&
-                diagnostic
-                .Location
-                .Span
-                .End <= owner
-                .Span
-                .End
+                diagnostic.Location.Span.Start >= owner.Span.Start &&
+                diagnostic.Location.Span.End <= owner.Span.End
         }
     }
 
@@ -255,20 +245,9 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         for var i = existingCount - 1; i >= 0; i-- {
             let diagnostic = diagnostics[i]
             if object.ReferenceEquals(diagnostic.Location.Text, owner.Text) &&
-                diagnostic
-                .Location
-                .Span
-                .Start >= owner
-                .Span
-                .Start &&
-                diagnostic
-                .Location
-                .Span
-                .End <= owner
-                .Span
-                .End &&
-                reboundSuppressed
-                .Add(diagnostic) {
+                diagnostic.Location.Span.Start >= owner.Span.Start &&
+                diagnostic.Location.Span.End <= owner.Span.End &&
+                reboundSuppressed.Add(diagnostic) {
                 reboundSuppressionLog.Add((diagnostic, existingCount))
                 for txSuppressed in transactionSuppressed {
                     txSuppressed.Add(diagnostic)
@@ -416,12 +395,8 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         // cascadeSuppressed), and is filtered out when diagnostics are read.
         if memberLookupCascadeDepth > 0 &&
             (
-            diagnostic.Id == DiagnosticDescriptors
-                .UnableToFindMember
-                .Id ||
-                diagnostic.Id == DiagnosticDescriptors
-                .UnableToFindFunction
-                .Id
+            diagnostic.Id == DiagnosticDescriptors.UnableToFindMember.Id ||
+                diagnostic.Id == DiagnosticDescriptors.UnableToFindFunction.Id
         ) {
             cascadeSuppressed.Add(diagnostic)
         }
@@ -837,31 +812,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 left.Severity == right.Severity &&
                 left.Message == right.Message &&
                 object.ReferenceEquals(left.Location.Text, right.Location.Text) &&
-                left
-                .Location
-                .Span
-                .Start == right
-                .Location
-                .Span
-                .Start &&
-                left
-                .Location
-                .Span
-                .Length == right
-                .Location
-                .Span
-                .Length &&
-                left
-                .AdditionalLocations
-                .SequenceEqual(right.AdditionalLocations) &&
-                left
-                .Properties
-                .Count == right
-                .Properties
-                .Count &&
-                left
-                .Properties
-                .All(
+                left.Location.Span.Start == right.Location.Span.Start &&
+                left.Location.Span.Length == right.Location.Span.Length &&
+                left.AdditionalLocations.SequenceEqual(right.AdditionalLocations) &&
+                left.Properties.Count == right.Properties.Count &&
+                left.Properties.All(
                 (property KeyValuePair[string, string?]) -> right.Properties.TryGetValue(property.Key, out var value) &&
                     property.Value == value
             )

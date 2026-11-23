@@ -137,10 +137,7 @@ Console.WriteLine(Two.Probe.V(C()))`, appPath, "/target:exe", "/reference:" + on
                         if iface.Kind == HandleKind.TypeReference {
                             let typeRef = reader.GetTypeReference(TypeReferenceHandle(iface))
                             if reader.GetString(typeRef.Name) == "IBase" &&
-                                typeRef
-                                .ResolutionScope
-                                .Kind == HandleKind
-                                .AssemblyReference {
+                                typeRef.ResolutionScope.Kind == HandleKind.AssemblyReference {
                                 let scope_ = reader.GetAssemblyReference(
                                     AssemblyReferenceHandle(typeRef.ResolutionScope)
                                 )

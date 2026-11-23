@@ -406,12 +406,9 @@ internal shared class MetadataModelComparison {
         "missing"
     }
 
-    private func Subject(module MetadataModule, handle TypeReferenceHandle) string -> module
-        .Identity
-        .Name +
+    private func Subject(module MetadataModule, handle TypeReferenceHandle) string -> module.Identity.Name +
         " TypeRef#" +
-        MetadataTokens
-        .GetRowNumber(handle).ToString()
+        MetadataTokens.GetRowNumber(handle).ToString()
 
     // Spells a type reference as the context sees it: the simple name of the assembly that the outermost
     // scope names, and the full name with `+` between the enclosing types. Returns null for a scope

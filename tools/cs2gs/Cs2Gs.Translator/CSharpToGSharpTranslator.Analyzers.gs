@@ -44,14 +44,8 @@ partial class CSharpToGSharpTranslator {
         } else {
             RoslynTypeMetadataName(
                 (
-                    this
-                        .context
-                        .GetTypeInfo(typeSyntax)
-                        .Type ??
-                        this
-                        .context
-                        .GetSymbolInfo(typeSyntax)
-                        .Symbol as ITypeSymbol
+                    this.context.GetTypeInfo(typeSyntax).Type ??
+                        this.context.GetSymbolInfo(typeSyntax).Symbol as ITypeSymbol
                 ) as INamedTypeSymbol
             )
         }
@@ -272,10 +266,7 @@ partial class CSharpToGSharpTranslator {
         ) bool -> expression is MemberAccessExpressionSyntax{
             Name: {Identifier: {Text: "Expression" or "WhenNotNull"}}
         } member &&
-            this
-            .context
-            .GetTypeInfo(member.Expression)
-            .Type is INamedTypeSymbol conditionalAccessType &&
+            this.context.GetTypeInfo(member.Expression).Type is INamedTypeSymbol conditionalAccessType &&
             RoslynTypeMetadataName(
             conditionalAccessType
         ) == "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax"
@@ -294,11 +285,8 @@ partial class CSharpToGSharpTranslator {
                 return memberName
             }
             if symbol is IFieldSymbol field &&
-                field
-                .ContainingType
-                .TypeKind == TypeKind.Enum &&
-                RoslynAnalyzerApiMap
-                .TryMapEnumMember(containingName, memberName, out var enumEntry) {
+                field.ContainingType.TypeKind == TypeKind.Enum &&
+                RoslynAnalyzerApiMap.TryMapEnumMember(containingName, memberName, out var enumEntry) {
                 this.ReportAnalyzerShapeIfAdapted(member, containingName, memberName, enumEntry)
                 return enumEntry.GsName
             }
@@ -327,29 +315,17 @@ partial class CSharpToGSharpTranslator {
             out result GExpression?
         ) bool {
             result = nil
-            if member
-                .Name
-                .Identifier
-                .Text == "Value" &&
+            if member.Name.Identifier.Text == "Value" &&
                 (
-                this
-                    .context
-                    .GetSymbolInfo(member)
-                    .Symbol is IPropertySymbol and
+                this.context.GetSymbolInfo(member).Symbol is IPropertySymbol and
                     {Name: "Value", ContainingType: {Name: "EqualsValueClauseSyntax"}}
             ) {
                 result = this.TranslateExpression(member.Expression)
                 return true
             }
-            if member
-                .Name
-                .Identifier
-                .Text == "Pattern" &&
+            if member.Name.Identifier.Text == "Pattern" &&
                 (
-                this
-                    .context
-                    .GetSymbolInfo(member)
-                    .Symbol is IPropertySymbol and
+                this.context.GetSymbolInfo(member).Symbol is IPropertySymbol and
                     {Name: "Pattern", ContainingType: {Name: "CasePatternSwitchLabelSyntax"}}
             ) {
                 result = NonNullAssertionExpression(
@@ -357,15 +333,9 @@ partial class CSharpToGSharpTranslator {
                 )
                 return true
             }
-            if member
-                .Name
-                .Identifier
-                .Text == "Identifier" &&
+            if member.Name.Identifier.Text == "Identifier" &&
                 member.Expression is IdentifierNameSyntax designationName &&
-                this
-                .context
-                .GetSymbolInfo(designationName)
-                .Symbol is ILocalSymbol designationLocal &&
+                this.context.GetSymbolInfo(designationName).Symbol is ILocalSymbol designationLocal &&
                 (
                 designationLocal
                     .DeclaringSyntaxReferences
@@ -390,14 +360,8 @@ partial class CSharpToGSharpTranslator {
             if this.TryTranslateCalleeSurfaceMember(member, out result) {
                 return true
             }
-            if member
-                .Name
-                .Identifier
-                .Text == "OperatorKind" &&
-                this
-                .context
-                .GetSymbolInfo(member)
-                .Symbol is IPropertySymbol{Name: "OperatorKind"} operatorKind &&
+            if member.Name.Identifier.Text == "OperatorKind" &&
+                this.context.GetSymbolInfo(member).Symbol is IPropertySymbol{Name: "OperatorKind"} operatorKind &&
                 RoslynTypeMetadataName(
                 operatorKind.ContainingType
             ) == "Microsoft.CodeAnalysis.Operations.IBinaryOperation" {
@@ -415,14 +379,8 @@ partial class CSharpToGSharpTranslator {
                 )
                 return true
             }
-            if member
-                .Name
-                .Identifier
-                .Text == "Value" &&
-                this
-                .context
-                .GetSymbolInfo(member)
-                .Symbol is IPropertySymbol{Name: "Value"} argumentValue &&
+            if member.Name.Identifier.Text == "Value" &&
+                this.context.GetSymbolInfo(member).Symbol is IPropertySymbol{Name: "Value"} argumentValue &&
                 RoslynTypeMetadataName(
                 argumentValue.ContainingType
             ) == "Microsoft.CodeAnalysis.Operations.IArgumentOperation" {
@@ -431,14 +389,8 @@ partial class CSharpToGSharpTranslator {
                 result = this.TranslateExpression(member.Expression)
                 return true
             }
-            if member
-                .Name
-                .Identifier
-                .Text == "Value" &&
-                this
-                .context
-                .GetSymbolInfo(member)
-                .Symbol is IPropertySymbol{Name: "Value"} initializerValue &&
+            if member.Name.Identifier.Text == "Value" &&
+                this.context.GetSymbolInfo(member).Symbol is IPropertySymbol{Name: "Value"} initializerValue &&
                 (
                 RoslynTypeMetadataName(
                     initializerValue.ContainingType
@@ -450,10 +402,7 @@ partial class CSharpToGSharpTranslator {
                 result = this.TranslateExpression(member.Expression)
                 return true
             }
-            if member
-                .Name
-                .Identifier
-                .Text == "ArgumentList" &&
+            if member.Name.Identifier.Text == "ArgumentList" &&
                 (member.Parent is MemberAccessExpressionSyntax and {Name: {Identifier: {Text: "Arguments"}}}) &&
                 this
                 .context
@@ -476,10 +425,7 @@ partial class CSharpToGSharpTranslator {
                 result = this.TranslateExpression(member.Expression)
                 return true
             }
-            if member
-                .Name
-                .Identifier
-                .Text == "ParameterList" &&
+            if member.Name.Identifier.Text == "ParameterList" &&
                 (member.Parent is MemberAccessExpressionSyntax and {Name: {Identifier: {Text: "Parameters"}}}) &&
                 this
                 .context
@@ -504,10 +450,7 @@ partial class CSharpToGSharpTranslator {
                 result = this.TranslateExpression(member.Expression)
                 return true
             }
-            if member
-                .Name
-                .Identifier
-                .Text == "Expression" &&
+            if member.Name.Identifier.Text == "Expression" &&
                 this
                 .context
                 .GetSymbolInfo(member)
@@ -520,14 +463,8 @@ partial class CSharpToGSharpTranslator {
                 result = this.TranslateExpression(member.Expression)
                 return true
             }
-            if member
-                .Name
-                .Identifier
-                .Text == "Expression" &&
-                this
-                .context
-                .GetTypeInfo(member.Expression)
-                .Type is INamedTypeSymbol conditionalAccessReceiverType &&
+            if member.Name.Identifier.Text == "Expression" &&
+                this.context.GetTypeInfo(member.Expression).Type is INamedTypeSymbol conditionalAccessReceiverType &&
                 RoslynTypeMetadataName(
                 conditionalAccessReceiverType
             ) == "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax" {
@@ -560,10 +497,7 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return true
             }
-            if member
-                .Name
-                .Identifier
-                .Text == "Arguments" &&
+            if member.Name.Identifier.Text == "Arguments" &&
                 member.Expression is MemberAccessExpressionSyntax{
                 Name: {Identifier: {Text: "ArgumentList"}}
             } elementBindingArgListAccess &&
@@ -587,10 +521,7 @@ partial class CSharpToGSharpTranslator {
             if member.Name.Identifier.Text != "Identifier" {
                 return false
             }
-            if this
-                .context
-                .GetSymbolInfo(member)
-                .Symbol is not IPropertySymbol{Name: "Identifier"} property ||
+            if this.context.GetSymbolInfo(member).Symbol is not IPropertySymbol{Name: "Identifier"} property ||
                 RoslynTypeMetadataName(property.ContainingType) is not(
                 "Microsoft.CodeAnalysis.CSharp.Syntax.SimpleNameSyntax" or
                     "Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax" or
@@ -601,10 +532,7 @@ partial class CSharpToGSharpTranslator {
             let tokenAccessor = if member.Expression is MemberAccessExpressionSyntax{
                 Name: {Identifier: {Text: "Name"}}
             } nameAccess &&
-                this
-                .context
-                .GetSymbolInfo(nameAccess)
-                .Symbol is IPropertySymbol{Name: "Name"} nameProperty &&
+                this.context.GetSymbolInfo(nameAccess).Symbol is IPropertySymbol{Name: "Name"} nameProperty &&
                 (
                 RoslynTypeMetadataName(nameProperty.ContainingType) is
                 "Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax" or
@@ -635,18 +563,12 @@ partial class CSharpToGSharpTranslator {
             result = nil
             if isPattern.Expression is ConditionalAccessExpressionSyntax conditional &&
                 conditional.Expression is MemberAccessExpressionSyntax expressionColon &&
-                expressionColon
-                .Name
-                .Identifier
-                .Text == "ExpressionColon" &&
+                expressionColon.Name.Identifier.Text == "ExpressionColon" &&
                 (
                 conditional.WhenNotNull is MemberBindingExpressionSyntax and {Name: {Identifier: {Text: "Expression"}}}
             ) &&
                 expressionColon.Expression is ExpressionSyntax propertyFieldSource &&
-                this
-                .context
-                .GetTypeInfo(propertyFieldSource)
-                .Type is INamedTypeSymbol propertyFieldType &&
+                this.context.GetTypeInfo(propertyFieldSource).Type is INamedTypeSymbol propertyFieldType &&
                 RoslynTypeMetadataName(propertyFieldType) == "Microsoft.CodeAnalysis.CSharp.Syntax.SubpatternSyntax" &&
                 isPattern.Pattern is DeclarationPatternSyntax{
                 Type: IdentifierNameSyntax{Identifier: {Text: "IdentifierNameSyntax"}},
@@ -688,17 +610,11 @@ partial class CSharpToGSharpTranslator {
                 .ExpressionColon
                 ?.Expression is not(IdentifierNameSyntax and {Identifier: {Text: "Expression"}}) ||
                 BaseSubpatternTypeSyntax(subpattern.Pattern) is not{} baseTypeSyntax ||
-                this
-                .context
-                .GetTypeInfo(recursivePattern.Type)
-                .Type is not INamedTypeSymbol recursiveType ||
+                this.context.GetTypeInfo(recursivePattern.Type).Type is not INamedTypeSymbol recursiveType ||
                 RoslynTypeMetadataName(
                 recursiveType
             ) != "Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax" ||
-                this
-                .context
-                .GetTypeInfo(baseTypeSyntax)
-                .Type is not INamedTypeSymbol baseType ||
+                this.context.GetTypeInfo(baseTypeSyntax).Type is not INamedTypeSymbol baseType ||
                 RoslynTypeMetadataName(baseType) != "Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax" {
                 return false
             }
@@ -749,10 +665,7 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             result = nil
             if typeSyntax == nil ||
-                this
-                .context
-                .GetTypeInfo(typeSyntax)
-                .Type is not INamedTypeSymbol typeSymbol ||
+                this.context.GetTypeInfo(typeSyntax).Type is not INamedTypeSymbol typeSymbol ||
                 RoslynTypeMetadataName(
                 typeSymbol
             ) != "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax" {
@@ -800,10 +713,7 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             result = nil
             if typeSyntax == nil ||
-                this
-                .context
-                .GetTypeInfo(typeSyntax)
-                .Type is not INamedTypeSymbol typeSymbol ||
+                this.context.GetTypeInfo(typeSyntax).Type is not INamedTypeSymbol typeSymbol ||
                 RoslynTypeMetadataName(
                 typeSymbol
             ) != "Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax" {
@@ -855,10 +765,7 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             result = nil
             if scrutinee is not MemberAccessExpressionSyntax{Name: {Identifier: {Text: "WhenNotNull"}}} access ||
-                this
-                .context
-                .GetTypeInfo(access.Expression)
-                .Type is not INamedTypeSymbol conditionalAccessType ||
+                this.context.GetTypeInfo(access.Expression).Type is not INamedTypeSymbol conditionalAccessType ||
                 RoslynTypeMetadataName(
                 conditionalAccessType
             ) != "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax" {
@@ -945,10 +852,7 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             result = nil
             if scrutinee is not MemberAccessExpressionSyntax{Name: {Identifier: {Text: "Expression"}}} access ||
-                this
-                .context
-                .GetTypeInfo(access.Expression)
-                .Type is not INamedTypeSymbol conditionalAccessType ||
+                this.context.GetTypeInfo(access.Expression).Type is not INamedTypeSymbol conditionalAccessType ||
                 RoslynTypeMetadataName(
                 conditionalAccessType
             ) != "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax" {
@@ -1135,13 +1039,8 @@ partial class CSharpToGSharpTranslator {
             out result GExpression?
         ) bool {
             result = nil
-            if this
-                .context
-                .GetSymbolInfo(invocation)
-                .Symbol is not IMethodSymbol{Name: "OfType"} ofTypeMethod ||
-                ofTypeMethod
-                .TypeArguments
-                .Length != 1 ||
+            if this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol{Name: "OfType"} ofTypeMethod ||
+                ofTypeMethod.TypeArguments.Length != 1 ||
                 RoslynTypeMetadataName(
                 ofTypeMethod.TypeArguments[0] as INamedTypeSymbol
             ) != "Microsoft.CodeAnalysis.CSharp.Syntax.CasePatternSwitchLabelSyntax" ||
@@ -1167,10 +1066,7 @@ partial class CSharpToGSharpTranslator {
                 RoslynTypeMetadataName(
                 sectionsProperty.ContainingType
             ) != "Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax" ||
-                selectManyInvocation
-                .ArgumentList
-                .Arguments
-                .Count != 1 ||
+                selectManyInvocation.ArgumentList.Arguments.Count != 1 ||
                 !(
                 selectManyInvocation
                     .ArgumentList
@@ -1182,10 +1078,7 @@ partial class CSharpToGSharpTranslator {
             ) ||
                 !(labelsAccess.Expression is IdentifierNameSyntax{Identifier: {Text: {} labelsReceiverName}}) ||
                 labelsReceiverName != sectionParameterName ||
-                this
-                .context
-                .GetSymbolInfo(labelsAccess)
-                .Symbol is not IPropertySymbol{Name: "Labels"} labelsProperty ||
+                this.context.GetSymbolInfo(labelsAccess).Symbol is not IPropertySymbol{Name: "Labels"} labelsProperty ||
                 RoslynTypeMetadataName(
                 labelsProperty.ContainingType
             ) != "Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax" {
@@ -1291,10 +1184,7 @@ partial class CSharpToGSharpTranslator {
             out result GExpression?
         ) bool {
             result = nil
-            if this
-                .context
-                .GetSymbolInfo(invocation)
-                .Symbol is not IMethodSymbol{Name: "GetMembers"} getMembers ||
+            if this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol{Name: "GetMembers"} getMembers ||
                 RoslynTypeMetadataName(getMembers.ContainingType) != "Microsoft.CodeAnalysis.INamespaceOrTypeSymbol" ||
                 !(invocation.Expression is MemberAccessExpressionSyntax{Expression: ExpressionSyntax receiver}) ||
                 invocation.Parent is not MemberAccessExpressionSyntax{
@@ -1321,15 +1211,9 @@ partial class CSharpToGSharpTranslator {
                     .DescendantNodesAndSelf()
                     .OfType[MemberAccessExpressionSyntax]()
                     .Any(
-                    (access MemberAccessExpressionSyntax) -> access
-                        .Name
-                        .Identifier
-                        .Text == "MethodKind" &&
+                    (access MemberAccessExpressionSyntax) -> access.Name.Identifier.Text == "MethodKind" &&
                         (
-                        this
-                            .context
-                            .GetSymbolInfo(access)
-                            .Symbol is IPropertySymbol and
+                        this.context.GetSymbolInfo(access).Symbol is IPropertySymbol and
                             {ContainingType: {Name: "IMethodSymbol"}}
                     )
                 )
@@ -1374,10 +1258,7 @@ partial class CSharpToGSharpTranslator {
             result = nil
             var translatedHop GExpression?
             var spanMethodName string
-            if this
-                .context
-                .GetTypeInfo(target)
-                .Type is INamedTypeSymbol directHopType &&
+            if this.context.GetTypeInfo(target).Type is INamedTypeSymbol directHopType &&
                 RoslynTypeMetadataName(
                 directHopType
             ) == "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax" {
@@ -1386,10 +1267,7 @@ partial class CSharpToGSharpTranslator {
             } else if target is MemberAccessExpressionSyntax{
                 Name: {Identifier: {Text: "Expression"}}
             } expressionAccess &&
-                this
-                .context
-                .GetTypeInfo(expressionAccess.Expression)
-                .Type is INamedTypeSymbol receiverHopType &&
+                this.context.GetTypeInfo(expressionAccess.Expression).Type is INamedTypeSymbol receiverHopType &&
                 RoslynTypeMetadataName(
                 receiverHopType
             ) == "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax" {
@@ -1531,24 +1409,12 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             if (invocation.Expression is IdentifierNameSyntax and {Identifier: {Text: "TypeNameOf"}}) &&
-                invocation
-                .ArgumentList
-                .Arguments
-                .Count == 1 &&
-                invocation
-                .ArgumentList
-                .Arguments[0]
-                .Expression is MemberAccessExpressionSyntax typeAccess &&
-                typeAccess
-                .Name
-                .Identifier
-                .Text == "Type" &&
+                invocation.ArgumentList.Arguments.Count == 1 &&
+                invocation.ArgumentList.Arguments[0].Expression is MemberAccessExpressionSyntax typeAccess &&
+                typeAccess.Name.Identifier.Text == "Type" &&
                 typeAccess.Expression is ExpressionSyntax creation &&
                 (
-                this
-                    .context
-                    .GetSymbolInfo(typeAccess)
-                    .Symbol is IPropertySymbol and
+                this.context.GetSymbolInfo(typeAccess).Symbol is IPropertySymbol and
                     {Name: "Type", ContainingType: {Name: "ObjectCreationExpressionSyntax"}}
             ) {
                 result = MemberAccessExpression(
@@ -1558,10 +1424,7 @@ partial class CSharpToGSharpTranslator {
                 )
                 return true
             }
-            if this
-                .context
-                .GetSymbolInfo(invocation)
-                .Symbol is not IMethodSymbol method ||
+            if this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method ||
                 !RoslynAnalyzerApiMap.IsRoslynNamespace(method.ContainingType?.ContainingNamespace?.ToDisplayString()) {
                 return false
             }
@@ -1576,9 +1439,7 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             if method.Name == "GetLocation" &&
-                method
-                .Parameters
-                .Length == 0 &&
+                method.Parameters.Length == 0 &&
                 invocation.Expression is MemberAccessExpressionSyntax locationReceiver {
                 if this.TryTranslateAnalyzerNullConditionalSpanRead(
                     locationReceiver.Expression,
@@ -1608,10 +1469,7 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             if method.Name == "Any" &&
-                invocation
-                .ArgumentList
-                .Arguments
-                .Count == 1 &&
+                invocation.ArgumentList.Arguments.Count == 1 &&
                 invocation.Expression is MemberAccessExpressionSyntax anyReceiver &&
                 anyReceiver.Expression is MemberAccessExpressionSyntax{
                 Name: {Identifier: {Text: "Modifiers"}}
@@ -1653,10 +1511,7 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             if method.Name == "ToDisplayString" &&
-                invocation
-                .ArgumentList
-                .Arguments
-                .Count == 0 &&
+                invocation.ArgumentList.Arguments.Count == 0 &&
                 (
                 RoslynTypeMetadataName(method.ContainingType) is "Microsoft.CodeAnalysis.INamespaceSymbol" or
                     "Microsoft.CodeAnalysis.ISymbol"
@@ -1712,13 +1567,9 @@ partial class CSharpToGSharpTranslator {
             var handlerSyntax ExpressionSyntax? = nil
             for argument in invocation.ArgumentList.Arguments {
                 if argument.Expression is MemberAccessExpressionSyntax kindAccess &&
-                    this
-                    .context
-                    .GetSymbolInfo(kindAccess)
-                    .Symbol is IFieldSymbol kindField &&
+                    this.context.GetSymbolInfo(kindAccess).Symbol is IFieldSymbol kindField &&
                     RoslynTypeMetadataName(kindField.ContainingType) == "Microsoft.CodeAnalysis.OperationKind" &&
-                    RoslynAnalyzerApiMap
-                    .TryMapOperationKindDispatch(kindField.Name, out var boundNodeKinds) {
+                    RoslynAnalyzerApiMap.TryMapOperationKindDispatch(kindField.Name, out var boundNodeKinds) {
                     expanded = true
                     if (
                         kindField.Name is "IsType" or
@@ -2015,10 +1866,7 @@ partial class CSharpToGSharpTranslator {
             let NamesKind = func (kindMemberName string) bool {
                 return kindArguments.Any(
                     (argument ArgumentSyntax) -> argument.Expression is MemberAccessExpressionSyntax kindAccess &&
-                        this
-                        .context
-                        .GetSymbolInfo(kindAccess)
-                        .Symbol is IFieldSymbol kindField &&
+                        this.context.GetSymbolInfo(kindAccess).Symbol is IFieldSymbol kindField &&
                         kindField.Name == kindMemberName &&
                         RoslynTypeMetadataName(kindField.ContainingType) == "Microsoft.CodeAnalysis.CSharp.SyntaxKind"
                 )
@@ -2148,10 +1996,7 @@ partial class CSharpToGSharpTranslator {
                 member.Expression is not MemberAccessExpressionSyntax{
                 Name: {Identifier: {Text: "TargetMethod"}}
             } targetMethod ||
-                this
-                .context
-                .GetSymbolInfo(targetMethod)
-                .Symbol is not IPropertySymbol{Name: "TargetMethod"} property ||
+                this.context.GetSymbolInfo(targetMethod).Symbol is not IPropertySymbol{Name: "TargetMethod"} property ||
                 RoslynTypeMetadataName(
                 property.ContainingType
             ) != "Microsoft.CodeAnalysis.Operations.IInvocationOperation" {
@@ -2185,20 +2030,12 @@ partial class CSharpToGSharpTranslator {
         private func TryTranslateAnalyzerTypeNameSwitch(node SwitchExpressionSyntax, out result GExpression?) bool {
             result = nil
             if !(node.GoverningExpression is IdentifierNameSyntax{Identifier: {Text: {} parameterName}}) ||
-                node
-                .Arms
-                .Count != 4 ||
-                node
-                .Arms[0]
-                .Pattern is not DeclarationPatternSyntax first ||
+                node.Arms.Count != 4 ||
+                node.Arms[0].Pattern is not DeclarationPatternSyntax first ||
                 first.Type is not(IdentifierNameSyntax and {Identifier: {Text: "IdentifierNameSyntax"}}) ||
-                node
-                .Arms[1]
-                .Pattern is not DeclarationPatternSyntax second ||
+                node.Arms[1].Pattern is not DeclarationPatternSyntax second ||
                 second.Type is not(IdentifierNameSyntax and {Identifier: {Text: "QualifiedNameSyntax"}}) ||
-                node
-                .Arms[2]
-                .Pattern is not DeclarationPatternSyntax third ||
+                node.Arms[2].Pattern is not DeclarationPatternSyntax third ||
                 third.Type is not(IdentifierNameSyntax and {Identifier: {Text: "GenericNameSyntax"}}) ||
                 !(node.Arms[3].Pattern is DiscardPatternSyntax) {
                 return false
@@ -2232,9 +2069,7 @@ partial class CSharpToGSharpTranslator {
             if !this.InAnalyzerApiMode ||
                 fieldName != "Expression" ||
                 recursive!!.Type is not IdentifierNameSyntax invocationType ||
-                invocationType
-                .Identifier
-                .Text != "InvocationExpressionSyntax" ||
+                invocationType.Identifier.Text != "InvocationExpressionSyntax" ||
                 this.GetPatternMemberSymbol(subpattern.NameColon?.Name) is not IPropertySymbol property ||
                 RoslynTypeMetadataName(
                 property.ContainingType
@@ -2263,10 +2098,7 @@ partial class CSharpToGSharpTranslator {
             if (
                 conditionalAccess.WhenNotNull is MemberBindingExpressionSyntax and {Name: {Identifier: {Text: "Value"}}}
             ) &&
-                this
-                .context
-                .GetTypeInfo(conditionalAccess.Expression)
-                .Type is INamedTypeSymbol initializerType &&
+                this.context.GetTypeInfo(conditionalAccess.Expression).Type is INamedTypeSymbol initializerType &&
                 RoslynTypeMetadataName(
                 initializerType
             ) == "Microsoft.CodeAnalysis.CSharp.Syntax.EqualsValueClauseSyntax" {
@@ -2288,10 +2120,7 @@ partial class CSharpToGSharpTranslator {
                     ArgumentList: {Arguments: {Count: 0}}
                 }
             ) ||
-                this
-                .context
-                .GetTypeInfo(conditionalAccess.Expression)
-                .Type is not INamedTypeSymbol receiverType ||
+                this.context.GetTypeInfo(conditionalAccess.Expression).Type is not INamedTypeSymbol receiverType ||
                 RoslynTypeMetadataName(receiverType) != "Microsoft.CodeAnalysis.INamespaceSymbol" {
                 return false
             }
@@ -2360,10 +2189,7 @@ partial class CSharpToGSharpTranslator {
                 !comparison.IsKind(SyntaxKind.EqualsExpression) {
                 return false
             }
-            if this
-                .context
-                .GetTypeInfo(declarationPattern.Type)
-                .Type is not INamedTypeSymbol patternType ||
+            if this.context.GetTypeInfo(declarationPattern.Type).Type is not INamedTypeSymbol patternType ||
                 RoslynTypeMetadataName(
                 patternType
             ) != "Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax" {
@@ -2374,11 +2200,7 @@ partial class CSharpToGSharpTranslator {
                     Expression: IdentifierNameSyntax receiver,
                     Name: {Identifier: {Text: "Left"}}
                 } &&
-                    receiver
-                    .Identifier
-                    .Text == designation
-                    .Identifier
-                    .Text
+                    receiver.Identifier.Text == designation.Identifier.Text
             }
             if !ComparesDesignationLeft(comparison.Left) && !ComparesDesignationLeft(comparison.Right) {
                 return false
@@ -2502,24 +2324,14 @@ partial class CSharpToGSharpTranslator {
                 if methodSide is not MemberAccessExpressionSyntax{
                     Name: {Identifier: {Text: "MethodKind"}}
                 } methodKindAccess ||
-                    this
-                    .context
-                    .GetSymbolInfo(methodKindAccess)
-                    .Symbol is not IPropertySymbol methodKindProperty ||
+                    this.context.GetSymbolInfo(methodKindAccess).Symbol is not IPropertySymbol methodKindProperty ||
                     methodKindProperty.Name != "MethodKind" ||
-                    methodKindProperty
-                    .ContainingType
-                    .Name != "IMethodSymbol" ||
+                    methodKindProperty.ContainingType.Name != "IMethodSymbol" ||
                     kindSide is not MemberAccessExpressionSyntax{
                     Name: {Identifier: {Text: "Constructor" or "Ordinary"}}
                 } kindAccess ||
-                    this
-                    .context
-                    .GetSymbolInfo(kindAccess)
-                    .Symbol is not IFieldSymbol kindField ||
-                    kindField
-                    .ContainingType
-                    .Name != "MethodKind" {
+                    this.context.GetSymbolInfo(kindAccess).Symbol is not IFieldSymbol kindField ||
+                    kindField.ContainingType.Name != "MethodKind" {
                     continue
                 }
                 let constructorKind = kindAccess.Name.Identifier.Text == "Constructor"
@@ -2549,10 +2361,7 @@ partial class CSharpToGSharpTranslator {
             }
             for operand in[]ExpressionSyntax{binary.Left, binary.Right} {
                 if operand is not MemberAccessExpressionSyntax operandAccess ||
-                    this
-                    .context
-                    .GetSymbolInfo(operandAccess)
-                    .Symbol is not{} operandSymbol ||
+                    this.context.GetSymbolInfo(operandAccess).Symbol is not{} operandSymbol ||
                     operandSymbol.ContainingType is not{} operandContainer {
                     continue
                 }
@@ -2586,14 +2395,8 @@ partial class CSharpToGSharpTranslator {
             if !this.InAnalyzerApiMode {
                 return false
             }
-            let symbol ISymbol? = this
-                .context
-                .GetSymbolInfo(attribute)
-                .Symbol ??
-                this
-                .context
-                .GetSymbolInfo(attribute.Name)
-                .Symbol
+            let symbol ISymbol? = this.context.GetSymbolInfo(attribute).Symbol ??
+                this.context.GetSymbolInfo(attribute.Name).Symbol
             let attributeType INamedTypeSymbol? = switch symbol {
                 case constructor is IMethodSymbol: constructor.ContainingType
                 case namedType is INamedTypeSymbol: namedType
@@ -2835,9 +2638,7 @@ partial class CSharpToGSharpTranslator {
                 expression ExpressionSyntax,
                 context TranslationContext
             ) bool -> expression is MemberAccessExpressionSyntax &&
-                context
-                .GetSymbolInfo(expression)
-                .Symbol is IFieldSymbol field &&
+                context.GetSymbolInfo(expression).Symbol is IFieldSymbol field &&
                 RoslynTypeMetadataName(field.ContainingType) == "Microsoft.CodeAnalysis.OperationKind"
 
             /// The parameter an argument binds to, by NAME when the argument is
@@ -2897,9 +2698,7 @@ partial class CSharpToGSharpTranslator {
             private func ReturnsTask(symbol IMethodSymbol?) bool -> symbol!!.ReturnType is INamedTypeSymbol{
                 Name: "Task"
             } returnType &&
-                returnType
-                .ContainingNamespace
-                ?.ToDisplayString() == "System.Threading.Tasks"
+                returnType.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks"
         }
     }
 

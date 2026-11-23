@@ -598,10 +598,7 @@ func Main() {
             return instructions
                 .Where(
                 (instruction IlInstruction) -> instruction.MetadataToken is int32 token &&
-                    hash
-                    .Module
-                    .ResolveMethod(token, type.GetGenericArguments(), nil)
-                    ?.Name is "Add" or
+                    hash.Module.ResolveMethod(token, type.GetGenericArguments(), nil)?.Name is "Add" or
                     "Combine"
             )
                 .Select(

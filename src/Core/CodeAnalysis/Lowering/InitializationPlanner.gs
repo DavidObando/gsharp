@@ -73,9 +73,7 @@ internal shared class InitializationPlanner {
         }
 
         private func IsStoredPrimaryInput(variable VariableSymbol) bool -> this.fieldMap.ContainsKey(variable) ||
-            this
-            .propertyMap
-            .ContainsKey(variable)
+            this.propertyMap.ContainsKey(variable)
     }
 
     private class RequestFinder : BoundTreeWalker {
@@ -93,12 +91,8 @@ internal shared class InitializationPlanner {
         override func VisitExpression(node BoundExpression?) {
             Found |= node is BoundManagedReferenceExpression ||
                 node is BoundStructLiteralExpression &&
-                node
-                .StructType
-                .HasDeclaredPrimaryConstructor == true &&
-                node
-                .StructType
-                .NeedsSynthesizedValueStructDefaultCtor == true
+                node.StructType.HasDeclaredPrimaryConstructor == true &&
+                node.StructType.NeedsSynthesizedValueStructDefaultCtor == true
             if node is BoundFunctionLiteralExpression literal {
                 if this.includeCapturedLambdas && literal.CapturedVariables.Any(
                     (variable VariableSymbol) -> variable is not ParameterSymbol{Name: "this"}

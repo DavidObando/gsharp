@@ -132,9 +132,7 @@ shared class EmittedProgramHost {
             // the issue-#835 typeof-identity guard clean even though these
             // are runtime-loaded (never MetadataLoadContext) types.
             if !entryPoint.ReturnType.IsSameAs(typeof(Void)) && !entryPoint.ReturnType.IsSameAs(typeof(int32)) &&
-                !entryPoint
-                .ReturnType
-                .IsSameAs(typeof(uint32)) {
+                !entryPoint.ReturnType.IsSameAs(typeof(uint32)) {
                 let invalidEntryPoint = MethodAccessException(
                     "Entry point must have a return type of void, integer, or unsigned integer."
                 )

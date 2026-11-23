@@ -116,8 +116,7 @@ partial class CSharpToGSharpTranslator {
                 // error. Downgrading it would keep one arm of the snippet and
                 // drop the other without failing anything.
                 if inner.DiagnosticId == CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId &&
-                    inner.Severity == TranslationSeverity
-                    .Unsupported {
+                    inner.Severity == TranslationSeverity.Unsupported {
                     this.context.Report(
                         TranslationDiagnostic(
                             inner.ConstructKind,
@@ -183,9 +182,7 @@ partial class CSharpToGSharpTranslator {
                 equals.Parent is not VariableDeclaratorSyntax declarator ||
                 declarator.Parent is not VariableDeclarationSyntax declaration ||
                 !(declaration.Parent is LocalDeclarationStatementSyntax) ||
-                this
-                .context
-                .GetDeclaredSymbol(declarator) is not ILocalSymbol local {
+                this.context.GetDeclaredSymbol(declarator) is not ILocalSymbol local {
                 return false
             }
             let scope_ SyntaxNode? = expression!!.FirstAncestorOrSelf[BaseMethodDeclarationSyntax]() ??
@@ -213,10 +210,7 @@ partial class CSharpToGSharpTranslator {
         /// @param call The candidate invocation.
         /// @returns The source argument, or null.
         private func HarnessSourceArgument(call InvocationExpressionSyntax) ArgumentSyntax? {
-            if this
-                .context
-                .GetSymbolInfo(call)
-                .Symbol is not IMethodSymbol method ||
+            if this.context.GetSymbolInfo(call).Symbol is not IMethodSymbol method ||
                 !AnalyzerProjectDetector.IsAnalyzerTestHarnessEntry(method.OriginalDefinition) {
                 return nil
             }

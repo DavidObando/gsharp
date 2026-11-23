@@ -1018,9 +1018,7 @@ shared class BoundNodePrinter {
         writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken)
         writer.WritePunctuation(SyntaxKind.DotToken)
         writer.WriteIdentifier(
-            node
-                .Method
-                ?.Name ??
+            node.Method?.Name ??
                 (
                 (
                     if node.IsSetterAccessor {
@@ -1029,9 +1027,7 @@ shared class BoundNodePrinter {
                         "get_"
                     }
                 ) +
-                    node
-                    .Property
-                    ?.Name
+                    node.Property?.Name
             )
         )
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken)
@@ -1174,8 +1170,7 @@ shared class BoundNodePrinter {
         // rather than `?.<index-expr>` for syntactic fidelity.
         if node.WhenNotNull is BoundIndexExpression idx &&
             idx.Target is BoundVariableExpression idxRecv &&
-            object
-            .ReferenceEquals(idxRecv.Variable, node.Capture) {
+            object.ReferenceEquals(idxRecv.Variable, node.Capture) {
             writer.WritePunctuation(SyntaxKind.QuestionOpenBracketToken)
             for var i = 0; i < idx.Indices.Length; i++ {
                 if i > 0 {
@@ -1189,8 +1184,7 @@ shared class BoundNodePrinter {
         }
         if node.WhenNotNull is BoundClrIndexExpression clrIdx &&
             clrIdx.Target is BoundVariableExpression clrIdxRecv &&
-            object
-            .ReferenceEquals(clrIdxRecv.Variable, node.Capture) {
+            object.ReferenceEquals(clrIdxRecv.Variable, node.Capture) {
             writer.WritePunctuation(SyntaxKind.QuestionOpenBracketToken)
             for var i = 0; i < clrIdx.Arguments.Length; i++ {
                 if i > 0 {

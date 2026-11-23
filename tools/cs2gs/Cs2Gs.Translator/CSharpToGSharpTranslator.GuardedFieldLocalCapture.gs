@@ -81,9 +81,7 @@ partial class CSharpToGSharpTranslator {
                     node is LocalFunctionStatementSyntax ||
                     node is AnonymousFunctionExpressionSyntax
             ) ??
-                ifStatement
-                .SyntaxTree
-                .GetRoot()
+                ifStatement.SyntaxTree.GetRoot()
             for symbol in provenNonNull {
                 // A redundant later guard on the SAME (still-unwritten) field
                 // needs no second capture: the earlier capture's
@@ -279,10 +277,7 @@ partial class CSharpToGSharpTranslator {
             if !(declared != nil && declared.IsReferenceType == true) {
                 return false
             }
-            return declared.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated ||
+            return declared.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated ||
                 this.ShouldPromoteToNullableReference(symbol)
         }
 
@@ -437,26 +432,10 @@ partial class CSharpToGSharpTranslator {
             private func AlwaysExitsViaReturnOrThrow(
                 statement Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax
             ) bool -> switch statement {
-                case _ is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ReturnStatementSyntax or
-                    _ is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ThrowStatementSyntax or
-                    _ is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .BreakStatementSyntax or
-                    _ is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ContinueStatementSyntax: true
+                case _ is Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax or
+                    _ is Microsoft.CodeAnalysis.CSharp.Syntax.ThrowStatementSyntax or
+                    _ is Microsoft.CodeAnalysis.CSharp.Syntax.BreakStatementSyntax or
+                    _ is Microsoft.CodeAnalysis.CSharp.Syntax.ContinueStatementSyntax: true
                 case BlockSyntax{Statements: {Count: > 0}} block: AlwaysExitsViaReturnOrThrow(
                     block.Statements[block.Statements.Count - 1]
                 )
@@ -500,9 +479,7 @@ partial class CSharpToGSharpTranslator {
                 case argument is ArgumentSyntax when argument.Expression == candidate &&
                     (
                     argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) ||
-                        argument
-                        .RefKindKeyword
-                        .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword)
+                        argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword)
                 ): true
                 default: false
             }

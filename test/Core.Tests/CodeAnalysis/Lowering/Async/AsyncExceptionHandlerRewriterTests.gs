@@ -560,12 +560,8 @@ open class AsyncExceptionHandlerRewriterTests {
             .Select((es BoundExpressionStatement) -> es.Expression)
             .OfType[BoundImportedInstanceCallExpression]()
             .Where(
-            (ic BoundImportedInstanceCallExpression) -> ic
-                .Method
-                .DeclaringType == typeof(ExceptionDispatchInfo) &&
-                ic
-                .Method
-                .Name == "Throw"
+            (ic BoundImportedInstanceCallExpression) -> ic.Method.DeclaringType == typeof(ExceptionDispatchInfo) &&
+                ic.Method.Name == "Throw"
         )
             .ToArray()
         Assert.Single(ediThrowCalls)
@@ -617,12 +613,8 @@ open class AsyncExceptionHandlerRewriterTests {
                 .OfType[BoundExpressionStatement]()
                 .Select((s BoundExpressionStatement) -> s.Expression)
                 .OfType[BoundImportedInstanceCallExpression](),
-            (ic BoundImportedInstanceCallExpression) -> ic
-                .Method
-                .DeclaringType == typeof(ExceptionDispatchInfo) &&
-                ic
-                .Method
-                .Name == "Throw"
+            (ic BoundImportedInstanceCallExpression) -> ic.Method.DeclaringType == typeof(ExceptionDispatchInfo) &&
+                ic.Method.Name == "Throw"
         )
     }
 

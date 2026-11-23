@@ -111,15 +111,9 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
         for part in node.Parts {
             if part.IsHole && TypeSymbol.IsByRefLike(part.Value!!.Type) &&
                 FindByRefLikeToString(part.Value!!.Type) == nil {
-                let location = part
-                    .HoleSyntax
-                    ?.Location ??
-                    part.Value!!
-                    .Syntax
-                    ?.Location ??
-                    node
-                    .Syntax
-                    ?.Location ??
+                let location = part.HoleSyntax?.Location ??
+                    part.Value!!.Syntax?.Location ??
+                    node.Syntax?.Location ??
                     default(TextLocation)
                 this.diagnostics.ReportByRefLikeInterpolationUnsupported(location, part.Value!!.Type)
             }
@@ -242,15 +236,9 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
                 let toString MethodInfo? = FindByRefLikeToString(value.Type)
                 if toString == nil {
                     this.diagnostics.ReportByRefLikeInterpolationUnsupported(
-                        part
-                            .HoleSyntax
-                            ?.Location ??
-                            value
-                            .Syntax
-                            ?.Location ??
-                            node
-                            .Syntax
-                            ?.Location ??
+                        part.HoleSyntax?.Location ??
+                            value.Syntax?.Location ??
+                            node.Syntax?.Location ??
                             default(TextLocation),
                         value.Type
                     )
@@ -304,9 +292,7 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
             return this.stringFormat!!
         }
         if !this.references.TryResolveType("System.String", requireExternalVisibility: false, out var stringType) ||
-            !this
-            .references
-            .TryResolveType("System.Object", requireExternalVisibility: false, out var objectType) {
+            !this.references.TryResolveType("System.Object", requireExternalVisibility: false, out var objectType) {
             throw InvalidOperationException("String.Format cannot be resolved from the target reference set.")
         }
         this.stringFormat = stringType.GetMethod(
@@ -711,16 +697,9 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
             method = nil
             typeArguments = default(ImmutableArray[TypeSymbol])
             this.diagnostics.ReportInterpolatedStringHandlerUnavailable(
-                part
-                    .HoleSyntax
-                    ?.Location ??
-                    part
-                    .Value
-                    ?.Syntax
-                    ?.Location ??
-                    node
-                    .Syntax
-                    ?.Location ??
+                part.HoleSyntax?.Location ??
+                    part.Value?.Syntax?.Location ??
+                    node.Syntax?.Location ??
                     default(TextLocation),
                 signature
             )

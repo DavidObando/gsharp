@@ -55,9 +55,7 @@ internal class IlVerifyFilterInFinallyRule {
     /// @param errorLine The trimmed ilverify error line.
     /// @returns `true` when the line is the #4489 false positive.
     func Matches(errorCode string?, errorLine string?) bool {
-        if this
-            .candidates
-            .Count == 0 ||
+        if this.candidates.Count == 0 ||
             (errorCode != nil && !string.Equals(errorCode, StackUnderflowCode, StringComparison.Ordinal)) ||
             !TryParse(errorLine, out var typePart, out var methodPart, out var parameterCount, out var offset) {
             return false
@@ -729,8 +727,7 @@ internal class IlVerifyFilterInFinallyRule {
             pops = 0
             pushes = 0
             if opcode.StackBehaviourPop == StackBehaviour.Varpop ||
-                opcode.StackBehaviourPush == StackBehaviour
-                .Varpush {
+                opcode.StackBehaviourPush == StackBehaviour.Varpush {
                 if metadataToken == nil {
                     return false
                 }

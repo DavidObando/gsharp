@@ -813,8 +813,7 @@ class ReferenceResolver : IDisposable {
             hostType,
             ClrOverloadResolution.DefaultLiteralArgumentType
         ) ||
-            object
-            .ReferenceEquals(hostType, ClrOverloadResolution.NeverArgumentType) {
+            object.ReferenceEquals(hostType, ClrOverloadResolution.NeverArgumentType) {
             throw InvalidOperationException(
                 "Internal compiler error: the overload-resolution sentinel '${hostType.FullName}' escaped the " +
                     "binder and reached type projection. An inline `out var`/`out let`/`out _` or `default` argument " +
@@ -2411,8 +2410,7 @@ class ReferenceResolver : IDisposable {
                     return
                 }
                 if Path.GetFileName(bundledPath) == "Gsharp.Runtime.Values.dll" && File.Exists(path) &&
-                    AssemblyName
-                    .GetAssemblyName(path).Name == NativeSliceTypes.AssemblyName {
+                    AssemblyName.GetAssemblyName(path).Name == NativeSliceTypes.AssemblyName {
                     return
                 }
             }
@@ -2829,8 +2827,7 @@ class ReferenceResolver : IDisposable {
                 asm,
                 out var imageOf
             ) &&
-                MetadataTypeNameReader
-                .TryReadNames(image, defined, forwarded, publicNested) {
+                MetadataTypeNameReader.TryReadNames(image, defined, forwarded, publicNested) {
                 return AssemblyTypeNames(defined, forwarded, List[Type](), publicNested, imageOf)
             }
             return ReadThroughReflection(asm)

@@ -146,28 +146,16 @@ let userNested = func() int32 {
 
         private func Analyze(context BoundNodeAnalysisContext) {
             switch context.BoundNode {
-                case assignment is BoundAssignmentExpression when context
-                    .ContainingFunction
-                    ?.Name == "Outer" &&
-                    assignment
-                    .Variable
-                    .Name == "total" {
+                case assignment is BoundAssignmentExpression when context.ContainingFunction?.Name == "Outer" &&
+                    assignment.Variable.Name == "total" {
                     Events.Add("assign:total")
                 }
-                case variable is BoundVariableExpression when context
-                    .ContainingFunction
-                    ?.Name == "Outer" &&
-                    variable
-                    .Variable
-                    .Name == "total" {
+                case variable is BoundVariableExpression when context.ContainingFunction?.Name == "Outer" &&
+                    variable.Variable.Name == "total" {
                     Events.Add("variable:${variable.Variable.Name}")
                 }
-                case variable is BoundVariableExpression when context
-                    .ContainingFunction
-                    ?.Name == "Test" &&
-                    variable
-                    .Variable
-                    .Name == "value" {
+                case variable is BoundVariableExpression when context.ContainingFunction?.Name == "Test" &&
+                    variable.Variable.Name == "value" {
                     Events.Add("variable:value")
                 }
                 case call is BoundCallOperationExpression when call.CalledFunction.Name == "Mark" {

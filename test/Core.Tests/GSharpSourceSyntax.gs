@@ -69,9 +69,7 @@ internal shared class GSharpSourceSyntax {
     /// @returns The name, or an empty string.
     internal func SimpleName(expression SyntaxNode?) string -> switch expression {
         case call is CallExpressionSyntax when call.Callee == nil &&
-            call.ConversionTypeClause == nil: call
-            .Identifier
-            .Text
+            call.ConversionTypeClause == nil: call.Identifier.Text
         case access is AccessorExpressionSyntax: SimpleName(access.RightPart)
         case name is NameExpressionSyntax: name.IdentifierToken.Text
         default: string.Empty
@@ -121,10 +119,7 @@ internal shared class GSharpSourceSyntax {
                     return function.Identifier.Text
                 }
                 case ConstructorDeclarationSyntax {
-                    return ancestor
-                        .Ancestors()
-                        .Select(TypeName)
-                        .FirstOrDefault((name string?) -> name != nil) ??
+                    return ancestor.Ancestors().Select(TypeName).FirstOrDefault((name string?) -> name != nil) ??
                         "<top-level>"
                 }
                 case accessor is PropertyAccessorSyntax {

@@ -202,12 +202,8 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             return true
         }
         if unreachable != other.unreachable ||
-            paths.Length != other
-            .paths
-            .Length ||
-            callables.Length != other
-            .callables
-            .Length {
+            paths.Length != other.paths.Length ||
+            callables.Length != other.callables.Length {
             return false
         }
         for var i = 0; i < paths.Length; i++ {

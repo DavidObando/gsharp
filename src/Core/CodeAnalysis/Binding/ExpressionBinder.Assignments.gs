@@ -87,9 +87,7 @@ internal partial class ExpressionBinder {
         }
         let boundExpression = BindAssignmentRhs(syntax.Expression, GetAssignmentTargetType(variable))
         if variable is ImplicitFieldVariableSymbol implicitField {
-            if implicitField
-                .Field
-                .IsReadOnly &&
+            if implicitField.Field.IsReadOnly &&
                 !IsReadOnlyFieldAssignmentAllowed(implicitField.Field, implicitField.StructType, receiverIsThis: true) {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name)
             }
@@ -166,9 +164,7 @@ internal partial class ExpressionBinder {
             // Issue #4224: a writable-ref-returning getter (no setter, but
             // `ReturnRefKind == Ref`) stores through the getter instead of
             // failing outright, mirroring the explicit-receiver forms below.
-            if !implicitProp
-                .Property
-                .HasSetter &&
+            if !implicitProp.Property.HasSetter &&
                 !IsGetOnlyAutoPropertyConstructorWrite(implicitProp.Property, implicitProp.StructType, receiver: nil) {
                 let implicitRefConverted = conversions.BindConversion(
                     syntax.Expression.Location,
@@ -256,9 +252,7 @@ internal partial class ExpressionBinder {
         var current = boundExpression
         while current is BoundBlockExpression block {
             if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
-                resultLocal
-                .Name
-                .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                resultLocal.Name.StartsWith("<blockResult", StringComparison.Ordinal) &&
                 DelegateRefKindUtilities.TryFindCleanupBlockResultInitializer(
                 block.Statements,
                 resultLocal
@@ -487,9 +481,7 @@ internal partial class ExpressionBinder {
     private func ReceiverBlocksValueTypeMemberWrite(receiver BoundExpression) bool {
         return (
             receiver is BoundVariableExpression bve &&
-                bve
-                .Variable
-                .IsReadOnly &&
+                bve.Variable.IsReadOnly &&
                 !ReceiverVariableIsThis(bve.Variable) &&
                 !ReceiverTypeIsReference(bve.Variable.Type)
         ) ||
@@ -630,9 +622,7 @@ internal partial class ExpressionBinder {
             }
             return fieldAccess.Field.IsStaticAddressLegal(staticConstructorOwner)
         }
-        if fieldAccess
-            .Field
-            .IsReadOnly &&
+        if fieldAccess.Field.IsReadOnly &&
             fieldAccess.StructType is {} fieldDeclaringType &&
             !IsReadOnlyFieldAssignmentAllowed(
             fieldAccess.Field,
@@ -1149,9 +1139,7 @@ internal partial class ExpressionBinder {
                 makeNarrowedField
             )
         } else if variable is ImplicitPropertyVariableSymbol implicitPropReceiver &&
-            implicitPropReceiver
-            .Property
-            .HasGetter {
+            implicitPropReceiver.Property.HasGetter {
             // Issue #1446 (follow-up to #689/#1339): the property counterpart
             // of the implicit-field case above. A bare instance-property name
             // used as the *receiver* of a member write (`Prop.Member = v`,
@@ -1189,9 +1177,7 @@ internal partial class ExpressionBinder {
                 )
             }
         } else if variable is ImplicitStaticPropertyVariableSymbol implicitStaticPropReceiver &&
-            implicitStaticPropReceiver
-            .Property
-            .HasGetter {
+            implicitStaticPropReceiver.Property.HasGetter {
             implicitFieldReceiverExpr = BoundPropertyAccessExpression(
                 nil,
                 receiver: nil,
@@ -1263,8 +1249,7 @@ internal partial class ExpressionBinder {
                 out var instTargetSymbol,
                 out var instWritable
             ) ||
-                RefCapabilities
-                .IsReadOnlyValueReference(assignmentReceiver) {
+                RefCapabilities.IsReadOnlyValueReference(assignmentReceiver) {
                 if !RefCapabilities.IsReadOnlyValueReference(assignmentReceiver) &&
                     TryReportProtectedClrInstanceMemberWrite(
                     clrReceiverType,
@@ -1507,8 +1492,7 @@ internal partial class ExpressionBinder {
                 }
             }
             if tpVarType.InterfaceConstraint is InterfaceSymbol tpIfaceConstraint &&
-                TypeMemberModel
-                .TryGetPropertyWithOwner(
+                TypeMemberModel.TryGetPropertyWithOwner(
                 tpIfaceConstraint,
                 syntax.FieldIdentifier.ValueText,
                 out var tpIfacePropCandidate,
@@ -1922,16 +1906,8 @@ internal partial class ExpressionBinder {
             var rhsSyntax = rawRhsSyntax
             while rhsSyntax.Parent is ParenthesizedExpressionSyntax or CheckedExpressionSyntax {
                 if rhsSyntax.Parent is ExpressionSyntax parentExpr &&
-                    parentExpr
-                    .Span
-                    .Start >= rhsLocation
-                    .Span
-                    .Start &&
-                    parentExpr
-                    .Span
-                    .End <= rhsLocation
-                    .Span
-                    .End {
+                    parentExpr.Span.Start >= rhsLocation.Span.Start &&
+                    parentExpr.Span.End <= rhsLocation.Span.End {
                     rhsSyntax = parentExpr
                 } else {
                     break
@@ -1980,8 +1956,7 @@ internal partial class ExpressionBinder {
             function?.ThisParameter != nil &&
             function!!.ReceiverType is StructSymbol receiverStruct &&
             !SourceValueMemberPrecedesInheritedEvent(receiverStruct, name) &&
-            TypeMemberModel
-            .TryGetEvent(receiverStruct, name, out var ev, out var eventOwner) {
+            TypeMemberModel.TryGetEvent(receiverStruct, name, out var ev, out var eventOwner) {
             if ReportInaccessibleSourceEvent(ev, eventOwner, bareName, syntax.Value) {
                 return BoundErrorExpression(nil)
             }
@@ -2018,8 +1993,12 @@ internal partial class ExpressionBinder {
             }
             if staticOwner != nil &&
                 !SourceStaticValueMemberPrecedesInheritedEvent(staticOwner, name) &&
-                TypeMemberModel
-                .TryGetStaticEventIncludingInherited(staticOwner, name, out var staticEv, out var staticEventOwner) {
+                TypeMemberModel.TryGetStaticEventIncludingInherited(
+                staticOwner,
+                name,
+                out var staticEv,
+                out var staticEventOwner
+            ) {
                 if ReportInaccessibleSourceEvent(staticEv, staticEventOwner, bareName, syntax.Value) {
                     return BoundErrorExpression(nil)
                 }
@@ -2152,21 +2131,13 @@ internal partial class ExpressionBinder {
         }
         let writableRefProperty = (
             variable is ImplicitPropertyVariableSymbol implicitProperty &&
-                implicitProperty
-                .Property
-                .ReturnRefKind == RefKind.Ref &&
-                !implicitProperty
-                .Property
-                .HasSetter
+                implicitProperty.Property.ReturnRefKind == RefKind.Ref &&
+                !implicitProperty.Property.HasSetter
         ) ||
             (
             variable is ImplicitStaticPropertyVariableSymbol implicitStaticProperty &&
-                implicitStaticProperty
-                .Property
-                .ReturnRefKind == RefKind.Ref &&
-                !implicitStaticProperty
-                .Property
-                .HasSetter
+                implicitStaticProperty.Property.ReturnRefKind == RefKind.Ref &&
+                !implicitStaticProperty.Property.HasSetter
         )
         if writableRefProperty {
             return BindRefGetterCompoundAssignment(syntax)
@@ -2242,9 +2213,7 @@ internal partial class ExpressionBinder {
         let convertedResult = conversions.BindConversion(syntax.Value.Location, binaryResult, storeType)
         // Route through the correct assignment path depending on variable kind.
         if variable is ImplicitFieldVariableSymbol implicitField {
-            if implicitField
-                .Field
-                .IsReadOnly &&
+            if implicitField.Field.IsReadOnly &&
                 !IsReadOnlyFieldAssignmentAllowed(implicitField.Field, implicitField.StructType, receiverIsThis: true) {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name)
             }
@@ -2311,9 +2280,7 @@ internal partial class ExpressionBinder {
             return FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, staticPropertyAssignment)
         }
         if variable is ImplicitPropertyVariableSymbol implicitProp {
-            if !implicitProp
-                .Property
-                .HasSetter &&
+            if !implicitProp.Property.HasSetter &&
                 !IsGetOnlyAutoPropertyConstructorWrite(implicitProp.Property, implicitProp.StructType, receiver: nil) {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name)
             }
@@ -2685,8 +2652,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         if !AccessibilityChecker.IsAccessible(property.GetterAccessibility, effectiveInterface, this.function) ||
-            !AccessibilityChecker
-            .IsAccessible(property.SetterAccessibility, effectiveInterface, this.function) {
+            !AccessibilityChecker.IsAccessible(property.SetterAccessibility, effectiveInterface, this.function) {
             Diagnostics.ReportMemberInaccessible(
                 memberNameSyntax.IdentifierToken.Location,
                 property.Name,
@@ -2914,8 +2880,7 @@ internal partial class ExpressionBinder {
         if !hasCompoundField &&
             hasCompoundProperty &&
             compoundProperty!!.ReturnRefKind == RefKind.Ref &&
-            !compoundProperty!!
-            .HasSetter {
+            !compoundProperty!!.HasSetter {
             let prop = compoundProperty!!
             let propDeclaringType = Invariant.Required(
                 compoundPropertyDeclaringType,
@@ -3424,8 +3389,7 @@ internal partial class ExpressionBinder {
             out _,
             fromDerivedType: includeInherited
         ) ||
-            RefCapabilities
-            .IsReadOnlyValueReference(boundReceiver) {
+            RefCapabilities.IsReadOnlyValueReference(boundReceiver) {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName)
             return BoundErrorExpression(nil)
         }
@@ -3952,10 +3916,7 @@ internal partial class ExpressionBinder {
         pointeeType = TypeSymbol.Error
         let unwrappedTarget = AssignmentTargetSyntaxFacts.UnwrapParentheses(target)
         if unwrappedTarget is UnaryExpressionSyntax dereference &&
-            dereference
-            .OperatorToken
-            .Kind == SyntaxKind
-            .StarToken {
+            dereference.OperatorToken.Kind == SyntaxKind.StarToken {
             var pointer = BindExpression(dereference.Operand)
             if pointer is BoundErrorExpression {
                 return pointer
@@ -4003,11 +3964,8 @@ internal partial class ExpressionBinder {
         }
         if RefCapabilities.IsReadOnlyStorage(storage) {
             if unwrappedTarget is UnaryExpressionSyntax &&
-                unwrappedTarget
-                .OperatorToken
-                .Kind == SyntaxKind.StarToken ||
-                AssignmentTargetSyntaxFacts
-                .IsCallResult(target) {
+                unwrappedTarget.OperatorToken.Kind == SyntaxKind.StarToken ||
+                AssignmentTargetSyntaxFacts.IsCallResult(target) {
                 Diagnostics.ReportManagedReference(target.Location, "readonly storage cannot be written through")
             } else {
                 Diagnostics.ReportCannotAssign(target.Location, target.ToString())
@@ -4171,9 +4129,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         // Constructor-owned readonly fields retain their initialization permissions.
-        if syntax
-            .RefKindModifier
-            .Text != "in" &&
+        if syntax.RefKindModifier.Text != "in" &&
             (
             RefCapabilities.IsReadOnlyStorage(operand) || RefCapabilities.IsCapturedValueTypeReceiverStorage(
                 operand,
@@ -5078,8 +5034,7 @@ internal partial class ExpressionBinder {
                 }
             }
             if tpReceiver.InterfaceConstraint is InterfaceSymbol tpIfaceConstraint &&
-                TypeMemberModel
-                .TryGetPropertyWithOwner(
+                TypeMemberModel.TryGetPropertyWithOwner(
                 tpIfaceConstraint,
                 fieldName,
                 out var tpIfacePropCandidate,
@@ -5200,8 +5155,7 @@ internal partial class ExpressionBinder {
                 out var instTargetSymbol,
                 out var instWritable
             ) ||
-                RefCapabilities
-                .IsReadOnlyValueReference(receiver) {
+                RefCapabilities.IsReadOnlyValueReference(receiver) {
                 if !RefCapabilities.IsReadOnlyValueReference(receiver) &&
                     TryReportProtectedClrInstanceMemberWrite(
                     clrReceiverType,
@@ -5265,9 +5219,7 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         if !binderCtx.TryGetNarrowedAccessPath(receiver, out var path, out _) ||
             path.HasMembers ||
-            path
-            .Root
-            .Type is NullableTypeSymbol ||
+            path.Root.Type is NullableTypeSymbol ||
             !CanRecoverDeclaredMemberWriteReceiver(path.Root.Type, requiredType) {
             return receiver
         }
@@ -5349,8 +5301,7 @@ internal partial class ExpressionBinder {
             out var owner
         ) &&
             SamePropertySlot(selectedProperty, property, MemberOperation.Write, receiverType) &&
-            object
-            .Equals(property.Type, selectedProperty.Type) {
+            object.Equals(property.Type, selectedProperty.Type) {
             declaredProperty = property
             declaredStructOwner = owner
             declaredInterfaceOwner = nil
@@ -5965,12 +5916,7 @@ internal partial class ExpressionBinder {
         if !syntax.IsIncrementDecrement ||
             receiver is BoundVariableExpression ||
             (receiver is BoundDereferenceExpression && receiver.Operand is BoundVariableExpression) ||
-            GSharp
-            .Core
-            .CodeAnalysis
-            .Lowering
-            .SideEffectSpiller
-            .IsCapturedRuntimeGenericStorageReceiver(receiver) {
+            GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.IsCapturedRuntimeGenericStorageReceiver(receiver) {
             return false
         }
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()

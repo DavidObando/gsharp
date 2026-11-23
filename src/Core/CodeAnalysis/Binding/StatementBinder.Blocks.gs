@@ -577,8 +577,7 @@ internal partial class StatementBinder {
         if catches.Count > 0 &&
             function != nil &&
             isIteratorReturnType(function!!.Type) &&
-            YieldFinder
-            .ContainsYieldInOwnTryBlock(tryBlock) {
+            YieldFinder.ContainsYieldInOwnTryBlock(tryBlock) {
             for yieldLocation in YieldFinder.GetYieldLocationsInOwnTryBlock(tryBlock) {
                 Diagnostics.ReportYieldInsideTryWithCatch(yieldLocation)
             }
@@ -1468,12 +1467,7 @@ internal partial class StatementBinder {
         }
         let rebuilt = CaptureCallReceiverCore(receiver, prefix, isDefer)
         if (!isDefer && ReadsUncapturableVariable(rebuilt)) ||
-            !GSharp
-            .Core
-            .CodeAnalysis
-            .Lowering
-            .SideEffectSpiller
-            .IsInPlaceStorageWriteReceiver(rebuilt) {
+            !GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.IsInPlaceStorageWriteReceiver(rebuilt) {
             return rebuilt
         }
         let captured = GSharp
@@ -1872,9 +1866,7 @@ internal partial class StatementBinder {
     ) BoundExpression {
         for statement in block.Statements {
             if statement is BoundVariableDeclaration hoistedDeclaration &&
-                hoistedDeclaration
-                .Variable
-                .DeclaringSyntax == nil {
+                hoistedDeclaration.Variable.DeclaringSyntax == nil {
                 $scope.TryDeclareVariable(hoistedDeclaration.Variable)
             }
             prefix.Add(statement)
@@ -1893,12 +1885,7 @@ internal partial class StatementBinder {
 
     private func MayBeValueType(type TypeSymbol?) bool -> type != nil &&
         (
-        GSharp
-            .Core
-            .CodeAnalysis
-            .Emit
-            .ReflectionMetadataEmitter
-            .IsValueTypeSymbol(type) ||
+        GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(type) ||
             type is PointerTypeSymbol or
             FunctionPointerTypeSymbol ||
             type is TypeParameterSymbol &&
@@ -1922,14 +1909,8 @@ internal partial class StatementBinder {
         if expression is BoundAwaitExpression awaited {
             expression = awaited.Expression
         } else if expression is BoundImportedCallExpression{Function: {Name: "Wait"}} bridge &&
-            bridge
-            .Function
-            .ImportedClass
-            .ClassType
-            .FullName == "Gsharp.Concurrency.Blocking" &&
-            bridge
-            .Arguments
-            .Length == 1 {
+            bridge.Function.ImportedClass.ClassType.FullName == "Gsharp.Concurrency.Blocking" &&
+            bridge.Arguments.Length == 1 {
             expression = bridge.Arguments[0]
         }
         if !(expression is BoundCallExpression) &&
@@ -2127,12 +2108,8 @@ internal partial class StatementBinder {
                 if !(channelExpr is BoundErrorExpression) &&
                     caseSyntax.CaseKind != SelectCaseKind.Send &&
                     !ChannelTypeSymbol.TryGetChannelShape(channelExpr.Type, out _, out _, out _) &&
-                    binderCtx
-                    .ChannelRuntime
-                    .IsAvailable &&
-                    binderCtx
-                    .ChannelRuntime
-                    .TryGetSelectableElement(channelExpr.Type, out var selectable) {
+                    binderCtx.ChannelRuntime.IsAvailable &&
+                    binderCtx.ChannelRuntime.TryGetSelectableElement(channelExpr.Type, out var selectable) {
                     selectableElement = selectable
                 } else if !(channelExpr is BoundErrorExpression) && ChannelTypeSymbol.TryGetChannelShape(
                     channelExpr.Type,
@@ -3218,10 +3195,7 @@ internal partial class StatementBinder {
                     return true
                 }
                 if calledFunction is ImportedFunctionSymbol imported &&
-                    imported
-                    .Method
-                    .GetParameters()
-                    .Any((parameter ParameterInfo) -> parameter.ParameterType.IsByRef) {
+                    imported.Method.GetParameters().Any((parameter ParameterInfo) -> parameter.ParameterType.IsByRef) {
                     return true
                 }
             }
@@ -3232,10 +3206,7 @@ internal partial class StatementBinder {
             }
             if expression is BoundIndirectCallExpression indirect &&
                 (
-                indirect
-                    .FunctionType
-                    .ParameterTypes
-                    .Any((type TypeSymbol) -> type is ByRefTypeSymbol) ||
+                indirect.FunctionType.ParameterTypes.Any((type TypeSymbol) -> type is ByRefTypeSymbol) ||
                     (
                     !indirect.ArgumentRefKinds.IsDefaultOrEmpty && indirect.ArgumentRefKinds.Any(
                         (kind RefKind) -> kind != RefKind.None
@@ -3245,10 +3216,7 @@ internal partial class StatementBinder {
                 return true
             }
             if expression is BoundFunctionPointerInvocationExpression pointer &&
-                pointer
-                .FunctionPointerType
-                .ParameterTypes
-                .Any((type TypeSymbol) -> type is ByRefTypeSymbol) {
+                pointer.FunctionPointerType.ParameterTypes.Any((type TypeSymbol) -> type is ByRefTypeSymbol) {
                 return true
             }
             let arguments = switch expression {
@@ -3300,9 +3268,7 @@ internal partial class StatementBinder {
             allowTemporaryValues bool = true
         ) bool -> switch expression {
             case boundVariableExpression is BoundVariableExpression when boundVariableExpression.Variable is ParameterSymbol &&
-                boundVariableExpression
-                .Variable
-                .IsReceiverParameter == true: false
+                boundVariableExpression.Variable.IsReceiverParameter == true: false
             case variable is BoundVariableExpression{
                 Variable: LocalVariableSymbol local
             }: local.RefKind == RefKind.None &&
@@ -3392,9 +3358,7 @@ internal partial class StatementBinder {
         // closed sources, preserving existing behavior.
         private func ResolvePinnableElementType(sourceType TypeSymbol, pinnableElementClr Type) TypeSymbol {
             if sourceType is ImportedTypeSymbol{OpenDefinition: not nil} imported &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !imported.TypeArguments.IsDefaultOrEmpty {
                 var openMethod MethodInfo? = nil
                 try {
                     openMethod = imported.OpenDefinition!!.GetMethod(

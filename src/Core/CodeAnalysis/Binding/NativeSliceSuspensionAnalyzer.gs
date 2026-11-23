@@ -23,9 +23,7 @@ internal class NativeSliceSuspensionAnalyzer : BoundTreeWalker {
         if node.Initializer != nil &&
             IsNativeLocation(node.Initializer) &&
             (
-            node
-                .Variable
-                .Type is ByRefTypeSymbol ||
+            node.Variable.Type is ByRefTypeSymbol ||
                 (node.Variable is LocalVariableSymbol and {RefKind: not RefKind.None})
         ) {
             nativeLocations.Add(node.Variable)
@@ -56,8 +54,7 @@ internal class NativeSliceSuspensionAnalyzer : BoundTreeWalker {
     private func Check(location BoundExpression?, value BoundExpression) {
         if location != nil && !Binder.IsReferenceTypeForConstraint(location.Type) &&
             IsNativeLocation(location) &&
-            AsyncBoundTreeQueries
-            .HasAwait(value) {
+            AsyncBoundTreeQueries.HasAwait(value) {
             let syntax SyntaxNode? = value.Syntax ?? location.Syntax
             if syntax != nil {
                 diagnostics.ReportNativeSliceSuspendingWrite(syntax.Location)

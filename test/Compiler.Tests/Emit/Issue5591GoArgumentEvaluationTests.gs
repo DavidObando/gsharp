@@ -852,18 +852,10 @@ scope {
             .DescendantNodes()
             .OfType[CallExpressionSyntax]()
             .Where(
-            (c CallExpressionSyntax) -> c
-                .Identifier
-                .Text == "Top" ||
-                c
-                .Identifier
-                .Text == "Run" ||
-                c
-                .Identifier
-                .Text == "Start" ||
-                c
-                .Identifier
-                .Text == "WriteLine"
+            (c CallExpressionSyntax) -> c.Identifier.Text == "Top" ||
+                c.Identifier.Text == "Run" ||
+                c.Identifier.Text == "Start" ||
+                c.Identifier.Text == "WriteLine"
         )
             .ToArray()
         Assert.Equal(4, calls.Length)

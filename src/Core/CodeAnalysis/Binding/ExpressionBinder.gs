@@ -1057,9 +1057,7 @@ internal partial class ExpressionBinder {
             let frame = entry.Frame
             let hasFacts = frame != nil && frame.Count > 0
             if hasFacts ||
-                entry
-                .Aliases
-                .Count > 0 ||
+                entry.Aliases.Count > 0 ||
                 (entryAliasesOverride != nil && entryAliasesOverride.Count > 0) ||
                 canAddExternalAlias {
                 activeCount++
@@ -1079,9 +1077,7 @@ internal partial class ExpressionBinder {
             let frame = entry.Frame
             let hasFacts = frame != nil && frame.Count > 0
             if !hasFacts &&
-                entry
-                .Aliases
-                .Count == 0 &&
+                entry.Aliases.Count == 0 &&
                 (entryAliasesOverride == nil || entryAliasesOverride.Count == 0) &&
                 !canAddExternalAlias {
                 continue
@@ -1540,10 +1536,7 @@ internal partial class ExpressionBinder {
         // classes coalesced at a shared interface), bind with the target so the
         // result is target-typed rather than reported as GS0129.
         if syntax is BinaryExpressionSyntax binaryExpr &&
-            binaryExpr
-            .OperatorToken
-            .Kind == SyntaxKind
-            .QuestionQuestionToken {
+            binaryExpr.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
             let boundCoalesce = BindBinaryExpression(binaryExpr, targetType)
             return ConvertTargetTypedValue(syntax, boundCoalesce, targetType)
         }
@@ -2034,8 +2027,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         if (variable is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol) &&
-            AccessibilityChecker
-            .TryGetInaccessibleImplicitMemberRead(
+            AccessibilityChecker.TryGetInaccessibleImplicitMemberRead(
             variable,
             this.function,
             out var propertyOwner,
@@ -2891,9 +2883,7 @@ internal partial class ExpressionBinder {
         // instead of failing deep inside emit.
         if variable is GlobalVariableSymbol global &&
             global.RequiresEntryPointLocalStorage &&
-            this
-            .function
-            ?.IsTopLevelEntryPoint != true {
+            this.function?.IsTopLevelEntryPoint != true {
             let kindDescription = if variable.Type is ByRefTypeSymbol {
                 "pointer variable '${variable.Name}' cannot be referenced from a function body; a managed pointer (*T)"
             } else {
@@ -2937,8 +2927,7 @@ internal partial class ExpressionBinder {
                 // BindNameExpression so setter-only access remains valid.
                 if !(variable is ImplicitPropertyVariableSymbol) &&
                     !(variable is ImplicitStaticPropertyVariableSymbol) &&
-                    AccessibilityChecker
-                    .TryGetInaccessibleImplicitMemberRead(
+                    AccessibilityChecker.TryGetInaccessibleImplicitMemberRead(
                     variable,
                     this.function,
                     out var declaringOwner,
@@ -3331,8 +3320,7 @@ internal partial class ExpressionBinder {
                 typeSymbol is NullableTypeSymbol &&
                 typeSymbol.UnderlyingType is TupleTypeSymbol
         ) &&
-            MemberLookup
-            .TryProjectErasedClrType(typeSymbol, out var erasedTuple) {
+            MemberLookup.TryProjectErasedClrType(typeSymbol, out var erasedTuple) {
             // Issue #3087: imported instance-method applicability still needs
             // the full erased ValueTuple shape when an element is symbolic.
             return erasedTuple
@@ -3882,10 +3870,8 @@ internal partial class ExpressionBinder {
             return false
         }
         var includeInternal = CanAccessInternalsOf(declaringType)
-        for var ancestor Type? = declaringType.BaseType;
-            ancestor != nil &&
-            !includeInternal;
-            ancestor = ancestor?.BaseType {
+        for var ancestor Type? = declaringType.BaseType; ancestor != nil &&
+            !includeInternal; ancestor = ancestor?.BaseType {
             includeInternal = CanAccessInternalsOf(ancestor)
         }
         let flags = ClrMemberVisibility.Widen(
@@ -4190,9 +4176,7 @@ internal partial class ExpressionBinder {
             return resolvedFrom is FunctionPointerTypeSymbol ||
                 resolvedFrom == TypeSymbol.NInt ||
                 resolvedFrom == TypeSymbol.Object ||
-                resolvedFrom
-                .ClrType
-                ?.FullName == "System.ValueType"
+                resolvedFrom.ClrType?.FullName == "System.ValueType"
         }
         if resolvedFrom is FunctionPointerTypeSymbol {
             return CanConvertViaAsCore(TypeSymbol.NInt, targetType, substitutions)
@@ -4337,12 +4321,8 @@ internal partial class ExpressionBinder {
             if tpIsVal {
                 if TryGetTypeParameterEffectiveClassBound(otherTp) is {} otherClassBound &&
                     otherClassBound != TypeSymbol.Object &&
-                    otherClassBound
-                    .ClrType
-                    ?.FullName != "System.ValueType" &&
-                    otherClassBound
-                    .ClrType
-                    ?.FullName != "System.Enum" {
+                    otherClassBound.ClrType?.FullName != "System.ValueType" &&
+                    otherClassBound.ClrType?.FullName != "System.Enum" {
                     return false
                 }
                 return true
@@ -4350,12 +4330,8 @@ internal partial class ExpressionBinder {
             if otherIsVal {
                 if TryGetTypeParameterEffectiveClassBound(tp) is {} tpClassBound &&
                     tpClassBound != TypeSymbol.Object &&
-                    tpClassBound
-                    .ClrType
-                    ?.FullName != "System.ValueType" &&
-                    tpClassBound
-                    .ClrType
-                    ?.FullName != "System.Enum" {
+                    tpClassBound.ClrType?.FullName != "System.ValueType" &&
+                    tpClassBound.ClrType?.FullName != "System.Enum" {
                     return false
                 }
                 return true
@@ -4587,8 +4563,7 @@ internal partial class ExpressionBinder {
     private func HasRuntimeReferenceConversion(from TypeSymbol, to TypeSymbol) bool {
         if (from is FunctionTypeSymbol || to is FunctionTypeSymbol) &&
             MemberLookup.TryGetDelegateFunctionTypeFromSymbol(from, out var fromFn) &&
-            MemberLookup
-            .TryGetDelegateFunctionTypeFromSymbol(to, out var toFn) {
+            MemberLookup.TryGetDelegateFunctionTypeFromSymbol(to, out var toFn) {
             if Conversion.ReusesFunctionValueDelegate(from, to) {
                 return true
             }
@@ -4640,8 +4615,7 @@ internal partial class ExpressionBinder {
                 return false
             }
             if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(rFrom, rTo) &&
-                !Conversion
-                .HaveIdenticalTypeArgumentContracts(rFrom, rTo) {
+                !Conversion.HaveIdenticalTypeArgumentContracts(rFrom, rTo) {
                 if (rFrom.IsValueType || rFrom is TupleTypeSymbol) ||
                     (rTo.IsValueType || rTo is TupleTypeSymbol) ||
                     !CanConvertViaAs(rFrom, rTo) {
@@ -4943,11 +4917,7 @@ internal partial class ExpressionBinder {
                 CanSingleTypePositionMatchForAs(fRect.ElementType, tRect.ElementType, varianceMode: 3, substitutions)
         }
         if fromCore is FunctionTypeSymbol fFn && toCore is FunctionTypeSymbol tFn {
-            return fFn
-                .ParameterTypes
-                .Length == tFn
-                .ParameterTypes
-                .Length &&
+            return fFn.ParameterTypes.Length == tFn.ParameterTypes.Length &&
                 (fFn.ReturnType == TypeSymbol.Void) == (tFn.ReturnType == TypeSymbol.Void) &&
                 CanTypeArgumentsMatchForAs(fFn.ParameterTypes, tFn.ParameterTypes, varianceMode: 3, substitutions) &&
                 CanSingleTypePositionMatchForAs(fFn.ReturnType, tFn.ReturnType, varianceMode: 3, substitutions)
@@ -5064,11 +5034,7 @@ internal partial class ExpressionBinder {
                 CanSingleTypePositionMatchForAs(fRect.ElementType, tRect.ElementType, varianceMode: 0, substitutions)
         }
         if fromCore is FunctionTypeSymbol fFn && toCore is FunctionTypeSymbol tFn {
-            return fFn
-                .ParameterTypes
-                .Length == tFn
-                .ParameterTypes
-                .Length &&
+            return fFn.ParameterTypes.Length == tFn.ParameterTypes.Length &&
                 (fFn.ReturnType == TypeSymbol.Void) == (tFn.ReturnType == TypeSymbol.Void) &&
                 CanTypeArgumentsMatchForAs(fFn.ParameterTypes, tFn.ParameterTypes, varianceMode: 0, substitutions) &&
                 CanSingleTypePositionMatchForAs(fFn.ReturnType, tFn.ReturnType, varianceMode: 0, substitutions)
@@ -5117,11 +5083,7 @@ internal partial class ExpressionBinder {
                 CanSingleTypePositionMatchForAs(sRect.ElementType, tRect.ElementType, varianceMode: 1, substitutions)
         }
         if source is FunctionTypeSymbol sFn && target is FunctionTypeSymbol tFn {
-            return sFn
-                .ParameterTypes
-                .Length == tFn
-                .ParameterTypes
-                .Length &&
+            return sFn.ParameterTypes.Length == tFn.ParameterTypes.Length &&
                 (sFn.ReturnType == TypeSymbol.Void) == (tFn.ReturnType == TypeSymbol.Void) &&
                 CanTypeArgumentsMatchForAs(sFn.ParameterTypes, tFn.ParameterTypes, varianceMode: 2, substitutions) &&
                 CanSingleTypePositionMatchForAs(sFn.ReturnType, tFn.ReturnType, varianceMode: 1, substitutions)
@@ -5637,9 +5599,7 @@ internal partial class ExpressionBinder {
                 case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.NullCoalesce:
                 binary.Right.Type == TypeSymbol.Never || IsProvenNonNullTypeParameterExpression(binary.Right)
                 case varExpr is BoundVariableExpression: varExpr.NarrowedType != nil ||
-                    varExpr
-                    .Variable
-                    .HasDefinitelyNonNullValue ||
+                    varExpr.Variable.HasDefinitelyNonNullValue ||
                     (
                     varExpr.Variable is LocalVariableSymbol local && local.Name.StartsWith(
                         "$$ncap_",
@@ -5873,14 +5833,10 @@ internal partial class ExpressionBinder {
                     let unboxesToValueType = bve.NarrowedType != nil && !ReflectionMetadataEmitter.IsValueTypeSymbol(
                         declaredType
                     ) &&
-                        declaredType
-                        ?.ClrType
-                        ?.IsValueType != true &&
+                        declaredType?.ClrType?.IsValueType != true &&
                         (
                         ReflectionMetadataEmitter.IsValueTypeSymbol(effectiveType) ||
-                            effectiveType
-                            ?.ClrType
-                            ?.IsValueType == true
+                            effectiveType?.ClrType?.IsValueType == true
                     )
                     return if unboxesToValueType {
                         effectiveType
@@ -6097,9 +6053,7 @@ internal partial class ExpressionBinder {
                     }
                     if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var functionType) ||
                         functionType == nil ||
-                        functionType.Arity != lambda
-                        .Parameters
-                        .Count {
+                        functionType.Arity != lambda.Parameters.Count {
                         return false
                     }
                     for var i = 0; i < lambda.Parameters.Count; i++ {
@@ -6234,19 +6188,14 @@ internal partial class ExpressionBinder {
             } symbolicAwaitable &&
                 symbolicAwaitable.ClrType is Type importedTaskClr &&
                 importedTaskClr.IsGenericType &&
-                !importedTaskClr
-                .IsGenericTypeDefinition {
+                !importedTaskClr.IsGenericTypeDefinition {
                 let openDef = importedTaskClr.GetGenericTypeDefinition()
                 let openShape = AwaitableShape.Resolve(openDef)
                 if openShape?.ResultType is Type openResult &&
                     openResult.IsGenericParameter &&
-                    openResult
-                    .DeclaringType
-                    .IsSameAs(openDef) &&
+                    openResult.DeclaringType.IsSameAs(openDef) &&
                     openResult.GenericParameterPosition >= 0 &&
-                    openResult.GenericParameterPosition < symbolicAwaitable
-                    .TypeArguments
-                    .Length {
+                    openResult.GenericParameterPosition < symbolicAwaitable.TypeArguments.Length {
                     element = if annotatedAwaitable != nil {
                         annotatedAwaitable.GetTypeArgumentSymbol(openResult.GenericParameterPosition)
                     } else {
@@ -6388,8 +6337,7 @@ internal partial class ExpressionBinder {
             }
             if source is TupleTypeSymbol sourceTuple &&
                 target is TupleTypeSymbol targetTuple &&
-                sourceTuple.Arity == targetTuple
-                .Arity {
+                sourceTuple.Arity == targetTuple.Arity {
                 for var i = 0; i < sourceTuple.Arity; i++ {
                     if !OpenLiteralShapeConverts(sourceTuple.ElementTypes[i], targetTuple.ElementTypes[i]) {
                         return false
@@ -6493,9 +6441,7 @@ internal partial class ExpressionBinder {
                         0
                     }
                 )
-                if resolution.Outcome != ClrOverloadResolution
-                    .ResolutionOutcome
-                    .Resolved ||
+                if resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved ||
                     resolution.Best is not{} method {
                     return nil
                 }
@@ -6642,13 +6588,9 @@ internal partial class ExpressionBinder {
             if argument is not BoundMethodGroupExpression userGroup {
                 return nil
             }
-            if userGroup
-                .Candidates
-                .Length == 1 &&
+            if userGroup.Candidates.Length == 1 &&
                 userGroup.FunctionType is {} naturalType &&
-                naturalType
-                .ParameterTypes
-                .Length == delegateArity {
+                naturalType.ParameterTypes.Length == delegateArity {
                 let naturalParameters = [delegateArity]Type
                 for var i = 0; i < naturalParameters.Length; i++ {
                     if projectType(naturalType.ParameterTypes[i]) is not{} projected {
@@ -6798,9 +6740,7 @@ internal partial class ExpressionBinder {
                 )
                 if parameterOffset == 1 {
                     let receiverParameter = candidateOwner?.SubstituteMemberType(candidate.Parameters[0].Type) ??
-                        candidate
-                        .Parameters[0]
-                        .Type
+                        candidate.Parameters[0].Type
                     // parameterOffset is 1 only when `candidate.IsExtension && receiver != null` held above.
                     Binder.InferTypeArguments(receiverParameter, receiver!!.Type, substitution)
                 }
@@ -6809,9 +6749,7 @@ internal partial class ExpressionBinder {
                         let parameter = candidateOwner?.SubstituteMemberType(
                             candidate.Parameters[i + parameterOffset].Type
                         ) ??
-                            candidate
-                            .Parameters[i + parameterOffset]
-                            .Type
+                            candidate.Parameters[i + parameterOffset].Type
                         Binder.InferTypeArguments(parameter, targetParameterTypes[i], substitution)
                     }
                 }
@@ -6831,9 +6769,7 @@ internal partial class ExpressionBinder {
             closedParameters = [delegateArity]TypeSymbol
             for var i = 0; i < closedParameters!!.Length; i++ {
                 let parameter = candidateOwner?.SubstituteMemberType(candidate.Parameters[i + parameterOffset].Type) ??
-                    candidate
-                    .Parameters[i + parameterOffset]
-                    .Type
+                    candidate.Parameters[i + parameterOffset].Type
                 closedParameters!![i] = if substitution == nil {
                     parameter
                 } else {

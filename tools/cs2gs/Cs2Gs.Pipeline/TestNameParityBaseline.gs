@@ -333,9 +333,8 @@ class TestNameParityBaseline {
                             " ('" +
                             test +
                             "'): 'reason' must explain the difference (at least " +
-                            TestParityAllowList
-                            .MinimumReasonLength
-                            .ToString(CultureInfo.InvariantCulture) + " characters)."
+                            TestParityAllowList.MinimumReasonLength.ToString(CultureInfo.InvariantCulture) +
+                            " characters)."
                     )
                 }
                 if !IssueReference.IsMatch(issue) {

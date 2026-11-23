@@ -357,17 +357,8 @@ async sequence[T]
         // Ensure the token is inside a method body, not in the struct's own declarations.
         let insideMethod = enclosingDecl.Methods.Any(
             (m FunctionDeclarationSyntax) -> m.Body != nil &&
-                m
-                .Body
-                .Span
-                .Start <= token
-                .Span
-                .Start &&
-                token
-                .Span
-                .End <= m.Body!!
-                .Span
-                .End
+                m.Body.Span.Start <= token.Span.Start &&
+                token.Span.End <= m.Body!!.Span.End
         )
         if !insideMethod {
             return nil
@@ -392,16 +383,8 @@ async sequence[T]
             (
             candidate != nil &&
                 token != nil &&
-                candidate
-                .Span
-                .Start == token
-                .Span
-                .Start &&
-                candidate
-                .Span
-                .End == token
-                .Span
-                .End &&
+                candidate.Span.Start == token.Span.Start &&
+                candidate.Span.End == token.Span.End &&
                 string.Equals(candidate.Text, token.Text, StringComparison.Ordinal)
         )
     }
@@ -1135,19 +1118,9 @@ shared class SignatureHelpComputer {
         if active < 0 && resolved is ImportedFunctionSymbol resolvedImported {
             active = candidates.FindIndex(
                 (c Symbol) -> c is ImportedFunctionSymbol imported && imported.Method.MetadataToken ==
-                resolvedImported
-                    .Method
-                    .MetadataToken &&
-                    imported
-                    .Method
-                    .Module == resolvedImported
-                    .Method
-                    .Module &&
-                    imported
-                    .Method
-                    .DeclaringType == resolvedImported
-                    .Method
-                    .DeclaringType
+                resolvedImported.Method.MetadataToken &&
+                    imported.Method.Module == resolvedImported.Method.Module &&
+                    imported.Method.DeclaringType == resolvedImported.Method.DeclaringType
             )
         }
         let signatures = candidates.Select(
@@ -1485,11 +1458,7 @@ shared class CompletionComputer {
         .DotToken
         .Span
         .End &&
-        offset <= member
-        .Initializer
-        .ColonToken
-        .Span
-        .Start
+        offset <= member.Initializer.ColonToken.Span.Start
 
     /// Determines whether [`offset`](paramref) sits inside the braces of
     /// [`creation`](paramref) in a property-name position — i.e. not within the
@@ -1527,13 +1496,8 @@ shared class CompletionComputer {
             .OfType[BlockStatementSyntax]()
             .Where(
             (b BlockStatementSyntax) -> b.OpenBraceToken != nil &&
-                !b
-                .OpenBraceToken
-                .IsMissing &&
-                offset >= b
-                .OpenBraceToken
-                .Span
-                .End &&
+                !b.OpenBraceToken.IsMissing &&
+                offset >= b.OpenBraceToken.Span.End &&
                 offset <= (
                 if b.CloseBraceToken != nil && !b.CloseBraceToken.IsMissing {
                     b.CloseBraceToken.Span.Start
@@ -1558,9 +1522,7 @@ shared class CompletionComputer {
             if !((node is CallExpressionSyntax || node is ObjectCreationExpressionSyntax)) {
                 continue
             }
-            if candidate
-                .Span
-                .End <= braceStart &&
+            if candidate.Span.End <= braceStart &&
                 IsWhitespaceBetween(root.SyntaxTree, candidate.Span.End, braceStart) &&
                 (best == nil || candidate.Span.End > best.Span.End) {
                 best = candidate
@@ -1725,9 +1687,7 @@ shared class CompletionComputer {
         let chainRoot = FindChainRoot(content.SyntaxTree.Root, accessor)
         let isSimpleNameReceiver = object.ReferenceEquals(chainRoot, accessor) &&
             accessor.LeftPart is NameExpressionSyntax simpleName &&
-            !simpleName
-            .IdentifierToken
-            .IsMissing
+            !simpleName.IdentifierToken.IsMissing
         if !isSimpleNameReceiver {
             // Complex or chained receivers — `(a + b).`, `foo().`, `arr[0].`,
             // `a.b.`, etc. Reconstruct the full receiver expression (chains parse
@@ -1847,21 +1807,9 @@ shared class CompletionComputer {
                 continue
             }
             let candidate = cast[ExpressionSyntax](node)
-            if candidate
-                .Span
-                .End == accessor
-                .Span
-                .End &&
-                candidate
-                .Span
-                .Start <= best
-                .Span
-                .Start &&
-                candidate
-                .Span
-                .Start <= accessor
-                .Span
-                .Start {
+            if candidate.Span.End == accessor.Span.End &&
+                candidate.Span.Start <= best.Span.Start &&
+                candidate.Span.Start <= accessor.Span.Start {
                 best = candidate
             }
         }

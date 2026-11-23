@@ -25,12 +25,8 @@ internal class FixedArrayAbi {
     private let branch Type
 
     internal init(owner Assembly) {
-        if owner.GetName()
-            .Name != NativeSliceTypes.AssemblyName ||
-            owner
-            .GetName()
-            .Version
-            ?.ToString() != "0.5.0.0" ||
+        if owner.GetName().Name != NativeSliceTypes.AssemblyName ||
+            owner.GetName().Version?.ToString() != "0.5.0.0" ||
             !string.IsNullOrEmpty(owner.GetName().CultureName) ||
             (owner.GetName().GetPublicKeyToken()?.Length ?? 0) != 0 ||
             ReadMarker(owner, OwnerKey) != Revision {
@@ -179,8 +175,7 @@ internal class FixedArrayAbi {
             }
             if type.IsFunctionPointer {
                 return ContainsCandidateCore(type.GetFunctionPointerReturnType(), depth + 1) ||
-                    type
-                    .GetFunctionPointerParameterTypes().Any(
+                    type.GetFunctionPointerParameterTypes().Any(
                     (parameter Type) -> ContainsCandidateCore(parameter, depth + 1)
                 )
             }
@@ -201,9 +196,7 @@ internal class FixedArrayAbi {
                 "Leaf`",
                 StringComparison.Ordinal
             ) ||
-                definition
-                .Name
-                .StartsWith("Branch`", StringComparison.Ordinal)
+                definition.Name.StartsWith("Branch`", StringComparison.Ordinal)
         }
 
         internal func ReadMarker(assembly Assembly, key string) string? {
@@ -235,15 +228,9 @@ internal class FixedArrayAbi {
             }
             var value string? = nil
             for attribute in assembly.GetCustomAttributesData() {
-                if attribute
-                    .AttributeType
-                    .FullName != "System.Reflection.AssemblyMetadataAttribute" ||
-                    attribute
-                    .ConstructorArguments
-                    .Count != 2 ||
-                    attribute
-                    .ConstructorArguments[0]
-                    .Value as string != key {
+                if attribute.AttributeType.FullName != "System.Reflection.AssemblyMetadataAttribute" ||
+                    attribute.ConstructorArguments.Count != 2 ||
+                    attribute.ConstructorArguments[0].Value as string != key {
                     continue
                 }
                 if value != nil || attribute.ConstructorArguments[1].Value is not string marker {
@@ -283,8 +270,7 @@ internal class FixedArrayAbi {
         }
 
         private func SameElement(left TypeSymbol, right TypeSymbol) bool -> left.ClrType == right.ClrType &&
-            NullableFlagsBuilder
-            .Build(left).SequenceEqual(NullableFlagsBuilder.Build(right))
+            NullableFlagsBuilder.Build(left).SequenceEqual(NullableFlagsBuilder.Build(right))
 
         private func CheckElement(element Type) {
             if element.FullName == "System.Void" ||
@@ -306,9 +292,7 @@ internal class FixedArrayAbi {
                 !definition.IsValueType ||
                 !definition.IsLayoutSequential ||
                 !definition.IsGenericTypeDefinition ||
-                definition
-                .GetGenericArguments()
-                .Length != arity ||
+                definition.GetGenericArguments().Length != arity ||
                 definition.IsByRefLike ||
                 (definition.StructLayoutAttribute?.Pack ?? 0) != 0 ||
                 (definition.StructLayoutAttribute?.Size ?? 0) != 0 {
@@ -335,8 +319,7 @@ internal class FixedArrayAbi {
                 ) ||
                     constraints.Length == 1 &&
                     constraints[0].FullName != "System.ValueType" ||
-                    parameters[index]
-                    .GetCustomAttributesData().Any(
+                    parameters[index].GetCustomAttributesData().Any(
                     (attribute CustomAttributeData) ->
                     attribute.AttributeType.FullName == "System.Runtime.CompilerServices.IsUnmanagedAttribute"
                 ) {

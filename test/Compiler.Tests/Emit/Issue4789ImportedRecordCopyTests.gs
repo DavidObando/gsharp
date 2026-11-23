@@ -141,11 +141,8 @@ public static class Caller
         )
         let copyConstructor = Assert.Single(
             leaf.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic),
-            (constructor ConstructorInfo) -> constructor.GetParameters()
-                .Length == 1 &&
-                constructor
-                .GetParameters()[0]
-                .ParameterType == leaf
+            (constructor ConstructorInfo) -> constructor.GetParameters().Length == 1 &&
+                constructor.GetParameters()[0].ParameterType == leaf
         )
         let body = copyConstructor.GetMethodBody()?.GetILAsByteArray() ??
             throw InvalidOperationException("Missing copy body.")

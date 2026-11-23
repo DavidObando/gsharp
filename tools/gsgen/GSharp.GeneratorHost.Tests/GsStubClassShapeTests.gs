@@ -735,8 +735,7 @@ class Plain {
                         .Select(
                         (constructor ConstructorInfo) -> ConstructorAccessName(constructor.Attributes) +
                             "(" +
-                            string
-                            .Join(
+                            string.Join(
                             ",",
                             constructor.GetParameters().Select(
                                 (parameter ParameterInfo) -> parameter.ParameterType.Name.Split('`')[0]

@@ -265,18 +265,14 @@ internal class NativeProtocolOperations {
                         registry.ProtocolEntries.Any(
                             (entry NativeProtocolEntryPlan) -> entry.Protocols.Contains(query.Source) &&
                                 NativeProtocolSafety.ContainsSavedProtocol(entry.SourceType) &&
-                                Conversion
-                                .ClassifyNonStructural(entry.SourceType, query.Target).Exists
+                                Conversion.ClassifyNonStructural(entry.SourceType, query.Target).Exists
                         ) ||
-                            registry
-                            .ImportedProtocolEntries
-                            .Any(
+                            registry.ImportedProtocolEntries.Any(
                             (entry ImportedNativeProtocolEntry) ->
                             entry.Decisions.TryGetValue(query.Source, out var decision) &&
                                 decision.Positive &&
                                 NativeProtocolSafety.ContainsSavedProtocol(entry.SourceType) &&
-                                Conversion
-                                .ClassifyNonStructural(entry.SourceType, query.Target).Exists
+                                Conversion.ClassifyNonStructural(entry.SourceType, query.Target).Exists
                         )
                     ) {
                         diagnostics.ReportNativeProtocol(
@@ -291,8 +287,7 @@ internal class NativeProtocolOperations {
                     (item NativeProtocolEntryPlan) -> item.Protocols.Contains(query.Source)
                 ) {
                     if entry.Protocols.Contains(query.Target) && NativeProtocolMetadata.IsPublic(query.Target) &&
-                        !NativeProtocolMetadata
-                        .IsPublic(entry.SourceType) {
+                        !NativeProtocolMetadata.IsPublic(entry.SourceType) {
                         diagnostics.ReportNativeProtocol(
                             query.Location,
                             "public native contracts require an accessible exact payload type; private-payload export is not admitted"
@@ -316,8 +311,7 @@ internal class NativeProtocolOperations {
                     known++
                     if !entry.Decisions.TryGetValue(query.Target, out var target) ||
                         query.RequirePositive &&
-                        !target
-                        .Positive {
+                        !target.Positive {
                         diagnostics.ReportNativeProtocol(
                             query.Location,
                             "unknown or incompatible imported native protocol coverage '${entry.SourceType.Name}/${query.Target.Name}'"

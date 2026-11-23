@@ -342,10 +342,7 @@ namespace Native.Other {
                 "native byte-load: " +
                     path +
                     " MVID " +
-                    assembly
-                    .ManifestModule
-                    .ModuleVersionId
-                    .ToString() +
+                    assembly.ManifestModule.ModuleVersionId.ToString() +
                     " SHA256 " +
                     Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))
             )
@@ -359,12 +356,8 @@ namespace Native.Other {
             Assert.Same(typeof(TargetFrameworkAttribute).Assembly, target.AttributeType.Assembly)
             let configurationAttribute = Assert.Single(
                 assembly.GetCustomAttributesData(),
-                (a CustomAttributeData) -> a
-                    .AttributeType
-                    .FullName == "System.Reflection.AssemblyMetadataAttribute" &&
-                    a
-                    .ConstructorArguments[0]
-                    .Value is "ProducerConfiguration"
+                (a CustomAttributeData) -> a.AttributeType.FullName == "System.Reflection.AssemblyMetadataAttribute" &&
+                    a.ConstructorArguments[0].Value is "ProducerConfiguration"
             )
             Assert.Equal("ProducerConfiguration", configurationAttribute.ConstructorArguments[0].Value)
             Assert.Equal(configuration, configurationAttribute.ConstructorArguments[1].Value)

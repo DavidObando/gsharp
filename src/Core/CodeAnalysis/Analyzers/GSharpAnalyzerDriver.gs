@@ -366,10 +366,7 @@ class GSharpAnalyzerDriver {
         override func Visit(node SyntaxNode?) {
             if node != nil &&
                 !(node is SyntaxToken) &&
-                driver
-                .registry
-                .SyntaxNodeActions
-                .TryGetValue(node.Kind, out var entries) {
+                driver.registry.SyntaxNodeActions.TryGetValue(node.Kind, out var entries) {
                 for entry in entries {
                     if driver.SkipsGenerated(entry.Owner, isGenerated) {
                         continue
@@ -533,11 +530,8 @@ class GSharpAnalyzerDriver {
         private func ProvenanceTree(function FunctionSymbol, body BoundBlockStatement) SyntaxTree? -> function
             .Declaration
             ?.SyntaxTree ??
-            (function.AssociatedSymbol as PropertySymbol)
-            ?.Declaration
-            ?.SyntaxTree ??
-            body
-            .FirstAnchoredSyntax()?.SyntaxTree
+            (function.AssociatedSymbol as PropertySymbol)?.Declaration?.SyntaxTree ??
+            body.FirstAnchoredSyntax()?.SyntaxTree
 
         private func EnumerateDeclaredSymbols(program BoundProgram) sequence[Symbol] {
             for function in program.Functions.Keys {

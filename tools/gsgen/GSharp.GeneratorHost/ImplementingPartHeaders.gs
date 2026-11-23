@@ -185,12 +185,7 @@ internal shared class ImplementingPartHeaders {
                 StringComparison.Ordinal
             ) &&
                 (definition.Declaration.TypeParameterList?.Parameters.Count ?? 0) == methodArity &&
-                definition
-                .Declaration
-                .Parameters
-                .Count == implementing
-                .Parameters
-                .Count {
+                definition.Declaration.Parameters.Count == implementing.Parameters.Count {
                 if match != nil {
                     return nil
                 }

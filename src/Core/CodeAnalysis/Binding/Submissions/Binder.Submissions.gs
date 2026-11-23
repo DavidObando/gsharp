@@ -90,9 +90,7 @@ partial class Binder {
             }
         }
 
-        private func GetDefaultPackageName($scope BoundScope) string -> $scope
-            .SubmissionOptions
-            ?.DefaultPackageName ??
+        private func GetDefaultPackageName($scope BoundScope) string -> $scope.SubmissionOptions?.DefaultPackageName ??
             "Default"
 
         private func CaptureTrailingCellValue($scope BoundScope, statements ImmutableArray[BoundStatement].Builder) {
@@ -198,9 +196,7 @@ partial class Binder {
                     type = nil
                     return false
                 }
-                case switchStatement is BoundPatternSwitchStatement when switchStatement
-                    .Arms
-                    .Length > 0 &&
+                case switchStatement is BoundPatternSwitchStatement when switchStatement.Arms.Length > 0 &&
                     (
                     switchStatement.IsExhaustive || switchStatement.Arms.Any(
                         (a BoundPatternSwitchArm) -> a.IsDefault && a.Guard == nil

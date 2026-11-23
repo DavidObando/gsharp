@@ -35,10 +35,7 @@ open class Issue3394InlineOutTupleBindingTests {
         let any = typeof(Enumerable).GetMethods(BindingFlags.Public | BindingFlags.Static).Single(
             (method MethodInfo) -> method.Name == "Any" && method.IsGenericMethodDefinition && method.GetParameters()
                 .Length == 2 &&
-                method
-                .GetParameters()[1]
-                .ParameterType
-                .IsGenericType
+                method.GetParameters()[1].ParameterType.IsGenericType
         )
         let closed = any.MakeGenericMethod(typeof(object))
         let inferred = MemberLookup.BuildSymbolicMethodTypeArgs(
@@ -64,11 +61,7 @@ open class Issue3394InlineOutTupleBindingTests {
             .Single(
             (method MethodInfo) -> method.Name == "Select" && method.IsGenericMethodDefinition && method.GetParameters()
                 .Length == 2 &&
-                method
-                .GetParameters()[1]
-                .ParameterType
-                .GetGenericArguments()
-                .Length == 2
+                method.GetParameters()[1].ParameterType.GetGenericArguments().Length == 2
         )
             .MakeGenericMethod(typeof(object), typeof(Dictionary[string, string]))
         let parameterType = Assert.IsType[ImportedTypeSymbol](
@@ -101,8 +94,7 @@ open class Issue3394InlineOutTupleBindingTests {
         let orderBy = typeof(Enumerable).GetMethods(BindingFlags.Public | BindingFlags.Static).Single(
             (method MethodInfo) -> method.Name == "OrderBy" &&
                 method.IsGenericMethodDefinition &&
-                method
-                .GetParameters().Length == 2 && method.GetGenericArguments().Length == 2
+                method.GetParameters().Length == 2 && method.GetGenericArguments().Length == 2
         )
         let inferred = MemberLookup.BuildSymbolicMethodTypeArgs(
             orderBy.MakeGenericMethod(typeof(object), typeof(int32)),
@@ -236,14 +228,8 @@ open class Issue3394InlineOutTupleBindingTests {
             .Single(
             (method MethodInfo) -> method.Name == "SelectMany" &&
                 method.IsGenericMethodDefinition &&
-                method
-                .GetGenericArguments().Length == 2 && method.GetParameters()
-                .Length == 2 &&
-                method
-                .GetParameters()[1]
-                .ParameterType
-                .GetGenericArguments()
-                .Length == 2
+                method.GetGenericArguments().Length == 2 && method.GetParameters().Length == 2 &&
+                method.GetParameters()[1].ParameterType.GetGenericArguments().Length == 2
         )
             .MakeGenericMethod(typeof(object), typeof(object))
         let result = ClrOverloadResolution.Resolve(

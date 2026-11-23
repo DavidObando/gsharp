@@ -382,10 +382,7 @@ struct Slice[T] : IEquatable[Slice[T]], IEnumerable[T] {
             }
             if MemoryMarshal.TryGetArray(memory, out var segment) &&
                 segment.Array is {} array &&
-                array
-                .GetType()
-                .TypeHandle
-                .Equals(typeof([]T).TypeHandle) {
+                array.GetType().TypeHandle.Equals(typeof([]T).TypeHandle) {
                 result = Slice[T](array, segment.Offset, segment.Count, segment.Count)
                 return true
             }

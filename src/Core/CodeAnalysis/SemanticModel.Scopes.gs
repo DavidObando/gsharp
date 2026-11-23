@@ -283,10 +283,7 @@ partial class SemanticModel {
 
     private func SameLocalFunctionGroup(first VariableDeclarationSyntax, second VariableDeclarationSyntax) bool {
         if !object.ReferenceEquals(first.SyntaxTree, second.SyntaxTree) ||
-            !index
-            .Value
-            .DeclaredBySyntax
-            .TryGetValue(first, out var firstSymbol) ||
+            !index.Value.DeclaredBySyntax.TryGetValue(first, out var firstSymbol) ||
             !IsLocalFunction(firstSymbol) {
             return false
         }
@@ -319,9 +316,7 @@ partial class SemanticModel {
             result.Add(thisParameter)
         }
         for parameter in function.Parameters {
-            if parameter
-                .DeclaringSyntaxNodes
-                .IsDefaultOrEmpty &&
+            if parameter.DeclaringSyntaxNodes.IsDefaultOrEmpty &&
                 IsListable(parameter.Name) &&
                 (name == nil || string.Equals(parameter.Name, name, StringComparison.Ordinal)) &&
                 seen.Add(parameter.Name) {
@@ -856,12 +851,7 @@ partial class SemanticModel {
             // The token sits at the `scope` keyword: its owner is the statement that starts there, and the
             // context is visible in the body (#5340).
             if FindInnermostNode(anchor.Span.Start).FirstAncestorOrSelf[ScopeStatementSyntax]() is {} scopeStatement &&
-                scopeStatement
-                .ScopeKeyword
-                .Span
-                .Start == anchor
-                .Span
-                .Start {
+                scopeStatement.ScopeKeyword.Span.Start == anchor.Span.Start {
                 return BodyRegion(scopeStatement, scopeStatement.Body)
             }
             return nil
@@ -1026,13 +1016,8 @@ partial class SemanticModel {
             owner = owner.Parent
         }
         return owner is GuardLetStatementSyntax guardLet &&
-            position >= guardLet
-            .ElseKeyword
-            .Span
-            .Start &&
-            position < guardLet
-            .Span
-            .End
+            position >= guardLet.ElseKeyword.Span.Start &&
+            position < guardLet.Span.End
     }
 
     private func BodyRegion(owner SyntaxNode, body SyntaxNode?) Region? {

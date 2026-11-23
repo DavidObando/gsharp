@@ -695,9 +695,7 @@ func Main() {
                 (method MethodIl) -> method.Regions.Any(
                     (region ExceptionRegion) -> region.Kind == ExceptionRegionKind.Finally
                 ) &&
-                    method
-                    .Instructions
-                    .Any((instruction IlInstruction) -> instruction.OpCode == OpCodes.Endfinally)
+                    method.Instructions.Any((instruction IlInstruction) -> instruction.OpCode == OpCodes.Endfinally)
             ),
             "State-machine bodies must retain fixed cleanup regions."
         )

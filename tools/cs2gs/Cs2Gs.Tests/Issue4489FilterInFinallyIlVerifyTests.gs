@@ -285,10 +285,7 @@ open class Issue4489FilterInFinallyIlVerifyTests {
                 .Select(md.GetMethodDefinition)
                 .First(
                 (m MethodDefinition) -> md.GetString(m.Name) == methodName &&
-                    pe
-                    .GetMethodBody(m.RelativeVirtualAddress)
-                    .ExceptionRegions
-                    .Length > 0
+                    pe.GetMethodBody(m.RelativeVirtualAddress).ExceptionRegions.Length > 0
             )
             return pe
                 .GetMethodBody(method.RelativeVirtualAddress)

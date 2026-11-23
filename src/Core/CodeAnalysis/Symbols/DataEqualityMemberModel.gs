@@ -100,19 +100,12 @@ internal shared class DataEqualityMemberModel {
         constructedOwner StructSymbol? = nil
     ) bool -> method.Name == "Equals" &&
         method.IsOverride &&
-        method
-        .TypeParameters
-        .IsDefaultOrEmpty &&
+        method.TypeParameters.IsDefaultOrEmpty &&
         method.Type == TypeSymbol.Bool &&
         method.ReturnRefKind == RefKind.None &&
-        method
-        .Parameters
-        .Length == 1 &&
-        method
-        .Parameters[0]
-        .RefKind == RefKind.None &&
-        TypeSymbol
-        .AreRuntimeEquivalentIgnoringReferenceNullability(
+        method.Parameters.Length == 1 &&
+        method.Parameters[0].RefKind == RefKind.None &&
+        TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
         constructedOwner?.SubstituteMemberType(method.Parameters[0].Type) ?? method.Parameters[0].Type,
         dataBase
     )

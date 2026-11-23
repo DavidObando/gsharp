@@ -132,18 +132,8 @@ open class Issue6162CallEffectSummaryRootOrderTests {
             .Select(
             (d Diagnostic) -> {
                 let owner = declarations.FirstOrDefault(
-                    (f FunctionDeclarationSyntax) -> f
-                        .Span
-                        .Start <= d
-                        .Location
-                        .Span
-                        .Start &&
-                        d
-                        .Location
-                        .Span
-                        .End <= f
-                        .Span
-                        .End
+                    (f FunctionDeclarationSyntax) -> f.Span.Start <= d.Location.Span.Start &&
+                        d.Location.Span.End <= f.Span.End
                 )
                 if owner == nil {
                     return "-|${d.Id}"

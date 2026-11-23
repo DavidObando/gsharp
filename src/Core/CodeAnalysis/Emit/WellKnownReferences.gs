@@ -1239,29 +1239,20 @@ internal class WellKnownReferences {
 
     func GetStringLengthReference() MemberReferenceHandle {
         // System.String::get_Length() — used to implement len(string).
-        let method = this
-            .emitCtx
-            .CoreStringType
-            .GetMethod("get_Length", Type.EmptyTypes) ??
+        let method = this.emitCtx.CoreStringType.GetMethod("get_Length", Type.EmptyTypes) ??
             throw InvalidOperationException("String.get_Length is not resolvable from the supplied references.")
         return this.getMethodReference(method)
     }
 
     func GetStringCharsReference() MemberReferenceHandle {
         // System.String::get_Chars(Int32) — used for string indexing (issue #537).
-        let method = this
-            .emitCtx
-            .CoreStringType
-            .GetMethod("get_Chars", []Type{this.emitCtx.CoreInt32Type}) ??
+        let method = this.emitCtx.CoreStringType.GetMethod("get_Chars", []Type{this.emitCtx.CoreInt32Type}) ??
             throw InvalidOperationException("String.get_Chars(int) is not resolvable from the supplied references.")
         return this.getMethodReference(method)
     }
 
     func GetArrayLengthReference() MemberReferenceHandle {
-        let method = this
-            .emitCtx
-            .CoreArrayType
-            .GetMethod("get_Length", Type.EmptyTypes) ??
+        let method = this.emitCtx.CoreArrayType.GetMethod("get_Length", Type.EmptyTypes) ??
             throw InvalidOperationException("Array.get_Length is not resolvable from the supplied references.")
         return this.getMethodReference(method)
     }
@@ -1319,17 +1310,9 @@ internal class WellKnownReferences {
         // System.Delegate::CreateDelegate(Type, object, MethodInfo) creates a
         // verifiable closed-static delegate whose target supplies the method's
         // first parameter (issue #2452 extension method groups).
-        let delegateType = this
-            .emitCtx
-            .CoreObjectType
-            .Assembly
-            .GetType("System.Delegate") ??
+        let delegateType = this.emitCtx.CoreObjectType.Assembly.GetType("System.Delegate") ??
             throw InvalidOperationException("System.Delegate is not resolvable from the supplied references.")
-        let methodInfoType = this
-            .emitCtx
-            .CoreMethodBaseType
-            .Assembly
-            .GetType("System.Reflection.MethodInfo") ??
+        let methodInfoType = this.emitCtx.CoreMethodBaseType.Assembly.GetType("System.Reflection.MethodInfo") ??
             throw InvalidOperationException(
             "System.Reflection.MethodInfo is not resolvable from the supplied references."
         )

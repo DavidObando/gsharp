@@ -122,14 +122,9 @@ shared class AnalyzerProjectDetector {
     /// @returns True when the method is an analyzer test harness entry point.
     func IsAnalyzerTestHarnessEntry(symbol IMethodSymbol?) bool -> symbol != nil &&
         symbol.IsStatic == true &&
-        symbol
-        .Parameters
-        .Length >= 2 &&
+        symbol.Parameters.Length >= 2 &&
         DerivesFromDiagnosticAnalyzer(symbol.Parameters[0].Type) &&
-        symbol
-        .Parameters[1]
-        .Type
-        .SpecialType == SpecialType.System_String
+        symbol.Parameters[1].Type.SpecialType == SpecialType.System_String
 
     /// True when the compilation's own source declares an analyzer test
     /// harness entry point. Only declarations count: calling somebody else's

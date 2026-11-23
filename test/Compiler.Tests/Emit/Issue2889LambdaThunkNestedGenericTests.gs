@@ -631,18 +631,13 @@ stderr:
                             .Item1
                             .FullName
                             ?.Contains("<closure", StringComparison.Ordinal) == true &&
-                            candidate
-                            .Item2
-                            .Name == "Invoke"
+                            candidate.Item2.Name == "Invoke"
                     )
                 }
                 let rendered = string.Join(
                     "\n",
                     lambdaMethods.Select(
-                        (candidate(Type Type, Method MethodInfo)) -> candidate
-                            .Item2
-                            .ReturnType
-                            .ToString() +
+                        (candidate(Type Type, Method MethodInfo)) -> candidate.Item2.ReturnType.ToString() +
                             "(" +
                             string.Join(
                             ",",

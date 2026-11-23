@@ -73,8 +73,7 @@ internal shared class PinningShapes {
         for candidate in unsafeType.GetMethods(BindingFlags.Public | BindingFlags.Static) {
             if candidate.Name == "AsPointer" && candidate.IsGenericMethodDefinition && candidate.GetGenericArguments()
                 .Length == 1 &&
-                candidate
-                .GetParameters().Length == 1 {
+                candidate.GetParameters().Length == 1 {
                 asPointer = candidate
                 return true
             }
@@ -102,16 +101,9 @@ internal shared class PinningShapes {
             // against a host `typeof(char)` never matches.
             if candidate.Name == "GetPinnableReference" &&
                 !candidate.IsGenericMethodDefinition &&
-                candidate
-                .GetParameters()
-                .Length == 0 &&
-                candidate
-                .ReturnType
-                .IsByRef &&
-                candidate
-                .ReturnType
-                .GetElementType()
-                .IsSameAs(typeof(char)) {
+                candidate.GetParameters().Length == 0 &&
+                candidate.ReturnType.IsByRef &&
+                candidate.ReturnType.GetElementType().IsSameAs(typeof(char)) {
                 getPinnableReference = candidate
                 return true
             }

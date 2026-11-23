@@ -492,9 +492,7 @@ shared class TypeMemberModel {
                         boundProperty.ImportedMember != nil && candidate.ImportedMember == boundProperty.ImportedMember
                     ) {
                         property = candidate
-                        if candidate.ImportedMember is System
-                            .Reflection
-                            .PropertyInfo importedProp &&
+                        if candidate.ImportedMember is System.Reflection.PropertyInfo importedProp &&
                             importedProp.DeclaringType is Type declaringClr &&
                             GetNearestImportedBase(inheritedOwner) is {} importedBase &&
                             importedBase.ClrType is Type baseClr &&
@@ -508,9 +506,7 @@ shared class TypeMemberModel {
                 }
             }
         }
-        if boundProperty.ImportedMember is System
-            .Reflection
-            .PropertyInfo boundClrProp &&
+        if boundProperty.ImportedMember is System.Reflection.PropertyInfo boundClrProp &&
             boundClrProp.DeclaringType is Type boundDeclaringClr {
             if type is StructSymbol typeStruct &&
                 typeStruct.ImportedBaseType is {} typeImportedBase &&
@@ -608,9 +604,7 @@ shared class TypeMemberModel {
         }
         if bareLeft is FunctionTypeSymbol leftFunction &&
             bareRight is FunctionTypeSymbol rightFunction &&
-            !leftFunction
-            .IsVariadic
-            .SequenceEqual(rightFunction.IsVariadic) {
+            !leftFunction.IsVariadic.SequenceEqual(rightFunction.IsVariadic) {
             return false
         }
         let leftElemPositions = left.GetElementPositions()
@@ -620,8 +614,7 @@ shared class TypeMemberModel {
             leftElemPositions.Length > 0 &&
             bareLeft.ClrType != nil &&
             bareRight.ClrType != nil &&
-            ClrTypeUtilities
-            .AreSame(bareLeft.ClrType, bareRight.ClrType) {
+            ClrTypeUtilities.AreSame(bareLeft.ClrType, bareRight.ClrType) {
             for var i = 0; i < leftElemPositions.Length; i++ {
                 if !ArePositionalRuntimeTypesEquivalent(leftElemPositions[i], rightElemPositions[i]) {
                     return false
@@ -771,9 +764,7 @@ shared class TypeMemberModel {
                 return importedStruct
             }
         }
-        if property.ImportedMember is System
-            .Reflection
-            .PropertyInfo importedProp &&
+        if property.ImportedMember is System.Reflection.PropertyInfo importedProp &&
             importedProp.DeclaringType is Type declaringClrType {
             if owner.ClrType != nil && ClrTypeUtilities.AreSame(owner.ClrType, declaringClrType) {
                 return owner
@@ -1323,29 +1314,17 @@ shared class TypeMemberModel {
         }
         if declaration?.SharedBlock is {} sharedBlock {
             return sharedBlock.Fields.Any((field FieldDeclarationSyntax) -> field.Identifier.ValueText == name) ||
-                sharedBlock
-                .Properties
-                .Any(
+                sharedBlock.Properties.Any(
                 (property PropertyDeclarationSyntax) -> !property.HasExplicitInterfaceClause &&
-                    property
-                    .Identifier
-                    .ValueText == name
+                    property.Identifier.ValueText == name
             ) ||
-                sharedBlock
-                .Events
-                .Any(
+                sharedBlock.Events.Any(
                 (event EventDeclarationSyntax) -> !event.HasExplicitInterfaceClause &&
-                    event
-                    .Identifier
-                    .ValueText == name
+                    event.Identifier.ValueText == name
             ) ||
-                sharedBlock
-                .Methods
-                .Any(
+                sharedBlock.Methods.Any(
                 (method FunctionDeclarationSyntax) -> !method.HasExplicitInterfaceClause &&
-                    method
-                    .Identifier
-                    .ValueText == name
+                    method.Identifier.ValueText == name
             )
         }
         return false

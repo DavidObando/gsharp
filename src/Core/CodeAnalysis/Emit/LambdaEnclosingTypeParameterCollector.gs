@@ -96,9 +96,7 @@ internal class LambdaEnclosingTypeParameterCollector : BoundTreeWalker {
                     TypeSymbol.CollectReferencedTypeParameters(
                         cast[TypeSymbol?](call.StaticGenericOwnerType) ??
                             call.StaticGenericInterfaceOwnerType ??
-                            call
-                            .Function
-                            .StaticOwnerType,
+                            call.Function.StaticOwnerType,
                         this.sink
                     )
                 }

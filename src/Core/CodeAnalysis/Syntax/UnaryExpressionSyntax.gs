@@ -40,11 +40,7 @@ open partial class UnaryExpressionSyntax : ExpressionSyntax {
         if object.ReferenceEquals(last, OperatorToken) &&
             OperatorToken.Kind == SyntaxKind.BangToken &&
             Operand is IsExpressionSyntax &&
-            Operand
-            .Span
-            .Start < OperatorToken
-            .Span
-            .Start {
+            Operand.Span.Start < OperatorToken.Span.Start {
             return Operand
         }
         return last

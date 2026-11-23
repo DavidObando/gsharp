@@ -102,8 +102,7 @@ class MigrationPipeline {
                 StringComparison.Ordinal
             ) &&
                 !relativeArtifactPath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
-                !relativeArtifactPath
-                .StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal) {
+                !relativeArtifactPath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal) {
                 throw InvalidOperationException(
                     "Repository validation artifacts must be outside the destination directory."
                 )
@@ -698,9 +697,7 @@ class MigrationPipeline {
         ) {
             throw InvalidOperationException(
                 "--sdk-version " +
-                    this
-                    .options
-                    .SdkVersion +
+                    this.options.SdkVersion +
                     " disagrees with the migrated tree's pin (" +
                     recordedPin +
                     ")."
@@ -976,10 +973,7 @@ class MigrationPipeline {
             .Repository {
             SanitizeAppId(appId) +
                 "-" +
-                Convert
-                .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(appId)))
-                .Substring(0, 8)
-                .ToLowerInvariant()
+                Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(appId))).Substring(0, 8).ToLowerInvariant()
         } else {
             SanitizeAppId(appId)
         }

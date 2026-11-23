@@ -224,9 +224,7 @@ class Calls {
             let parameter = type.GetMethod(methodName)!!.GetParameters()[0]
             Assert.Equal(
                 expectedParamTypeName,
-                parameter
-                    .ParameterType
-                    .Name +
+                parameter.ParameterType.Name +
                     (
                     if parameter.ParameterType.IsArray {
                         string.Empty

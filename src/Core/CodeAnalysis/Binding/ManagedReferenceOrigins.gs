@@ -110,9 +110,7 @@ internal shared class ManagedReferenceOrigins {
                 ReceiverRejection(receiver)
             }
             case index is BoundIndexExpression when index.IsArrayBackedElementAccess &&
-                index
-                .Indices
-                .Length == 1 &&
+                index.Indices.Length == 1 &&
                 !(index.Target.Type is RectangularArrayTypeSymbol): default(string?)
             case block is BoundBlockExpression: Rejection(block.Expression)
             case BoundDereferenceExpression{Operand: BoundImportedInstanceCallExpression call} when IsHandleBorrow(
@@ -127,9 +125,7 @@ internal shared class ManagedReferenceOrigins {
         }
     }
 
-    internal func IsHandleBorrow(call BoundImportedInstanceCallExpression) bool -> call
-        .Method
-        .Name == "Borrow" &&
+    internal func IsHandleBorrow(call BoundImportedInstanceCallExpression) bool -> call.Method.Name == "Borrow" &&
         ManagedReferenceTypes.TryGetElement(call.Receiver.Type, out _, out _) && ManagedReferenceTypes.IsCompatible(
         call.Receiver.Type.ClrType
     )

@@ -693,9 +693,7 @@ internal shared class RoslynAnalyzerApiMap {
     /// @returns True for Microsoft.CodeAnalysis.INamespaceSymbol.
     func IsNamespaceSymbolType(type ITypeSymbol?) bool -> type is INamedTypeSymbol named &&
         named.Name == "INamespaceSymbol" &&
-        named
-        .ContainingNamespace
-        ?.ToDisplayString() == "Microsoft.CodeAnalysis"
+        named.ContainingNamespace?.ToDisplayString() == "Microsoft.CodeAnalysis"
 
     /// The G# bound-node kinds a `RegisterOperationAction` for
     /// [`operationKindMember`](paramref) must register (issue #3920).

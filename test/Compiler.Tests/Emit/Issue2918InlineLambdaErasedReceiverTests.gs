@@ -1344,10 +1344,7 @@ public sealed class DelegateBox<T>
                 )
                     .Where(
                     (method MethodInfo) -> method.Name.Contains("<lambda", StringComparison.Ordinal) ||
-                        method
-                        .DeclaringType
-                        ?.FullName
-                        ?.Contains("<closure", StringComparison.Ordinal) == true
+                        method.DeclaringType?.FullName?.Contains("<closure", StringComparison.Ordinal) == true
                 )
                     .ToArray()
                 Assert.NotEmpty(lambdas)

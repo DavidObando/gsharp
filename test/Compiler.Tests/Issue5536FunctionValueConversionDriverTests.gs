@@ -1592,16 +1592,11 @@ func Main() {
             "n++; # goto L; } return ~; }"
         let oracle = "using System;\nclass Box { public readonly int? Value; public Box(int? value) { Value = value; } }\n" +
             "class Program {\n    static int? Declared() " +
-            oracleBody
-            .Replace("#", "box = new Box(null);").Replace("~", "default(int?)") +
+            oracleBody.Replace("#", "box = new Box(null);").Replace("~", "default(int?)") +
             "\n    static int Kept() { Func<int> f = () => " +
-            oracleBody
-            .Replace("#", "n = n + 0;")
-            .Replace("box.Value; }", "box.Value.Value; }")
-            .Replace("~", "0") +
+            oracleBody.Replace("#", "n = n + 0;").Replace("box.Value; }", "box.Value.Value; }").Replace("~", "0") +
             "; return f(); }\n    static void Main() {\n        Func<int?> f = () => " +
-            oracleBody
-            .Replace("#", "box = new Box(null);").Replace("~", "default(int?)") +
+            oracleBody.Replace("#", "box = new Box(null);").Replace("~", "default(int?)") +
             ";\n        Console.Write(f() == null);\n        Console.Write(Declared() == null);\n" +
             "        Console.Write(Kept());\n    }\n}\n"
         Check(fixture, source, oracle, "TrueTrue1")
@@ -2384,8 +2379,7 @@ class Program {
             fixture,
             NoConversionPrelude +
                 "func FT(x (string, int32)) int32 -> x.Item1.Length\nfunc Main() {\n" +
-                BranchValueBody
-                .Replace("|", statement).Replace("#", "s = nil") + "\n}\n",
+                BranchValueBody.Replace("|", statement).Replace("#", "s = nil") + "\n}\n",
             value
         )
     }
@@ -2573,9 +2567,7 @@ class Program {
                 .Select(
                 (error(Code string, Line int32, Column int32)) -> error.Code + " (" + error.Line.ToString() +
                     "," +
-                    error
-                    .Column
-                    .ToString() + ")"
+                    error.Column.ToString() + ")"
             )
                 .ToArray()
         }

@@ -1020,12 +1020,8 @@ class P {
                 )
                 Assert.Contains(
                     artifacts,
-                    (artifact TriageArtifact) -> artifact
-                        .SourceLocation
-                        .CsLine == expectedLine &&
-                        artifact
-                        .SourceLocation
-                        .CsColumn == expectedColumn &&
+                    (artifact TriageArtifact) -> artifact.SourceLocation.CsLine == expectedLine &&
+                        artifact.SourceLocation.CsColumn == expectedColumn &&
                         artifact.OffendingCSharpConstruct!!.Snippet!!.Contains(
                         expectedSnippet,
                         StringComparison.Ordinal

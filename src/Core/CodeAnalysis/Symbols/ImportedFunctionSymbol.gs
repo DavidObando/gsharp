@@ -185,9 +185,7 @@ class ImportedFunctionSymbol : Symbol {
                 return false
             }
             return parameters.Length > 0 &&
-                parameters[^1]
-                .ParameterType
-                .FullName == "Gsharp.Concurrency.Context" &&
+                parameters[^1].ParameterType.FullName == "Gsharp.Concurrency.Context" &&
                 parameters[^1].Name == FunctionSymbol.HiddenContextParameterName
         }
     }

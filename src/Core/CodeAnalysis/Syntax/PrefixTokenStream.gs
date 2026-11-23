@@ -134,9 +134,7 @@ internal sealed class PrefixTokenStream {
             )
             if lastToken != nil {
                 facts.LastToken = lastToken.Span
-                facts.LastTokenIsWord = lastToken
-                    .Text
-                    .Length > 0 &&
+                facts.LastTokenIsWord = lastToken.Text.Length > 0 &&
                     IsWordCharacter(lastToken.Text[lastToken.Text.Length - 1])
             }
             facts.HasKeptText = kept.Count > 0

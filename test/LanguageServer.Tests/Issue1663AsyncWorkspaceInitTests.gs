@@ -122,9 +122,7 @@ open class Issue1663AsyncWorkspaceInitTests {
                     () -> {
                         let proj ProjectState? = workspace.GetProjectForFile(filePath)
                         return proj != nil && proj.TryGetSyntaxTree(filePath, out var t) &&
-                            t
-                            .Text
-                            .ToString() == bufferText
+                            t.Text.ToString() == bufferText
                     }
                 )
                 let loadedProject ProjectState? = workspace.GetProjectForFile(filePath)

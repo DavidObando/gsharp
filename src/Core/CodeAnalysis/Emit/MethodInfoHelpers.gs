@@ -460,8 +460,7 @@ internal shared class MethodInfoHelpers {
         typeParameterMap IReadOnlyDictionary[TypeParameterSymbol, TypeSymbol]
     ) bool {
         if AsyncIteratorDetection.IsAsyncIteratorReturnType(interfaceMethod.Type) &&
-            AsyncIteratorDetection
-            .IsAsyncIteratorReturnType(implementationMethod.Type) {
+            AsyncIteratorDetection.IsAsyncIteratorReturnType(implementationMethod.Type) {
             return TypesMatch(interfaceMethod.Type, implementationMethod.Type, typeParameterMap)
         }
         if interfaceMethod.IsAsyncVoid || implementationMethod.IsAsyncVoid {

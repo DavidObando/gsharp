@@ -314,12 +314,8 @@ partial class BoundScope {
                 if symbols!!.TryGetValue(key, out var sym) &&
                     sym is LocalVariableSymbol{DeclaringSyntax: {} declSyntax} &&
                     object.ReferenceEquals(declSyntax.SyntaxTree, tree) &&
-                    declSyntax
-                    .Span
-                    .Start >= span.Start &&
-                    declSyntax
-                    .Span
-                    .End <= span.End {
+                    declSyntax.Span.Start >= span.Start &&
+                    declSyntax.Span.End <= span.End {
                     symbols!!.Remove(key)
                     symbolKeys!!.RemoveAt(i)
                 }
@@ -2063,9 +2059,7 @@ partial class BoundScope {
         let previous = currentReferencingSyntaxTree.Value
         // ADR-0227 D4 (issue #6128): a speculative body pass binds an edited body of a file whose
         // declarations, imports included, belong to the file's tree before the edit.
-        this
-            .currentReferencingSyntaxTree
-            .Value = if tree != nil &&
+        this.currentReferencingSyntaxTree.Value = if tree != nil &&
             speculativeEditedTree != nil &&
             object.ReferenceEquals(tree, speculativeEditedTree) {
             speculativeDeclaringTree
@@ -2799,9 +2793,7 @@ partial class BoundScope {
         var subtypeCandidate FunctionSymbol? = nil
         var subtypeSpecificity = -1
         for ext in bucket {
-            if !ext
-                .TypeParameters
-                .IsDefaultOrEmpty &&
+            if !ext.TypeParameters.IsDefaultOrEmpty &&
                 ext.ExtensionReceiverType != nil &&
                 ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters) {
                 // Open receivers are handled by the unification pass above.
@@ -2847,9 +2839,7 @@ partial class BoundScope {
                 for ext in bucket {
                     var matches = ReceiverMatches(ext.ExtensionReceiverType, receiverType)
                     if !matches &&
-                        !ext
-                        .TypeParameters
-                        .IsDefaultOrEmpty &&
+                        !ext.TypeParameters.IsDefaultOrEmpty &&
                         ext.ExtensionReceiverType != nil &&
                         ext.ExtensionReceiverType != TypeSymbol.Error &&
                         ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters) &&
@@ -2866,9 +2856,7 @@ partial class BoundScope {
                     // the receiver as parameter 0 — picks the most specific one.
                     if !matches &&
                         (
-                        ext
-                            .TypeParameters
-                            .IsDefaultOrEmpty ||
+                        ext.TypeParameters.IsDefaultOrEmpty ||
                             ext.ExtensionReceiverType == nil ||
                             !ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters)
                     ) &&
@@ -3465,11 +3453,7 @@ partial class BoundScope {
                 default: nil
             }
             return declaration != nil &&
-                !declaration
-                .SyntaxTree
-                .Root
-                .Members
-                .Any((member MemberSyntax) -> member is PackageSyntax)
+                !declaration.SyntaxTree.Root.Members.Any((member MemberSyntax) -> member is PackageSyntax)
         }
 
         /// Issue #1080: builds the containing-type-qualified dotted name of a type
@@ -3616,9 +3600,8 @@ partial class BoundScope {
             if x is NullabilityAnnotatedTypeSymbol || y is NullabilityAnnotatedTypeSymbol {
                 return x is NullabilityAnnotatedTypeSymbol ax &&
                     y is NullabilityAnnotatedTypeSymbol ay &&
-                    ax
-                    .NullableFlags
-                    .SequenceEqual(ay.NullableFlags) && SigTypesEquivalent(ax.BaseType, ay.BaseType, fx, fy)
+                    ax.NullableFlags.SequenceEqual(ay.NullableFlags) &&
+                    SigTypesEquivalent(ax.BaseType, ay.BaseType, fx, fy)
             }
             if x is PlatformTypeSymbol || y is PlatformTypeSymbol {
                 return x is PlatformTypeSymbol px &&

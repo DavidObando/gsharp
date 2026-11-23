@@ -385,17 +385,11 @@ internal partial class ExpressionBinder {
         // mistaken for a (rejected) dereference of a `*void` value.
         if binderCtx.InUnsafeContext &&
             syntax.Operand is CallExpressionSyntax voidCast &&
-            voidCast
-            .Identifier
-            .Kind == SyntaxKind.IdentifierToken &&
-            voidCast
-            .Identifier
-            .ValueText == "void" &&
+            voidCast.Identifier.Kind == SyntaxKind.IdentifierToken &&
+            voidCast.Identifier.ValueText == "void" &&
             voidCast.TypeArgumentList == nil &&
             voidCast.NullableQuestionToken == nil &&
-            voidCast
-            .Arguments
-            .Count == 1 {
+            voidCast.Arguments.Count == 1 {
             return conversions.BindConversion(
                 voidCast.Arguments[0],
                 PointerTypeSymbol.Get(TypeSymbol.Void),
@@ -412,24 +406,18 @@ internal partial class ExpressionBinder {
         // argument so an ordinary struct construction `Point(x)` is unaffected.
         if binderCtx.InUnsafeContext &&
             syntax.Operand is CallExpressionSyntax structCast &&
-            structCast
-            .Identifier
-            .Kind == SyntaxKind.IdentifierToken &&
+            structCast.Identifier.Kind == SyntaxKind.IdentifierToken &&
             structCast.TypeArgumentList == nil &&
             structCast.NullableQuestionToken == nil &&
-            structCast
-            .Arguments
-            .Count == 1 &&
+            structCast.Arguments.Count == 1 &&
             lookupType(structCast.Identifier.ValueText) is {} castTarget &&
-            BlittableDetector
-            .IsBlittableValueStructPointee(castTarget) {
+            BlittableDetector.IsBlittableValueStructPointee(castTarget) {
             let castArg = BindExpression(structCast.Arguments[0])
             if castArg.Type is PointerTypeSymbol ||
                 castArg.Type == TypeSymbol.NInt ||
                 castArg.Type == TypeSymbol.NUInt ||
                 castArg.Type == TypeSymbol.Int64 ||
-                castArg.Type == TypeSymbol
-                .UInt64 {
+                castArg.Type == TypeSymbol.UInt64 {
                 binderCtx.RecordPointerEscapedArgument(castArg)
                 return BoundConversionExpression(nil, PointerTypeSymbol.Get(castTarget), castArg)
             }
@@ -1819,9 +1807,7 @@ internal partial class ExpressionBinder {
         // no-common-type failure is parked as a placeholder retaining the syntax
         // rather than reported, then re-bound once the parameter type is known.
         // Consume the flag immediately so nested sub-expressions bind normally.
-        let deferTargetlessCoalesce = syntax
-            .OperatorToken
-            .Kind == SyntaxKind.QuestionQuestionToken &&
+        let deferTargetlessCoalesce = syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken &&
             coalesceTargetType == nil &&
             binderCtx.DeferTargetlessConditional
         if syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
@@ -1844,9 +1830,7 @@ internal partial class ExpressionBinder {
         let coalesceSuppressionMark = Diagnostics.SuppressionCount
         let leftEntryAliases = GetCurrentExpressionCallableAliases()
         var boundLeft = if coalesceTargetType != nil &&
-            syntax
-            .OperatorToken
-            .Kind == SyntaxKind.QuestionQuestionToken &&
+            syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken &&
             IsTargetDependentExpressionSyntax(syntax.Left) {
             BindExpression(syntax.Left, coalesceTargetType)
         } else {
@@ -1914,9 +1898,7 @@ internal partial class ExpressionBinder {
             applyShortCircuitOperandEffects(syntax.Right, boundRight, rightAliases)
             MergeBranchExpressionNarrowingFrames(beforeRight)
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse)
-        } else if syntax
-            .OperatorToken
-            .Kind == SyntaxKind.QuestionQuestionToken &&
+        } else if syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken &&
             coalesceTargetType != nil &&
             IsTargetDependentExpressionSyntax(syntax.Right) {
             ApplySubExpressionNarrowingEffects(syntax.Left, boundLeft)
@@ -1939,9 +1921,7 @@ internal partial class ExpressionBinder {
             rightEntryAliases = getCallableAliases()
             boundRight = BindExpression(syntax.Right)
         }
-        if syntax
-            .OperatorToken
-            .Kind == SyntaxKind.PlusToken &&
+        if syntax.OperatorToken.Kind == SyntaxKind.PlusToken &&
             boundLeft is BoundUtf8StringExpression leftUtf8 &&
             boundRight is BoundUtf8StringExpression rightUtf8 &&
             SyntaxFacts.IsUtf8LiteralRepresentation(syntax.Left) && SyntaxFacts.IsUtf8LiteralRepresentation(
@@ -2097,8 +2077,7 @@ internal partial class ExpressionBinder {
         }
         if (operatorKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) &&
             ManagedReferenceTypes.TryGetElement(nativeEqualityLeftType, out _, out var leftReadOnlyManaged) &&
-            ManagedReferenceTypes
-            .TryGetElement(nativeEqualityRightType, out _, out var rightReadOnlyManaged) {
+            ManagedReferenceTypes.TryGetElement(nativeEqualityRightType, out _, out var rightReadOnlyManaged) {
             if leftReadOnlyManaged != rightReadOnlyManaged || ManagedReferenceTypes.HaveIncompatibleElements(
                 nativeEqualityLeftType,
                 nativeEqualityRightType
@@ -2135,8 +2114,7 @@ internal partial class ExpressionBinder {
         }
         if (operatorKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) &&
             NativeSliceTypes.TryGetElement(nativeEqualityLeftType, out _, out var leftReadOnly) &&
-            NativeSliceTypes
-            .TryGetElement(nativeEqualityRightType, out _, out var rightReadOnly) {
+            NativeSliceTypes.TryGetElement(nativeEqualityRightType, out _, out var rightReadOnly) {
             if leftReadOnly != rightReadOnly || NativeSliceTypes.HaveIncompatibleElements(
                 nativeEqualityLeftType,
                 nativeEqualityRightType
@@ -2221,8 +2199,7 @@ internal partial class ExpressionBinder {
         }
         if operatorKind == SyntaxKind.QuestionQuestionToken &&
             boundRight.Type == TypeSymbol.Null &&
-            !binderCtx
-            .ValidateSourceNullableResult(
+            !binderCtx.ValidateSourceNullableResult(
             boundLeft.Type,
             operatorLocation,
             []TypeSymbol{boundLeft.Type, boundRight.Type}
@@ -2240,16 +2217,20 @@ internal partial class ExpressionBinder {
             boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce &&
             coalesceTargetType != nil {
             if boundLeft.Type == TypeSymbol.Null &&
-                ConversionClassifier
-                .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundRight, coalesceTargetType) {
+                ConversionClassifier.CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
+                boundRight,
+                coalesceTargetType
+            ) {
                 boundOperator = BoundBinaryOperator.MakeNullCoalesce(
                     boundLeft.Type,
                     boundRight.Type,
                     coalesceTargetType
                 )
             } else if boundRight.Type == TypeSymbol.Null &&
-                ConversionClassifier
-                .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundLeft, coalesceTargetType) {
+                ConversionClassifier.CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
+                boundLeft,
+                coalesceTargetType
+            ) {
                 let leftTarget = if coalesceTargetType is NullableTypeSymbol {
                     coalesceTargetType
                 } else {
@@ -2272,8 +2253,10 @@ internal partial class ExpressionBinder {
             }
             if leftUnderlying != nil &&
                 leftUnderlying != TypeSymbol.Null &&
-                ConversionClassifier
-                .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundRight, leftUnderlying) {
+                ConversionClassifier.CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
+                boundRight,
+                leftUnderlying
+            ) {
                 let common = if boundRight.Type is NullableTypeSymbol {
                     cast[TypeSymbol](NullableTypeSymbol.Get(leftUnderlying))
                 } else {
@@ -2282,8 +2265,10 @@ internal partial class ExpressionBinder {
                 boundOperator = BoundBinaryOperator.MakeNullCoalesce(boundLeft.Type, boundRight.Type, common)
             } else if rightUnderlying != nil &&
                 rightUnderlying != TypeSymbol.Null &&
-                ConversionClassifier
-                .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundLeft, rightUnderlying) {
+                ConversionClassifier.CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
+                boundLeft,
+                rightUnderlying
+            ) {
                 let leftTarget = if boundLeft.Type is NullableTypeSymbol {
                     cast[TypeSymbol](NullableTypeSymbol.Get(rightUnderlying))
                 } else {
@@ -2420,8 +2405,7 @@ internal partial class ExpressionBinder {
             // `struct`-constrained `T?` still reports GS0129.
             if (operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken) &&
                 BoundBinaryOperator.IsReferenceEqualityOperand(boundLeft.Type) &&
-                BoundBinaryOperator
-                .IsReferenceEqualityOperand(boundRight.Type) {
+                BoundBinaryOperator.IsReferenceEqualityOperand(boundRight.Type) {
                 let referenceOperator = BoundBinaryOperator.MakeReferenceEquality(
                     operatorKind,
                     boundLeft.Type,
@@ -2442,8 +2426,10 @@ internal partial class ExpressionBinder {
         // `int32? ?? int64` → `int64`); reference upcasts need no IL conversion
         // because they are representation-preserving.
         if boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce &&
-            ConversionClassifier
-            .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundLeft, boundOperator.Type) {
+            ConversionClassifier.CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
+            boundLeft,
+            boundOperator.Type
+        ) {
             let leftTarget = if boundLeft.Type is NullableTypeSymbol && boundOperator.Type is not NullableTypeSymbol {
                 cast[TypeSymbol](NullableTypeSymbol.Get(boundOperator.Type))
             } else {
@@ -2523,8 +2509,7 @@ internal partial class ExpressionBinder {
                 boundOperator.Kind == BoundBinaryOperatorKind.NotEquals
         ) &&
             boundLeft.Type == TypeSymbol.Null &&
-            boundRight.Type != TypeSymbol
-            .Null {
+            boundRight.Type != TypeSymbol.Null {
             let mirrored BoundBinaryOperator? = BoundBinaryOperator.Bind(operatorKind, boundRight.Type, boundLeft.Type)
             if mirrored != nil {
                 boundLeft, boundRight = boundRight, boundLeft
@@ -2668,9 +2653,7 @@ internal partial class ExpressionBinder {
             return nil
         }
         let parameterType = targetStruct.SubstituteMemberType(op.Parameters[parameterOffset].Type) ??
-            op
-            .Parameters[parameterOffset]
-            .Type
+            op.Parameters[parameterOffset].Type
         if !Conversion.Classify(value.Type, parameterType).Exists {
             return nil
         }
@@ -2757,13 +2740,9 @@ internal partial class ExpressionBinder {
                 // overload applicability and the bound call use Box[int32],
                 // not the open Box[T] signature.
                 let leftParameterType = userOpOwner?.SubstituteMemberType(userOp.Parameters[0].Type) ??
-                    userOp
-                    .Parameters[0]
-                    .Type
+                    userOp.Parameters[0].Type
                 let rightParameterType = userOpOwner?.SubstituteMemberType(userOp.Parameters[1].Type) ??
-                    userOp
-                    .Parameters[1]
-                    .Type
+                    userOp.Parameters[1].Type
                 let resultType = userOpOwner?.SubstituteMemberType(userOp.Type) ?? userOp.Type
                 let hasByRefSignature = userOp.Parameters.Any((p ParameterSymbol) -> p.RefKind != RefKind.None) ||
                     userOp.ReturnRefKind != RefKind.None
@@ -2810,12 +2789,8 @@ internal partial class ExpressionBinder {
                 ){
                     StaticGenericOwnerType = if userOpOwner != nil &&
                         (
-                        !userOpOwner
-                            .TypeArguments
-                            .IsDefaultOrEmpty ||
-                            !(userOpOwner.Definition ?? userOpOwner)
-                            .TypeParameters
-                            .IsDefaultOrEmpty
+                        !userOpOwner.TypeArguments.IsDefaultOrEmpty ||
+                            !(userOpOwner.Definition ?? userOpOwner).TypeParameters.IsDefaultOrEmpty
                     ) {
                         userOpOwner
                     } else {
@@ -2837,9 +2812,7 @@ internal partial class ExpressionBinder {
             let leftParameterType = ClrNullability.GetParameterTypeSymbol(clrParameters[0])
             let rightParameterType = ClrNullability.GetParameterTypeSymbol(clrParameters[1])
             let hasByRefSignature = clrParameters.Any((p ParameterInfo) -> p.ParameterType.IsByRef) ||
-                clrMethod
-                .ReturnType
-                .IsByRef
+                clrMethod.ReturnType.IsByRef
             // Issue #2388: `ClrOperatorResolution` matches on
             // `TypeSymbol.ClrType`, which for a `NullableTypeSymbol` wrapping
             // a value type is already the UNDERLYING CLR type (see
@@ -2927,8 +2900,7 @@ internal partial class ExpressionBinder {
         let targetIsValueNullable = parameterType is NullableTypeSymbol targetNullable &&
             NullableLifting.IsAnyValueTypeNullable(targetNullable)
         if (!sourceIsValueNullable || targetIsValueNullable) &&
-            ConversionClassifier
-            .HasUserDefinedImplicitConversionForTypes(operand.Type, parameterType) {
+            ConversionClassifier.HasUserDefinedImplicitConversionForTypes(operand.Type, parameterType) {
             converted = conversions.BindConversion(location, operand, parameterType)
             return !(converted is BoundErrorExpression)
         }
@@ -3029,13 +3001,11 @@ internal partial class ExpressionBinder {
         // was the one concatenation path that never learned about `T!`.
         if boundOperator == nil && operatorKind == SyntaxKind.PlusToken {
             if GetReferenceNullabilityUnderlying(boundLeft.Type) == TypeSymbol.String &&
-                boundRight.Type == TypeSymbol
-                .Char {
+                boundRight.Type == TypeSymbol.Char {
                 boundRight = ConvertStringConcatCharOperand(boundRight, rightLocation)
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
             } else if boundLeft.Type == TypeSymbol.Char &&
-                GetReferenceNullabilityUnderlying(boundRight.Type) == TypeSymbol
-                .String {
+                GetReferenceNullabilityUnderlying(boundRight.Type) == TypeSymbol.String {
                 boundLeft = ConvertStringConcatCharOperand(boundLeft, leftLocation)
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
             }
@@ -3117,8 +3087,7 @@ internal partial class ExpressionBinder {
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
             } else if boundRight.Type == TypeSymbol.Object &&
                 boundLeft.Type != TypeSymbol.Object &&
-                Conversion
-                .Classify(boundLeft.Type, TypeSymbol.Object).IsImplicit {
+                Conversion.Classify(boundLeft.Type, TypeSymbol.Object).IsImplicit {
                 boundLeft = conversions.BindConversion(leftLocation, boundLeft, TypeSymbol.Object)
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
             }
@@ -3182,8 +3151,7 @@ internal partial class ExpressionBinder {
             IsNumericPrimitiveType(boundLeft.Type) &&
             IsNumericPrimitiveType(boundRight.Type) &&
             (IsFloatingOrDecimalType(boundLeft.Type) || IsFloatingOrDecimalType(boundRight.Type)) &&
-            boundLeft.Type != boundRight
-            .Type {
+            boundLeft.Type != boundRight.Type {
             if Conversion.Classify(boundRight.Type, boundLeft.Type).IsImplicit {
                 boundRight = conversions.BindConversion(rightLocation, boundRight, boundLeft.Type)
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
@@ -3213,8 +3181,7 @@ internal partial class ExpressionBinder {
             IsIntegerType(boundLeft.Type) &&
             (IsIntegerType(boundRight.Type) || boundRight.Type == TypeSymbol.Char) &&
             boundRight.Type != TypeSymbol.Int32 &&
-            Conversion
-            .Classify(boundRight.Type, TypeSymbol.Int32).IsImplicit {
+            Conversion.Classify(boundRight.Type, TypeSymbol.Int32).IsImplicit {
             boundRight = conversions.BindConversion(rightLocation, boundRight, TypeSymbol.Int32)
             boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
         }
@@ -3229,8 +3196,7 @@ internal partial class ExpressionBinder {
             !(boundRight is BoundLiteralExpression) &&
             IsIntegerType(boundLeft.Type) &&
             IsIntegerType(boundRight.Type) &&
-            boundLeft.Type != boundRight
-            .Type {
+            boundLeft.Type != boundRight.Type {
             if Conversion.Classify(boundLeft.Type, boundRight.Type).IsImplicit {
                 boundLeft = conversions.BindConversion(leftLocation, boundLeft, boundRight.Type)
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
@@ -3246,14 +3212,11 @@ internal partial class ExpressionBinder {
             if boundLeft.Type is NullableTypeSymbol leftNullable && NullableLifting.IsAnyValueTypeNullable(
                 leftNullable
             ) &&
-                boundRight.Type == leftNullable
-                .UnderlyingType {
+                boundRight.Type == leftNullable.UnderlyingType {
                 let lifted BoundBinaryOperator? = BoundBinaryOperator.Bind(operatorKind, leftNullable, leftNullable)
                 if lifted != nil {
                     boundRight = if boundRight is BoundUnaryExpression{IsNarrowingUnwrap: true} rightUnwrap &&
-                        rightUnwrap
-                        .Operand
-                        .Type == leftNullable {
+                        rightUnwrap.Operand.Type == leftNullable {
                         rightUnwrap.Operand
                     } else {
                         conversions.BindConversion(rightLocation, boundRight, leftNullable)
@@ -3263,14 +3226,11 @@ internal partial class ExpressionBinder {
             } else if boundRight.Type is NullableTypeSymbol rightNullable && NullableLifting.IsAnyValueTypeNullable(
                 rightNullable
             ) &&
-                boundLeft.Type == rightNullable
-                .UnderlyingType {
+                boundLeft.Type == rightNullable.UnderlyingType {
                 let lifted BoundBinaryOperator? = BoundBinaryOperator.Bind(operatorKind, rightNullable, rightNullable)
                 if lifted != nil {
                     boundLeft = if boundLeft is BoundUnaryExpression{IsNarrowingUnwrap: true} leftUnwrap &&
-                        leftUnwrap
-                        .Operand
-                        .Type == rightNullable {
+                        leftUnwrap.Operand.Type == rightNullable {
                         leftUnwrap.Operand
                     } else {
                         conversions.BindConversion(leftLocation, boundLeft, rightNullable)
@@ -3283,9 +3243,7 @@ internal partial class ExpressionBinder {
         if boundOperator == nil {
             if boundLeft.Type is NullableTypeSymbol leftN2 &&
                 !(boundRight.Type is NullableTypeSymbol) &&
-                boundRight
-                .Type
-                ?.ClrType is {IsValueType: true} {
+                boundRight.Type?.ClrType is {IsValueType: true} {
                 let rightLifted = NullableTypeSymbol.Get(boundRight.Type)
                 let lifted BoundBinaryOperator? = BoundBinaryOperator.Bind(operatorKind, leftN2, rightLifted)
                 if lifted != nil {
@@ -3294,9 +3252,7 @@ internal partial class ExpressionBinder {
                 }
             } else if boundRight.Type is NullableTypeSymbol rightN2 &&
                 !(boundLeft.Type is NullableTypeSymbol) &&
-                boundLeft
-                .Type
-                ?.ClrType is {IsValueType: true} {
+                boundLeft.Type?.ClrType is {IsValueType: true} {
                 let leftLifted = NullableTypeSymbol.Get(boundLeft.Type)
                 let lifted BoundBinaryOperator? = BoundBinaryOperator.Bind(operatorKind, leftLifted, rightN2)
                 if lifted != nil {
@@ -3420,14 +3376,12 @@ internal partial class ExpressionBinder {
                 target = leftDelegate
             } else if rightDelegate is FunctionTypeSymbol &&
                 !(leftDelegate is FunctionTypeSymbol) &&
-                Conversion
-                .Classify(right.Type, leftDelegate).IsImplicit {
+                Conversion.Classify(right.Type, leftDelegate).IsImplicit {
                 target = leftDelegate
                 right = conversions.BindConversion(rightLocation, right, target)
             } else if leftDelegate is FunctionTypeSymbol &&
                 !(rightDelegate is FunctionTypeSymbol) &&
-                Conversion
-                .Classify(left.Type, rightDelegate).IsImplicit {
+                Conversion.Classify(left.Type, rightDelegate).IsImplicit {
                 target = rightDelegate
                 left = conversions.BindConversion(leftLocation, left, target)
             }
@@ -3568,8 +3522,7 @@ internal partial class ExpressionBinder {
         }
 
         private func CanLowerPointerComparisonOperand(type TypeSymbol) bool -> type == TypeSymbol.Null ||
-            Conversion
-            .Classify(type, TypeSymbol.NInt).Exists
+            Conversion.Classify(type, TypeSymbol.NInt).Exists
 
         private func IsNestedLambdaExpression(syntax ExpressionSyntax) bool {
             var syntax = syntax
@@ -3961,9 +3914,7 @@ internal partial class ExpressionBinder {
                 ConversionClassifier.HasUserDefinedImplicitConversionForTypes(underlyingOperand, parameterType)
         }
 
-        private func IsNumericPrimitiveType(type TypeSymbol) bool -> type
-            ?.ClrType
-            ?.FullName is string fullName &&
+        private func IsNumericPrimitiveType(type TypeSymbol) bool -> type?.ClrType?.FullName is string fullName &&
             NumericWideningLattice.IsNumericPrimitive(fullName)
 
         private func IsFloatingOrDecimalType(type TypeSymbol) bool -> type == TypeSymbol.Float32 ||
@@ -4227,12 +4178,8 @@ internal partial class ExpressionBinder {
                     value = ToBigInteger(lit.Value)
                     return true
                 }
-                case fieldAccess is BoundFieldAccessExpression when fieldAccess
-                    .Field
-                    .IsConst &&
-                    fieldAccess
-                    .Field
-                    .HasConstantValue &&
+                case fieldAccess is BoundFieldAccessExpression when fieldAccess.Field.IsConst &&
+                    fieldAccess.Field.HasConstantValue &&
                     IsIntegerLiteralValue(fieldAccess.Field.ConstantValue) {
                     value = ToBigInteger(fieldAccess.Field.ConstantValue)
                     return true
@@ -4472,9 +4419,7 @@ internal partial class ExpressionBinder {
                 }
                 return type is StructSymbol owner && owner.StaticMethods.Any(
                     (method FunctionSymbol) -> string.Equals(method.Name, "op_Implicit", StringComparison.Ordinal) &&
-                        method
-                        .Parameters
-                        .Length == 1
+                        method.Parameters.Length == 1
                 )
             }
             if boundArguments == nil {
@@ -4505,8 +4450,9 @@ internal partial class ExpressionBinder {
                         hasRefKindOrReadOnlyMismatch = true
                     } else if paramRefKind != RefKind.In && ConversionClassifier.IsPlainValueArgument(argument) &&
                         !ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument) &&
-                        !InterpolatedStringHandlerInfo
-                        .IsHandlerType(clrParameterType.GetElementType() ?? clrParameterType) {
+                        !InterpolatedStringHandlerInfo.IsHandlerType(
+                        clrParameterType.GetElementType() ?? clrParameterType
+                    ) {
                         hasRefKindOrReadOnlyMismatch = true
                     }
                     // Issue #5558: when a by-reference parameter is substituted from
@@ -4657,8 +4603,7 @@ internal partial class ExpressionBinder {
                         }
                     }
                     return if DeclaresImplicitOperator(sourceType) &&
-                        ConversionClassifier
-                        .HasUserDefinedImplicitConversionForTypes(sourceType, nativeTarget) {
+                        ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, nativeTarget) {
                         ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
                     } else {
                         ClrOverloadResolution.ImplicitConversionKind.None
@@ -4674,8 +4619,7 @@ internal partial class ExpressionBinder {
                 // Function arguments retain the contextual delegate classifier's return-conversion rank.
                 if !clrParameterType.IsByRef &&
                     sourceType is not FunctionTypeSymbol &&
-                    TypeSymbol
-                    .ContainsSameCompilationUserType(sourceType) {
+                    TypeSymbol.ContainsSameCompilationUserType(sourceType) {
                     let symbolicConversion = Conversion.ClassifyNonStructural(sourceType, nativeTarget)
                     if TypeSymbol.ContainsSameCompilationUserType(nativeTarget) {
                         if symbolicConversion.IsIdentity ||
@@ -4696,21 +4640,16 @@ internal partial class ExpressionBinder {
                     let bareNativeTarget = nativeTarget.StripToBareShape()
                     if Conversion.RequiresSymbolicTypeArgumentIdentity(sourceType) &&
                         (
-                        !bareNativeTarget
-                            .ConstructedTypeArguments
-                            .IsDefaultOrEmpty ||
+                        !bareNativeTarget.ConstructedTypeArguments.IsDefaultOrEmpty ||
                             bareNativeTarget is SliceTypeSymbol or
                             ArrayTypeSymbol or
                             RectangularArrayTypeSymbol ||
-                            bareNativeTarget
-                            .ClrType
-                            ?.IsArray == true
+                            bareNativeTarget.ClrType?.IsArray == true
                     ) &&
                         !TypeSymbol.ContainsTypeParameter(nativeTarget) &&
                         !symbolicConversion.IsImplicit &&
                         !Conversion.HasClrArgumentRuntimeRelation(sourceType, nativeTarget) &&
-                        !ConversionClassifier
-                        .HasUserDefinedImplicitConversionForTypes(sourceType, nativeTarget) {
+                        !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, nativeTarget) {
                         return ClrOverloadResolution.ImplicitConversionKind.None
                     }
                 }
@@ -4770,14 +4709,9 @@ internal partial class ExpressionBinder {
                 receiverType != nil &&
                 MemberLookup.GetProjectionReceiverImportedType(receiverType) is ImportedTypeSymbol importedReceiver &&
                 importedReceiver.OpenDefinition != nil &&
-                !importedReceiver
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                parameter
-                .Member
-                ?.DeclaringType is {} declaringType &&
-                MemberLookup
-                .TryGetSymbolicDeclaringContext(
+                !importedReceiver.TypeArguments.IsDefaultOrEmpty &&
+                parameter.Member?.DeclaringType is {} declaringType &&
+                MemberLookup.TryGetSymbolicDeclaringContext(
                 importedReceiver,
                 declaringType,
                 out var resolvedOpenDef,
@@ -4814,12 +4748,8 @@ internal partial class ExpressionBinder {
                 }
                 let openParams = openMethod.GetParameters()
                 if uint32(parameter.Position) >= uint32(openParams.Length) ||
-                    !openParams[parameter.Position]
-                    .ParameterType
-                    .IsByRef ||
-                    !openParams[parameter.Position]
-                    .ParameterType
-                    .ContainsGenericParameters {
+                    !openParams[parameter.Position].ParameterType.IsByRef ||
+                    !openParams[parameter.Position].ParameterType.ContainsGenericParameters {
                     return nil
                 }
                 if MentionsUnresolvedMethodGenericParameter(
@@ -4858,12 +4788,8 @@ internal partial class ExpressionBinder {
                 }
                 let openParams = openMethod.GetParameters()
                 if uint32(parameter.Position) >= uint32(openParams.Length) ||
-                    !openParams[parameter.Position]
-                    .ParameterType
-                    .IsByRef ||
-                    !openParams[parameter.Position]
-                    .ParameterType
-                    .ContainsGenericParameters ||
+                    !openParams[parameter.Position].ParameterType.IsByRef ||
+                    !openParams[parameter.Position].ParameterType.ContainsGenericParameters ||
                     MentionsUnresolvedMethodGenericParameter(
                     openParams[parameter.Position].ParameterType,
                     nullableMethodTypeArgs
@@ -4941,10 +4867,8 @@ internal partial class ExpressionBinder {
                 if NativeProtocolOperations.GetProtocol(targetType) != nil {
                     return nativeConversions?.ClassifyArgumentConversion(sourceType, targetType).IsImplicit == true
                 }
-                return Conversion.ClassifyNonStructural(sourceType, targetType)
-                    .IsImplicit ||
-                    ConversionClassifier
-                    .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
+                return Conversion.ClassifyNonStructural(sourceType, targetType).IsImplicit ||
+                    ConversionClassifier.CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
                     boundArguments[argIndex],
                     targetType
                 ) ||
@@ -5222,8 +5146,7 @@ internal partial class ExpressionBinder {
             // is produced and the raw value is pushed. Treating "a projection would
             // have been possible" as acceptance here would therefore accept exactly
             // the pairs that emit the invalid IL this check exists to stop.
-            return !Conversion.Classify(sourceType, targetType)
-                .Exists &&
+            return !Conversion.Classify(sourceType, targetType).Exists &&
                 !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, targetType)
         }
 

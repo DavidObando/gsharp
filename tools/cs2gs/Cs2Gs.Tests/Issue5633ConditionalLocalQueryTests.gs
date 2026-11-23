@@ -362,9 +362,7 @@ open class Issue5633ConditionalLocalQueryTests {
                     "reassignment",
                     StringComparison.Ordinal
                 ) ||
-                    counter
-                    .Key
-                    .StartsWith("storage_write", StringComparison.Ordinal) || counter.Key.StartsWith(
+                    counter.Key.StartsWith("storage_write", StringComparison.Ordinal) || counter.Key.StartsWith(
                     "scope_",
                     StringComparison.Ordinal
                 ) {

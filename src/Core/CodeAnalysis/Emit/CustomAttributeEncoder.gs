@@ -826,9 +826,9 @@ internal class CustomAttributeEncoder {
         let constructorCandidates = List[(Constructor ConstructorSymbol?, Parameters ImmutableArray[ParameterSymbol])]()
         if attributeType.HasPrimaryConstructor &&
             this.resolvePrimaryCtorToken != nil &&
-            !attributeType
-            .EffectiveExplicitConstructors
-            .Any((ctor ConstructorSymbol) -> ctor.IsSynthesizedFromPrimaryConstructor) {
+            !attributeType.EffectiveExplicitConstructors.Any(
+            (ctor ConstructorSymbol) -> ctor.IsSynthesizedFromPrimaryConstructor
+        ) {
             constructorCandidates.Add((nil, attributeType.PrimaryConstructorParameters))
         }
         if this.resolveExplicitCtorToken != nil {
@@ -1057,8 +1057,7 @@ internal class CustomAttributeEncoder {
                 argument.Value == nil &&
                 unwrappedArgumentType.ClrType is {} scalarNullClr &&
                 NormalizeWellKnownType(scalarNullClr) is {} normalizedScalarNull &&
-                normalizedScalarNull
-                .IsSameAs(typeof(Type)) {
+                normalizedScalarNull.IsSameAs(typeof(Type)) {
                 WriteCustomAttributeFieldOrPropertyType(bb, typeof(Type))
                 this.WriteCustomAttributeFixedArg(bb, typeof(Type), nil)
                 return
@@ -1235,22 +1234,13 @@ internal class CustomAttributeEncoder {
                 .IsDefaultOrEmpty {
                 return (
                     (openDefinition.FullName ?? openDefinition.Name) + this.BuildArgumentList(imported.TypeArguments),
-                    openDefinition
-                        .Assembly
-                        .FullName ??
-                        openDefinition
-                        .Assembly
-                        .GetName()
-                        .Name ??
+                    openDefinition.Assembly.FullName ??
+                        openDefinition.Assembly.GetName().Name ??
                         this.CompilationAssemblyName()
                 )
             }
-            case StructSymbol{ClrType: nil} structType when !structType
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty ||
-                !structType
-                .TypeArguments
-                .IsDefaultOrEmpty {
+            case StructSymbol{ClrType: nil} structType when !structType.EnclosingTypeArguments.IsDefaultOrEmpty ||
+                !structType.TypeArguments.IsDefaultOrEmpty {
                 return (
                     GetMetadataTypeName(structType.Definition!!) + this.BuildArgumentList(
                         Flatten(structType.EnclosingTypeArguments, structType.TypeArguments)
@@ -1261,9 +1251,7 @@ internal class CustomAttributeEncoder {
             case InterfaceSymbol{ClrType: nil} interfaceType when !interfaceType
                 .EnclosingTypeArguments
                 .IsDefaultOrEmpty ||
-                !interfaceType
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !interfaceType.TypeArguments.IsDefaultOrEmpty {
                 return (
                     GetMetadataTypeName(interfaceType.Definition ?? interfaceType) + this.BuildArgumentList(
                         Flatten(interfaceType.EnclosingTypeArguments, interfaceType.TypeArguments)
@@ -1540,13 +1528,8 @@ internal class CustomAttributeEncoder {
 
     /// Gets the identity of the assembly being emitted.
     /// @returns The assembly's simple name.
-    private func CompilationAssemblyName() string -> this
-        .emitCtx
-        .AssemblyNameOverride ??
-        this
-        .emitCtx
-        .Program
-        .PackageName ??
+    private func CompilationAssemblyName() string -> this.emitCtx.AssemblyNameOverride ??
+        this.emitCtx.Program.PackageName ??
         "Default"
 
     private func WriteCustomAttributeNamedArg(bb BlobBuilder, attributeType Type, arg BoundAttributeArgument) {
@@ -1937,9 +1920,7 @@ internal class CustomAttributeEncoder {
         private func DescribeArgumentList(positional ImmutableArray[BoundAttributeArgument]) string -> string.Join(
             ", ",
             positional.Select(
-                (argument BoundAttributeArgument) -> argument
-                    .Type
-                    ?.Name ??
+                (argument BoundAttributeArgument) -> argument.Type?.Name ??
                     (
                     if argument.Value is {} value {
                         value.GetType().Name
@@ -2158,9 +2139,7 @@ internal class CustomAttributeEncoder {
             for current in attributeType.GetHierarchy() {
                 for staticProperty in current.StaticProperties {
                     if !staticProperty.IsIndexer &&
-                        staticProperty
-                        .Parameters
-                        .Length == 0 &&
+                        staticProperty.Parameters.Length == 0 &&
                         staticProperty.Name == emittedName {
                         return false
                     }
@@ -2692,9 +2671,7 @@ internal class CustomAttributeEncoder {
             paramType = NormalizeWellKnownType(paramType)!!
             let suppliedIsObject = unwrappedSupplied != nil &&
                 unwrappedSupplied != TypeSymbol.Null &&
-                unwrappedSupplied
-                .ClrType
-                ?.FullName == "System.Object"
+                unwrappedSupplied.ClrType?.FullName == "System.Object"
             // Everything is assignable to System.Object. Compared by name so the
             // check holds for attribute types resolved through a MetadataLoadContext.
             if paramType.FullName == "System.Object" {
@@ -2841,8 +2818,7 @@ internal class CustomAttributeEncoder {
                 supplied is []object? widenedElements &&
                 GetOneDimensionalArrayElementType(unwrappedSupplied)?.ClrType is {} declaredElementType &&
                 NormalizeWellKnownType(declaredElementType) is {} normalizedElementType &&
-                string
-                .Equals(normalizedElementType.FullName, parameterElementType.FullName, StringComparison.Ordinal) {
+                string.Equals(normalizedElementType.FullName, parameterElementType.FullName, StringComparison.Ordinal) {
                 for element in widenedElements {
                     if !ArgAssignable(element, parameterElementType) {
                         return AttributeArgumentConversionKind.NotApplicable
@@ -2892,8 +2868,7 @@ internal class CustomAttributeEncoder {
                 let suppliedElementClr = GetOneDimensionalArrayElementType(unwrappedSupplied)?.ClrType
                 return if suppliedElementClr != nil &&
                     NormalizeWellKnownType(suppliedElementClr) is {} normalizedSuppliedElement &&
-                    string
-                    .Equals(normalizedSuppliedElement.FullName, paramElement.FullName, StringComparison.Ordinal) {
+                    string.Equals(normalizedSuppliedElement.FullName, paramElement.FullName, StringComparison.Ordinal) {
                     AttributeArgumentConversionKind.Exact
                 } else {
                     AttributeArgumentConversionKind.NotApplicable
@@ -2902,8 +2877,7 @@ internal class CustomAttributeEncoder {
             return if GetOneDimensionalArrayElementType(unwrappedSupplied) == nil &&
                 unwrappedSupplied.ClrType is {} suppliedClr &&
                 NormalizeWellKnownType(suppliedClr) is {} normalizedSupplied &&
-                string
-                .Equals(normalizedSupplied.FullName, paramType.FullName, StringComparison.Ordinal) {
+                string.Equals(normalizedSupplied.FullName, paramType.FullName, StringComparison.Ordinal) {
                 AttributeArgumentConversionKind.Exact
             } else {
                 AttributeArgumentConversionKind.NotApplicable
@@ -2993,8 +2967,7 @@ internal class CustomAttributeEncoder {
         }
 
         private func IsObjectArrayType(type Type) bool -> type.IsArray && type.GetArrayRank() == 1 &&
-            type
-            .GetElementType()?.FullName == "System.Object"
+            type.GetElementType()?.FullName == "System.Object"
 
         private func UnwrapAttributeReferenceNullability(type TypeSymbol?) TypeSymbol? {
             var current = type
@@ -3187,11 +3160,8 @@ internal class CustomAttributeEncoder {
                 .Where(
                 (candidate MemberInfo) -> (
                     candidate is PropertyInfo property &&
-                        property
-                        .SetMethod
-                        ?.IsPublic == true &&
-                        property
-                        .GetIndexParameters().Length == 0
+                        property.SetMethod?.IsPublic == true &&
+                        property.GetIndexParameters().Length == 0
                 ) ||
                     candidate is FieldInfo &&
                     candidate.IsInitOnly == false &&
@@ -3203,8 +3173,7 @@ internal class CustomAttributeEncoder {
                 .Distinct(StringComparer.Ordinal)
                 .ToArray()
             member = members.FirstOrDefault((candidate MemberInfo) -> candidate.Name == emittedName) ??
-                members
-                .FirstOrDefault(
+                members.FirstOrDefault(
                 (candidate MemberInfo) -> SyntaxFacts.GetEmittedIdentifier(
                     candidate.Name,
                     IdentifierNameContext.General,

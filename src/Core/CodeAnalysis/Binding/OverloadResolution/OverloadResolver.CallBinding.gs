@@ -125,13 +125,9 @@ internal partial class OverloadResolver {
         if argument is not BoundMethodGroupExpression userGroup {
             return false
         }
-        if userGroup
-            .Candidates
-            .Length == 1 &&
+        if userGroup.Candidates.Length == 1 &&
             userGroup.FunctionType is {} naturalType &&
-            naturalType
-            .ParameterTypes
-            .Length == delegateArity {
+            naturalType.ParameterTypes.Length == delegateArity {
             parameters = naturalType.ParameterTypes.ToArray()
             returnType = naturalType.ReturnType
             return true
@@ -234,14 +230,10 @@ internal partial class OverloadResolver {
                 0
             }
         )
-        if resolution.Outcome != ClrOverloadResolution
-            .ResolutionOutcome
-            .Resolved ||
+        if resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved ||
             resolution.Best is not{} best ||
             best.IsGenericMethodDefinition ||
-            best
-            .ReturnType
-            .IsSameAs(typeof(Void)) {
+            best.ReturnType.IsSameAs(typeof(Void)) {
             return nil
         }
         // ADR-0193 Phase 2: read through the funnel and taken bare, as the
@@ -644,8 +636,8 @@ internal partial class OverloadResolver {
             // overload set of the enclosing type — mirror that union here.
             if !TypeMemberModel.GetMethods(receiverStruct, name, MemberQuery.Instance(MemberKinds.Method))
                 .IsDefaultOrEmpty ||
-                !TypeMemberModel
-                .GetMethods(receiverStruct, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty {
+                !TypeMemberModel.GetMethods(receiverStruct, name, MemberQuery.InheritedStatic(MemberKinds.Method))
+                .IsDefaultOrEmpty {
                 return true
             }
         } else if effThis?.Type is InterfaceSymbol receiverIface {
@@ -653,8 +645,7 @@ internal partial class OverloadResolver {
             // method body also sees the interface's own private helpers.
             if !TypeMemberModel.GetMethods(receiverIface, name, MemberQuery.Instance(MemberKinds.Method))
                 .IsDefaultOrEmpty ||
-                receiverIface
-                .GetPrivateMethods(name).Length > 0 {
+                receiverIface.GetPrivateMethods(name).Length > 0 {
                 return true
             }
         }
@@ -664,8 +655,7 @@ internal partial class OverloadResolver {
             if GetImplicitStaticSelfOwner() is InterfaceSymbol staticIface {
                 if !TypeMemberModel.GetMethods(staticIface, name, MemberQuery.Static(MemberKinds.Method))
                     .IsDefaultOrEmpty ||
-                    staticIface
-                    .GetStaticPrivateMethods(name).Length > 0 {
+                    staticIface.GetStaticPrivateMethods(name).Length > 0 {
                     return true
                 }
             } else if GetImplicitStaticSelfOwner() is StructSymbol staticStruct {
@@ -708,9 +698,7 @@ internal partial class OverloadResolver {
             aggregate.IsInline ||
             aggregate.HasPrimaryConstructor ||
             (argumentCount == 0 && aggregate.ClrType == nil && aggregate.HasSynthesizedDataConstructor) ||
-            !aggregate
-            .EffectiveExplicitConstructors
-            .IsDefaultOrEmpty
+            !aggregate.EffectiveExplicitConstructors.IsDefaultOrEmpty
     )
 
     /// Binds calls with the same conversion and construction rules for simple and qualified targets.
@@ -783,9 +771,7 @@ internal partial class OverloadResolver {
         // constructor-independent explicit-conversion form. Bind it before
         // callable/type lookup so no symbol named `cast` can redirect it.
         if resolvedType == nil &&
-            syntax
-            .Identifier
-            .ValueText == "cast" &&
+            syntax.Identifier.ValueText == "cast" &&
             tryBindIntrinsicCall(syntax, out var checkedCast) {
             return checkedCast!!
         }
@@ -797,20 +783,14 @@ internal partial class OverloadResolver {
         // function" diagnostic.
         if resolvedType == nil &&
             syntax.TypeArgumentList == nil &&
-            syntax
-            .Identifier
-            .Kind == SyntaxKind.IdentifierToken &&
-            syntax
-            .Identifier
-            .ValueText == "init" {
+            syntax.Identifier.Kind == SyntaxKind.IdentifierToken &&
+            syntax.Identifier.ValueText == "init" {
             let inCtor FunctionSymbol? = getCurrentFunction()
             if inCtor != nil &&
                 inCtor.IsSpecialName &&
                 inCtor.Name == ".ctor" &&
                 inCtor.ReceiverType is StructSymbol owningClass &&
-                !owningClass
-                .ExplicitConstructors
-                .IsDefaultOrEmpty {
+                !owningClass.ExplicitConstructors.IsDefaultOrEmpty {
                 return BindConstructorChainingExpression(syntax, owningClass, inCtor)
             }
         }
@@ -926,16 +906,12 @@ internal partial class OverloadResolver {
         } else {
             resolvedType ?? lookupTypeWithArity(syntax.Identifier, ctorPreferredArity)
         }
-        let hasSingleInlineOutArgument = syntax
-            .Arguments
-            .Count == 1 &&
+        let hasSingleInlineOutArgument = syntax.Arguments.Count == 1 &&
             (
             UnwrapNamedArgumentValue(syntax.Arguments[0]) is RefArgumentExpressionSyntax and {IsInlineDeclaration: true}
         )
         if !hasNonConstructorCallable &&
-            syntax
-            .Arguments
-            .Count == 1 &&
+            syntax.Arguments.Count == 1 &&
             !hasSingleInlineOutArgument &&
             conversionType is TypeSymbol {
             var explicitConversionType TypeSymbol? = TryConstructConversionTarget(syntax, conversionType)
@@ -961,11 +937,7 @@ internal partial class OverloadResolver {
             let typeArgumentsMatchConversionTarget = if syntax.TypeArgumentList is {} callTypeArgumentList {
                 singleArgClass != nil &&
                     singleArgClass.IsGenericDefinition == true &&
-                    callTypeArgumentList
-                    .Arguments
-                    .Count == singleArgClass
-                    .TypeParameters
-                    .Length
+                    callTypeArgumentList.Arguments.Count == singleArgClass.TypeParameters.Length
             } else {
                 true
             }
@@ -1015,9 +987,7 @@ internal partial class OverloadResolver {
         // to it can only mean construction. When the `init()` constraint is
         // absent we cannot guarantee an accessible parameterless constructor, so
         // report GS0389 pointing at the missing constraint.
-        if syntax
-            .Arguments
-            .Count == 0 &&
+        if syntax.Arguments.Count == 0 &&
             syntax.TypeArgumentList == nil &&
             (resolvedType ?? lookupType(syntax.Identifier.ValueText)) is TypeParameterSymbol typeParam {
             if typeParam.HasDefaultConstructorConstraint {
@@ -2035,12 +2005,8 @@ internal partial class OverloadResolver {
             )
             return BoundErrorExpression(nil)
         }
-        let isVariadic = function
-            .Parameters
-            .Length > 0 &&
-            function
-            .Parameters[function.Parameters.Length - 1]
-            .IsVariadic
+        let isVariadic = function.Parameters.Length > 0 &&
+            function.Parameters[function.Parameters.Length - 1].IsVariadic
         let fixedParamCount = if isVariadic {
             function.Parameters.Length - 1
         } else {
@@ -2136,12 +2102,8 @@ internal partial class OverloadResolver {
         // empty in the reorder output, then filled with default-value
         // BoundLiteralExpression here.
         var parameterSyntax[]ExpressionSyntax?
-        let hasOptional = function
-            .Parameters
-            .Length > 0 &&
-            requiredParamCount < function
-            .Parameters
-            .Length &&
+        let hasOptional = function.Parameters.Length > 0 &&
+            requiredParamCount < function.Parameters.Length &&
             !isVariadic
         if (!argumentNames.IsDefault && !isVariadic) ||
             (hasOptional && syntax.Arguments.Count < function.Parameters.Length) {
@@ -2227,12 +2189,8 @@ internal partial class OverloadResolver {
                     // caller supplied a single trailing argument whose type
                     // already matches the slice (the C# `params` pass-through
                     // case), in which case the slice itself drives inference.
-                    if i == function
-                        .Parameters
-                        .Length - 1 &&
-                        function
-                        .Parameters[i]
-                        .IsVariadic &&
+                    if i == function.Parameters.Length - 1 &&
+                        function.Parameters[i].IsVariadic &&
                         VariadicCarriers.GetElementType(paramType) != TypeSymbol.Error {
                         InferVariadicArguments(paramType, boundArguments.ToImmutable(), i, substitution)
                         break
@@ -2338,8 +2296,7 @@ internal partial class OverloadResolver {
                 i < parameterSyntax.Length &&
                 parameterSyntax[i] is {} deferredArgument &&
                 GetLambdaArgumentSyntax(deferredArgument) is {} deferredLambda &&
-                deferredArrowLambdas
-                .Remove(deferredLambda) {
+                deferredArrowLambdas.Remove(deferredLambda) {
                 let lambdaLoc = deferredArgument.Location
                 if bindLambdaWithTarget != nil &&
                     expectedType != nil &&
@@ -2628,8 +2585,7 @@ internal partial class OverloadResolver {
                     widenTargetFn.ReturnType != TypeSymbol.Void &&
                     widenTargetFn.ReturnType != TypeSymbol.Error &&
                     !object.ReferenceEquals(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType) &&
-                    Conversion
-                    .Classify(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType).IsImplicit {
+                    Conversion.Classify(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType).IsImplicit {
                     let widenLoc = if i < parameterSyntax.Length && parameterSyntax[i] is {} widenSyntax {
                         widenSyntax.Location
                     } else {
@@ -2720,8 +2676,7 @@ internal partial class OverloadResolver {
                 expectedType is TupleTypeSymbol paramTuple &&
                 argTuple.Arity == paramTuple.Arity &&
                 argTuple != paramTuple &&
-                Conversion
-                .Classify(argTuple, paramTuple).IsImplicit {
+                Conversion.Classify(argTuple, paramTuple).IsImplicit {
                 let tupleLoc = if i < parameterSyntax.Length && parameterSyntax[i] is {} tupleSyntax {
                     tupleSyntax.Location
                 } else {
@@ -2850,8 +2805,7 @@ internal partial class OverloadResolver {
                     )
                 )
                     .IsImplicit ||
-                    !ConversionClassifier
-                    .KeepsConvertedDelegate(
+                    !ConversionClassifier.KeepsConvertedDelegate(
                     argument,
                     Invariant.Required(
                         expectedType,

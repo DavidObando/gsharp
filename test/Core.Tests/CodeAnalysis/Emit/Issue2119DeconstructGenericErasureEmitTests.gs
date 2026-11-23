@@ -71,10 +71,7 @@ open class Issue2119DeconstructGenericErasureEmitTests {
             .Select((l LocalVariableInfo) -> l.LocalType)
             .Where(
             (t Type) -> t.IsGenericType &&
-                t
-                .GetGenericTypeDefinition()
-                .Name
-                .StartsWith("ValueTuple", StringComparison.Ordinal)
+                t.GetGenericTypeDefinition().Name.StartsWith("ValueTuple", StringComparison.Ordinal)
         )
             .ToList()
         Assert.NotEmpty(tupleLocals)
@@ -82,10 +79,7 @@ open class Issue2119DeconstructGenericErasureEmitTests {
             let args = tuple.GetGenericArguments()
             let enumeratorArg Type? = args.FirstOrDefault(
                 (a Type) -> a.IsGenericType &&
-                    a
-                    .GetGenericTypeDefinition()
-                    .Name
-                    .StartsWith("IEnumerator", StringComparison.Ordinal)
+                    a.GetGenericTypeDefinition().Name.StartsWith("IEnumerator", StringComparison.Ordinal)
             )
             Assert.NotNull(enumeratorArg)
             let innerArg = enumeratorArg!!.GetGenericArguments().Single()
@@ -125,10 +119,7 @@ open class Issue2119DeconstructGenericErasureEmitTests {
             .Select((l LocalVariableInfo) -> l.LocalType)
             .Single(
             (t Type) -> t.IsGenericType &&
-                t
-                .GetGenericTypeDefinition()
-                .Name
-                .StartsWith("ValueTuple", StringComparison.Ordinal)
+                t.GetGenericTypeDefinition().Name.StartsWith("ValueTuple", StringComparison.Ordinal)
         )
         let objectArg = tuple.GetGenericArguments().Last()
         Assert.Equal(typeof(object).FullName, objectArg.FullName)

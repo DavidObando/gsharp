@@ -155,9 +155,7 @@ shared class ExhaustivenessAnalyzer {
                     sealedInterface.PackageName ?? string.Empty,
                     StringComparison.Ordinal
                 ) &&
-                    s
-                    .Interfaces
-                    .Any((i InterfaceSymbol) -> SameInterface(i, sealedInterface))
+                    s.Interfaces.Any((i InterfaceSymbol) -> SameInterface(i, sealedInterface))
             )
                 .ToImmutableArray()
             let coveredTypes = HashSet[StructSymbol]()
@@ -165,9 +163,7 @@ shared class ExhaustivenessAnalyzer {
                 for leaf in FlattenDisjunction(pattern) {
                     if leaf is BoundTypePattern typePattern &&
                         typePattern.TargetType is StructSymbol structSymbol &&
-                        structSymbol
-                        .Interfaces
-                        .Any((i InterfaceSymbol) -> SameInterface(i, sealedInterface)) {
+                        structSymbol.Interfaces.Any((i InterfaceSymbol) -> SameInterface(i, sealedInterface)) {
                         coveredTypes.Add(structSymbol)
                     }
                 }

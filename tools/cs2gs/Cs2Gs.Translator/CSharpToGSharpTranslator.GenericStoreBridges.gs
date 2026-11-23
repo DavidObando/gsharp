@@ -181,9 +181,7 @@ partial class CSharpToGSharpTranslator {
             } else {
                 slotType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) +
                     " (" +
-                    slotType
-                    .NullableAnnotation
-                    .ToString() + ")"
+                    slotType.NullableAnnotation.ToString() + ")"
             }
             // Keep the value on one line within 160 characters, reserving
             // space for the asserted synthesized leaf.
@@ -293,10 +291,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 case assignment is AssignmentExpressionSyntax when assignment.Right == node {
                     return (
-                        this
-                            .context
-                            .GetSymbolInfo(assignment.Left)
-                            .Symbol ??
+                        this.context.GetSymbolInfo(assignment.Left).Symbol ??
                             (
                             if assignment.Left is ElementAccessExpressionSyntax elementAccess {
                                 this.context.GetTypeInfo(elementAccess.Expression).Type as IArrayTypeSymbol
@@ -365,9 +360,7 @@ partial class CSharpToGSharpTranslator {
                         let parameterIsAssignmentTarget = finalValue!!.Parent is AssignmentExpressionSyntax assignment &&
                             assignment.Left == finalValue &&
                             value != nil &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(this.context.GetSymbolInfo(value).Symbol, parameter)
+                            SymbolEqualityComparer.Default.Equals(this.context.GetSymbolInfo(value).Symbol, parameter)
                         if parameterIsAssignmentTarget ||
                             (parameterIsFinalStore && finalValue!!.Parent is AssignmentExpressionSyntax) ||
                             (
@@ -430,9 +423,7 @@ partial class CSharpToGSharpTranslator {
                         let asyncLambda = OutermostTransparentNode(
                             value
                         )!!.Parent is AnonymousFunctionExpressionSyntax function &&
-                            function
-                            .AsyncKeyword
-                            .IsKind(SyntaxKind.AsyncKeyword)
+                            function.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword)
                         return DelegateResultSlot(invoke, asyncLambda, value, out slotType) ??
                             this.ClassifyTupleStoreSlot(value, invoke, out slotType, out resultDependsOnSlot)
                     }
@@ -570,14 +561,8 @@ partial class CSharpToGSharpTranslator {
             ) {
                 outermost = parent
             }
-            return this
-                .context
-                .GetTypeInfo(outermost)
-                .ConvertedType as IArrayTypeSymbol ??
-                this
-                .context
-                .GetTypeInfo(outermost.Parent)
-                .Type as IArrayTypeSymbol
+            return this.context.GetTypeInfo(outermost).ConvertedType as IArrayTypeSymbol ??
+                this.context.GetTypeInfo(outermost.Parent).Type as IArrayTypeSymbol
         }
 
         private func GetIteratorStoreSlot(value ExpressionSyntax?, iterator IMethodSymbol) ITypeSymbol? {
@@ -590,9 +575,7 @@ partial class CSharpToGSharpTranslator {
             // envelopes. Use MapReturnType's emitted scalar element contract
             // before following the tuple path; the operand may have another type.
             var slotType ITypeSymbol? = if iterator.ReturnType is INamedTypeSymbol returnType &&
-                returnType
-                .TypeArguments
-                .Length == 1 {
+                returnType.TypeArguments.Length == 1 {
                 returnType.TypeArguments[0]
             } else {
                 this.context.GetTypeInfo(yielded.Expression).ConvertedType
@@ -771,12 +754,8 @@ partial class CSharpToGSharpTranslator {
                 var slotType = slotType
                 for var i = tupleIndices.Count - 1; i >= 0; i-- {
                     if slotType is INamedTypeSymbol nullable &&
-                        nullable
-                        .OriginalDefinition
-                        .SpecialType == SpecialType.System_Nullable_T &&
-                        nullable
-                        .TypeArguments
-                        .Length == 1 &&
+                        nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+                        nullable.TypeArguments.Length == 1 &&
                         nullable.TypeArguments[0] is INamedTypeSymbol{IsTupleType: true} underlyingTuple {
                         slotType = underlyingTuple
                     }

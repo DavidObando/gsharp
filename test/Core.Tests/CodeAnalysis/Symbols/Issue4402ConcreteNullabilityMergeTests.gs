@@ -92,13 +92,8 @@ class Issue4402ConcreteNullabilityMergeTests {
         let closedFactory = factoryDefinition.MakeGenericType(stringType)
         let continueWhenAll = closedFactory.GetMethods().Single(
             (method MethodInfo) -> method.Name == "ContinueWhenAll" && method.GetParameters() is [var tasks, _] &&
-                tasks
-                .ParameterType
-                .IsArray &&
-                tasks
-                .ParameterType
-                .GetElementType()
-                ?.FullName == "System.Threading.Tasks.Task"
+                tasks.ParameterType.IsArray &&
+                tasks.ParameterType.GetElementType()?.FullName == "System.Threading.Tasks.Task"
         )
         let receiver = ImportedTypeSymbol.GetConstructed(
             closedFactory,

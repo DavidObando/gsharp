@@ -142,8 +142,7 @@ class BaseClassCycleUnsafeWalkAnalyzer : GSharpDiagnosticAnalyzer {
             let baseClassAccess ExpressionSyntax? = GetBaseClassAccess(assignment.Expression, out var rightReceiver)
             if baseClassAccess == nil ||
                 rightReceiver is not NameExpressionSyntax rightIdentifier ||
-                rightIdentifier
-                .GetLastToken().Text != leftText {
+                rightIdentifier.GetLastToken().Text != leftText {
                 return
             }
             if !IsInsideLoop(assignment) || IsInsideExemptMethod(assignment) {
@@ -167,10 +166,7 @@ class BaseClassCycleUnsafeWalkAnalyzer : GSharpDiagnosticAnalyzer {
         /// #4173).
         private func GetBaseClassAccess(expression ExpressionSyntax, out receiver ExpressionSyntax?) ExpressionSyntax? {
             if expression is AccessorExpressionSyntax{IsNullConditional: false} memberAccess &&
-                memberAccess
-                .RightPart
-                .GetFirstToken()
-                .Text == BaseClassPropertyName {
+                memberAccess.RightPart.GetFirstToken().Text == BaseClassPropertyName {
                 // Issue #4173: cs2gs's nullable-lifting inserts a null-forgiving
                 // wrapper around a nullable receiver that has no equivalent
                 // narrowing in G#'s flow analysis, so the migrated form of even

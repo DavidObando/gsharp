@@ -1746,8 +1746,7 @@ open partial class Parser {
         var parseNext = true
         while parseNext &&
             Current.Kind != SyntaxKind.CloseSquareBracketToken &&
-            Current.Kind != SyntaxKind
-            .EndOfFileToken {
+            Current.Kind != SyntaxKind.EndOfFileToken {
             nodesAndSeparators.Add(
                 if pointerArgumentsAllowed {
                     ParseTypeClause()

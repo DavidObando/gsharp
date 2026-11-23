@@ -299,11 +299,7 @@ shared class BoundSemantics {
         if !string.IsNullOrEmpty(fileName) {
             for candidate in compilation.SyntaxTrees {
                 if ServerPathIdentity.AreSame(candidate.Text?.FileName, fileName) &&
-                    candidate
-                    .Text
-                    .Length == tree
-                    .Text
-                    .Length &&
+                    candidate.Text.Length == tree.Text.Length &&
                     string.Equals(candidate.Text.ToString(), tree.Text.ToString(), StringComparison.Ordinal) {
                     found = candidate
                     break

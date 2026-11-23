@@ -161,8 +161,7 @@ internal partial class DeclarationBinder {
         if implementationAttribute != nil &&
             enforceContract &&
             !slotHasUnscopedRef &&
-            reportedUnscopedRefDiagnostics
-            .Add(implementationAttribute.Syntax) {
+            reportedUnscopedRefDiagnostics.Add(implementationAttribute.Syntax) {
             Diagnostics.ReportUnscopedRefInvalidTarget(
                 implementationAttribute.Syntax.Location,
                 "cannot be applied because $slotDescription does not have @UnscopedRef"
@@ -402,8 +401,7 @@ internal partial class DeclarationBinder {
                     // Delegate Invoke has no FieldMarshal return emitter (issue #5967).
                     if defaultSystemTarget == AttributeTargets.Delegate &&
                         bound.Target == AttributeTargetKind.Return &&
-                        KnownAttributes
-                        .IsMarshalAs(bound) {
+                        KnownAttributes.IsMarshalAs(bound) {
                         Diagnostics.ReportMarshalAsRejected(
                             annotation.Location,
                             "Invoke return",
@@ -523,8 +521,7 @@ internal partial class DeclarationBinder {
             KnownAttributes.IsReservedForCompiler(attrType.ClrType) ||
                 EmbeddedAttributeSource.IsSourceNullabilityAttribute(attrType)
         ) &&
-            !EmbeddedAttributeSource
-            .IsSyntheticTree(annotation.SyntaxTree) {
+            !EmbeddedAttributeSource.IsSyntheticTree(annotation.SyntaxTree) {
             Diagnostics.ReportAttributeReservedForCompiler(GetAnnotationNameLocation(annotation), nameText)
             return nil
         }
@@ -1075,9 +1072,7 @@ internal partial class DeclarationBinder {
             bound is BoundConversionExpression ||
                 (
                 (syntax is CallExpressionSyntax || syntax is AccessorExpressionSyntax) &&
-                    constantType
-                    .ClrType
-                    ?.IsPrimitive == true
+                    constantType.ClrType?.IsPrimitive == true
             )
         ) &&
             IsSerialisableAttributeConstant(constantType) {
@@ -1534,12 +1529,9 @@ internal partial class DeclarationBinder {
             // pure-extension shape is built with neither a ReceiverType nor an
             // ExplicitReceiverParameter, so the syntax-level receiver clause is the
             // marker that is already final here.
-            if function
-                .Declaration
-                ?.Receiver != nil ||
+            if function.Declaration?.Receiver != nil ||
                 function.ExplicitReceiverParameter != nil ||
-                function
-                .IsExtension {
+                function.IsExtension {
                 return "cannot be applied to a receiver-clause function; every receiver clause declares an extension, whose receiver is an ordinary by-value parameter"
             }
             if function.ContainingType is InterfaceSymbol {

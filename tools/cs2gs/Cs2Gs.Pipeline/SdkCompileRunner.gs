@@ -1395,9 +1395,7 @@ class SdkCompileRunner {
                 if seen.Add(
                     diagnostic.Id + "|" + diagnostic.File + "|" + diagnostic.Line.ToString() +
                         "," +
-                        diagnostic
-                        .Column
-                        .ToString() + "|" + diagnostic.Message
+                        diagnostic.Column.ToString() + "|" + diagnostic.Message
                 ) {
                     diagnostics.Add(diagnostic)
                 }
@@ -1789,14 +1787,9 @@ class SdkCompileRunner {
                     let match = GenericErrorPattern.Match(rawLine.Trim())
                     if match.Success {
                         let message = "dotnet build: " +
-                            match
-                            .Groups["code"]
-                            .Value +
+                            match.Groups["code"].Value +
                             ": " +
-                            match
-                            .Groups["msg"]
-                            .Value
-                            .Trim()
+                            match.Groups["msg"].Value.Trim()
                         return GscDiagnostic(match.Groups["code"].Value, message, "error", relativeFile, 1, 1)
                     }
                 }

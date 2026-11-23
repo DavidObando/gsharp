@@ -347,8 +347,7 @@ class GsStubRenderer {
         for method in methods {
             if !SkipType(method.Name) &&
                 method.Declaration is {} declaration &&
-                ClassifyPartialShape(method, isPartialType) == PartialShape
-                .Definition {
+                ClassifyPartialShape(method, isPartialType) == PartialShape.Definition {
                 partialDefinitions.Add(
                     StubPartialDefinition(
                         owner.PackageName,
@@ -705,12 +704,8 @@ class GsStubRenderer {
 
     private func RenderBaseInitializer(sb StringBuilder, baseInitializer BaseConstructorInitializer?) {
         if baseInitializer != nil &&
-            !baseInitializer
-            .Arguments
-            .IsDefaultOrEmpty &&
-            baseInitializer
-            .ArgumentRefKinds
-            .All((refKind RefKind) -> refKind == RefKind.None) {
+            !baseInitializer.Arguments.IsDefaultOrEmpty &&
+            baseInitializer.ArgumentRefKinds.All((refKind RefKind) -> refKind == RefKind.None) {
             // Only signatures are projected; typed defaults select the bound
             // base overload without evaluating the source's initializer. Keep
             // the existing elision for by-reference arguments, not rvalue defaults.
@@ -891,8 +886,7 @@ class GsStubRenderer {
             if includeDefaults &&
                 parameter.HasExplicitDefaultValue &&
                 parameter.RefKind == RefKind.None &&
-                !parameter
-                .IsVariadic {
+                !parameter.IsVariadic {
                 let rendered string? = RenderConstant(parameter.ExplicitDefaultValue, parameter.Type)
                 builder.Append(" = ").Append(rendered ?? "default")
             }
@@ -1185,9 +1179,7 @@ class GsStubRenderer {
         }
 
         private func IsExplicitlyAbstract(structSymbol StructSymbol) bool -> structSymbol.IsDeclaredAbstract ||
-            structSymbol
-            .Definition
-            ?.IsDeclaredAbstract == true
+            structSymbol.Definition?.IsDeclaredAbstract == true
 
         private func PrimaryConstructorAccessibility(
             structSymbol StructSymbol

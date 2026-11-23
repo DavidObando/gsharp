@@ -101,12 +101,8 @@ internal class Issue4563RefSafetyRulesContracts : IDisposable {
             (attribute CustomAttributeData) -> attribute
                 .AttributeType
                 .FullName == "System.Runtime.CompilerServices.RefSafetyRulesAttribute" &&
-                attribute
-                .ConstructorArguments
-                .Count == 1 &&
-                attribute
-                .ConstructorArguments[0]
-                .Value is 11
+                attribute.ConstructorArguments.Count == 1 &&
+                attribute.ConstructorArguments[0].Value is 11
         )
 
         private func RenameLookalikeRefSafetyRulesAttribute(path string) {

@@ -881,9 +881,7 @@ open class Program {
                 if severity == DiagnosticSeverity.Warning &&
                     args.TreatAllWarningsAsErrors &&
                     id != "GS9100" &&
-                    !args
-                    .WarnNotAsErrorIds
-                    .Contains(id) {
+                    !args.WarnNotAsErrorIds.Contains(id) {
                     severity = DiagnosticSeverity.Error
                 }
                 result.Add(d.WithSeverity(severity))
@@ -1233,8 +1231,7 @@ Options:
                                 throw CommandLineException("/resource requires a non-empty path and name.")
                             }
                             if !string.Equals(resourceAccess, "public", StringComparison.OrdinalIgnoreCase) &&
-                                !string
-                                .Equals(resourceAccess, "private", StringComparison.OrdinalIgnoreCase) {
+                                !string.Equals(resourceAccess, "private", StringComparison.OrdinalIgnoreCase) {
                                 throw CommandLineException("/resource access must be 'public' or 'private'.")
                             }
                             if result.Resources.Any(

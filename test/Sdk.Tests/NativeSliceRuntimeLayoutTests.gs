@@ -25,9 +25,7 @@ class NativeSliceRuntimeLayoutTests {
         Assert.EndsWith(expectedSuffix, property.Value)
         Assert.Contains(
             xml.Descendants(),
-            (e XElement) -> e
-                .Name
-                .LocalName == "_ExplicitReference" &&
+            (e XElement) -> e.Name.LocalName == "_ExplicitReference" &&
                 string(e.Attribute(XName?("Include")!!)) == "$$(GsharpValuesRuntimeAssemblyFullPath)"
         )
     }

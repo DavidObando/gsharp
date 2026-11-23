@@ -48,9 +48,7 @@ partial class TestParityStage : IMigrationStage {
         }
         if oracle == nil {
             let missingOracle = "no C# test oracle for '" +
-                context
-                .App
-                .Id +
+                context.App.Id +
                 "' in " +
                 oracleDirectory +
                 " (expected " +
@@ -80,9 +78,7 @@ partial class TestParityStage : IMigrationStage {
         } catch (ex Exception) when IsReadFailure(ex) {
             let unreadable = "the migrated run's TRX could not be read, so its cases cannot be compared " +
                 "with the C# original's " +
-                oracle.Tests!!
-                .Count
-                .ToString(CultureInfo.InvariantCulture) + " (#4633): " + ex.Message
+                oracle.Tests!!.Count.ToString(CultureInfo.InvariantCulture) + " (#4633): " + ex.Message
             return this.NameParityFailure(context, "TEST-RESULTS-UNREADABLE", unreadable)
         }
         summary.MigratedCases = actual.Count
@@ -93,9 +89,7 @@ partial class TestParityStage : IMigrationStage {
         }
         if actual.Count == 0 {
             let none = "the migrated run reported ZERO test results, but the C# original discovers " +
-                oracle.Tests!!
-                .Count
-                .ToString(CultureInfo.InvariantCulture) + " case(s) (#4633)."
+                oracle.Tests!!.Count.ToString(CultureInfo.InvariantCulture) + " case(s) (#4633)."
             return this.NameParityFailure(context, "TEST-NAME-PARITY", none)
         }
         let result = TestNameParity.Compare(oracle, actual)

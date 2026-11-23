@@ -529,15 +529,9 @@ class BoundGlobalScope {
     internal prop HasNativeProtocols bool ->
     Interfaces.Any((type InterfaceSymbol) -> type.IsProtocol) ||
         StructuralAdapters.HasNativeProtocolDeclarations ||
-        StructuralAdapters
-        .ProtocolEntries
-        .Count != 0 ||
-        StructuralAdapters
-        .ImportedProtocolEntries
-        .Count != 0 ||
-        StructuralAdapters
-        .ProtocolOperations
-        .Count != 0
+        StructuralAdapters.ProtocolEntries.Count != 0 ||
+        StructuralAdapters.ImportedProtocolEntries.Count != 0 ||
+        StructuralAdapters.ProtocolOperations.Count != 0
 
     /// Gets or sets the ref-kind delegate cache (issue #3501 A2) shared with
     /// `BindProgram`'s body-binding pass so a function-type shape with

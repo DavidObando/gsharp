@@ -2176,8 +2176,7 @@ internal partial class StatementBinder {
                 function != nil &&
                 !function!!.IsReturnTypeInferred &&
                 function!!.Type != TypeSymbol.Void &&
-                function!!.Type != TypeSymbol
-                .Error {
+                function!!.Type != TypeSymbol.Error {
                 let value = Invariant.Required(
                     syntax.Expression,
                     "a target-typed return has an expression",
@@ -2292,8 +2291,13 @@ internal partial class StatementBinder {
                         IsLvalueForRefReturn(returnValue) &&
                         returnValue.Type != TypeSymbol.Error &&
                         function!!.Type != TypeSymbol.Error &&
-                        !ByRefStorageMatching
-                        .AreSameStorageType(returnValue.Type, function!!.Type, out _, out _, out _) {
+                        !ByRefStorageMatching.AreSameStorageType(
+                        returnValue.Type,
+                        function!!.Type,
+                        out _,
+                        out _,
+                        out _
+                    ) {
                         Diagnostics.ReportCannotConvert(
                             Invariant.Required(
                                 syntax.Expression,
@@ -2947,11 +2951,9 @@ internal partial class StatementBinder {
                         IsDefensivelyCopiedReceiverForwarding(conditional.WhenFalseOperand)
                 }
                 case clrIndex is BoundClrIndexExpression when !TypeSymbol.IsByRefLike(clrIndex.Target.Type) ||
-                    RefCapabilities
-                    .IsUnscopedRefIndexerGetter(clrIndex.Indexer) {
+                    RefCapabilities.IsUnscopedRefIndexerGetter(clrIndex.Indexer) {
                     return !Binder.IsReferenceTypeForConstraint(clrIndex.Target.Type) &&
-                        RefCapabilities
-                        .RequiresReadOnlyReceiverDefensiveCopy(
+                        RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(
                         clrIndex.Target,
                         clrIndex.Indexer.GetMethod is {} getter && RefCapabilities.IsReadOnlyMethod(getter)
                     )

@@ -144,8 +144,7 @@ partial class Binder {
                     }
                     if bodyValue is InterpolatedStringExpressionSyntax interpolated &&
                         targetType != nil &&
-                        ExpressionBinder
-                        .IsFormattableStringTargetType(targetType) {
+                        ExpressionBinder.IsFormattableStringTargetType(targetType) {
                         return Statements.BindFormattableReturnValue(interpolated, interpolated, targetType)
                     }
                     return Expressions.BindLambdaBodyExpression(syntax, targetType)
@@ -1120,9 +1119,7 @@ partial class Binder {
             }
             if value is BoundVariableExpression receiverValue &&
                 (receiverValue.Variable is ParameterSymbol and {IsReceiverParameter: true}) &&
-                value
-                .Type
-                .IsValueType {
+                value.Type.IsValueType {
                 Diagnostics.ReportManagedReference(
                     member.Value.Location,
                     "a borrowed struct receiver cannot be captured; copy it to an ordinary local before the rich object"
@@ -1170,9 +1167,7 @@ partial class Binder {
             }
             if boundArgument is BoundVariableExpression receiverArgument &&
                 (receiverArgument.Variable is ParameterSymbol and {IsReceiverParameter: true}) &&
-                boundArgument
-                .Type
-                .IsValueType {
+                boundArgument.Type.IsValueType {
                 Diagnostics.ReportManagedReference(
                     argument.Location,
                     "a borrowed struct receiver cannot be retained as a rich-object base argument; copy it first"
@@ -1186,12 +1181,8 @@ partial class Binder {
             baseInitializer = declarations.ResolveRichAnonymousBaseConstructor(
                 classSymbol,
                 baseArguments.ToImmutable(),
-                syntax
-                    .BaseConstructorOpenParenthesisToken
-                    ?.Location ??
-                    syntax
-                    .BaseTypeClause
-                    ?.Location ??
+                syntax.BaseConstructorOpenParenthesisToken?.Location ??
+                    syntax.BaseTypeClause?.Location ??
                     syntax.Location
             )
         }
@@ -1254,11 +1245,8 @@ partial class Binder {
             }
             if method.Type != TypeSymbol.Void &&
                 !IsIteratorReturnType(method.Type) &&
-                !child
-                .statements
-                .HasInvalidUserGoto &&
-                !ControlFlowGraph
-                .AllPathsReturn(lowered) {
+                !child.statements.HasInvalidUserGoto &&
+                !ControlFlowGraph.AllPathsReturn(lowered) {
                 let pushed = child.Diagnostics.PushPremiseIf(
                     PrefixBindingContext.IsOpen(method.Declaration!!.Body),
                     PrefixPremise.RestOfBody
@@ -1470,12 +1458,8 @@ partial class Binder {
             baseInitializer = declarations.ResolveRichAnonymousBaseConstructor(
                 classSymbol,
                 baseArguments.ToImmutable(),
-                syntax
-                    .BaseConstructorOpenParenthesisToken
-                    ?.Location ??
-                    syntax
-                    .BaseTypeClause
-                    ?.Location ??
+                syntax.BaseConstructorOpenParenthesisToken?.Location ??
+                    syntax.BaseTypeClause?.Location ??
                     syntax.Location
             )
         }
@@ -1524,12 +1508,8 @@ partial class Binder {
         classToOuterTypeParameters Dictionary[TypeParameterSymbol, TypeSymbol],
         referencedTypeParameters ImmutableArray[TypeParameterSymbol]
     ) StructSymbol {
-        let shellTypeParameterCount = classSymbol
-            .Declaration
-            ?.RichAnonymousShellTypeParameterCount ??
-            classSymbol
-            .TypeParameters
-            .Length
+        let shellTypeParameterCount = classSymbol.Declaration?.RichAnonymousShellTypeParameterCount ??
+            classSymbol.TypeParameters.Length
         let shellTypeParameters = classSymbol.TypeParameters.Take(shellTypeParameterCount).ToImmutableArray()
         if !shellTypeParameters.IsDefaultOrEmpty && classToOuterTypeParameters.Count == shellTypeParameters.Length {
             let argumentsForConstruction = shellTypeParameters.Select(
@@ -1628,12 +1608,8 @@ partial class Binder {
         }
         let outerToClass = Dictionary[TypeParameterSymbol, TypeSymbol]()
         let classToOuter = Dictionary[TypeParameterSymbol, TypeSymbol]()
-        let shellParameterCount = classSymbol
-            .Declaration
-            ?.RichAnonymousShellTypeParameterCount ??
-            classSymbol
-            .TypeParameters
-            .Length
+        let shellParameterCount = classSymbol.Declaration?.RichAnonymousShellTypeParameterCount ??
+            classSymbol.TypeParameters.Length
         for classParameter in classSymbol.TypeParameters.Take(shellParameterCount) {
             var match TypeParameterSymbol? = nil
             if binderCtx.CurrentTypeParameters == nil || !binderCtx.CurrentTypeParameters!!.TryGetValue(
@@ -1823,15 +1799,10 @@ partial class Binder {
                 for slot in eventSlots {
                     let contract = GetUserAdapterEventContract(iface, slot)
                     if slot.IsStatic {
-                        if slot
-                            .AddMethodSymbol
-                            ?.IsAbstract == true ||
-                            slot
-                            .RemoveMethodSymbol
-                            ?.IsAbstract == true ||
+                        if slot.AddMethodSymbol?.IsAbstract == true ||
+                            slot.RemoveMethodSymbol?.IsAbstract == true ||
                             slot.IsVirtual ||
-                            !iface
-                            .IsSealed {
+                            !iface.IsSealed {
                             Diagnostics.ReportStructuralAdaptation(
                                 syntax.Location,
                                 sourceMemberType.Name,
@@ -1843,12 +1814,8 @@ partial class Binder {
                         continue
                     }
                     let eventRequired = slot.IsFieldLike ||
-                        slot
-                        .AddMethodSymbol
-                        ?.IsAbstract != false ||
-                        slot
-                        .RemoveMethodSymbol
-                        ?.IsAbstract != false
+                        slot.AddMethodSymbol?.IsAbstract != false ||
+                        slot.RemoveMethodSymbol?.IsAbstract != false
                     if sourceMemberType.ClrType is Type importedSource {
                         let importedCandidates = GetImportedSourceEvents(importedSource).Where(
                             (candidate EventInfo) -> candidate.Name == slot.Name &&
@@ -1910,12 +1877,8 @@ partial class Binder {
                         continue
                     }
                     let candidates = GetUserSourceAdapterEvents(sourceMemberType).Where(
-                        (candidate(Owner TypeSymbol, Event EventSymbol)) -> candidate
-                            .Event
-                            .Name == slot.Name &&
-                            candidate
-                            .Event
-                            .Accessibility == Accessibility.Public &&
+                        (candidate(Owner TypeSymbol, Event EventSymbol)) -> candidate.Event.Name == slot.Name &&
+                            candidate.Event.Accessibility == Accessibility.Public &&
                             EventContractsMatch(contract, candidate.Event, candidate.Owner)
                     )
                         .ToImmutableArray()
@@ -1967,15 +1930,10 @@ partial class Binder {
                 for slot in propertySlots {
                     let contract = GetUserAdapterPropertyContract(iface, slot)
                     if slot.IsStatic {
-                        if slot
-                            .GetterSymbol
-                            ?.IsAbstract == true ||
-                            slot
-                            .SetterSymbol
-                            ?.IsAbstract == true ||
+                        if slot.GetterSymbol?.IsAbstract == true ||
+                            slot.SetterSymbol?.IsAbstract == true ||
                             slot.IsVirtual ||
-                            !iface
-                            .IsSealed {
+                            !iface.IsSealed {
                             Diagnostics.ReportStructuralAdaptation(
                                 syntax.Location,
                                 sourceMemberType.Name,
@@ -2005,12 +1963,8 @@ partial class Binder {
                         )
                             .ToArray()
                         if importedCandidates.Length == 0 {
-                            let importedRequired = slot
-                                .GetterSymbol
-                                ?.IsAbstract == true ||
-                                slot
-                                .SetterSymbol
-                                ?.IsAbstract == true
+                            let importedRequired = slot.GetterSymbol?.IsAbstract == true ||
+                                slot.SetterSymbol?.IsAbstract == true
                             if !importedRequired {
                                 unmatchedDefaultProperties.Add((iface, contract))
                                 continue
@@ -2054,9 +2008,7 @@ partial class Binder {
                         (candidate(Owner TypeSymbol, Property PropertySymbol)) -> candidate
                             .Property
                             .Name == slot.Name &&
-                            candidate
-                            .Property
-                            .Accessibility == Accessibility.Public &&
+                            candidate.Property.Accessibility == Accessibility.Public &&
                             PropertyContractsMatch(contract, candidate.Property, candidate.Owner)
                     )
                         .ToImmutableArray()
@@ -2223,10 +2175,7 @@ partial class Binder {
                             candidate.Owner,
                             other.Owner
                         ) ||
-                            candidate
-                            .Owner
-                            .SelfAndAllBaseInterfaces()
-                            .Contains(other.Owner)
+                            candidate.Owner.SelfAndAllBaseInterfaces().Contains(other.Owner)
                     )
                 )
                     .ToArray()
@@ -2258,10 +2207,7 @@ partial class Binder {
                             candidate.Owner,
                             other.Owner
                         ) ||
-                            candidate
-                            .Owner
-                            .SelfAndAllBaseInterfaces()
-                            .Contains(other.Owner)
+                            candidate.Owner.SelfAndAllBaseInterfaces().Contains(other.Owner)
                     )
                 )
                     .ToArray()
@@ -2278,11 +2224,7 @@ partial class Binder {
             for var i = 0; i < unmatchedDefaultEvents.Count; i++ {
                 let current = unmatchedDefaultEvents[i]
                 let conflicts = unmatchedDefaultEvents.Where(
-                    (candidate(Owner InterfaceSymbol, Slot EventSymbol)) -> current
-                        .Slot
-                        .Name == candidate
-                        .Slot
-                        .Name &&
+                    (candidate(Owner InterfaceSymbol, Slot EventSymbol)) -> current.Slot.Name == candidate.Slot.Name &&
                         AdapterTypesMatch(current.Slot.Type, candidate.Slot.Type)
                 )
                     .ToArray()
@@ -2295,10 +2237,7 @@ partial class Binder {
                             candidate.Owner,
                             other.Owner
                         ) ||
-                            candidate
-                            .Owner
-                            .SelfAndAllBaseInterfaces()
-                            .Contains(other.Owner)
+                            candidate.Owner.SelfAndAllBaseInterfaces().Contains(other.Owner)
                     )
                 )
                     .ToArray()
@@ -2677,9 +2616,7 @@ partial class Binder {
                         (candidate(Owner TypeSymbol, Property PropertySymbol)) -> candidate
                             .Property
                             .Name == slot.Name &&
-                            candidate
-                            .Property
-                            .Accessibility == Accessibility.Public &&
+                            candidate.Property.Accessibility == Accessibility.Public &&
                             PropertyContractsMatch(contract, candidate.Property, candidate.Owner)
                     )
                         .ToImmutableArray()
@@ -2799,12 +2736,8 @@ partial class Binder {
                     }
                     let contract = CreateImportedAdapterContractEvent(slot, slotOwner)
                     let userCandidates = GetUserSourceAdapterEvents(sourceMemberType).Where(
-                        (candidate(Owner TypeSymbol, Event EventSymbol)) -> candidate
-                            .Event
-                            .Name == slot.Name &&
-                            candidate
-                            .Event
-                            .Accessibility == Accessibility.Public &&
+                        (candidate(Owner TypeSymbol, Event EventSymbol)) -> candidate.Event.Name == slot.Name &&
+                            candidate.Event.Accessibility == Accessibility.Public &&
                             EventContractsMatch(contract, candidate.Event, candidate.Owner)
                     )
                         .ToImmutableArray()
@@ -2851,11 +2784,7 @@ partial class Binder {
         }
         for current in unmatchedDefaults {
             let conflicts = unmatchedDefaults.Where(
-                (candidate(Owner Type, Slot MethodInfo)) -> current
-                    .Slot
-                    .Name == candidate
-                    .Slot
-                    .Name &&
+                (candidate(Owner Type, Slot MethodInfo)) -> current.Slot.Name == candidate.Slot.Name &&
                     ImportedMethodContractsMatch(current.Slot, candidate.Slot)
             )
                 .ToArray()
@@ -2865,9 +2794,7 @@ partial class Binder {
             let mostSpecific = conflicts.Where(
                 (candidate(Owner Type, Slot MethodInfo)) -> conflicts.All(
                     (other(Owner Type, Slot MethodInfo)) -> ClrTypeUtilities.AreSame(candidate.Owner, other.Owner) ||
-                        other
-                        .Owner
-                        .IsAssignableFrom(candidate.Owner)
+                        other.Owner.IsAssignableFrom(candidate.Owner)
                 )
             )
                 .ToArray()
@@ -2895,9 +2822,7 @@ partial class Binder {
             let mostSpecific = conflicts.Where(
                 (candidate(Owner Type, Slot PropertyInfo)) -> conflicts.All(
                     (other(Owner Type, Slot PropertyInfo)) -> ClrTypeUtilities.AreSame(candidate.Owner, other.Owner) ||
-                        other
-                        .Owner
-                        .IsAssignableFrom(candidate.Owner)
+                        other.Owner.IsAssignableFrom(candidate.Owner)
                 )
             )
                 .ToArray()
@@ -2922,9 +2847,7 @@ partial class Binder {
             let mostSpecific = conflicts.Where(
                 (candidate(Owner Type, Slot EventInfo)) -> conflicts.All(
                     (other(Owner Type, Slot EventInfo)) -> ClrTypeUtilities.AreSame(candidate.Owner, other.Owner) ||
-                        other
-                        .Owner
-                        .IsAssignableFrom(candidate.Owner)
+                        other.Owner.IsAssignableFrom(candidate.Owner)
                 )
             )
                 .ToArray()
@@ -3479,16 +3402,8 @@ partial class Binder {
         source FunctionSymbol,
         sourceContainingType TypeSymbol
     ) bool {
-        if target
-            .TypeParameters
-            .Length != source
-            .TypeParameters
-            .Length ||
-            target
-            .Parameters
-            .Length != source
-            .Parameters
-            .Length ||
+        if target.TypeParameters.Length != source.TypeParameters.Length ||
+            target.Parameters.Length != source.Parameters.Length ||
             target.ReturnRefKind != source.ReturnRefKind ||
             target.HasUnscopedRef != source.HasUnscopedRef {
             return false
@@ -3731,12 +3646,8 @@ partial class Binder {
                 uint32(parameter.Ordinal) < uint32(methodTypeParameters.Length) {
                 return methodTypeParameters[parameter.Ordinal]
             }
-            case imported is ImportedTypeSymbol when imported
-                .Type
-                .IsGenericParameter &&
-                imported
-                .Type
-                .DeclaringMethod != nil &&
+            case imported is ImportedTypeSymbol when imported.Type.IsGenericParameter &&
+                imported.Type.DeclaringMethod != nil &&
                 uint32(imported.Type.GenericParameterPosition) < uint32(methodTypeParameters.Length) {
                 return methodTypeParameters[imported.Type.GenericParameterPosition]
             }
@@ -3757,9 +3668,7 @@ partial class Binder {
                 )
             }
             case imported is ImportedTypeSymbol when imported.OpenDefinition != nil &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !imported.TypeArguments.IsDefaultOrEmpty {
                 return ImportedTypeSymbol.GetConstructed(
                     imported.Type,
                     imported.OpenDefinition,
@@ -3889,8 +3798,7 @@ partial class Binder {
         if sourceMemberType is ByRefTypeSymbol ||
             sourceMemberType is PointerTypeSymbol ||
             sourceMemberType is FunctionPointerTypeSymbol ||
-            TypeSymbol
-            .IsByRefLike(sourceMemberType) {
+            TypeSymbol.IsByRefLike(sourceMemberType) {
             Diagnostics.ReportStructuralAdaptation(
                 syntax.Location,
                 sourceMemberType.Name,
@@ -3913,9 +3821,7 @@ partial class Binder {
 
     private func IsDefinitelyNullAdaptationSource(expression BoundExpression) bool -> switch expression {
         case BoundLiteralExpression{Value: nil}: true
-        case conversion is BoundConversionExpression: conversion
-            .Expression
-            .Type == TypeSymbol.Null ||
+        case conversion is BoundConversionExpression: conversion.Expression.Type == TypeSymbol.Null ||
             IsDefinitelyNullAdaptationSource(conversion.Expression)
         case conditional is BoundConditionalExpression: IsDefinitelyNullAdaptationSource(conditional.WhenTrue) &&
             IsDefinitelyNullAdaptationSource(conditional.WhenFalse)
@@ -4385,15 +4291,13 @@ partial class Binder {
         if !syntax.HasQualifier &&
             !syntax.HasTypeArguments &&
             syntax.Identifier is {Text: "bytestring"} byteStringName &&
-            binderCtx
-            .CanUseIntrinsicAlias($scope, byteStringName, function) {
+            binderCtx.CanUseIntrinsicAlias($scope, byteStringName, function) {
             return ApplyArraySuffix(syntax, LookupType(byteStringName, -1)!!)
         }
         if !syntax.HasQualifier &&
             syntax.HasTypeArguments &&
             syntax.Identifier is {} spanName &&
-            binderCtx
-            .CanUseSpanAlias($scope, spanName, function) {
+            binderCtx.CanUseSpanAlias($scope, spanName, function) {
             let arguments = Invariant.Required(
                 syntax.TypeArguments,
                 "HasTypeArguments establishes the span argument list",
@@ -4412,8 +4316,7 @@ partial class Binder {
             }
             if element == TypeSymbol.Void ||
                 (element is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol) ||
-                TypeSymbol
-                .IsByRefLike(element) {
+                TypeSymbol.IsByRefLike(element) {
                 Diagnostics.ReportNativeSpanType(
                     arguments[0].Location,
                     "CLR spans require an ordinary heap-storable element type"
@@ -4449,8 +4352,7 @@ partial class Binder {
         if !syntax.HasQualifier &&
             syntax.HasTypeArguments &&
             syntax.Identifier is {Text: "managed"} managedName &&
-            binderCtx
-            .CanUseIntrinsicAlias($scope, managedName, function) {
+            binderCtx.CanUseIntrinsicAlias($scope, managedName, function) {
             let arguments = Invariant.Required(
                 syntax.TypeArguments,
                 "HasTypeArguments establishes the argument list",
@@ -4469,8 +4371,7 @@ partial class Binder {
             }
             if managedElement == TypeSymbol.Void ||
                 (managedElement is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol) ||
-                TypeSymbol
-                .IsByRefLike(managedElement) {
+                TypeSymbol.IsByRefLike(managedElement) {
                 Diagnostics.ReportManagedReference(
                     arguments[0].Location,
                     "the referent must be an ordinary heap-storable type"
@@ -4502,8 +4403,7 @@ partial class Binder {
         if !syntax.HasQualifier &&
             syntax.HasTypeArguments &&
             syntax.Identifier is {} nativeName &&
-            binderCtx
-            .CanUseNativeBufferAlias($scope, nativeName, function) {
+            binderCtx.CanUseNativeBufferAlias($scope, nativeName, function) {
             let arguments = Invariant.Required(
                 syntax.TypeArguments,
                 "HasTypeArguments means the parser supplied a generic argument list",
@@ -4525,8 +4425,7 @@ partial class Binder {
             }
             if bufferElement == TypeSymbol.Void ||
                 (bufferElement is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol) ||
-                TypeSymbol
-                .IsByRefLike(bufferElement) {
+                TypeSymbol.IsByRefLike(bufferElement) {
                 Diagnostics.ReportNativeSliceType(
                     arguments[0].Location,
                     "native slices require an ordinary heap-storable element type"
@@ -5391,10 +5290,7 @@ partial class Binder {
         let typeArgs = typeArgsBuilder.MoveToImmutable()
         switch definition {
             case genericStruct is StructSymbol when genericStruct.IsGenericDefinition &&
-                genericStruct
-                .TypeParameters
-                .Length == typeArgs
-                .Length {
+                genericStruct.TypeParameters.Length == typeArgs.Length {
                 let def = genericStruct.Definition ?? genericStruct
                 let ownParams = def.DeclaredTypeParameters
                 let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
@@ -5415,10 +5311,7 @@ partial class Binder {
                 return StructSymbol.Construct(genericStruct, typeArgs, $scope.References!!.MapClrTypeToReferences)!!
             }
             case genericIface is InterfaceSymbol when genericIface.IsGenericDefinition &&
-                genericIface
-                .TypeParameters
-                .Length == typeArgs
-                .Length {
+                genericIface.TypeParameters.Length == typeArgs.Length {
                 let def = genericIface.Definition ?? genericIface
                 let ownParams = def.DeclaredTypeParameters
                 let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
@@ -5439,10 +5332,7 @@ partial class Binder {
                 return InterfaceSymbol.Construct(genericIface, typeArgs, $scope.References!!.MapClrTypeToReferences)!!
             }
             case genericDelegate is DelegateTypeSymbol when genericDelegate.IsGenericDefinition &&
-                genericDelegate
-                .TypeParameters
-                .Length == typeArgs
-                .Length {
+                genericDelegate.TypeParameters.Length == typeArgs.Length {
                 // Issue #4762: validate qualified generic named-delegate constructions.
                 CheckUserGenericTypeClauseConstraints(
                     (genericDelegate.Definition ?? genericDelegate).TypeParameters,
@@ -5577,8 +5467,7 @@ partial class Binder {
         // Source types have no CLR representation while binding. Preserve the
         // complete name: an enum member must not resolve as an unrelated type.
         if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var sourceType) &&
-            !binderCtx
-            .HasUnclosedEnclosingTypeParameters(sourceType, function) {
+            !binderCtx.HasUnclosedEnclosingTypeParameters(sourceType, function) {
             if targetArity == 0 {
                 return sourceType
             }
@@ -6481,8 +6370,7 @@ partial class Binder {
                 out var importedType,
                 out importedTypeAmbiguity
             ) &&
-                binderCtx
-                .ImportedTypeOverridesSourceType(
+                binderCtx.ImportedTypeOverridesSourceType(
                 $scope,
                 name,
                 aliased,
@@ -6943,17 +6831,9 @@ partial class Binder {
                 nativeCoverage: nil
             )
             if !result.Interfaces.Any((item InterfaceSymbol) -> item.IsProtocol) &&
-                !result
-                .StructuralAdapters
-                .HasNativeProtocolDeclarations &&
-                result
-                .StructuralAdapters
-                .ImportedProtocolEntries
-                .Count == 0 &&
-                result
-                .StructuralAdapters
-                .ProtocolOperations
-                .Count == 0 {
+                !result.StructuralAdapters.HasNativeProtocolDeclarations &&
+                result.StructuralAdapters.ImportedProtocolEntries.Count == 0 &&
+                result.StructuralAdapters.ProtocolOperations.Count == 0 {
                 return result
             }
             // Discover actual insertions across all bodies before committing overload choices,
@@ -6968,12 +6848,9 @@ partial class Binder {
                         (item KeyValuePair[string, bool]) -> item.Key + ":" + item.Value.ToString()
                     )
                 )
-                if result
-                    .StructuralAdapters
-                    .ProtocolCoverage is {} previousCoverage &&
+                if result.StructuralAdapters.ProtocolCoverage is {} previousCoverage &&
                     previousCoverage.Count == coverage.Count &&
-                    coverage
-                    .All(
+                    coverage.All(
                     (item KeyValuePair[string, bool]) -> previousCoverage.TryGetValue(item.Key, out var value) &&
                         value == item.Value
                 ) {
@@ -7847,9 +7724,7 @@ partial class Binder {
                         continue
                     }
                     if parentScope.GetLatestRichAnonymousObjectPlans().TryGetValue(structSym, out var richPlan) &&
-                        richPlan
-                        .MethodBodies
-                        .TryGetValue(method, out var richBody) {
+                        richPlan.MethodBodies.TryGetValue(method, out var richBody) {
                         functionBodies[method] = richBody
                         continue
                     }
@@ -8461,9 +8336,7 @@ partial class Binder {
                 }
             }
             if globalScope?.LatestRichAnonymousObjectPlans != nil &&
-                globalScope
-                .LatestRichAnonymousObjectPlans
-                .Count > 0 {
+                globalScope.LatestRichAnonymousObjectPlans.Count > 0 {
                 let latestRichPlans = parentScope.GetLatestRichAnonymousObjectPlans()
                 for kv in globalScope.LatestRichAnonymousObjectPlans {
                     latestRichPlans[kv.Key] = kv.Value
@@ -8655,11 +8528,8 @@ partial class Binder {
             }
             if allPathsReturnLocation != nil &&
                 !IsIteratorReturnType(member.Type) &&
-                !binder
-                .statements
-                .HasInvalidUserGoto &&
-                !ControlFlowGraph
-                .AllPathsReturn(lowered) {
+                !binder.statements.HasInvalidUserGoto &&
+                !ControlFlowGraph.AllPathsReturn(lowered) {
                 // ADR-0225: a body that is open at the cut can still end in a return.
                 let pushed = binder.Diagnostics.PushPremiseIf(
                     PrefixBindingContext.IsOpen(bodySyntax),
@@ -8716,9 +8586,7 @@ partial class Binder {
                     (existing Diagnostic) -> existing.Id == diagnostic.Id &&
                         existing.Severity == diagnostic.Severity &&
                         existing.Message == diagnostic.Message &&
-                        existing
-                        .Location
-                        .CompareTo(diagnostic.Location) == 0
+                        existing.Location.CompareTo(diagnostic.Location) == 0
                 ) {
                     continue
                 }
@@ -8750,8 +8618,7 @@ partial class Binder {
             declaration.Body!!.Statements[0] is ReturnStatementSyntax{
             Expression: AnonymousClassExpressionSyntax anonymous
         } &&
-            parentScope
-            .GetRichAnonymousClassMap().ContainsKey(anonymous)
+            parentScope.GetRichAnonymousClassMap().ContainsKey(anonymous)
 
         private func GetDeclaredBodyFunctions(globalScope BoundGlobalScope) List[
             (Function FunctionSymbol, Owner StructSymbol?)
@@ -8789,10 +8656,7 @@ partial class Binder {
             if budget == nil || budget.MaxWorkers <= 1 || globalScope.Interfaces.Any(
                 (item InterfaceSymbol) -> item.IsProtocol
             ) ||
-                parentScope
-                .GetStructuralAdapterRegistry()
-                .ProtocolOperations
-                .Count > 0 {
+                parentScope.GetStructuralAdapterRegistry().ProtocolOperations.Count > 0 {
                 return results
             }
             let jobs = List[(Function FunctionSymbol, Owner StructSymbol?)]()
@@ -8800,9 +8664,7 @@ partial class Binder {
             var largestBody int64 = 0
             let add = func (function FunctionSymbol, owner StructSymbol?) {
                 if owner != nil && parentScope.GetLatestRichAnonymousObjectPlans().TryGetValue(owner, out var plan) &&
-                    plan
-                    .MethodBodies
-                    .ContainsKey(function) {
+                    plan.MethodBodies.ContainsKey(function) {
                     return
                 }
                 if !boundBodies.ContainsKey(function) && seen.Add(function) && function.Declaration?.Body != nil {
@@ -9053,9 +8915,7 @@ partial class Binder {
             diagnostics ImmutableArray[Diagnostic].Builder
         ) {
             var structDeclaration = structSym.Declaration
-            let initBlocks = structDeclaration
-                ?.SharedBlock
-                ?.InitBlocks ??
+            let initBlocks = structDeclaration?.SharedBlock?.InitBlocks ??
                 ImmutableArray[StaticInitializerBlockSyntax].Empty
             if initBlocks.IsDefaultOrEmpty {
                 return
@@ -9397,12 +9257,8 @@ partial class Binder {
             if argumentIndex < initializer.ArgumentRefKinds.Length {
                 return initializer.ArgumentRefKinds[argumentIndex]
             }
-            let parameters = initializer
-                .GSharpConstructor
-                ?.Parameters ??
-                initializer
-                .GSharpBaseType
-                ?.PrimaryConstructorParameters ??
+            let parameters = initializer.GSharpConstructor?.Parameters ??
+                initializer.GSharpBaseType?.PrimaryConstructorParameters ??
                 ImmutableArray[ParameterSymbol].Empty
             return if argumentIndex < parameters.Length {
                 parameters[argumentIndex].RefKind
@@ -10252,27 +10108,15 @@ partial class Binder {
 
         private func UserAdapterSlotsEquivalent(left FunctionSymbol, right FunctionSymbol) bool {
             if left.Name != right.Name ||
-                left
-                .TypeParameters
-                .Length != right
-                .TypeParameters
-                .Length ||
-                left
-                .Parameters
-                .Length != right
-                .Parameters
-                .Length ||
+                left.TypeParameters.Length != right.TypeParameters.Length ||
+                left.Parameters.Length != right.Parameters.Length ||
                 left.ReturnRefKind != right.ReturnRefKind ||
                 left.HasUnscopedRef != right.HasUnscopedRef ||
                 !AdapterTypesMatch(left.Type, right.Type) {
                 return false
             }
             for var i = 0; i < left.Parameters.Length; i++ {
-                if left
-                    .Parameters[i]
-                    .RefKind != right
-                    .Parameters[i]
-                    .RefKind ||
+                if left.Parameters[i].RefKind != right.Parameters[i].RefKind ||
                     !AdapterTypesMatch(left.Parameters[i].Type, right.Parameters[i].Type) {
                     return false
                 }
@@ -10403,8 +10247,7 @@ partial class Binder {
                 if (
                     targetParameters[i].GenericParameterAttributes & GenericParameterAttributes.ReferenceTypeConstraint
                 ) != 0 &&
-                    ClrNullability
-                    .GetGenericParameterTypeSymbol(targetParameters[i])
+                    ClrNullability.GetGenericParameterTypeSymbol(targetParameters[i])
                     .ReferenceNullability != ClrNullability
                     .GetGenericParameterTypeSymbol(sourceParameters[i]).ReferenceNullability {
                     return false
@@ -10583,13 +10426,9 @@ partial class Binder {
                     return parameter
                 }
                 for pair in typeParameters {
-                    if pair
-                        .Key
-                        .IsGenericParameter &&
+                    if pair.Key.IsGenericParameter &&
                         (pair.Key.DeclaringMethod != nil) == (type.DeclaringMethod != nil) &&
-                        pair
-                        .Key
-                        .GenericParameterPosition == type.GenericParameterPosition {
+                        pair.Key.GenericParameterPosition == type.GenericParameterPosition {
                         return pair.Value
                     }
                 }
@@ -10706,9 +10545,7 @@ partial class Binder {
                     }
                 } else if importedOwner != nil &&
                     importedOwner.OpenDefinition != nil &&
-                    !importedOwner
-                    .TypeArguments
-                    .IsDefaultOrEmpty {
+                    !importedOwner.TypeArguments.IsDefaultOrEmpty {
                     let openParameters = importedOwner.OpenDefinition.GetGenericArguments()
                     for var i = 0; i < openParameters.Length && i < importedOwner.TypeArguments.Length; i++ {
                         map_[openParameters[i]] = importedOwner.TypeArguments[i]
@@ -10838,14 +10675,8 @@ partial class Binder {
                             }
                         }
                         if !ancestor.TypeArguments.IsDefaultOrEmpty {
-                            for var i = 0;
-                                i < ancestorDefinition
-                                .TypeParameters
-                                .Length &&
-                                i < ancestor
-                                .TypeArguments
-                                .Length;
-                                i++ {
+                            for var i = 0; i < ancestorDefinition.TypeParameters.Length &&
+                                i < ancestor.TypeArguments.Length; i++ {
                                 substitutions.TryAdd(ancestorDefinition.TypeParameters[i], ancestor.TypeArguments[i])
                             }
                         }
@@ -10864,14 +10695,8 @@ partial class Binder {
                         }
                     }
                     if !sourceInterface.TypeArguments.IsDefaultOrEmpty {
-                        for var i = 0;
-                            i < ifaceDefinition
-                            .TypeParameters
-                            .Length &&
-                            i < sourceInterface
-                            .TypeArguments
-                            .Length;
-                            i++ {
+                        for var i = 0; i < ifaceDefinition.TypeParameters.Length &&
+                            i < sourceInterface.TypeArguments.Length; i++ {
                             substitutions.TryAdd(ifaceDefinition.TypeParameters[i], sourceInterface.TypeArguments[i])
                         }
                     }
@@ -11120,15 +10945,10 @@ partial class Binder {
                         target[i].InterfaceConstraint = nullableUserInterface
                         target[i].HasNullableInterfaceConstraint = true
                     } else if constraint.IsInterface ||
-                        mapped
-                        .ClrType
-                        ?.IsInterface == true ||
+                        mapped.ClrType?.IsInterface == true ||
                         (
                         mapped is NullableTypeSymbol nullableClr &&
-                            nullableClr
-                            .UnderlyingType
-                            .ClrType
-                            ?.IsInterface == true
+                            nullableClr.UnderlyingType.ClrType?.IsInterface == true
                     ) {
                         target[i].ClrInterfaceConstraint = mapped
                     } else {
@@ -11145,11 +10965,7 @@ partial class Binder {
         ) bool {
             let sourceType = SubstituteAdapterOwnerMemberType(sourceOwner, source.Type)
             if target.IsIndexer != source.IsIndexer ||
-                target
-                .Parameters
-                .Length != source
-                .Parameters
-                .Length ||
+                target.Parameters.Length != source.Parameters.Length ||
                 target.ReturnRefKind != source.ReturnRefKind ||
                 (target.HasSetter && target.IsInitOnly != source.IsInitOnly) ||
                 (target.HasGetter && (!source.HasGetter || source.GetterAccessibility != Accessibility.Public)) ||
@@ -11294,11 +11110,7 @@ partial class Binder {
             left MemberInfo,
             right MemberInfo
         ) bool -> left.MetadataToken == right.MetadataToken &&
-            left
-            .Module
-            .ModuleVersionId == right
-            .Module
-            .ModuleVersionId &&
+            left.Module.ModuleVersionId == right.Module.ModuleVersionId &&
             ClrTypeUtilities.AreSame(
             left.ReflectedType ?? left.DeclaringType,
             right.ReflectedType ?? right.DeclaringType
@@ -11421,9 +11233,7 @@ partial class Binder {
         ) bool -> source
             .AddMethod
             ?.IsPublic == true &&
-            source
-            .RemoveMethod
-            ?.IsPublic == true &&
+            source.RemoveMethod?.IsPublic == true &&
             target.AddMethod != nil &&
             target.RemoveMethod != nil &&
             AdapterMethodMetadataMatches(target.AddMethod!!, source.AddMethod!!) &&
@@ -11436,9 +11246,7 @@ partial class Binder {
         private func ImportedEventContractsMatch(target EventInfo, source EventInfo) bool -> source
             .AddMethod
             ?.IsPublic == true &&
-            source
-            .RemoveMethod
-            ?.IsPublic == true &&
+            source.RemoveMethod?.IsPublic == true &&
             target.AddMethod != nil &&
             target.RemoveMethod != nil &&
             AdapterMethodMetadataMatches(target.AddMethod!!, source.AddMethod!!) &&
@@ -11473,8 +11281,7 @@ partial class Binder {
             right
         )
             .IsIdentity &&
-            NullableFlagsBuilder
-            .Build(left).SequenceEqual(NullableFlagsBuilder.Build(right))
+            NullableFlagsBuilder.Build(left).SequenceEqual(NullableFlagsBuilder.Build(right))
 
         private func IsAdapterScoped(parameter ParameterInfo) bool -> parameter.GetCustomAttributesData().Any(
             (attribute CustomAttributeData) -> KnownAttributes.IsScopedRef(attribute.AttributeType)
@@ -11520,8 +11327,7 @@ partial class Binder {
         private func ImportedMethodMetadataSupported(method MethodInfo) bool -> AdapterParameterMetadataSupported(
             method.ReturnParameter
         ) &&
-            method
-            .GetParameters().All(AdapterParameterMetadataSupported)
+            method.GetParameters().All(AdapterParameterMetadataSupported)
 
         private func ImportedPropertyMetadataSupported(property PropertyInfo) bool -> (
             property.GetMethod == nil ||
@@ -11569,8 +11375,7 @@ partial class Binder {
             target[]Type,
             source[]Type
         ) bool -> target.Length == source.Length &&
-            target
-            .Zip(source).All((pair(First Type, Second Type)) -> ClrTypeUtilities.AreSame(pair.First, pair.Second))
+            target.Zip(source).All((pair(First Type, Second Type)) -> ClrTypeUtilities.AreSame(pair.First, pair.Second))
 
         private func HasAdapterMethodUnscopedRef(method MethodInfo) bool -> RefCapabilities.HasUnscopedRef(method) ||
             HasAdapterUnscopedRef(method.ReturnParameter)
@@ -12206,9 +12011,7 @@ partial class Binder {
                 if seg is StructSymbol nestedConstruction &&
                     (
                     inheritedDeclaringContainers[i] != nil ||
-                        !nestedConstruction
-                        .EnclosingTypeArguments
-                        .IsDefaultOrEmpty
+                        !nestedConstruction.EnclosingTypeArguments.IsDefaultOrEmpty
                 ) {
                     builder?.Clear()
                     if !nestedConstruction.EnclosingTypeArguments.IsDefaultOrEmpty {
@@ -13154,18 +12957,8 @@ partial class Binder {
                     existing.Location.Text,
                     location.Text
                 ) &&
-                    existing
-                    .Location
-                    .Span
-                    .Start == location
-                    .Span
-                    .Start &&
-                    existing
-                    .Location
-                    .Span
-                    .Length == location
-                    .Span
-                    .Length &&
+                    existing.Location.Span.Start == location.Span.Start &&
+                    existing.Location.Span.Length == location.Span.Length &&
                     string.Equals(existing.Message, message, StringComparison.Ordinal) {
                     return true
                 }
@@ -13411,13 +13204,9 @@ partial class Binder {
         }
 
         private func StartsWithConstructorDelegationSyntax(body BlockStatementSyntax) bool {
-            return body
-                .Statements
-                .Length > 0 &&
+            return body.Statements.Length > 0 &&
                 body.Statements[0] is ExpressionStatementSyntax{Expression: CallExpressionSyntax call} &&
-                call
-                .Identifier
-                .ValueText == "init"
+                call.Identifier.ValueText == "init"
         }
 
         private func IsConstructorChainingExpression(
@@ -13565,8 +13354,7 @@ partial class Binder {
 
             } else if parameterType is RectangularArrayTypeSymbol pr &&
                 argumentType is RectangularArrayTypeSymbol ar &&
-                pr.Rank == ar
-                .Rank {
+                pr.Rank == ar.Rank {
                 InferTypeArgumentsCore(
                     pr.ElementType,
                     ar.ElementType,
@@ -13575,8 +13363,7 @@ partial class Binder {
                 )
             } else if parameterType is TupleTypeSymbol parameterTuple &&
                 argumentType is TupleTypeSymbol argumentTuple &&
-                parameterTuple.Arity == argumentTuple
-                .Arity {
+                parameterTuple.Arity == argumentTuple.Arity {
                 for var i = 0; i < parameterTuple.Arity; i++ {
                     InferTypeArgumentsCore(
                         parameterTuple.ElementTypes[i],
@@ -13642,11 +13429,7 @@ partial class Binder {
                 argumentType,
                 out var af
             ) &&
-                pf
-                .ParameterTypes
-                .Length == af
-                .ParameterTypes
-                .Length {
+                pf.ParameterTypes.Length == af.ParameterTypes.Length {
                 // Infer type parameters that appear inside a delegate parameter,
                 // e.g. `f func(T) U` matched against `func(int32) bool` yields
                 // T -> int32, U -> bool.
@@ -13660,8 +13443,7 @@ partial class Binder {
                 }
                 InferTypeArgumentsCore(pf.ReturnType, af.ReturnType, substitution, boundKind)
             } else if TryGetUserGenericArguments(parameterType, out var userParamDef, out var userParamArgs) &&
-                userParamArgs
-                .Any(TypeSymbol.ContainsTypeParameter) {
+                userParamArgs.Any(TypeSymbol.ContainsTypeParameter) {
                 // Issue #1932: mirror the ImportedTypeSymbol (`List[T]`) inference
                 // below for USER-DEFINED generic types (struct/class `StructSymbol`,
                 // `interface InterfaceSymbol`) — e.g. parameter `Pair[T]` matched
@@ -13671,8 +13453,7 @@ partial class Binder {
                 // argument itself, or one of its implemented interfaces) shares the
                 // parameter's generic definition.
                 if TryFindUserGenericArguments(argumentType, userParamDef, out var userArgArgs) &&
-                    userParamArgs.Length == userArgArgs
-                    .Length {
+                    userParamArgs.Length == userArgArgs.Length {
                     let parameters = switch userParamDef {
                         case structure is StructSymbol: StructSymbol.CollectEnclosingTypeParameters(structure).AddRange(
                             structure.DeclaredTypeParameters
@@ -13733,9 +13514,7 @@ partial class Binder {
             }
             if !foundProjection &&
                 (argumentType is SliceTypeSymbol || argumentType is ArrayTypeSymbol) &&
-                parameterType
-                .TypeArguments
-                .Length == 1 &&
+                parameterType.TypeArguments.Length == 1 &&
                 IsArrayCompatibleOpenInterface(parameterType.OpenDefinition) {
                 let elementType = if argumentType is SliceTypeSymbol slice {
                     slice.ElementType
@@ -13888,12 +13667,8 @@ partial class Binder {
             out typeArguments ImmutableArray[TypeSymbol]
         ) bool {
             switch type {
-                case s is StructSymbol when !s
-                    .EnclosingTypeArguments
-                    .IsDefaultOrEmpty ||
-                    !s
-                    .TypeArguments
-                    .IsDefaultOrEmpty {
+                case s is StructSymbol when !s.EnclosingTypeArguments.IsDefaultOrEmpty ||
+                    !s.TypeArguments.IsDefaultOrEmpty {
                     definition = s.Definition ?? s
                     typeArguments = Conversion.GetEffectiveStructTypeArguments(s)
                     return !typeArguments.IsDefaultOrEmpty
@@ -13903,12 +13678,8 @@ partial class Binder {
                     typeArguments = e.EnclosingTypeArguments
                     return true
                 }
-                case i is InterfaceSymbol when !i
-                    .EnclosingTypeArguments
-                    .IsDefaultOrEmpty ||
-                    !i
-                    .TypeArguments
-                    .IsDefaultOrEmpty {
+                case i is InterfaceSymbol when !i.EnclosingTypeArguments.IsDefaultOrEmpty ||
+                    !i.TypeArguments.IsDefaultOrEmpty {
                     definition = i.Definition ?? i
                     typeArguments = Conversion.GetEffectiveInterfaceTypeArguments(i)
                     return !typeArguments.IsDefaultOrEmpty
@@ -13944,8 +13715,7 @@ partial class Binder {
                     continue
                 }
                 if TryGetUserGenericArguments(current, out var currentDefinition, out var currentArguments) &&
-                    object
-                    .ReferenceEquals(currentDefinition, definition) {
+                    object.ReferenceEquals(currentDefinition, definition) {
                     if !foundProjection {
                         typeArguments = currentArguments
                         foundProjection = true
@@ -14093,9 +13863,7 @@ partial class Binder {
             // Recurses so nested generics (`Holder[Holder[T]]`,
             // `Dictionary[K, List[V]]`) are substituted too.
             if type is StructSymbol ss && ss.Definition != nil && !object.ReferenceEquals(ss.Definition, ss) &&
-                !ss
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !ss.TypeArguments.IsDefaultOrEmpty {
                 return StructSymbol.SubstituteConstructionArguments(
                     ss,
                     (arg TypeSymbol) -> {
@@ -14132,9 +13900,7 @@ partial class Binder {
                 ifaceType.Definition,
                 ifaceType
             ) &&
-                !ifaceType
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !ifaceType.TypeArguments.IsDefaultOrEmpty {
                 return InterfaceSymbol.SubstituteConstructionArguments(ifaceType, substituteEnclosingType, mapClrType)
             }
             if type is InterfaceSymbol nestedInterfaceRef && nestedInterfaceRef.TypeArguments.IsDefaultOrEmpty {
@@ -14167,9 +13933,7 @@ partial class Binder {
                 del.Definition,
                 del
             ) &&
-                !del
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !del.TypeArguments.IsDefaultOrEmpty {
                 let newDelegateArgs = ImmutableArray.CreateBuilder[TypeSymbol](del.TypeArguments.Length)
                 var delegateChanged = false
                 for arg in del.TypeArguments {
@@ -14261,8 +14025,7 @@ partial class Binder {
                                 "System.Tuple`",
                                 StringComparison.Ordinal
                             ) == true ||
-                                substitutedArgs
-                                .Any(
+                                substitutedArgs.Any(
                                 (a TypeSymbol) -> TypeSymbol.ContainsTupleType(a) ||
                                     TypeSymbol.ContainsSourceArrayShape(a)
                             ) {
@@ -14865,8 +14628,11 @@ partial class Binder {
                 }
                 if TryGetImportedGenericDefinitionAndArguments(current, out var currentOpen, out _) &&
                     currentOpen != nil &&
-                    string
-                    .Equals(currentOpen.FullName ?? currentOpen.Name, openTargetDefName, StringComparison.Ordinal) {
+                    string.Equals(
+                    currentOpen.FullName ?? currentOpen.Name,
+                    openTargetDefName,
+                    StringComparison.Ordinal
+                ) {
                     let alignedActual = GetClrSlotAlignedArguments(current)
                     if alignedActual.Length == expectedPositions.Length {
                         let openParameters = currentOpen.GetGenericArguments()
@@ -15296,8 +15062,7 @@ partial class Binder {
                 TryGetImportedGenericDefinitionAndArguments(right, out var rightOpen, out var rightArgs) {
                 return ClrTypeUtilities.AreSame(leftOpen, rightOpen) && SameConstraintTypeArguments(leftArgs, rightArgs)
             }
-            if left.GetElementPositions().IsDefaultOrEmpty && right.GetElementPositions()
-                .IsDefaultOrEmpty &&
+            if left.GetElementPositions().IsDefaultOrEmpty && right.GetElementPositions().IsDefaultOrEmpty &&
                 left.ClrType is {ContainsGenericParameters: false} leftLeafClr &&
                 right.ClrType is {ContainsGenericParameters: false} rightLeafClr {
                 return ClrTypeUtilities.AreSame(leftLeafClr, rightLeafClr)
@@ -15366,8 +15131,7 @@ partial class Binder {
                 )
             } else if restCount >= 2 && restClr.IsGenericType && restClr.GetGenericTypeDefinition()
                 .FullName is {} restDefName &&
-                restDefName
-                .StartsWith("System.ValueTuple`", StringComparison.Ordinal) {
+                restDefName.StartsWith("System.ValueTuple`", StringComparison.Ordinal) {
                 let restElements = ImmutableArray.CreateBuilder[TypeSymbol](restCount)
                 for var i = startIndex + 7; i < flatPositions.Length; i++ {
                     restElements.Add(flatPositions[i])

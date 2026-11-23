@@ -1351,11 +1351,8 @@ open class Issue4988SignatureNullabilityMatrixTests {
             let FindMethod = func () MethodBase {
                 if position.Member == ".ctor" {
                     return FindType(position.TypeName).GetConstructors(AllMembers).Single(
-                        (c ConstructorInfo) -> c.GetParameters()
-                            .Length > 0 &&
-                            c
-                            .GetParameters()[0]
-                            .Name == position.Selector
+                        (c ConstructorInfo) -> c.GetParameters().Length > 0 &&
+                            c.GetParameters()[0].Name == position.Selector
                     )
                 }
                 let candidates = if position.TypeName == "*" {

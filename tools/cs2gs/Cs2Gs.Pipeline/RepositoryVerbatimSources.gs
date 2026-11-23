@@ -271,10 +271,7 @@ internal shared class RepositoryVerbatimSources {
                     continue
                 }
                 if element.Parent == nil ||
-                    !element.Parent!!
-                    .Name
-                    .LocalName
-                    .Equals("ItemGroup", StringComparison.OrdinalIgnoreCase) {
+                    !element.Parent!!.Name.LocalName.Equals("ItemGroup", StringComparison.OrdinalIgnoreCase) {
                     continue
                 }
                 let itemName = element.Name.LocalName
@@ -445,8 +442,7 @@ internal shared class RepositoryVerbatimSources {
                 .Replace("$$(MSBuildProjectDirectory)", string.Empty, StringComparison.OrdinalIgnoreCase)
                 .Replace('\\', '/')
             if text.Contains("$$(", StringComparison.Ordinal) || text.Contains("@(", StringComparison.Ordinal) ||
-                text
-                .Contains("%(", StringComparison.Ordinal) {
+                text.Contains("%(", StringComparison.Ordinal) {
                 if unresolved != nil && CouldMatchCSharpSource(itemName, text) {
                     unresolved.Add(raw.Trim())
                 }
@@ -639,10 +635,7 @@ internal shared class RepositoryVerbatimSources {
 
     private func IsConditionalOrDynamic(item XElement) bool -> item.AncestorsAndSelf().Any(
         (e XElement) -> e.Attribute(XName?("Condition")!!) != nil ||
-            e
-            .Name
-            .LocalName
-            .Equals("Target", StringComparison.OrdinalIgnoreCase)
+            e.Name.LocalName.Equals("Target", StringComparison.OrdinalIgnoreCase)
     )
 
     private func DirectoryOf(relativePath string) string {

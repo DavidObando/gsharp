@@ -1425,9 +1425,7 @@ internal partial class StatementBinder {
                         reconcileGenericLocalFunctionGroupCaptures?(List[BoundFunctionLiteralExpression](){literal})
                         if !Diagnostics.HasErrorSince(diagnosticCount) &&
                             (
-                            literal
-                                .CapturedVariables
-                                .IsEmpty ||
+                            literal.CapturedVariables.IsEmpty ||
                                 HasDistinctOuterOverload(outerFunctions, literal.Function)
                         ) {
                             literal.Function.HasCaptures = !literal.CapturedVariables.IsEmpty
@@ -1624,23 +1622,12 @@ internal partial class StatementBinder {
                 if ancestor is BlockStatementSyntax or
                     BlockExpressionSyntax or
                     ForClauseStatementSyntax &&
-                    index
-                    .DeclarationsOf(ancestor).TryGetValue(name, out var declarations) {
+                    index.DeclarationsOf(ancestor).TryGetValue(name, out var declarations) {
                     for declaration in declarations {
                         // Callable buckets merge parent overloads; only value bindings hide them.
                         let enclosesLiteralBody = declaration.Initializer is FunctionLiteralExpressionSyntax initLit &&
-                            initLit
-                            .Body
-                            .Span
-                            .Start <= site
-                            .Span
-                            .Start &&
-                            site
-                            .Span
-                            .End <= initLit
-                            .Body
-                            .Span
-                            .End
+                            initLit.Body.Span.Start <= site.Span.Start &&
+                            site.Span.End <= initLit.Body.Span.End
                         if (declaration.Span.End <= site.Span.Start || enclosesLiteralBody) &&
                             !IsGenericLocalFunctionDeclaration(declaration) &&
                             !IsRefReturningLocalFunctionDeclaration(declaration) {
@@ -1676,9 +1663,7 @@ internal partial class StatementBinder {
                 let literal = cast[FunctionLiteralExpressionSyntax](declaration.Initializer!!)
                 for node in literal.Body.DescendantNodesAndSelf() {
                     if LocalFunctionReferenceName(node) is {} name &&
-                        name != declaration
-                        .Identifier
-                        .ValueText &&
+                        name != declaration.Identifier.ValueText &&
                         siblingNames.Contains(name) {
                         return true
                     }

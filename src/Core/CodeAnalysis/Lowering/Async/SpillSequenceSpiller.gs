@@ -1224,8 +1224,7 @@ shared class SpillSequenceSpiller {
                         Operand: BoundTupleElementAccessExpression tuple,
                         IsUnmanaged: false
                     } address &&
-                        SideEffectSpiller
-                        .IsInPlaceStorageWriteReceiver(tuple.Receiver) {
+                        SideEffectSpiller.IsInPlaceStorageWriteReceiver(tuple.Receiver) {
                         return SpillTwoOperand(
                             indirectAssign,
                             tuple.Receiver,
@@ -2480,8 +2479,7 @@ shared class SpillSequenceSpiller {
                 case pp is BoundPropertyPattern {
                     if pp.InputVariable == nil &&
                         !(pp.Type is NullableTypeSymbol) &&
-                        ReflectionMetadataEmitter
-                        .IsValueTypeSymbol(pp.Type) {
+                        ReflectionMetadataEmitter.IsValueTypeSymbol(pp.Type) {
                         for field in pp.Fields {
                             EmitSpilledPatternTest(
                                 field.Pattern,
@@ -2937,9 +2935,7 @@ shared class SpillSequenceSpiller {
             // receiver value. The shared variable emitter routes hoisted
             // captures to state-machine fields (issue #2771), but it cannot
             // reconcile this wrapper/unwrapped type mismatch.
-            let isValueTypeNullableReceiver = nc
-                .Receiver
-                .Type is NullableTypeSymbol ncReceiverNullable &&
+            let isValueTypeNullableReceiver = nc.Receiver.Type is NullableTypeSymbol ncReceiverNullable &&
                 NullableLifting.IsAnyValueTypeNullable(ncReceiverNullable)
             let receiverHasAwait = HasAwait(nc.Receiver)
             let whenNotNullHasAwait = HasAwait(nc.WhenNotNull)
@@ -3427,17 +3423,10 @@ shared class SpillSequenceSpiller {
         }
 
         private func SpillArrayCreation(arrayCreation BoundArrayCreationExpression) BoundSpillSequenceExpression {
-            if arrayCreation
-                .DimensionExpressions
-                .Length > 1 &&
+            if arrayCreation.DimensionExpressions.Length > 1 &&
                 arrayCreation.ContainerType is RectangularArrayTypeSymbol rectangular {
-                if !arrayCreation
-                    .Elements
-                    .IsDefaultOrEmpty &&
-                    arrayCreation
-                    .RectangularLengths
-                    .Length == rectangular
-                    .Rank {
+                if !arrayCreation.Elements.IsDefaultOrEmpty &&
+                    arrayCreation.RectangularLengths.Length == rectangular.Rank {
                     let (initializerLocals, initializerSideEffects, spilledDimensions) = SpillArgumentList(
                         arrayCreation.DimensionExpressions,
                         spillEveryPreAwaitOperand: true
@@ -4006,8 +3995,7 @@ shared class SpillSequenceSpiller {
             if value is BoundConversionExpression{Type: {} convType, Expression: {} inner} conv &&
                 (convType == TypeSymbol.NInt || convType == TypeSymbol.NUInt) &&
                 inner.Type is PointerTypeSymbol &&
-                ExpressionBinder
-                .ContainsFixedBufferPointer(inner) {
+                ExpressionBinder.ContainsFixedBufferPointer(inner) {
                 let pointerTemp = MakeSpillTemp(inner.Type)
                 pointerTemp.IsManagedPointerSlot = true
                 locals.Add(pointerTemp)

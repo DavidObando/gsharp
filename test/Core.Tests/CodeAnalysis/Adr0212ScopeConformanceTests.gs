@@ -744,13 +744,8 @@ class C {
         ) {
             if clause.Identifier is not{} identifier ||
                 identifier.IsMissing ||
-                !clause
-                .QualifierIdentifierTokens
-                .IsDefaultOrEmpty ||
-                clause
-                .GetChildren()
-                .OfType[TypeClauseSyntax]()
-                .Any() {
+                !clause.QualifierIdentifierTokens.IsDefaultOrEmpty ||
+                clause.GetChildren().OfType[TypeClauseSyntax]().Any() {
                 return
             }
             let owner = clause.Parent
@@ -770,8 +765,7 @@ class C {
             let symbol = model.GetSymbolInfo(identifier).Symbol
             if symbol == nil && NamesAType(model, identifier) {
                 mismatches.Add(
-                    "type clause of " + owner?.GetType()
-                        .Name +
+                    "type clause of " + owner?.GetType().Name +
                         " answered nothing @ ${file}:${identifier.Span.Start} '${identifier.Text}'"
                 )
             }

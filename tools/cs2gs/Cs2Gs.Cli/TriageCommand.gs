@@ -188,9 +188,7 @@ internal shared class TriageCommand {
         )
         for cluster in clusters.Take(limit) {
             let primary = cluster[0]
-            let title = primary
-                .SuggestedIssue
-                ?.Title ??
+            let title = primary.SuggestedIssue?.Title ??
                 "[cs2gs] ${primary.Diagnostic?.Id} ${primary.Stage} gap (${primary.OffendingCSharpConstruct?.Kind})"
             let labels = (primary.SuggestedIssue?.Labels ?? List[string]{"Oats", "bug"}).ToList()
             let stageLabel = switch primary.Stage {

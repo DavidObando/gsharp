@@ -155,8 +155,7 @@ internal shared class MetadataNullability {
         // Only the core library's `Nullable<T>` is a stated nullable; a namesake is an ordinary generic type.
         if type.IsGenericType && !type.IsGenericTypeDefinition && type.GetGenericTypeDefinition()
             .FullName == "System.Nullable`1" &&
-            MetadataTypeKeys
-            .IsCoreLibrary(type.GetGenericTypeDefinition().Assembly) {
+            MetadataTypeKeys.IsCoreLibrary(type.GetGenericTypeDefinition().Assembly) {
             return IsSinglePosition(type.GetGenericArguments()[0])
         }
         return !type.IsGenericType && !type.IsArray && !type.IsPointer && !type.IsByRef && !type.IsFunctionPointer

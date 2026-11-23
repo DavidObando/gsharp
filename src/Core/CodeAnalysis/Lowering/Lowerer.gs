@@ -74,9 +74,7 @@ class Lowerer : BoundTreeRewriter {
         if discriminant is not BoundLiteralExpression literal || node.Arms.Any(
             (arm BoundPatternSwitchArm) -> arm.Guard != nil
         ) ||
-            node
-            .Arms
-            .Any(HasFallthroughEntryLabel) {
+            node.Arms.Any(HasFallthroughEntryLabel) {
             // Issue #3501 A3: an arm carrying a fallthrough entry label is a
             // goto target from the PREVIOUS arm — the constant fast path
             // keeps only one arm's body, so the label (and the fallthrough
@@ -794,12 +792,8 @@ class Lowerer : BoundTreeRewriter {
         } else if stream.Type is ImportedTypeSymbol streamImp &&
             streamImp.HasSubstitutableTypeArgument &&
             streamImp.OpenDefinition != nil &&
-            streamImp
-            .OpenDefinition
-            .FullName == "System.Collections.Generic.IAsyncEnumerable`1" &&
-            streamImp
-            .TypeArguments
-            .Length == 1 {
+            streamImp.OpenDefinition.FullName == "System.Collections.Generic.IAsyncEnumerable`1" &&
+            streamImp.TypeArguments.Length == 1 {
             let elementSym = streamImp.TypeArguments[0]
             enumeratorType = ImportedTypeSymbol.GetConstructed(
                 enumeratorClr,
@@ -809,11 +803,8 @@ class Lowerer : BoundTreeRewriter {
             currentType = elementSym
         } else if stream.Type is ImportedTypeSymbol patternImp &&
             patternImp.OpenDefinition != nil &&
-            !patternImp
-            .TypeArguments
-            .IsDefaultOrEmpty &&
-            MemberLookup
-            .TryResolveClrPatternAsyncEnumerator(
+            !patternImp.TypeArguments.IsDefaultOrEmpty &&
+            MemberLookup.TryResolveClrPatternAsyncEnumerator(
             patternImp.OpenDefinition,
             out var openGetAsyncEnumerator,
             out _,
@@ -1059,9 +1050,7 @@ class Lowerer : BoundTreeRewriter {
                 var valueAccessType = ClrNullability.GetPropertyTypeSymbol(valueProp)
                 if kvpType is ImportedTypeSymbol kvpImp &&
                     kvpImp.HasSubstitutableTypeArgument &&
-                    kvpImp
-                    .TypeArguments
-                    .Length == 2 {
+                    kvpImp.TypeArguments.Length == 2 {
                     keyAccessType = kvpImp.TypeArguments[0]
                     valueAccessType = kvpImp.TypeArguments[1]
                 }
@@ -1484,9 +1473,7 @@ class Lowerer : BoundTreeRewriter {
                 "GetEnumerator",
                 out var userGetEnumerator
             ) &&
-                userGetEnumerator
-                .Parameters
-                .Length == 0 {
+                userGetEnumerator.Parameters.Length == 0 {
                 enumeratorType = userType.SubstituteMemberType(userGetEnumerator.Type)
                 getEnumeratorCall = BoundUserInstanceCallExpression(
                     nil,
@@ -1546,8 +1533,7 @@ class Lowerer : BoundTreeRewriter {
                     typeArguments = imp.TypeArguments
                 }
                 case openMap is MapTypeSymbol when openMap.ClrType == nil &&
-                    MemberLookup
-                    .TryGetSymbolicOpenMapReceiverView(openMap, out var mapView) {
+                    MemberLookup.TryGetSymbolicOpenMapReceiverView(openMap, out var mapView) {
                     openDef = mapView!!.OpenDefinition
                     typeArguments = mapView!!.TypeArguments
                 }
@@ -1784,12 +1770,9 @@ class Lowerer : BoundTreeRewriter {
                 "MoveNext",
                 out var userMoveNext
             ) &&
-                userMoveNext
-                .Parameters
-                .Length == 0 &&
+                userMoveNext.Parameters.Length == 0 &&
                 userMoveNext.Type == TypeSymbol.Bool &&
-                MemberLookup
-                .TryGetUserEnumeratorCurrent(userEnumerator, out var currentMember, out var currentType) {
+                MemberLookup.TryGetUserEnumeratorCurrent(userEnumerator, out var currentMember, out var currentType) {
                 moveNextCallFactory = (receiver BoundExpression) -> {
                     return BoundUserInstanceCallExpression(
                         nil,
@@ -1855,9 +1838,7 @@ class Lowerer : BoundTreeRewriter {
                     // the statement preceding that label is a throw/goto. Keeping
                     // that continuation preserves the branch around a later else
                     // arm when async catch awaits resume (#2781).
-                    return block
-                        .Statements
-                        .Length > 0 &&
+                    return block.Statements.Length > 0 &&
                         !(block.Statements[block.Statements.Length - 1] is BoundLabelStatement) &&
                         EndsInUnconditionalTransfer(block.Statements[block.Statements.Length - 1])
                 }

@@ -1100,14 +1100,8 @@ internal class ReaderAgreementHarness {
             let trees = shapes.Select(ShapeNode.Parse).ToList()
             let differing = List[string]()
             let Compare = func (nodes List[ShapeNode], path string) {
-                if nodes
-                    .Select((n ShapeNode) -> n.Root)
-                    .Distinct()
-                    .Count() > 1 ||
-                    nodes
-                    .Select((n ShapeNode) -> n.Children.Count)
-                    .Distinct()
-                    .Count() > 1 {
+                if nodes.Select((n ShapeNode) -> n.Root).Distinct().Count() > 1 ||
+                    nodes.Select((n ShapeNode) -> n.Children.Count).Distinct().Count() > 1 {
                     differing.Add(path)
                     return
                 }

@@ -352,18 +352,8 @@ internal shared class MemberTokenResolver {
             yield break
         }
         for accessor in FindNodes[AccessorExpressionSyntax](tree.Root).Where(
-            (a AccessorExpressionSyntax) -> a
-                .RightPart
-                .Span
-                .Start <= token
-                .Span
-                .Start &&
-                token
-                .Span
-                .End <= a
-                .RightPart
-                .Span
-                .End
+            (a AccessorExpressionSyntax) -> a.RightPart.Span.Start <= token.Span.Start &&
+                token.Span.End <= a.RightPart.Span.End
         )
             .OrderBy((a AccessorExpressionSyntax) -> a.Span.Length) {
             if TryResolveAccessorMemberContext(
@@ -444,9 +434,7 @@ internal shared class MemberTokenResolver {
         member = nil
         overloadCount = 0
         if SemanticLookup.SemanticModel.IsStrictTypePosition(token) ||
-            SemanticLookup
-            .SemanticModel
-            .IsTypeArgumentIndexToken(token) {
+            SemanticLookup.SemanticModel.IsTypeArgumentIndexToken(token) {
             return false
         }
         if (
@@ -495,59 +483,21 @@ internal shared class MemberTokenResolver {
         while current != nil && !object.ReferenceEquals(current, enclosingDecl) {
             switch current {
                 case fn is FunctionDeclarationSyntax when fn.Body != nil &&
-                    fn
-                    .Body
-                    .Span
-                    .Start <= token
-                    .Span
-                    .Start &&
-                    token
-                    .Span
-                    .End <= fn.Body!!
-                    .Span
-                    .End {
+                    fn.Body.Span.Start <= token.Span.Start &&
+                    token.Span.End <= fn.Body!!.Span.End {
                     return true
                 }
-                case ctor is ConstructorDeclarationSyntax when ctor
-                    .Body
-                    .Span
-                    .Start <= token
-                    .Span
-                    .Start &&
-                    token
-                    .Span
-                    .End <= ctor
-                    .Body
-                    .Span
-                    .End {
+                case ctor is ConstructorDeclarationSyntax when ctor.Body.Span.Start <= token.Span.Start &&
+                    token.Span.End <= ctor.Body.Span.End {
                     return true
                 }
                 case accessor is PropertyAccessorSyntax when accessor.Body != nil &&
-                    accessor
-                    .Body
-                    .Span
-                    .Start <= token
-                    .Span
-                    .Start &&
-                    token
-                    .Span
-                    .End <= accessor.Body!!
-                    .Span
-                    .End {
+                    accessor.Body.Span.Start <= token.Span.Start &&
+                    token.Span.End <= accessor.Body!!.Span.End {
                     return true
                 }
-                case deinit_ is DeinitDeclarationSyntax when deinit_
-                    .Body
-                    .Span
-                    .Start <= token
-                    .Span
-                    .Start &&
-                    token
-                    .Span
-                    .End <= deinit_
-                    .Body
-                    .Span
-                    .End {
+                case deinit_ is DeinitDeclarationSyntax when deinit_.Body.Span.Start <= token.Span.Start &&
+                    token.Span.End <= deinit_.Body.Span.End {
                     return true
                 }
             }
@@ -650,16 +600,8 @@ internal shared class MemberTokenResolver {
             (
             candidate != nil &&
                 token != nil &&
-                candidate
-                .Span
-                .Start == token
-                .Span
-                .Start &&
-                candidate
-                .Span
-                .End == token
-                .Span
-                .End &&
+                candidate.Span.Start == token.Span.Start &&
+                candidate.Span.End == token.Span.End &&
                 string.Equals(candidate.Text, token.Text, StringComparison.Ordinal)
         )
     }

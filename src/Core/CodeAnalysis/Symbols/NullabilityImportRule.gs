@@ -278,8 +278,7 @@ internal shared class NullabilityImportRule {
         }
         return argument.DeclaringType is {} argumentOwner &&
             slot.DeclaringType is {} slotOwner &&
-            ClrTypeUtilities
-            .AreSame(
+            ClrTypeUtilities.AreSame(
             if argumentOwner.IsGenericType {
                 argumentOwner.GetGenericTypeDefinition()
             } else {

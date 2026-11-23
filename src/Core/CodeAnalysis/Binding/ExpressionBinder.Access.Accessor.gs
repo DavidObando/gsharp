@@ -134,9 +134,7 @@ internal partial class ExpressionBinder {
             // scope regardless), so peel it off the same way as the
             // nested-type case above whenever the qualifier names the type's own
             // simple name AND that name is also the tail of its package.
-            if headIdentifier == enclosingNameSyntax
-                .IdentifierToken
-                .ValueText &&
+            if headIdentifier == enclosingNameSyntax.IdentifierToken.ValueText &&
                 GetSymbolPackageName(enclosingAliasType) is string ownPackageName &&
                 (
                 ownPackageName == headIdentifier || ownPackageName.EndsWith(
@@ -876,10 +874,7 @@ internal partial class ExpressionBinder {
                 symbolicNested = ImportedTypeSymbol.GetConstructed(closedType, nestedType, symbolicOuter.TypeArguments)
             }
             let constructedNested = if constructedOuterSymbol != nil &&
-                constructedOuterSymbol
-                .TypeArguments
-                .Length == nestedType
-                .GetGenericArguments().Length {
+                constructedOuterSymbol.TypeArguments.Length == nestedType.GetGenericArguments().Length {
                 ImportedTypeSymbol.GetConstructed(closedType, nestedType, constructedOuterSymbol.TypeArguments)
             } else {
                 symbolicNested
@@ -1044,8 +1039,7 @@ internal partial class ExpressionBinder {
             if $scope.TryLookupNestedTypeAlias(containerDef, segments[i].Name, arity, out var nested) {
                 definitions[i] = nested
             } else if definitions[i - 1] is StructSymbol containerStruct &&
-                $scope
-                .TryLookupNestedTypeAliasIncludingInherited(
+                $scope.TryLookupNestedTypeAliasIncludingInherited(
                 containerStruct,
                 segments[i].Name,
                 arity,
@@ -1074,16 +1068,12 @@ internal partial class ExpressionBinder {
         var hasConstructedSegment = false
         for var i = 0; i < segments.Count - 1; i++ {
             if definitions[i] is StructSymbol nestedConstruction &&
-                !nestedConstruction
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty {
+                !nestedConstruction.EnclosingTypeArguments.IsDefaultOrEmpty {
                 enclosingBuilder!!.Clear()
                 enclosingBuilder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
                 hasConstructedSegment = true
             } else if definitions[i] is InterfaceSymbol nestedIfaceConstruction &&
-                !nestedIfaceConstruction
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty {
+                !nestedIfaceConstruction.EnclosingTypeArguments.IsDefaultOrEmpty {
                 enclosingBuilder!!.Clear()
                 enclosingBuilder!!.AddRange(nestedIfaceConstruction.EnclosingTypeArguments)
                 hasConstructedSegment = true
@@ -1131,14 +1121,10 @@ internal partial class ExpressionBinder {
             var constructionArgs = default(ImmutableArray[TypeSymbol])
             if !ownParams.IsDefaultOrEmpty {
                 constructionArgs = if definitions[i] is StructSymbol constructedStruct &&
-                    !constructedStruct
-                    .TypeArguments
-                    .IsDefaultOrEmpty {
+                    !constructedStruct.TypeArguments.IsDefaultOrEmpty {
                     constructedStruct.TypeArguments
                 } else if definitions[i] is InterfaceSymbol constructedIface &&
-                    !constructedIface
-                    .TypeArguments
-                    .IsDefaultOrEmpty {
+                    !constructedIface.TypeArguments.IsDefaultOrEmpty {
                     constructedIface.TypeArguments
                 } else {
                     segments[i].Args
@@ -1159,8 +1145,7 @@ internal partial class ExpressionBinder {
                     default(ImmutableArray[TypeSymbol])
                 }
                 let resolvedContainer = if !precedingEnclosingArgs.IsDefaultOrEmpty &&
-                    !constructionArgs
-                    .IsDefaultOrEmpty {
+                    !constructionArgs.IsDefaultOrEmpty {
                     StructSymbol.ConstructNestedGeneric(
                         def,
                         precedingEnclosingArgs,
@@ -1186,12 +1171,8 @@ internal partial class ExpressionBinder {
                 }
                 let projectedOwnParams = (projectedOwner.Definition ?? projectedOwner).DeclaredTypeParameters
                 if !projectedOwnParams.IsDefaultOrEmpty {
-                    if projectedOwner
-                        .TypeArguments
-                        .IsDefaultOrEmpty ||
-                        projectedOwner
-                        .TypeArguments
-                        .Length != projectedOwnParams.Length {
+                    if projectedOwner.TypeArguments.IsDefaultOrEmpty ||
+                        projectedOwner.TypeArguments.Length != projectedOwnParams.Length {
                         enclosingBuilder = nil
                         break
                     }
@@ -1798,8 +1779,12 @@ internal partial class ExpressionBinder {
                     return false
                 }
                 if $scope.TryResolveType(currentPath + "." + genericIdentifier.ValueText, out _) ||
-                    $scope
-                    .TryLookupSourceTypeInPackage(currentPath, genericIdentifier.ValueText, preferredArity: 0, out _) {
+                    $scope.TryLookupSourceTypeInPackage(
+                    currentPath,
+                    genericIdentifier.ValueText,
+                    preferredArity: 0,
+                    out _
+                ) {
                     invalidGenericType = genericIdentifier
                     return false
                 }
@@ -1978,8 +1963,7 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out importedType ImportedClassSymbol?
     ) bool {
         if $scope.TryLookupImportedClassByArity(name, requestedArity, declaration, out var candidate) &&
-            binderCtx
-            .ImportedTypeOverridesSourceType(
+            binderCtx.ImportedTypeOverridesSourceType(
             $scope,
             name,
             sourceType,
@@ -2874,9 +2858,7 @@ internal partial class ExpressionBinder {
             return false
         }
         if !TryBindTypeArgumentExpressions(index.Indices, out var typeArgs) ||
-            typeArgs.Length != ifaceDef
-            .TypeParameters
-            .Length {
+            typeArgs.Length != ifaceDef.TypeParameters.Length {
             return false
         }
         constructed = InterfaceSymbol.Construct(ifaceDef, typeArgs, $scope.References!!.MapClrTypeToReferences)
@@ -3167,9 +3149,7 @@ internal partial class ExpressionBinder {
         failureHandled = false
         let name = generic.Identifier.ValueText
         if resolvedType == nil &&
-            generic
-            .Identifier
-            .Text == "managed" &&
+            generic.Identifier.Text == "managed" &&
             (
             generic.ReadOnlyManagedModifier != nil || binderCtx.CanUseIntrinsicAlias(
                 $scope,
@@ -3205,9 +3185,7 @@ internal partial class ExpressionBinder {
             return true
         }
         if resolvedType == nil &&
-            generic
-            .Identifier
-            .Text == "span" &&
+            generic.Identifier.Text == "span" &&
             (generic.ReadOnlySpanModifier != nil || CanUseSpanAlias(generic.Identifier, expression: true)) {
             failureHandled = true
             if !CanUseSpanAlias(generic.Identifier, expression: true) {
@@ -3638,8 +3616,7 @@ internal partial class ExpressionBinder {
         peeledSegments List[string],
         segment string
     ) bool -> peeledSegments.Count > 0 &&
-        $scope
-        .TryLookupQualifiedSourceType(
+        $scope.TryLookupQualifiedSourceType(
         $scope.ExpandQualifiedTypeName(peeledSegments.Append(segment).ToArray(), peeledSegments.Count + 1),
         preferredArity: -1,
         out _
@@ -4160,9 +4137,7 @@ internal partial class ExpressionBinder {
             var result = bindStaticArgumentsAndDispatch()
             if !preAppliedCallableProperty &&
                 lastSelectedCallablePropertyLoad is {} selectedPropLoad &&
-                ce
-                .Arguments
-                .Count > 0 {
+                ce.Arguments.Count > 0 {
                 lastSelectedCallablePropertyLoad = nil
                 result = Diagnostics.ReplaceDiagnosticsIn(
                     ce.Location,
@@ -4243,12 +4218,8 @@ internal partial class ExpressionBinder {
             } else {
                 (effectiveInterfaceOwner?.Definition as TypeSymbol?)
             }
-            let ownerDefTypeParameters = effectiveStructOwner
-                ?.Definition
-                ?.TypeParameters ??
-                effectiveInterfaceOwner
-                ?.Definition
-                ?.TypeParameters ??
+            let ownerDefTypeParameters = effectiveStructOwner?.Definition?.TypeParameters ??
+                effectiveInterfaceOwner?.Definition?.TypeParameters ??
                 ImmutableArray[TypeParameterSymbol].Empty
             let ownerTypeArguments = effectiveStructOwner?.TypeArguments ??
                 effectiveInterfaceOwner?.TypeArguments ??
@@ -4288,9 +4259,7 @@ internal partial class ExpressionBinder {
                     } else {
                         cast[ExpressionSyntax](staticLambda)
                     }
-                    if idx < method
-                        .Parameters
-                        .Length &&
+                    if idx < method.Parameters.Length &&
                         TryBindLambdaExpressionWithTargetType(
                         sourceArgSyntax,
                         method.Parameters[idx].Type,
@@ -4340,9 +4309,7 @@ internal partial class ExpressionBinder {
             }
             var requiredFixedParamCount = fixedParamCount
             while requiredFixedParamCount > 0 &&
-                method
-                .Parameters[requiredFixedParamCount - 1]
-                .HasExplicitDefaultValue {
+                method.Parameters[requiredFixedParamCount - 1].HasExplicitDefaultValue {
                 requiredFixedParamCount--
             }
             if isVariadic {
@@ -4433,8 +4400,7 @@ internal partial class ExpressionBinder {
             }
             if ownerDefinition != nil && !object.ReferenceEquals(ownerDefinition, effectiveOwnerType) &&
                 !ownerTypeArguments.IsDefaultOrEmpty &&
-                !ownerDefTypeParameters
-                .IsDefaultOrEmpty {
+                !ownerDefTypeParameters.IsDefaultOrEmpty {
                 substitution ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
                 let defParams = ownerDefTypeParameters
                 let count = Math.Min(defParams.Length, ownerTypeArguments.Length)
@@ -4634,8 +4600,7 @@ internal partial class ExpressionBinder {
                 }
                 if substitution != nil &&
                     paramType is FunctionTypeSymbol openFunctionParameter &&
-                    LambdaBinder
-                    .TryGetFunctionLiteral(permutedArgs[i], out var functionLiteralArgument) {
+                    LambdaBinder.TryGetFunctionLiteral(permutedArgs[i], out var functionLiteralArgument) {
                     // ADR-0087 §3 R6: substitute the open target before
                     // routing through the adapter. When the substituted
                     // target matches the literal's declared shape the
@@ -4663,9 +4628,7 @@ internal partial class ExpressionBinder {
                     paramType
                 }
                 if slotSyntax == nil &&
-                    !method
-                    .Parameters[i]
-                    .IsVariadic &&
+                    !method.Parameters[i].IsVariadic &&
                     expectedType != nil &&
                     expectedType != paramType {
                     permutedArgs = permutedArgs.SetItem(
@@ -4686,8 +4649,7 @@ internal partial class ExpressionBinder {
                 // Issue #4400: an `in` delegate parameter target-types a lambda
                 // like a by-value one; the post-pass below passes it by reference.
                 if (method.Parameters[i].RefKind is RefKind.None or RefKind.In) &&
-                    overloads
-                    .TryConvertLambdaArgumentWithTarget(
+                    overloads.TryConvertLambdaArgumentWithTarget(
                     permutedArgs[i],
                     expectedType,
                     argLoc,
@@ -5081,8 +5043,7 @@ internal partial class ExpressionBinder {
                 return fieldOwner.GetStaticField(headName) != nil || fieldOwner.Properties.Any(
                     (property PropertySymbol) -> property.IsStatic && !property.IsIndexer && property.Name == headName
                 ) ||
-                    !TypeMemberModel
-                    .GetMethods(interfaceType, headName, MemberQuery.Static(MemberKinds.Method)).IsEmpty
+                    !TypeMemberModel.GetMethods(interfaceType, headName, MemberQuery.Static(MemberKinds.Method)).IsEmpty
             }
             // ADR-0112: route through the canonical member-resolution layer.
             if isCall {
@@ -5337,9 +5298,7 @@ internal partial class ExpressionBinder {
                     )
                     return true
                 }
-                case generic is GenericNameExpressionSyntax when !generic
-                    .Identifier
-                    .IsMissing &&
+                case generic is GenericNameExpressionSyntax when !generic.Identifier.IsMissing &&
                     generic.ReadOnlySliceModifier == nil &&
                     generic.ReadOnlySpanModifier == nil &&
                     generic.ReadOnlyManagedModifier == nil {

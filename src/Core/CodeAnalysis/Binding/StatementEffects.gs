@@ -128,11 +128,8 @@ internal sealed class StatementEffects {
             (MayMutateGlobalRoots || !other.MayMutateGlobalRoots) &&
             (MayMutateWritableReferenceRoots || !other.MayMutateWritableReferenceRoots) &&
             (MayRunEscapedClosure || !other.MayRunEscapedClosure) &&
-            other
-            .AssignedRoots
-            .All((root VariableSymbol) -> AssignedRoots.Contains(root)) && other.WritableReferenceRoots.All(
-            (root VariableSymbol) -> WritableReferenceRoots.Contains(root)
-        )
+            other.AssignedRoots.All((root VariableSymbol) -> AssignedRoots.Contains(root)) &&
+            other.WritableReferenceRoots.All((root VariableSymbol) -> WritableReferenceRoots.Contains(root))
     }
 
     override func ToString() string {

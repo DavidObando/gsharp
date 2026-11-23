@@ -279,12 +279,10 @@ open class SdkLayoutTests {
             (group XElement) -> group.Elements(MsbuildNs + "Reference").Any(
                 (item XElement) -> string(item.Attribute(XName?("Include")!!)) == "Gsharp.HotReload.Runtime"
             ) &&
-                group
-                .Elements(MsbuildNs + "None").Any(
+                group.Elements(MsbuildNs + "None").Any(
                 (item XElement) -> string(item.Attribute(XName?("Include")!!)) == "$$(GsharpHotReloadManifestPath)"
             ) &&
-                group
-                .Elements(MsbuildNs + "ProjectCapability").Any(
+                group.Elements(MsbuildNs + "ProjectCapability").Any(
                 (item XElement) -> string(item.Attribute(XName?("Include")!!)) == "SupportsHotReload"
             )
         )

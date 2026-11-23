@@ -73,10 +73,8 @@ internal shared class NativeSliceTypes {
             out var resolved
         ) &&
             IsDefinition(resolved, out _) &&
-            resolved
-            .GetMethods().Any((m MethodInfo) -> m.Name == "Subslice" && m.GetParameters().Length == 4) &&
-            resolved
-            .GetMethods().Any((m MethodInfo) -> m.Name == "FromArray" && m.GetParameters().Length == 1) {
+            resolved.GetMethods().Any((m MethodInfo) -> m.Name == "Subslice" && m.GetParameters().Length == 4) &&
+            resolved.GetMethods().Any((m MethodInfo) -> m.Name == "FromArray" && m.GetParameters().Length == 1) {
             type = resolved
             return true
         }

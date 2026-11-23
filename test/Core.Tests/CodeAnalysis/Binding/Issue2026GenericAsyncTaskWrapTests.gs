@@ -270,12 +270,8 @@ async func Outer[U](seed U) U {
                 type is ImportedTypeSymbol imported &&
                     imported.ClrType!!.IsGenericType &&
                     imported.ClrType!!.GetGenericTypeDefinition() == typeof(System.Threading.Tasks.Task[_]) &&
-                    imported
-                    .TypeArguments
-                    .Length == 1 &&
-                    imported
-                    .TypeArguments[0]
-                    .Name == expectedTypeArgumentName,
+                    imported.TypeArguments.Length == 1 &&
+                    imported.TypeArguments[0].Name == expectedTypeArgumentName,
                 "Expected Task[$expectedTypeArgumentName], got '$type'."
             )
         }
