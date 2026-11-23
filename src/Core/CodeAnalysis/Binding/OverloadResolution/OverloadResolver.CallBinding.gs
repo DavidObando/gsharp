@@ -728,7 +728,7 @@ internal partial class OverloadResolver {
                 ) ??
                     bound
             }
-            binderCtx.CompleteCall(bound, syntax.Arguments)
+            binderCtx.CompleteCall(bound, syntax.Arguments, call: syntax)
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {
@@ -1574,12 +1574,20 @@ internal partial class OverloadResolver {
                 return BoundErrorExpression(nil)
             }
         }
+        // Issue #6189: every path below calls the variable; a call that fails keeps its load for
+        // the semantic model, built as a call that binds builds it.
+        if symbol is VariableSymbol calleeVariable {
+            binderCtx.RecordCallCallee(
+                syntax,
+                () -> BuildFailedCalleeLoad(calleeVariable, syntax, narrowedCallTargetType)
+            )
+        }
         // A callable variable has no type parameters (#6186). A variable that is not callable keeps
         // its GS0131 below.
-        if symbol is VariableSymbol calleeVariable &&
+        if symbol is VariableSymbol typedCalleeVariable &&
             syntax.TypeArgumentList is {} unexpectedTypeArguments &&
-            IsCallableValueType(narrowedCallTargetType ?? calleeVariable.Type) {
-            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, calleeVariable.Name)
+            IsCallableValueType(narrowedCallTargetType ?? typedCalleeVariable.Type) {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, typedCalleeVariable.Name)
             return BoundErrorExpression(nil)
         }
         // ADR-0122 §9 / issues #1035 and #3523: invoking a function-pointer-

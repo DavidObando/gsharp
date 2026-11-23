@@ -95,6 +95,30 @@ internal class BinderContext {
     /// the binder synthesized over source expressions (the `Add` of a collection initializer).
     private var expectedArguments HashSet[SyntaxNode]?
 
+    /// Issue #6189: the callee of each call through a function value being bound, by the call's
+    /// syntax, built only when the call fails. (cref:CompleteCall) gives a call that failed its
+    /// callee, and forgets it either way.
+    private var callCallees Dictionary[CallExpressionSyntax, Func[BoundExpression?]]?
+
+    /// Remembers how to build the callee of [`call`](paramref), a call through a function value, so
+    /// a call that fails keeps it for the semantic model (#6189). The callee is built only when the
+    /// call fails, and must not report diagnostics; the last record of a call wins.
+    /// @param call The call.
+    /// @param callee Builds the callee's bound load, anchored at the call's identifier, or null.
+    internal func RecordCallCallee(call CallExpressionSyntax, callee Func[BoundExpression?]) {
+        let table = callCallees ??
+            Dictionary[CallExpressionSyntax, Func[BoundExpression?]](ReferenceEqualityComparer.Instance)
+        callCallees = table
+        table[call] = callee
+    }
+
+    /// Forgets the callee recorded for [`call`](paramref) when the binder does not invoke it after
+    /// all (#6189).
+    /// @param call The call.
+    internal func ForgetCallCallee(call CallExpressionSyntax) {
+        let _ = callCallees?.Remove(call)
+    }
+
     /// Declares the arguments of a call about to be bound, so they are recorded even when the call
     /// is not their syntax parent (a synthesized call over source expressions, #6150).
     /// @param arguments The call's argument list.
@@ -151,7 +175,7 @@ internal class BinderContext {
     /// @param syntax The expression the binder bound.
     /// @param bound Its bound node.
     internal func CompleteCallSyntax(syntax ExpressionSyntax, bound BoundExpression) {
-        if callArguments is not{Count: > 0} {
+        if callCallees is not{Count: > 0} && callArguments is not{Count: > 0} {
             return
         }
         var terminal ExpressionSyntax = syntax
@@ -159,25 +183,58 @@ internal class BinderContext {
             terminal = accessor.RightPart
         }
         if terminal is CallExpressionSyntax call {
-            CompleteCall(bound, call.Arguments)
+            CompleteCall(bound, call.Arguments, call: call)
         } else if terminal is BaseInterfaceCallExpressionSyntax baseCall {
             CompleteCall(bound, baseCall.Arguments)
         }
     }
 
+    /// Gives the error of a call through a function value that did not bind its callee (#6189), and
+    /// forgets the callee's record either way.
+    private func CompleteCallee(call CallExpressionSyntax, bound BoundExpression) {
+        if callCallees is not{} table || !table.Remove(call, out var callee) {
+            return
+        }
+        if BoundErrorExpression.FindFailedCall(bound) is {FailedCallee: nil} error &&
+            callee() is {} load &&
+            !(load is BoundErrorExpression) {
+            // A member load has no anchor of its own; the failed call is not in the tree, so its
+            // callee is not anchored later. The read under a conversion or a null assertion (a
+            // narrowed read) is anchored at the identifier too; the receiver keeps its own anchor.
+            var anchored BoundExpression? = load
+            while anchored != nil {
+                anchored.AnchorSyntax(call.Identifier)
+                anchored = switch anchored {
+                    case conversion is BoundConversionExpression: conversion.Expression
+                    case assertion is BoundUnaryExpression when assertion
+                        .Op
+                        .Kind == BoundUnaryOperatorKind.NullAssertion: assertion.Operand
+                    default: default(BoundExpression?)
+                }
+            }
+            error.FailedCallee = load
+        }
+    }
+
     /// Finishes the bind of a call: when [`bound`](paramref) is the error of a call that did not
-    /// bind, it keeps the call's receiver (#6151) and the arguments the binder bound (#6150), for
-    /// the semantic model only. The arguments' records are forgotten either way.
+    /// bind, it keeps the call's receiver (#6151), the arguments the binder bound (#6150) and the
+    /// callee of a call through a function value (#6189), for the semantic model only. The records
+    /// are forgotten either way.
     /// @param bound The bound call.
     /// @param arguments The call's argument list.
     /// @param receiver The call's bound receiver, when any.
     /// @param receiverSyntax The receiver's syntax, when the receiver does not carry it.
+    /// @param call The call's syntax, whose callee (cref:RecordCallCallee) recorded, when any.
     internal func CompleteCall(
         bound BoundExpression,
         arguments SeparatedSyntaxList[ExpressionSyntax],
         receiver BoundExpression? = nil,
-        receiverSyntax SyntaxNode? = nil
+        receiverSyntax SyntaxNode? = nil,
+        call CallExpressionSyntax? = nil
     ) {
+        if call != nil && callCallees is {Count: > 0} {
+            CompleteCallee(call, bound)
+        }
         var failed ImmutableArray[BoundExpression].Builder? = nil
         let error = BoundErrorExpression.FindFailedCall(bound)
         if expectedArguments is {Count: > 0} expected {

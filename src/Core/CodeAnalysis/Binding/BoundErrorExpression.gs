@@ -90,12 +90,22 @@ class BoundErrorExpression : BoundExpression {
         set;
     }
 
+    /// Gets or sets the bound callee of a call through a function value that did not bind (`f(x, 2)`
+    /// with `f` a local, a parameter, a field or a property of function or delegate type), anchored
+    /// at the callee's identifier, so the semantic model answers the callee as in a call that binds
+    /// (#6189). The callee is not a child of this node: walkers and rewriters do not visit it.
+    internal prop FailedCallee BoundExpression? {
+        get;
+        set;
+    }
+
     /// Gets whether this error keeps a record the semantic model reads: a candidate group, an
-    /// inner failed call, a failed receiver, failed arguments or failed operands.
+    /// inner failed call, a failed receiver, failed arguments, a failed callee or failed operands.
     internal prop HasFailedRecords bool -> !MemberGroup.IsDefaultOrEmpty ||
         !FailedChildren.IsDefaultOrEmpty ||
         FailedReceiver != nil ||
         !FailedArguments.IsDefaultOrEmpty ||
+        FailedCallee != nil ||
         !FailedOperands.IsDefaultOrEmpty
 
     /// Keeps the operands of the operator expression that this error replaces, for the semantic

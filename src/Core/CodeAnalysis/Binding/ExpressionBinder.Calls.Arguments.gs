@@ -612,6 +612,19 @@ internal partial class ExpressionBinder {
             return false
         }
         memberLoad = ApplyCallableMemberNarrowing(memberLoad)
+        // The member's identifier answers its load, and a call that fails keeps the load for the
+        // semantic model, prepared as a call that binds prepares it (#6189). Both are dropped if the
+        // member is not invoked after all.
+        let calleeLoad = memberLoad
+        calleeLoad.CalleeIdentifier = ce.Identifier
+        binderCtx.RecordCallCallee(
+            ce,
+            () -> if ce.NullableQuestionToken == nil {
+                PlatformCoercion.CheckDelegateInvocationTarget(calleeLoad, ce.Identifier.Location)
+            } else {
+                calleeLoad
+            }
+        )
         if matchedProperty != nil {
             lastSelectedCallablePropertyLoad = memberLoad
         }
@@ -712,9 +725,11 @@ internal partial class ExpressionBinder {
             // delegate.
             if !TryBindAmbiguousBracketAsIndex(ce, memberLoad, out var indexedValue) ||
                 indexedValue.Type is not{} indexedType {
+                ForgetMemberCallee(ce, calleeLoad)
                 return false
             }
             if !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(indexedType, out functionType) {
+                ForgetMemberCallee(ce, calleeLoad)
                 return false
             }
             memberLoad = indexedValue
@@ -815,6 +830,12 @@ internal partial class ExpressionBinder {
         }
         indexed = bound
         return true
+    }
+
+    /// Drops the callee records of a member the binder does not invoke after all (#6189).
+    private func ForgetMemberCallee(ce CallExpressionSyntax, load BoundExpression) {
+        load.CalleeIdentifier = nil
+        binderCtx.ForgetCallCallee(ce)
     }
 
     private func BuildDelegateMemberInvocation(

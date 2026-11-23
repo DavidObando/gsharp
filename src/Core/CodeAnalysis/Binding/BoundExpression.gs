@@ -140,6 +140,26 @@ abstract class BoundExpression : BoundNode {
         return false
     }
 
+    /// Gets or sets the identifier of the call that invokes this load as its callee: a member
+    /// function value called through a receiver (`G` in `c.G(x)`), whose load inherits the call's
+    /// anchor. The semantic model answers the identifier with this load (#6189). It is not a
+    /// syntax or bound tree child.
+    internal prop CalleeIdentifier SyntaxToken? {
+        get;
+        set;
+    }
+
+    /// Carries (cref:CalleeIdentifier) to a node that replaces this read (a lowered or rewritten
+    /// copy of the same load).
+    /// @param copy The replacement.
+    /// @returns The replacement.
+    internal func CopyCalleeIdentifierTo(copy BoundExpression) BoundExpression {
+        if copy.CalleeIdentifier == nil {
+            copy.CalleeIdentifier = CalleeIdentifier
+        }
+        return copy
+    }
+
     internal prop StaticQualifierType TypeSymbol? {
         get;
         private set;

@@ -540,6 +540,16 @@ partial class SemanticModel {
             if node is BoundErrorExpression error {
                 RecordFailedCall(error)
             }
+            // A member function value called through a receiver (`c.G(x)`) is loaded without an
+            // anchor of its own and inherits the call's; the binder names the call's identifier
+            // (#6189).
+            if node is BoundExpression{CalleeIdentifier: {} identifier} load && object.ReferenceEquals(
+                identifier.SyntaxTree,
+                tree
+            ) &&
+                !boundBySyntax.ContainsKey(identifier) {
+                boundBySyntax.Add(identifier, load)
+            }
             // A variable declared at an identifier the symbol does not remember (an element of a
             // destructured lambda parameter or of a tuple `for`) is anchored by the declaration
             // node the binder built for it.
@@ -580,6 +590,10 @@ partial class SemanticModel {
                     !boundBySyntax.ContainsKey(receiverSyntax) {
                     boundBySyntax.Add(receiverSyntax, receiver)
                 }
+            }
+            // The callee of a failed call through a function value is anchored at its identifier (#6189).
+            if error.FailedCallee is {} callee {
+                VisitExpression(callee)
             }
             if error.CallSyntax is {} callSyntax && !error.MemberGroup.IsDefaultOrEmpty && object.ReferenceEquals(
                 callSyntax.SyntaxTree,
