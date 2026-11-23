@@ -307,11 +307,16 @@ open class Issue6189FunctionValueCalleeTests {
     @Theory
     @InlineData("c.A(x)", "c.A(x, 2)", "(int32) -> int32") // an auto-property of the owning type
     @InlineData("c.Q?(x)", "c.Q?(x, 2)", "((int32) -> int32)?") // a nullable auto-property called with `?(...)`
+    @InlineData(
+        "0\n        if c.Fp != nil {\n            let j = c.Fp()\n        }",
+        "0\n        if c.Fp != nil {\n            let j = c.Fp(x)\n        }",
+        "unmanaged[Cdecl] () -> int32"
+    ) // a narrowed nullable function-pointer get-only auto-property
     func CallThroughAnAutoPropertyOfTheOwningType_CalleeAnswersTheProperty(bound string, failed string, type string) {
         // Inside its own type an auto-property read lowers to a read of its backing field.
         for source in[]string{bound, failed} {
             let (model, tree, _) = CreateModel(
-                "package P\n\nclass C {\n    prop A (int32) -> int32 { get; set }\n    prop Q ((int32) -> int32)? { get; set }\n    init() {\n        A = (v int32) -> v\n    }\n    func M(c C) {\n        let x = 1\n        let k = " +
+                "package P\n\nclass C {\n    prop A (int32) -> int32 { get; set }\n    prop Q ((int32) -> int32)? { get; set }\n    prop Fp (unmanaged[Cdecl] () -> int32)? { get }\n    init() {\n        A = (v int32) -> v\n    }\n    func M(c C) {\n        let x = 1\n        let k = " +
                     source +
                     "\n    }\n}\n"
             )

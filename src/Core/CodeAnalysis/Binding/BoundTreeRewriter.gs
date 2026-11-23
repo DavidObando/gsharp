@@ -318,6 +318,17 @@ abstract class BoundTreeRewriter {
     /// @param node The expression to rewrite.
     /// @returns The rewritten expression.
     protected open func RewriteExpression(node BoundExpression) BoundExpression {
+        let rewritten = RewriteExpressionByKind(node)
+        // A replacement of a member function value's load keeps the identifier of the call that
+        // invokes it, for the semantic model (#6189).
+        return if node.CalleeIdentifier != nil && !object.ReferenceEquals(rewritten, node) {
+            node.CopyCalleeIdentifierTo(rewritten)
+        } else {
+            rewritten
+        }
+    }
+
+    private func RewriteExpressionByKind(node BoundExpression) BoundExpression {
         if sharedReceiverTarget != nil && object.ReferenceEquals(node, sharedReceiverTarget) {
             return sharedReceiverReplacement!!
         }
@@ -2157,19 +2168,17 @@ abstract class BoundTreeRewriter {
         return if receiver == node.Receiver {
             node
         } else {
-            node.CopyCalleeIdentifierTo(
-                BoundFieldAccessExpression(
-                    node.Syntax,
-                    receiver,
-                    Invariant.Required(
-                        node.StructType,
-                        "an instance field access has a struct type",
-                        expression: "node.StructType"
-                    ),
-                    node.Field,
-                    node.SubstitutedType,
-                    node.NarrowedType
-                )
+            BoundFieldAccessExpression(
+                node.Syntax,
+                receiver,
+                Invariant.Required(
+                    node.StructType,
+                    "an instance field access has a struct type",
+                    expression: "node.StructType"
+                ),
+                node.Field,
+                node.SubstitutedType,
+                node.NarrowedType
             )
         }
     }
@@ -2245,16 +2254,14 @@ abstract class BoundTreeRewriter {
         return if receiver == node.Receiver {
             node
         } else {
-            node.CopyCalleeIdentifierTo(
-                BoundPropertyAccessExpression(
-                    node.Syntax,
-                    receiver,
-                    node.StructType,
-                    node.Property,
-                    node.SubstitutedType,
-                    node.NarrowedType,
-                    node.InterfaceType
-                )
+            BoundPropertyAccessExpression(
+                node.Syntax,
+                receiver,
+                node.StructType,
+                node.Property,
+                node.SubstitutedType,
+                node.NarrowedType,
+                node.InterfaceType
             )
         }
     }
