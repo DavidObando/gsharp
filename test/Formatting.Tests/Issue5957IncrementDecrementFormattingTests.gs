@@ -68,6 +68,10 @@ class Issue5957IncrementDecrementFormattingTests {
     let callPostfix = f(x ++, y --)
     let idxPrefix = arr[++ x]
     let idxPostfix = arr[y --]
+    let elemPrefix = ++ arr[0]
+    let elemCanon = ++arr[0]
+    let elemDec = -- arr[1]
+    let elemPostfix = arr[0] --
     let ptrPrefix = ++ *p
     let ptrPostfix = (*p) --
     let parenTarget = ++ (x)
@@ -101,6 +105,10 @@ class Issue5957IncrementDecrementFormattingTests {
     let callPostfix = f(x++, y--)
     let idxPrefix = arr[++x]
     let idxPostfix = arr[y--]
+    let elemPrefix = ++arr[0]
+    let elemCanon = ++arr[0]
+    let elemDec = --arr[1]
+    let elemPostfix = arr[0]--
     let ptrPrefix = ++*p
     let ptrPostfix = (*p)--
     let parenTarget = ++(x)
@@ -132,7 +140,13 @@ class Issue5957IncrementDecrementFormattingTests {
         let afterTree = SyntaxTree.Parse(once.Text!!)
         Assert.Empty(afterTree.Diagnostics)
         Assert.Equal(SignificantTokens(source), SignificantTokens(formatted))
-        Assert.Equal(IncrementDecrementSummary(beforeTree.Root), IncrementDecrementSummary(afterTree.Root))
+        let beforeSummary = IncrementDecrementSummary(beforeTree.Root)
+        let afterSummary = IncrementDecrementSummary(afterTree.Root)
+        Assert.NotEmpty(beforeSummary)
+        Assert.Contains(beforeSummary, (entry string) -> entry.StartsWith("Event:", StringComparison.Ordinal))
+        Assert.Contains(beforeSummary, (entry string) -> entry.StartsWith("Index:", StringComparison.Ordinal))
+        Assert.Contains(beforeSummary, (entry string) -> entry.StartsWith("Indirect:", StringComparison.Ordinal))
+        Assert.Equal(beforeSummary, afterSummary)
 
         let twice = GSharpFormatter.Format(once.Text!!)
         Assert.Empty(twice.Diagnostics)
