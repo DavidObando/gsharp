@@ -997,6 +997,192 @@ Console.WriteLine("${run(false).GetAwaiter().GetResult()}:${run(true).GetAwaiter
     }
 
     @Fact
+    func ReconstructedNativeRefAlias_FieldAndIndexAssignments_TargetInitializedStorage() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package NativeAliasFieldIndexWrite6182
+import System
+import System.Collections.Generic
+import System.Threading.Tasks
+
+struct Box {
+    var Value int32
+}
+
+class Node {
+    var Value int32
+    init(value int32) {
+        Value = value
+    }
+}
+
+async func runStatementAliases() Task[string] {
+    var b = Box{Value: 10}
+    var b2 = Box{Value: 2}
+    var ref boxAlias = b
+    var bp = &boxAlias
+    boxAlias.Value = 77
+    boxAlias.Value += 3
+    let bPre = (*bp).Value
+    bp = &b2
+
+    var n = Node(5)
+    var n2 = Node(6)
+    var ref nodeAlias = n
+    var np = &nodeAlias
+    nodeAlias.Value = 88
+    let nPre = (*np).Value
+    np = &n2
+
+    var arr = []int32{1, 2}
+    var arr2 = []int32{3, 4}
+    var ref arrAlias = arr
+    var ap = &arrAlias
+    arrAlias[0] = 99
+    let aPre = (*ap)[0]
+    ap = &arr2
+
+    var list = List[int32]{10, 20}
+    var list2 = List[int32]{30, 40}
+    var ref listAlias = list
+    var lp = &listAlias
+    listAlias[1] = 55
+    let lPre = (*lp)[1]
+    lp = &list2
+
+    await Task.Yield()
+    return "${bPre}:${b.Value}:${(*bp).Value}:${nPre}:${n.Value}:${(*np).Value}:${aPre}:${arr[0]}:${(*ap)[0]}:${lPre}:${list[1]}:${(*lp)[1]}"
+}
+
+async func runBlockAliases() Task[string] {
+    var b = Box{Value: 10}
+    var bp = ({
+        var ref boxAlias = b
+        boxAlias.Value = 77
+        boxAlias.Value += 3
+        let r = &boxAlias
+        r
+    })
+    var n = Node(5)
+    var np = ({
+        var ref nodeAlias = n
+        nodeAlias.Value = 88
+        let r = &nodeAlias
+        r
+    })
+    var arr = []int32{1, 2}
+    var ap = ({
+        var ref arrAlias = arr
+        arrAlias[0] = 99
+        let r = &arrAlias
+        r
+    })
+    var list = List[int32]{10, 20}
+    var lp = ({
+        var ref listAlias = list
+        listAlias[1] = 55
+        let r = &listAlias
+        r
+    })
+    await Task.Yield()
+    return "${b.Value}:${(*bp).Value}:${n.Value}:${(*np).Value}:${arr[0]}:${(*ap)[0]}:${list[1]}:${(*lp)[1]}"
+}
+
+Console.WriteLine("${runStatementAliases().GetAwaiter().GetResult()}|${runBlockAliases().GetAwaiter().GetResult()}")`, "NativeAliasFieldIndexWrite6182", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("80:80:2:88:88:6:99:99:3:55:55:40|80:80:88:88:99:99:55:55\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func OpaqueRefDependency_OverwrittenBeforeAwait_PreservesNativeAliasAndVerifies() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package OpaqueRefDepBeforeAwait6182
+import System
+import System.Threading.Tasks
+
+struct Pair {
+    var Value int32
+}
+
+func at(xs []int32, i int32) ref int32 {
+    return ref xs[i]
+}
+
+func atPair(ps []Pair, i int32) ref Pair {
+    return ref ps[i]
+}
+
+async func straightReseat() Task[string] {
+    var arr = []int32{10, 20}
+    var y = 77
+    var ref alias = at(arr, 0)
+    var p = &alias
+    let pre = *p
+    p = &y
+    await Task.Yield()
+    return "${pre}:${*p}"
+}
+
+async func conditionalReseat(flag bool) Task[string] {
+    var arr = []int32{11, 22}
+    var y = 33
+    var z = 44
+    var ref alias = at(arr, 1)
+    var p = &alias
+    let pre = *p
+    if flag {
+        p = &y
+    } else {
+        p = &z
+    }
+    await Task.Yield()
+    return "${pre}:${*p}"
+}
+
+async func structFieldAndChainReseat() Task[string] {
+    var pairs = []Pair{Pair{Value: 55}}
+    var y = 66
+    var ref pairAlias = atPair(pairs, 0)
+    var pp = &pairAlias.Value
+    let prePair = *pp
+    pp = &y
+    var arr = []int32{15}
+    var ref a1 = at(arr, 0)
+    var ref a2 = a1
+    var cp = &a2
+    let preChain = *cp
+    cp = &y
+    var ap = &y
+    ap = &a1
+    let preAssign = *ap
+    ap = &y
+    await Task.Yield()
+    return "${prePair}:${*pp}:${preChain}:${*cp}:${preAssign}:${*ap}"
+}
+
+Console.WriteLine(
+    "${straightReseat().GetAwaiter().GetResult()}:${conditionalReseat(true).GetAwaiter().GetResult()}:${conditionalReseat(false).GetAwaiter().GetResult()}:${structFieldAndChainReseat().GetAwaiter().GetResult()}"
+)`, "OpaqueRefDepBeforeAwait6182", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("10:77:22:33:22:44:55:66:15:66:15:66\n", fixture.Run(dll))
+        let (_, output) = fixture.TryCompile(`package OpaqueRefDepSurvives6182
+import System
+import System.Threading.Tasks
+
+func at(xs []int32, i int32) ref int32 {
+    return ref xs[i]
+}
+
+async func bad() Task[int32] {
+    var arr = []int32{10, 20}
+    var ref alias = at(arr, 0)
+    var p = &alias
+    await Task.Yield()
+    return *p
+}`, "OpaqueRefDepSurvives6182", executable: false)
+        Assert.Contains("error GS0258:", output, StringComparison.Ordinal)
+    }
+
+    @Fact
     func ManagedPointerDefault_EmitAndExecute_WithStrictILVerify() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let templateDll = fixture.Compile(`package Template6182

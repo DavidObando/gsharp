@@ -632,7 +632,13 @@ shared class RefInitializationHoister {
             out rebuiltTemplate BoundExpression?
         ) {
             let unwrapped = RefInitializationHoister.UnwrapManagedAddressOfDeref(rhs)
-            if !object.ReferenceEquals(unwrapped, rhs) {
+            if !object.ReferenceEquals(unwrapped, rhs) &&
+                !(
+                unwrapped is BoundVariableExpression{Variable: LocalVariableSymbol unwrappedLocal} &&
+                    unwrappedLocal.RefKind != RefKind.None &&
+                    !IsSelfVariable(unwrapped, local) &&
+                    !(sharedSites != nil && TryGetSharedSourceTag(info, unwrapped, out _))
+            ) {
                 EmitAssignmentStatements(local, info, unwrapped, syntax, statements, out rebuiltTemplate)
                 return
             }
@@ -1333,12 +1339,13 @@ shared class RefInitializationHoister {
         }
 
         shared {
-            private func IsReconstructableStorage(expression BoundExpression) bool {
+            internal func IsReconstructableStorage(expression BoundExpression) bool {
                 return switch expression {
                     case block is BoundBlockExpression: IsReconstructableStorage(block.Expression)
                     case conditional is BoundConditionalExpression: IsReconstructableStorage(conditional.WhenTrue) &&
                         IsReconstructableStorage(conditional.WhenFalse)
                     case tuple is BoundTupleElementAccessExpression: IsReconstructableStorage(tuple.Receiver)
+                    case addr is BoundAddressOfExpression: IsReconstructableStorage(addr.Operand)
                     case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: nil}: true
                     case BoundClrPropertyAccessExpression{
                         Member: FieldInfo,
@@ -1541,6 +1548,91 @@ shared class RefInitializationHoister {
             return base.RewriteAssignmentExpression(node)
         }
 
+        @SuppressDiagnostic("GSA0005")
+        protected override func RewriteFieldAssignmentExpression(node BoundFieldAssignmentExpression) BoundExpression {
+            if node.Receiver is LocalVariableSymbol local && local.RefKind != RefKind.None && refLocals.TryGetValue(
+                local,
+                out var info
+            ) {
+                return BoundFieldAssignmentExpression.WithExpressionReceiver(
+                    node.Syntax,
+                    info.BuildDereferenceExpression(node.Syntax),
+                    BoundNodeForm.DeclaringType(node),
+                    node.Field,
+                    RewriteExpression(node.Value),
+                    node.ResultType
+                )
+            }
+            return base.RewriteFieldAssignmentExpression(node)
+        }
+
+        @SuppressDiagnostic("GSA0005")
+        protected override func RewriteIndexAssignmentExpression(node BoundIndexAssignmentExpression) BoundExpression {
+            if node.Target is LocalVariableSymbol local && local.RefKind != RefKind.None && refLocals.TryGetValue(
+                local,
+                out var info
+            ) {
+                var indexBuilder ImmutableArray[BoundExpression].Builder? = nil
+                for var i = 0; i < node.Indices.Length; i++ {
+                    let oldIdx = node.Indices[i]
+                    let newIdx = RewriteExpression(oldIdx)
+                    if newIdx != oldIdx && indexBuilder == nil {
+                        indexBuilder = ImmutableArray.CreateBuilder[BoundExpression](node.Indices.Length)
+                        for var j = 0; j < i; j++ {
+                            indexBuilder.Add(node.Indices[j])
+                        }
+                    }
+                    if indexBuilder != nil {
+                        indexBuilder.Add(newIdx)
+                    }
+                }
+                return BoundIndexAssignmentExpression.WithExpressionTarget(
+                    node.Syntax,
+                    info.BuildDereferenceExpression(node.Syntax),
+                    indexBuilder?.ToImmutable() ?? node.Indices,
+                    RewriteExpression(node.Value),
+                    node.Type
+                )
+            }
+            return base.RewriteIndexAssignmentExpression(node)
+        }
+
+        @SuppressDiagnostic("GSA0005")
+        protected override func RewriteClrIndexAssignmentExpression(
+            node BoundClrIndexAssignmentExpression
+        ) BoundExpression {
+            if node.Target is LocalVariableSymbol local && local.RefKind != RefKind.None && refLocals.TryGetValue(
+                local,
+                out var info
+            ) {
+                var argBuilder ImmutableArray[BoundExpression].Builder? = nil
+                for var i = 0; i < node.Arguments.Length; i++ {
+                    let oldArg = node.Arguments[i]
+                    let newArg = RewriteExpression(oldArg)
+                    if newArg != oldArg && argBuilder == nil {
+                        argBuilder = ImmutableArray.CreateBuilder[BoundExpression](node.Arguments.Length)
+                        for var j = 0; j < i; j++ {
+                            argBuilder.Add(node.Arguments[j])
+                        }
+                    }
+                    if argBuilder != nil {
+                        argBuilder.Add(newArg)
+                    }
+                }
+                return BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                    node.Syntax,
+                    info.BuildDereferenceExpression(node.Syntax),
+                    node.Indexer,
+                    argBuilder?.ToImmutable() ?? node.Arguments,
+                    RewriteExpression(node.Value),
+                    node.Type,
+                    node.ConstrainedReceiverTypeParameter,
+                    node.ConstrainedInterfaceType
+                )
+            }
+            return base.RewriteClrIndexAssignmentExpression(node)
+        }
+
         protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression {
             // Bare ref local usage (e.g., passed to a ref parameter) → &lvalue or conditional address;
             // native var/let ref alias usage → dereferenced lvalue.
@@ -1598,7 +1690,17 @@ shared class RefInitializationHoister {
                 }
                 if collector.Dependencies.TryGetValue(local, out var deps) {
                     for dep in deps {
-                        if collector.Declarations.ContainsKey(dep) && rewriteLocals.Add(dep) {
+                        if collector.Declarations.TryGetValue(dep, out var depDecl) &&
+                            !(
+                            dep.RefKind != RefKind.None && collector.StatementDeclarations.Contains(dep) &&
+                                !crossing.Contains(dep) &&
+                                (
+                                depDecl.Initializer == nil || !DefinitionRewriter.IsReconstructableStorage(
+                                    depDecl.Initializer
+                                )
+                            )
+                        ) &&
+                            rewriteLocals.Add(dep) {
                             dependencyAdded = true
                         }
                     }
