@@ -665,9 +665,7 @@ internal class StateMachineEmitter {
             // symbolic encoder so the GetEnumerator signature stays
             // strongly typed as `IEnumerator<Shape>`.
             let elementNeedsSymbolicEnumerator = TypeSymbol.RequiresSymbolicProjection(plan.ElementType) ||
-                plan
-                .ElementType
-                .ClrType == nil ||
+                plan.ElementType.ClrType == nil ||
                 (plan.ElementType is NullableTypeSymbol and {UnderlyingType: {ClrType: {IsValueType: true}}})
             let getEnumeratorType = if elementNeedsSymbolicEnumerator {
                 cast[TypeSymbol](

@@ -133,9 +133,7 @@ internal class SignatureEncoder {
         if type is NullableTypeSymbol nullable {
             let inner = nullable.UnderlyingType
             if inner is ImportedTypeSymbol symbolicValueType && symbolicValueType.OpenDefinition.IsValueTypeSafe() &&
-                !symbolicValueType
-                .TypeArguments
-                .IsDefaultOrEmpty {
+                !symbolicValueType.TypeArguments.IsDefaultOrEmpty {
                 let nullableOpen = typeof(System.Nullable[_])
                 let genericNullable = encoder.GenericInstantiation(
                     this.outer.memberRefs.GetTypeReference(nullableOpen),
@@ -248,26 +246,14 @@ internal class SignatureEncoder {
             // `!0` on the SM class. The remap is pushed by
             // EmitIteratorStateMachineMember and is keyed by the
             // source TP's instance identity.
-            if this
-                .remaps
-                .ActiveIteratorStateMachineRemap != nil &&
-                this
-                .remaps
-                .ActiveIteratorStateMachineRemap!!.TryGetValue(tp, out var classOrdinal) {
+            if this.remaps.ActiveIteratorStateMachineRemap != nil &&
+                this.remaps.ActiveIteratorStateMachineRemap!!.TryGetValue(tp, out var classOrdinal) {
                 encoder.GenericTypeParameter(classOrdinal)
-            } else if this
-                .remaps
-                .ActiveLambdaMethodTypeParamRemap != nil &&
-                this
-                .remaps
-                .ActiveLambdaMethodTypeParamRemap!!.TryGetValue(tp, out var lambdaMethodOrd) {
+            } else if this.remaps.ActiveLambdaMethodTypeParamRemap != nil &&
+                this.remaps.ActiveLambdaMethodTypeParamRemap!!.TryGetValue(tp, out var lambdaMethodOrd) {
                 encoder.GenericMethodTypeParameter(lambdaMethodOrd)
-            } else if this
-                .remaps
-                .ActiveIteratorStateMachineRemap != nil &&
-                this
-                .remaps
-                .ActiveIteratorStateMachineRemap!!.TryGetValue(tp, out var classOrdinal2) {
+            } else if this.remaps.ActiveIteratorStateMachineRemap != nil &&
+                this.remaps.ActiveIteratorStateMachineRemap!!.TryGetValue(tp, out var classOrdinal2) {
                 encoder.GenericTypeParameter(classOrdinal2)
             } else if tp.IsMethodTypeParameter {
                 encoder.GenericMethodTypeParameter(tp.Ordinal)
@@ -275,9 +261,7 @@ internal class SignatureEncoder {
                 encoder.GenericTypeParameter(tp.Ordinal)
             }
         } else if type is ImportedTypeSymbol constructedImported &&
-            !constructedImported
-            .TypeArguments
-            .IsDefaultOrEmpty &&
+            !constructedImported.TypeArguments.IsDefaultOrEmpty &&
             constructedImported.OpenDefinition != nil {
             // Issue #2666: the cached CLR projection may be object-erased even
             // when every symbolic argument is concrete (for example the
@@ -291,12 +275,8 @@ internal class SignatureEncoder {
                 this.EncodeTypeSymbol(genericInst.AddArgument(), arg)
             }
         } else if type is ImportedTypeSymbol arrayImported &&
-            !arrayImported
-            .TypeArguments
-            .IsDefaultOrEmpty &&
-            arrayImported
-            .TypeArguments
-            .Length == 1 &&
+            !arrayImported.TypeArguments.IsDefaultOrEmpty &&
+            arrayImported.TypeArguments.Length == 1 &&
             arrayImported.ClrType is {IsArray: true} arrayClr {
             if arrayClr.IsSZArray {
                 this.EncodeTypeSymbol(encoder.SZArray(), arrayImported.TypeArguments[0])

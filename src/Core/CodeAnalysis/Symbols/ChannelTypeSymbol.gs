@@ -126,8 +126,7 @@ class ChannelTypeSymbol : TypeSymbol {
                         return false
                     }
                     if annotated.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} annotatedClr &&
-                        annotatedClr
-                        .GetGenericArguments().Length == 1 {
+                        annotatedClr.GetGenericArguments().Length == 1 {
                         elementType = annotated.GetTypeArgumentSymbol(0)
                     }
                     return true

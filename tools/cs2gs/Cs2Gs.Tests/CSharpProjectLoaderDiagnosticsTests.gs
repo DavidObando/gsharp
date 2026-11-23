@@ -336,16 +336,8 @@ open class CSharpProjectLoaderDiagnosticsTests {
                 Assert.Contains(
                     errors,
                     (diagnostic Diagnostic) -> diagnostic.Id == "CS0103" &&
-                        diagnostic
-                        .Location
-                        .GetLineSpan()
-                        .StartLinePosition
-                        .Line == 0 &&
-                        diagnostic
-                        .Location
-                        .GetLineSpan()
-                        .StartLinePosition
-                        .Character == 57
+                        diagnostic.Location.GetLineSpan().StartLinePosition.Line == 0 &&
+                        diagnostic.Location.GetLineSpan().StartLinePosition.Character == 57
                 )
             }
             Assert.Same(

@@ -1616,15 +1616,9 @@ shared class ClrNullability {
         let attrs IList[CustomAttributeData]? = SafeGetCustomAttributesData(parameter)
         if attrs != nil {
             for ad in attrs {
-                if ad
-                    .AttributeType
-                    ?.FullName == attributeFullName &&
-                    ad
-                    .ConstructorArguments
-                    .Count == 1 &&
-                    ad
-                    .ConstructorArguments[0]
-                    .Value is bool boolValue {
+                if ad.AttributeType?.FullName == attributeFullName &&
+                    ad.ConstructorArguments.Count == 1 &&
+                    ad.ConstructorArguments[0].Value is bool boolValue {
                     value = boolValue
                     return true
                 }

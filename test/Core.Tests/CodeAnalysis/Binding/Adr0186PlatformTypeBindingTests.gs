@@ -1397,9 +1397,7 @@ func G(s string?) string {
                 Assert.Contains(
                     compiled.Diagnostics,
                     (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains(member, StringComparison.Ordinal) &&
-                        d
-                        .Message
-                        .Contains("may be nil", StringComparison.Ordinal)
+                        d.Message.Contains("may be nil", StringComparison.Ordinal)
                 )
             }
             Assert.Equal(
@@ -1453,9 +1451,7 @@ func G(s string?) string {
                 Assert.Contains(
                     compiled.Diagnostics,
                     (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains(member, StringComparison.Ordinal) &&
-                        d
-                        .Message
-                        .Contains("may be nil", StringComparison.Ordinal)
+                        d.Message.Contains("may be nil", StringComparison.Ordinal)
                 )
             }
             Assert.Equal(
@@ -1479,9 +1475,7 @@ func G(s string?) string {
             Assert.Contains(
                 projected.Diagnostics,
                 (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains("Id", StringComparison.Ordinal) &&
-                    d
-                    .Message
-                    .Contains("may be nil", StringComparison.Ordinal)
+                    d.Message.Contains("may be nil", StringComparison.Ordinal)
             )
             Assert.Equal("7", world.Run(entryRemedy, mode, extraDeclarations: EntryDeclaration).Trim())
         }
@@ -1545,9 +1539,7 @@ func G(s string?) string {
                         "Capacity",
                         StringComparison.Ordinal
                     ) &&
-                        d
-                        .Message
-                        .Contains("may be nil", StringComparison.Ordinal)
+                        d.Message.Contains("may be nil", StringComparison.Ordinal)
                 )
             }
             Assert.Equal(

@@ -800,9 +800,7 @@ internal partial class DeclarationBinder {
                     // 1 << 31, etc.) is a common real value (sign-bit flags), so special-case
                     // a uint literal directly under unary minus and fold via long to avoid
                     // overflow.
-                    if unary
-                        .OperatorToken
-                        .Kind == SyntaxKind.MinusToken &&
+                    if unary.OperatorToken.Kind == SyntaxKind.MinusToken &&
                         unary.Operand is LiteralExpressionSyntax{Value: uint32 negatedLiteral} &&
                         negatedLiteral <= uint32(int32.MaxValue) +
                         uint32(1) {

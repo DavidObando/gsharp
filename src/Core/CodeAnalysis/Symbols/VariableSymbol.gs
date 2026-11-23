@@ -148,8 +148,7 @@ internal class CallableParameterNameNode {
             var anyElement = false
             let mergedElements = if !leftElements.IsDefaultOrEmpty &&
                 !rightElements.IsDefaultOrEmpty &&
-                leftElements.Length == rightElements
-                .Length {
+                leftElements.Length == rightElements.Length {
                 let builder = ImmutableArray.CreateBuilder[CallableParameterNameNode?](leftElements.Length)
                 for var i = 0; i < leftElements.Length; i++ {
                     let mergedChild = Merge(leftElements[i], rightElements[i])

@@ -485,8 +485,7 @@ internal partial class ExpressionBinder {
         while current is AccessorExpressionSyntax step &&
             !step.IsNullConditional &&
             step.LeftPart is AccessorExpressionSyntax left &&
-            !left
-            .IsNullConditional {
+            !left.IsNullConditional {
             let right = AccessorExpressionSyntax(step.SyntaxTree, left.RightPart, step.DotToken, step.RightPart)
             current = AccessorExpressionSyntax(step.SyntaxTree, left.LeftPart, left.DotToken, right)
         }

@@ -415,12 +415,8 @@ class CompileStage : IMigrationStage {
                 return context.EvaluatedProjectReferencePaths
             }
             let appProjectPath = Path.GetFullPath(context.App.ProjectPath)
-            if context
-                .Options
-                .EvaluatedProjectReferences != nil &&
-                context
-                .Options
-                .EvaluatedProjectReferences!!.TryGetValue(appProjectPath, out var evaluated) {
+            if context.Options.EvaluatedProjectReferences != nil &&
+                context.Options.EvaluatedProjectReferences!!.TryGetValue(appProjectPath, out var evaluated) {
                 return evaluated
             }
             let direct = context
@@ -476,10 +472,7 @@ class CompileStage : IMigrationStage {
         }
 
         private func IsBuildOrderingOnlyReference(reference DeclaredProjectItem) bool {
-            let referenceOutputAssembly = reference
-                .Element
-                .Attribute(XName?("ReferenceOutputAssembly")!!)
-                ?.Value ??
+            let referenceOutputAssembly = reference.Element.Attribute(XName?("ReferenceOutputAssembly")!!)?.Value ??
                 reference
                 .Element
                 .Elements()
@@ -670,13 +663,8 @@ class CompileStage : IMigrationStage {
                     return true
                 }
             }
-            if context
-                .Options
-                .RepositoryLoadedProjects != nil &&
-                context
-                .Options
-                .RepositoryLoadedProjects!!
-                .TryGetValue(fullReferencedPath, out var loadedReferenced) {
+            if context.Options.RepositoryLoadedProjects != nil &&
+                context.Options.RepositoryLoadedProjects!!.TryGetValue(fullReferencedPath, out var loadedReferenced) {
                 for document in loadedReferenced.Documents {
                     if MatchesMappedProjectSource(context, diagnosticPath, document.FilePath) {
                         return true
@@ -711,14 +699,8 @@ class CompileStage : IMigrationStage {
                 ) {
                     continue
                 }
-                let rawInclude = item
-                    .Element
-                    .Attribute(XName?("Include")!!)
-                    ?.Value ??
-                    item
-                    .Element
-                    .Attribute(XName?("Update")!!)
-                    ?.Value
+                let rawInclude = item.Element.Attribute(XName?("Include")!!)?.Value ??
+                    item.Element.Attribute(XName?("Update")!!)?.Value
                 if string.IsNullOrWhiteSpace(rawInclude) {
                     continue
                 }

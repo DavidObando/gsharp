@@ -359,8 +359,12 @@ partial class SemanticModel {
         }
         if sourceType is StructSymbol owner {
             if read is BoundPropertyAccessExpression{Receiver: nil, Property: {IsStatic: true}} property &&
-                TypeMemberModel
-                .TryGetStaticPropertyIncludingInherited(owner, name, out var expectedProperty, out var propertyOwner) {
+                TypeMemberModel.TryGetStaticPropertyIncludingInherited(
+                owner,
+                name,
+                out var expectedProperty,
+                out var propertyOwner
+            ) {
                 return object.ReferenceEquals(property.Property, expectedProperty) && object.ReferenceEquals(
                     property.StructType,
                     propertyOwner
@@ -422,8 +426,7 @@ partial class SemanticModel {
                 let selectedOwner = call.StaticGenericInterfaceOwnerType ?? declaredOwner
                 return contract.SelfAndAllBaseInterfaces().Any(
                     (candidate InterfaceSymbol) -> object.ReferenceEquals(candidate, selectedOwner) &&
-                        TypeMemberModel
-                        .GetMethods(candidate, name, MemberQuery.Static(MemberKinds.Method)).Any(
+                        TypeMemberModel.GetMethods(candidate, name, MemberQuery.Static(MemberKinds.Method)).Any(
                         (method FunctionSymbol) -> object.ReferenceEquals(method, call.Function)
                     )
                 )
@@ -536,8 +539,7 @@ partial class SemanticModel {
         if call.ClrMethod is {} imported && object.ReferenceEquals(call.ConstrainedInterfaceType, owner) &&
             owner.ClrType is {} declaringType &&
             constraint.ClrType is {} constraintType &&
-            imported
-            .IsStatic {
+            imported.IsStatic {
             let definition = if imported.IsGenericMethod && !imported.IsGenericMethodDefinition {
                 imported.GetGenericMethodDefinition()
             } else {
@@ -574,18 +576,14 @@ partial class SemanticModel {
     private func CapturedIndexArgument(anchored BoundExpression) BoundExpression? {
         var read = Unwrap(anchored)
         if read is BoundDereferenceExpression dereference &&
-            dereference
-            .Operand
-            .Type is ByRefTypeSymbol &&
+            dereference.Operand.Type is ByRefTypeSymbol &&
             IsSynthesizedWrapper(dereference, dereference.Operand) {
             read = Unwrap(dereference.Operand)
         }
         // The native idx plan stores its written argument in one known
         // operation over the first source capture. Do not scan block children.
         if read is not BoundBlockExpression block ||
-            block
-            .Statements
-            .Length != 1 ||
+            block.Statements.Length != 1 ||
             CapturedIndexTarget(block) == nil ||
             block.Statements[0] is not BoundVariableDeclaration capture {
             return nil
@@ -595,15 +593,11 @@ partial class SemanticModel {
                 receiver.Variable,
                 capture.Variable
             ) &&
-                idx
-                .Arguments
-                .Length == 1: idx.Arguments[0]
+                idx.Arguments.Length == 1: idx.Arguments[0]
             case BoundImportedInstanceCallExpression{
                 Receiver: BoundVariableExpression receiver
             } call when object.ReferenceEquals(receiver.Variable, capture.Variable) &&
-                call
-                .Arguments
-                .Length == 1: call.Arguments[0]
+                call.Arguments.Length == 1: call.Arguments[0]
             default: default(BoundExpression?)
         }
         return if argument != nil && object.ReferenceEquals(argument.Syntax, block.Syntax) {
@@ -626,9 +620,7 @@ partial class SemanticModel {
     private func IndexTargetOf(node BoundExpression, capturedOnly bool = false) BoundExpression? -> switch node {
         case idx is BoundIndexExpression when !capturedOnly: idx.Target
         case idx is BoundClrIndexExpression when !capturedOnly: idx.Target
-        case dereference is BoundDereferenceExpression when dereference
-            .Operand
-            .Type is ByRefTypeSymbol &&
+        case dereference is BoundDereferenceExpression when dereference.Operand.Type is ByRefTypeSymbol &&
             IsSynthesizedWrapper(dereference, dereference.Operand): IndexTargetOf(dereference.Operand, capturedOnly)
         case block is BoundBlockExpression: CapturedIndexTarget(block)
         default: if capturedOnly {
@@ -643,16 +635,12 @@ partial class SemanticModel {
         // blocks. Its reserved role and absent declaration exclude authored
         // blocks and other generated capture plans.
         const sourceCapturePrefix = "$$slice_src"
-        if !block
-            .Statements
-            .IsDefaultOrEmpty &&
+        if !block.Statements.IsDefaultOrEmpty &&
             block.Statements[0] is BoundVariableDeclaration{
             Variable: LocalVariableSymbol{DeclaringSyntax: nil, IsReadOnly: true} capture,
             Initializer: {} target
         } &&
-            capture
-            .Name
-            .StartsWith(sourceCapturePrefix, StringComparison.Ordinal) && int32.TryParse(
+            capture.Name.StartsWith(sourceCapturePrefix, StringComparison.Ordinal) && int32.TryParse(
             capture.Name.Substring(sourceCapturePrefix.Length),
             out _
         ) {
@@ -687,17 +675,11 @@ partial class SemanticModel {
         case BoundIndirectAssignmentExpression{
             Pointer: BoundAddressOfExpression{Operand: BoundTupleElementAccessExpression tuple}
         }: tuple.Receiver
-        case call is BoundCallExpression when call
-            .Function
-            .IsExtension &&
+        case call is BoundCallExpression when call.Function.IsExtension &&
             call.StaticQualifierType == nil &&
-            call
-            .Arguments
-            .Length > 0: call.Arguments[0]
+            call.Arguments.Length > 0: call.Arguments[0]
         case call is BoundImportedCallExpression when call.StaticQualifierType == nil &&
-            call
-            .Arguments
-            .Length > 0 &&
+            call.Arguments.Length > 0 &&
             IsExtensionMethod(call.Function?.Method): UnwrapExtensionReceiver(call.Arguments[0], call.Syntax)
         default: default(BoundExpression?)
     }
@@ -766,9 +748,7 @@ partial class SemanticModel {
             ) {
                 current = captured
             } else if current is BoundUnaryExpression unary &&
-                unary
-                .Op
-                .Kind == BoundUnaryOperatorKind.NullAssertion &&
+                unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion &&
                 IsSynthesizedWrapper(unary, unary.Operand) {
                 current = unary.Operand
             } else {
@@ -955,9 +935,7 @@ partial class SemanticModel {
             ImportedMemberSymbol(
                 instanceCall.ConstrainedInterfaceType ??
                     instanceCall.NonVirtualBaseTargetType ??
-                    instanceCall
-                    .Receiver
-                    .Type,
+                    instanceCall.Receiver.Type,
                 associatedProperty
             )
             // The callee symbol keeps the call's own return type, which reflection erases.

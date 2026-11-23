@@ -358,18 +358,12 @@ Issue2896.DefaultValue`.ReplaceLineEndings(Environment.NewLine) + Environment.Ne
             Assert.Contains(
                 callSiteInstructions,
                 (instruction IlInstruction) -> instruction.OpCode == OpCodes.Call &&
-                    callSiteProbe
-                    .Module
-                    .ResolveMethod(instruction.MetadataToken!!)
-                    ?.DeclaringType == allType
+                    callSiteProbe.Module.ResolveMethod(instruction.MetadataToken!!)?.DeclaringType == allType
             )
             Assert.Contains(
                 callSiteInstructions,
                 (instruction IlInstruction) -> instruction.OpCode == OpCodes.Callvirt &&
-                    callSiteProbe
-                    .Module
-                    .ResolveMethod(instruction.MetadataToken!!)
-                    ?.DeclaringType == typeof(object)
+                    callSiteProbe.Module.ResolveMethod(instruction.MetadataToken!!)?.DeclaringType == typeof(object)
             )
             let printGeneric = programType.GetMethod("PrintGeneric", BindingFlags.Static | BindingFlags.Public)!!
             let genericInstructions = IlInstructionReader.Read(printGeneric.GetMethodBody()!!.GetILAsByteArray()!!)

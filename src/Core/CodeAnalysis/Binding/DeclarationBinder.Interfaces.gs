@@ -78,15 +78,9 @@ internal partial class DeclarationBinder {
             if interfaceSymbol.ContainingType != nil ||
                 syntax.TypeParameterList != nil ||
                 syntax.HasBaseInterfaces ||
-                !syntax
-                .Properties
-                .IsDefaultOrEmpty ||
-                !syntax
-                .Events
-                .IsDefaultOrEmpty ||
-                !syntax
-                .StaticFields
-                .IsDefaultOrEmpty {
+                !syntax.Properties.IsDefaultOrEmpty ||
+                !syntax.Events.IsDefaultOrEmpty ||
+                !syntax.StaticFields.IsDefaultOrEmpty {
                 Diagnostics.ReportNativeProtocol(
                     syntax.Identifier.Location,
                     "only nongeneric protocols with synchronous by-value method slots are supported"
@@ -99,9 +93,7 @@ internal partial class DeclarationBinder {
                     method.AccessibilityModifier != nil ||
                     method.IsAsync ||
                     method.ReturnRefModifier != nil ||
-                    method
-                    .Parameters
-                    .Any((parameter ParameterSyntax) -> parameter.RefKindModifier != nil) {
+                    method.Parameters.Any((parameter ParameterSyntax) -> parameter.RefKindModifier != nil) {
                     Diagnostics.ReportNativeProtocol(
                         method.Identifier.Location,
                         "protocol slots must be public synchronous nongeneric by-value signatures without bodies"
@@ -540,8 +532,7 @@ internal partial class DeclarationBinder {
                 }
                 let isIndexerOverload = isIndexer &&
                     declaredIndexerSignatures.Count > 0 &&
-                    !declaredIndexerSignatures
-                    .Any(
+                    !declaredIndexerSignatures.Any(
                     (declared ImmutableArray[ParameterSymbol]) -> HaveSameIndexerSignature(declared, indexerParameters)
                 )
                 if !seenNames.Add(propName) && !isIndexerOverload {

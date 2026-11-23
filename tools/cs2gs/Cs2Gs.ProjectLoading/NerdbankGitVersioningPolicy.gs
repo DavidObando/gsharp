@@ -294,13 +294,9 @@ shared class NerdbankGitVersioningPolicy {
                     return element.Value
                 }
                 let newAttrs = attrs.Substring(0, versionMatch.Index) +
-                    versionMatch
-                    .Groups["pre"]
-                    .Value +
+                    versionMatch.Groups["pre"].Value +
                     bumped +
-                    versionMatch
-                    .Groups["post"]
-                    .Value +
+                    versionMatch.Groups["post"].Value +
                     attrs.Substring(versionMatch.Index + versionMatch.Length)
                 changed = true
                 return "<" + element.Groups["tag"].Value + newAttrs + element.Groups["slash"].Value + ">"

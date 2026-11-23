@@ -142,9 +142,7 @@ async func Consume() bool {
                 type is ImportedTypeSymbol imported &&
                     imported.ClrType!!.IsGenericType &&
                     imported.ClrType!!.GetGenericTypeDefinition() == typeof(System.Threading.Tasks.Task[_]) &&
-                    imported
-                    .TypeArguments
-                    .Length == 1 &&
+                    imported.TypeArguments.Length == 1 &&
                     imported.TypeArguments[0] is TupleTypeSymbol,
                 "Expected Task[(...)] over a tuple, got '$type'."
             )

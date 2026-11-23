@@ -162,8 +162,7 @@ internal shared class BodyLocalDelta {
         }
         if function.IsPInvoke ||
             function.NullableSequenceSpecialization != NullableSequenceSpecializationKind.None ||
-            function
-            .IsReturnTypeInferred {
+            function.IsReturnTypeInferred {
             return BodyLocalResult(
                 "the member is a P/Invoke stub, a nullable-sequence specialization or has an inferred return type"
             )
@@ -173,9 +172,7 @@ internal shared class BodyLocalDelta {
         }
         if !program.BodyDiagnostics!!.TryGetValue(function, out var recorded) ||
             recorded.IsDefault ||
-            !program
-            .Functions
-            .TryGetValue(function, out var oldBound) {
+            !program.Functions.TryGetValue(function, out var oldBound) {
             return BodyLocalResult("the compilation recorded no single body bind of the member")
         }
         // The suspension inference marks functions after every body is bound, and the speculative bind

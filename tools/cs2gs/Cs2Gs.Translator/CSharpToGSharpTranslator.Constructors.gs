@@ -112,16 +112,12 @@ partial class CSharpToGSharpTranslator {
             // CLR interfaces use the clause too.
             let isExplicitInterfaceIndexerImpl = symbol != nil && symbol.ExplicitInterfaceImplementations.Length > 0
             let usesExplicitInterfaceIndexerClause = isExplicitInterfaceIndexerImpl &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .Length == 1
+                symbol!!.ExplicitInterfaceImplementations.Length == 1
             if isExplicitInterfaceIndexerImpl &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .Length > 1 &&
-                symbol!!
-                .ExplicitInterfaceImplementations
-                .All((e IPropertySymbol) -> e.ContainingType.Locations.Any((l Location) -> l.IsInSource)) {
+                symbol!!.ExplicitInterfaceImplementations.Length > 1 &&
+                symbol!!.ExplicitInterfaceImplementations.All(
+                (e IPropertySymbol) -> e.ContainingType.Locations.Any((l Location) -> l.IsInSource)
+            ) {
                 let names = string.Join(
                     ", ",
                     symbol!!.ExplicitInterfaceImplementations.Select((e IPropertySymbol) -> e.ContainingType.Name)
@@ -193,8 +189,11 @@ partial class CSharpToGSharpTranslator {
             if usesExplicitInterfaceIndexerClause &&
                 type != nil &&
                 type.IsNullable &&
-                this
-                .TryGetErasedExplicitInterfacePropertySlotType(symbol!!, node.GetLocation(), out var explicitSlotType) {
+                this.TryGetErasedExplicitInterfacePropertySlotType(
+                symbol!!,
+                node.GetLocation(),
+                out var explicitSlotType
+            ) {
                 type = explicitSlotType
             }
             let isPartialIndexerImplementation = symbol is IPropertySymbol{PartialDefinitionPart: not nil}
@@ -494,13 +493,8 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             let arguments = initializer!!.ArgumentList.Arguments
-            if this
-                .context
-                .GetSymbolInfo(initializer)
-                .Symbol is not IMethodSymbol constructor ||
-                arguments.Count > constructor
-                .Parameters
-                .Length {
+            if this.context.GetSymbolInfo(initializer).Symbol is not IMethodSymbol constructor ||
+                arguments.Count > constructor.Parameters.Length {
                 this.context.ReportUnsupported(
                     initializer,
                     "named constructor-initializer arguments could not be mapped to positional parameter order."
@@ -581,14 +575,8 @@ partial class CSharpToGSharpTranslator {
             typeSymbol INamedTypeSymbol?
         ) sequence[(Field IFieldSymbol, Assignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax)] {
             for member in members {
-                if member is not Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ConstructorDeclarationSyntax ctor ||
-                    !ctor
-                    .Modifiers
-                    .Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword) || ctor.Body == nil {
+                if member is not Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax ctor ||
+                    !ctor.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword) || ctor.Body == nil {
                     continue
                 }
                 // Issue #1910: a merged-in static constructor from another
@@ -619,10 +607,7 @@ partial class CSharpToGSharpTranslator {
                         .Syntax
                         .AssignmentExpressionSyntax assignment &&
                         assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) &&
-                        this
-                        .context
-                        .GetSymbolInfo(assignment.Left)
-                        .Symbol is IFieldSymbol field {
+                        this.context.GetSymbolInfo(assignment.Left).Symbol is IFieldSymbol field {
                         yield (field, assignment)
                     }
                 }
@@ -676,16 +661,9 @@ partial class CSharpToGSharpTranslator {
                     .Syntax
                     .AssignmentExpressionSyntax assignment ||
                     !assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
-                    this
-                    .context
-                    .GetSymbolInfo(assignment.Left)
-                    .Symbol is not IFieldSymbol{IsStatic: true} field ||
-                    !SymbolEqualityComparer
-                    .Default
-                    .Equals(field.ContainingType, typeSymbol) || this.ReferencesStaticMemberOfType(
-                    assignment.Right,
-                    typeSymbol
-                ) {
+                    this.context.GetSymbolInfo(assignment.Left).Symbol is not IFieldSymbol{IsStatic: true} field ||
+                    !SymbolEqualityComparer.Default.Equals(field.ContainingType, typeSymbol) ||
+                    this.ReferencesStaticMemberOfType(assignment.Right, typeSymbol) {
                     return false
                 }
             }
@@ -966,9 +944,7 @@ partial class CSharpToGSharpTranslator {
             let explicitlyNamedDelegate = parameterType is INamedTypeSymbol namedParameterType &&
                 namedParameterType.TypeKind == TypeKind.Delegate &&
                 namedParameterType.DelegateInvokeMethod != nil &&
-                symbol
-                .DeclaringSyntaxReferences
-                .Any(
+                symbol.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> (
                     reference.GetSyntax() is Microsoft.CodeAnalysis.CSharp.Syntax.ParameterSyntax and {Type: not nil}
                 )
@@ -1042,9 +1018,7 @@ partial class CSharpToGSharpTranslator {
             // Issue #4370: gsc takes a [LibraryImport] string's encoding from
             // the import's StringMarshalling (a string @MarshalAs is GS0360);
             // MapLibraryImportMethodAttributes folds it in there.
-            let isLibraryImportString = symbol
-                .Type
-                .SpecialType == SpecialType.System_String &&
+            let isLibraryImportString = symbol.Type.SpecialType == SpecialType.System_String &&
                 symbol.ContainingSymbol is IMethodSymbol importMethod &&
                 CSharpToGSharpTranslator.IsLibraryImportDefinition(importMethod)
             var attributes List[AttributeUse]? = if parameterSyntax == nil {
@@ -1063,9 +1037,7 @@ partial class CSharpToGSharpTranslator {
             // Win32 BOOL. G# intentionally requires that ABI to be explicit for
             // byref bool, so materialize C#'s effective default during migration.
             if symbol.RefKind != RefKind.None &&
-                symbol
-                .Type
-                .SpecialType == SpecialType.System_Boolean &&
+                symbol.Type.SpecialType == SpecialType.System_Boolean &&
                 symbol.ContainingSymbol is IMethodSymbol method &&
                 method.GetDllImportData() != nil && !symbol.GetAttributes().Any(
                 (attribute AttributeData) -> attribute
@@ -1123,16 +1095,9 @@ partial class CSharpToGSharpTranslator {
             }
             if symbol.ExplicitDefaultValue == nil {
                 let nullableValueType = symbol.Type.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T
-                let nonNullableValueType = symbol
-                    .Type
-                    .IsValueType &&
+                let nonNullableValueType = symbol.Type.IsValueType &&
                     !nullableValueType &&
-                    symbol
-                    .Type
-                    .NullableAnnotation != Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated
+                    symbol.Type.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.Annotated
                 return if nonNullableValueType || type is not{IsNullable: true} {
                     cast[GExpression](DefaultValueExpression(type))
                 } else {
@@ -1236,9 +1201,7 @@ partial class CSharpToGSharpTranslator {
                     symbol.IsAsync &&
                     returnType is INamedTypeSymbol{Name: "Task" or "ValueTask"} task &&
                     (task.Name == "Task" || unwrapValueTask) &&
-                    task
-                    .ContainingNamespace
-                    ?.ToDisplayString() == "System.Threading.Tasks" {
+                    task.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks" {
                     return this.MapUnwrappedAsyncReturnType(
                         symbol,
                         task,
@@ -1274,12 +1237,9 @@ partial class CSharpToGSharpTranslator {
                 // conformance once CollectInterfaceMethodEdges syncs both
                 // sides' taint (GS0187).
                 if returnType is INamedTypeSymbol{IsGenericType: true} taskLikeSync &&
-                    taskLikeSync
-                    .TypeArguments
-                    .Length == 1 &&
-                    taskLikeSync
-                    .ContainingNamespace
-                    ?.ToDisplayString() == "System.Threading.Tasks" && (taskLikeSync.Name is "Task" or "ValueTask") {
+                    taskLikeSync.TypeArguments.Length == 1 &&
+                    taskLikeSync.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks" &&
+                    (taskLikeSync.Name is "Task" or "ValueTask") {
                     return this.PromoteTaskEnvelopeReturnIfTainted(mapped, taskLikeSync.TypeArguments[0], symbol)
                 }
                 // Issue #2113: promote the return type to `T?` through the same
@@ -1450,8 +1410,7 @@ partial class CSharpToGSharpTranslator {
                             ) {
                                 if !hasUnscopedRef {
                                     if object.ReferenceEquals(declaration, node) &&
-                                        attribute.SyntaxTree == node
-                                        .SyntaxTree {
+                                        attribute.SyntaxTree == node.SyntaxTree {
                                         this.typeMapper.TrackAttributeType(attributeType, sourceAlias)
                                         using let modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree)
                                         attributes.Add(
@@ -1628,9 +1587,12 @@ partial class CSharpToGSharpTranslator {
                 }
                 if candidateName != nil && !candidateName.Contains('.', StringComparison.Ordinal) &&
                     !candidateName.Contains('[', StringComparison.Ordinal) &&
-                    this
-                    .typeMapper
-                    .IsRelocatedAttributeNameSafe(attributeType, candidateName, this.context, destinationLocation) {
+                    this.typeMapper.IsRelocatedAttributeNameSafe(
+                    attributeType,
+                    candidateName,
+                    this.context,
+                    destinationLocation
+                ) {
                     this.typeMapper.TrackAttributeType(attributeType, nil)
                     return candidateName
                 }
@@ -1749,8 +1711,7 @@ partial class CSharpToGSharpTranslator {
                         HasOmittedTypeArgument(nameSyntax) &&
                         operandType is INamedTypeSymbol unboundNamed {
                         if CSharpTypeMapper.IsLiftedNestedDelegate(unboundNamed) &&
-                            CSharpTypeMapper
-                            .HasGenericContainingType(unboundNamed) {
+                            CSharpTypeMapper.HasGenericContainingType(unboundNamed) {
                             this.context.ReportUnsupported(
                                 typeOf.Type,
                                 "unbound typeof over nested delegate '${unboundNamed.ToDisplayString()}' inside a generic containing type cannot preserve its enclosing generic arity when lifted to top level."
@@ -1770,10 +1731,8 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case arrayCreation is Microsoft.CodeAnalysis.CSharp.Syntax.ArrayCreationExpressionSyntax {
-                    let arrayType = attributeModel.GetTypeInfo(arrayCreation)
-                        .Type as IArrayTypeSymbol ??
-                        attributeModel
-                        .GetTypeInfo(arrayCreation).ConvertedType as IArrayTypeSymbol
+                    let arrayType = attributeModel.GetTypeInfo(arrayCreation).Type as IArrayTypeSymbol ??
+                        attributeModel.GetTypeInfo(arrayCreation).ConvertedType as IArrayTypeSymbol
                     let elementType = this.typeMapper.MapDestinationSafeType(
                         arrayType?.ElementType,
                         this.context,
@@ -1793,10 +1752,8 @@ partial class CSharpToGSharpTranslator {
                     return ArrayLiteralExpression(elementType, elements)
                 }
                 case implicitArray is ImplicitArrayCreationExpressionSyntax {
-                    let arrayType = attributeModel.GetTypeInfo(implicitArray)
-                        .Type as IArrayTypeSymbol ??
-                        attributeModel
-                        .GetTypeInfo(implicitArray).ConvertedType as IArrayTypeSymbol
+                    let arrayType = attributeModel.GetTypeInfo(implicitArray).Type as IArrayTypeSymbol ??
+                        attributeModel.GetTypeInfo(implicitArray).ConvertedType as IArrayTypeSymbol
                     let elementType = this.typeMapper.MapDestinationSafeType(
                         arrayType?.ElementType,
                         this.context,
@@ -1813,10 +1770,8 @@ partial class CSharpToGSharpTranslator {
                     return ArrayLiteralExpression(elementType, elements)
                 }
                 case collection is CollectionExpressionSyntax {
-                    let arrayType = attributeModel.GetTypeInfo(collection)
-                        .Type as IArrayTypeSymbol ??
-                        attributeModel
-                        .GetTypeInfo(collection).ConvertedType as IArrayTypeSymbol
+                    let arrayType = attributeModel.GetTypeInfo(collection).Type as IArrayTypeSymbol ??
+                        attributeModel.GetTypeInfo(collection).ConvertedType as IArrayTypeSymbol
                     let elementType = this.typeMapper.MapDestinationSafeType(
                         arrayType?.ElementType,
                         this.context,
@@ -1873,14 +1828,8 @@ partial class CSharpToGSharpTranslator {
             out attributeType INamedTypeSymbol?,
             out sourceAlias IAliasSymbol?
         ) {
-            let symbol ISymbol? = this
-                .context
-                .GetSymbolInfo(attribute)
-                .Symbol ??
-                this
-                .context
-                .GetSymbolInfo(attribute.Name)
-                .Symbol
+            let symbol ISymbol? = this.context.GetSymbolInfo(attribute).Symbol ??
+                this.context.GetSymbolInfo(attribute.Name).Symbol
             attributeType = switch symbol {
                 case constructor is IMethodSymbol: constructor.ContainingType
                 case namedType is INamedTypeSymbol: namedType
@@ -1980,9 +1929,7 @@ partial class CSharpToGSharpTranslator {
                     "Attribute",
                     StringComparison.Ordinal
                 ) &&
-                    this
-                    .typeMapper
-                    .HasSourceTopLevelTypeNamed(sourceName + "Attribute", this.context) {
+                    this.typeMapper.HasSourceTopLevelTypeNamed(sourceName + "Attribute", this.context) {
                     return this.typeMapper.RenderDestinationSafeAttributeName(
                         aliasedAttributeType,
                         this.context,
@@ -2353,9 +2300,7 @@ partial class CSharpToGSharpTranslator {
                     .Select((r SyntaxReference) -> r.SyntaxTree)
                     .Where(
                     (tree Microsoft.CodeAnalysis.SyntaxTree) -> this.retainedFilePaths == nil ||
-                        this
-                        .retainedFilePaths
-                        .Contains(tree.FilePath)
+                        this.retainedFilePaths.Contains(tree.FilePath)
                 )
             }
             let absorbedExtensions = this.GetAbsorbedOwnedExtensions(owner).ToList()
@@ -2417,8 +2362,7 @@ partial class CSharpToGSharpTranslator {
         func PreallocatePartialAggregates() {
             if !this.preservePartialParts ||
                 (this.partialTypeParts.Count == 0 && !this.context.Compilation.SyntaxTrees.Skip(1).Any()) ||
-                !LiftedLocalFunctionNameAllocator
-                .For(this.context.Compilation).TryBeginCompilationPreallocation() {
+                !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryBeginCompilationPreallocation() {
                 return
             }
             let candidates = List[(Symbol INamedTypeSymbol, Parts List[TypeDeclarationSyntax])]()
@@ -2477,8 +2421,7 @@ partial class CSharpToGSharpTranslator {
                         .Members
                         .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax]() {
                         if this.context.GetDeclaredSymbol(loweredCandidate) is IPropertySymbol loweredSymbol &&
-                            this
-                            .IsBackingFieldLoweredGetOnlyAutoProperty(loweredSymbol) {
+                            this.IsBackingFieldLoweredGetOnlyAutoProperty(loweredSymbol) {
                             this.RegisterSynthesizedPropertyBackingField(loweredSymbol, primaryCtorParamNames)
                         }
                     }
@@ -2696,8 +2639,7 @@ partial class CSharpToGSharpTranslator {
                     .Distinct()
                     .Skip(1)
                     .Any() ||
-                    component
-                    .Any(
+                    component.Any(
                     (symbol IMethodSymbol) -> this.IsLocalFunctionReferencedFromAnotherSwitchSection(
                         symbol,
                         declarationByLocalFunction[symbol]
@@ -2721,9 +2663,7 @@ partial class CSharpToGSharpTranslator {
             if this.SourceIdentifierClaimsSynthesizedLocalName(name, site, allowedSourceSymbol) {
                 return false
             }
-            let owner INamedTypeSymbol? = this
-                .state
-                .CurrentEmittedAggregate ??
+            let owner INamedTypeSymbol? = this.state.CurrentEmittedAggregate ??
                 this
                 .context
                 .SemanticModel
@@ -2758,9 +2698,7 @@ partial class CSharpToGSharpTranslator {
             }
             for token in body.DescendantTokens() {
                 if !token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierToken) ||
-                    this
-                    .nameAllocator
-                    .GetName(token.ValueText) != name {
+                    this.nameAllocator.GetName(token.ValueText) != name {
                     continue
                 }
                 if token.Parent is SimpleNameSyntax simpleName && SymbolEqualityComparer.Default.Equals(
@@ -2775,9 +2713,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ReserveSynthesizedLocalName(name string, site Microsoft.CodeAnalysis.SyntaxNode? = nil) bool {
-            let owner INamedTypeSymbol? = this
-                .state
-                .CurrentEmittedAggregate ??
+            let owner INamedTypeSymbol? = this.state.CurrentEmittedAggregate ??
                 this
                 .context
                 .SemanticModel
@@ -2791,14 +2727,8 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func AllocateSynthesizedLocalName(stem string, site Microsoft.CodeAnalysis.SyntaxNode) string {
-            let owner INamedTypeSymbol? = this
-                .state
-                .CurrentEmittedAggregate ??
-                this
-                .context
-                .SemanticModel
-                .GetEnclosingSymbol(site.SpanStart)
-                ?.ContainingType
+            let owner INamedTypeSymbol? = this.state.CurrentEmittedAggregate ??
+                this.context.SemanticModel.GetEnclosingSymbol(site.SpanStart)?.ContainingType
             let allocator = LiftedLocalFunctionNameAllocator.For(this.context.Compilation)
             var suffix = allocator.GetNextLocalSuffix(owner, stem)
             while true {
@@ -2838,14 +2768,8 @@ partial class CSharpToGSharpTranslator {
             site Microsoft.CodeAnalysis.SyntaxNode,
             extraCollision((string) -> bool)?
         ) string {
-            let owner INamedTypeSymbol? = this
-                .state
-                .CurrentEmittedAggregate ??
-                this
-                .context
-                .SemanticModel
-                .GetEnclosingSymbol(site.SpanStart)
-                ?.ContainingType
+            let owner INamedTypeSymbol? = this.state.CurrentEmittedAggregate ??
+                this.context.SemanticModel.GetEnclosingSymbol(site.SpanStart)?.ContainingType
             let allocator = LiftedLocalFunctionNameAllocator.For(this.context.Compilation)
             var suffix = allocator.GetNextLocalSuffix(owner, stem)
             while true {
@@ -2856,11 +2780,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 suffix++
                 if (extraCollision != nil && extraCollision(candidate)) ||
-                    !this
-                    .context
-                    .SemanticModel
-                    .LookupSymbols(site.SpanStart, name: candidate)
-                    .IsEmpty ||
+                    !this.context.SemanticModel.LookupSymbols(site.SpanStart, name: candidate).IsEmpty ||
                     !this.TryClaimSynthesizedLocalName(candidate, site) {
                     continue
                 }
@@ -2941,17 +2861,11 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             occupied.UnionWith(
-                this
-                    .state
-                    .PendingInstanceSynthHelpers
-                    ?.Select((helper MethodDeclaration) -> helper.Name) ??
+                this.state.PendingInstanceSynthHelpers?.Select((helper MethodDeclaration) -> helper.Name) ??
                     Enumerable.Empty[string]()
             )
             occupied.UnionWith(
-                this
-                    .state
-                    .PendingStaticSynthHelpers
-                    ?.Select((helper MethodDeclaration) -> helper.Name) ??
+                this.state.PendingStaticSynthHelpers?.Select((helper MethodDeclaration) -> helper.Name) ??
                     Enumerable.Empty[string]()
             )
             for var scope_ ISymbol? = localFunction.ContainingSymbol;
@@ -3121,10 +3035,7 @@ partial class CSharpToGSharpTranslator {
                         CSharpToGSharpTranslator.UnwrapParenthesesAndSuppressions(
                             access.Expression
                         ) is not SimpleNameSyntax receiver ||
-                            this
-                            .context
-                            .GetSymbolInfo(receiver)
-                            .Symbol is INamespaceOrTypeSymbol
+                            this.context.GetSymbolInfo(receiver).Symbol is INamespaceOrTypeSymbol
                     )
                     case _ is MemberBindingExpressionSyntax: true
                     case qualifiedName is QualifiedNameSyntax: qualifiedName.Right == simpleName
@@ -3199,13 +3110,8 @@ partial class CSharpToGSharpTranslator {
             }
         )
             .Any(
-            (name SimpleNameSyntax) -> this
-                .context
-                .GetSymbolInfo(name)
-                .Symbol is IMethodSymbol referencedMethod &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(referencedMethod.OriginalDefinition, localFunction) &&
+            (name SimpleNameSyntax) -> this.context.GetSymbolInfo(name).Symbol is IMethodSymbol referencedMethod &&
+                SymbolEqualityComparer.Default.Equals(referencedMethod.OriginalDefinition, localFunction) &&
                 !(name.Parent is InvocationExpressionSyntax) &&
                 !(name.Parent is ArgumentSyntax argument && IsNameOfArgument(argument))
         )
@@ -3231,13 +3137,8 @@ partial class CSharpToGSharpTranslator {
                 }
             )
                 .Any(
-                (name SimpleNameSyntax) -> this
-                    .context
-                    .GetSymbolInfo(name)
-                    .Symbol is IMethodSymbol referencedMethod &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(referencedMethod.OriginalDefinition, localFunction) &&
+                (name SimpleNameSyntax) -> this.context.GetSymbolInfo(name).Symbol is IMethodSymbol referencedMethod &&
+                    SymbolEqualityComparer.Default.Equals(referencedMethod.OriginalDefinition, localFunction) &&
                     !(name.Parent is ArgumentSyntax argument && IsNameOfArgument(argument))
             )
         }
@@ -3276,13 +3177,8 @@ partial class CSharpToGSharpTranslator {
                 }
             )
                 .Any(
-                (name SimpleNameSyntax) -> this
-                    .context
-                    .GetSymbolInfo(name)
-                    .Symbol is IMethodSymbol referencedMethod &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(referencedMethod.OriginalDefinition, localFunction) &&
+                (name SimpleNameSyntax) -> this.context.GetSymbolInfo(name).Symbol is IMethodSymbol referencedMethod &&
+                    SymbolEqualityComparer.Default.Equals(referencedMethod.OriginalDefinition, localFunction) &&
                     !(name.Parent is ArgumentSyntax argument && IsNameOfArgument(argument))
             )
         }
@@ -3646,10 +3542,7 @@ partial class CSharpToGSharpTranslator {
                     .DescendantNodes(
                     (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
                         node is InvocationExpressionSyntax &&
-                            this
-                            .context
-                            .SemanticModel
-                            .GetOperation(node) is INameOfOperation
+                            this.context.SemanticModel.GetOperation(node) is INameOfOperation
                     )
                 )
                     .Select((node Microsoft.CodeAnalysis.SyntaxNode) -> this.context.GetSymbolInfo(node).Symbol)
@@ -3812,9 +3705,7 @@ partial class CSharpToGSharpTranslator {
                         .Symbol
                         .ReturnsByRefReadonly ||
                         (candidate.Syntax.TypeParameterList != nil) != generic ||
-                        candidate
-                        .Symbol
-                        .ReturnsByRef != refReturn
+                        candidate.Symbol.ReturnsByRef != refReturn
                 ) ||
                     (generic && refReturn) ||
                     (
@@ -3824,8 +3715,7 @@ partial class CSharpToGSharpTranslator {
                         ) -> ReferencesEnclosingTypeParameter(candidate, includeContainingTypeParameters: false)
                     )
                 ) ||
-                    component
-                    .Any(
+                    component.Any(
                     (candidate(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)) -> candidate
                         .Syntax
                         .ConstraintClauses
@@ -3838,8 +3728,7 @@ partial class CSharpToGSharpTranslator {
                             .IsStatic
                     )
                 ) ||
-                    component
-                    .Any(
+                    component.Any(
                     (
                         candidate(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)
                     ) -> this.IsLocalFunctionReferencedAsValue(candidate.Symbol, statementList)
@@ -3895,9 +3784,7 @@ partial class CSharpToGSharpTranslator {
                 if modelScope == nil {
                     return true
                 }
-                if !candidate
-                    .Symbol
-                    .IsStatic &&
+                if !candidate.Symbol.IsStatic &&
                     this
                     .context
                     .SemanticModel
@@ -3915,19 +3802,16 @@ partial class CSharpToGSharpTranslator {
                     .DescendantNodes(
                     (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
                         node is InvocationExpressionSyntax &&
-                            this
-                            .context
-                            .SemanticModel
-                            .GetOperation(node) is INameOfOperation
+                            this.context.SemanticModel.GetOperation(node) is INameOfOperation
                     )
                 )
                     .OfType[IdentifierNameSyntax]() {
                     let symbol ISymbol? = this.context.GetSymbolInfo(identifier).Symbol
                     if !(symbol is ILocalSymbol) &&
                         !(symbol is IParameterSymbol) ||
-                        symbol!!
-                        .DeclaringSyntaxReferences
-                        .Any((reference SyntaxReference) -> candidate.Syntax.Span.Contains(reference.Span)) {
+                        symbol!!.DeclaringSyntaxReferences.Any(
+                        (reference SyntaxReference) -> candidate.Syntax.Span.Contains(reference.Span)
+                    ) {
                         continue
                     }
                     for var owner ISymbol? = candidate
@@ -3950,8 +3834,7 @@ partial class CSharpToGSharpTranslator {
                 // ANOTHER local function does (the partner would have to be
                 // forward-referenced before its `let` declaration).
                 let recursiveThroughOthers = edges.TryGetValue(pair.Symbol, out var ownDependencies) &&
-                    ownDependencies
-                    .Any(
+                    ownDependencies.Any(
                     (dependency IMethodSymbol) -> !SymbolEqualityComparer.Default.Equals(dependency, pair.Symbol) &&
                         IsRecursive(
                         pair.Symbol,
@@ -3984,14 +3867,12 @@ partial class CSharpToGSharpTranslator {
                         .Syntax
                         .TypeParameterList != nil
                 ) &&
-                    dependencyClosure
-                    .Any(
+                    dependencyClosure.Any(
                     (candidate(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)) -> CapturesOuterValue(
                         candidate
                     )
                 ) &&
-                    dependencyClosure
-                    .Any(
+                    dependencyClosure.Any(
                     (
                         candidate(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)
                     ) -> ReferencesEnclosingTypeParameter(candidate, includeContainingTypeParameters: true)
@@ -4001,8 +3882,7 @@ partial class CSharpToGSharpTranslator {
                     forceLift ||
                         (recursiveThroughOthers && !IsCapturingRecursiveGroupMember(pair.Symbol) && !canUseNativeGroup)
                 ) &&
-                    dependencyClosure
-                    .Any(
+                    dependencyClosure.Any(
                     (
                         candidate(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)
                     ) -> ReferencesEnclosingTypeParameter(candidate, includeContainingTypeParameters: false)
@@ -4036,10 +3916,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 for dependency in dependencies {
-                    if !this
-                        .state
-                        .UnsupportedRecursiveEnclosingTypeParameterLocalFunctions
-                        .Contains(dependency) &&
+                    if !this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Contains(dependency) &&
                         toLift.Add(dependency) {
                         pending.Push(dependency)
                     }
@@ -4056,10 +3933,7 @@ partial class CSharpToGSharpTranslator {
                 (pair(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)) -> pair.Symbol.IsStatic
             ) {
                 if this.state.LiftedStaticLocalFunctions.ContainsKey(pair.Symbol) || !toLift.Contains(pair.Symbol) ||
-                    this
-                    .state
-                    .UnsupportedRecursiveEnclosingTypeParameterLocalFunctions
-                    .Contains(pair.Symbol) ||
+                    this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Contains(pair.Symbol) ||
                     IsCapturingRecursiveGroupMember(pair.Symbol) {
                     continue
                 }
@@ -4070,14 +3944,9 @@ partial class CSharpToGSharpTranslator {
                 )!!
             }
             let capturingLocals = localFunctions.Where(
-                (pair(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)) -> !pair
-                    .Symbol
-                    .IsStatic &&
+                (pair(Syntax LocalFunctionStatementSyntax, Symbol IMethodSymbol)) -> !pair.Symbol.IsStatic &&
                     toLift.Contains(pair.Symbol) &&
-                    !this
-                    .state
-                    .UnsupportedRecursiveEnclosingTypeParameterLocalFunctions
-                    .Contains(pair.Symbol) &&
+                    !this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Contains(pair.Symbol) &&
                     !IsCapturingRecursiveGroupMember(pair.Symbol)
             )
                 .ToList()
@@ -4101,10 +3970,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 let IsInsideNestedClosure = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
-                    for var ancestor Microsoft
-                        .CodeAnalysis
-                        .SyntaxNode? = node;
-                        ancestor != nil &&
+                    for var ancestor Microsoft.CodeAnalysis.SyntaxNode? = node; ancestor != nil &&
                         !object.ReferenceEquals(ancestor, pair.Syntax); ancestor = ancestor!!.Parent {
                         if this.IsClosureBoundary(ancestor) {
                             return true
@@ -4116,10 +3982,7 @@ partial class CSharpToGSharpTranslator {
                 for node in pair.Syntax.DescendantNodes(
                     (child Microsoft.CodeAnalysis.SyntaxNode) -> !(
                         child is InvocationExpressionSyntax &&
-                            this
-                            .context
-                            .SemanticModel
-                            .GetOperation(child) is INameOfOperation
+                            this.context.SemanticModel.GetOperation(child) is INameOfOperation
                     )
                 ) {
                     if this.context.GetSymbolInfo(node).Symbol is IMethodSymbol callee && edges.TryGetValue(
@@ -4203,8 +4066,7 @@ partial class CSharpToGSharpTranslator {
                 let capturesByRefInNestedClosure = directNestedClosureCaptures[pair.Symbol].Any(
                     (symbol ISymbol) -> this.GetCaptureRefKind(symbol) != RefKind.None
                 ) ||
-                    nestedClosureCalls[pair.Symbol]
-                    .Any(
+                    nestedClosureCalls[pair.Symbol].Any(
                     (callee IMethodSymbol) -> directCaptures.TryGetValue(callee, out var calleeCaptures) &&
                         calleeCaptures.Any((symbol ISymbol) -> this.GetCaptureRefKind(symbol) != RefKind.None)
                 )
@@ -4221,18 +4083,9 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             for pair in capturingLocals {
-                if this
-                    .state
-                    .LiftedRecursiveLocalFunctions
-                    .ContainsKey(pair.Symbol) ||
-                    this
-                    .state
-                    .UnsupportedSuspendingRefCaptureLocalFunctions
-                    .Contains(pair.Symbol) ||
-                    this
-                    .state
-                    .UnsupportedNestedClosureRefCaptureLocalFunctions
-                    .Contains(pair.Symbol) {
+                if this.state.LiftedRecursiveLocalFunctions.ContainsKey(pair.Symbol) ||
+                    this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Contains(pair.Symbol) ||
+                    this.state.UnsupportedNestedClosureRefCaptureLocalFunctions.Contains(pair.Symbol) {
                     continue
                 }
                 let captures = directCaptures[pair.Symbol]
@@ -4303,21 +4156,13 @@ partial class CSharpToGSharpTranslator {
                 if localFunction.TypeParameterList != nil || symbol.ReturnsByRef || symbol.Parameters.Any(
                     IsVariadicCarrierParameter
                 ) ||
-                    symbol
-                    .Parameters
-                    .Any((parameter IParameterSymbol) -> parameter.RefKind != RefKind.None) {
+                    symbol.Parameters.Any((parameter IParameterSymbol) -> parameter.RefKind != RefKind.None) {
                     excluded.Add(symbol)
                 }
                 // A local function already lifted as a shared helper has
                 // working recursion there — nothing to do for it.
-                if this
-                    .state
-                    .LiftedStaticLocalFunctions
-                    .ContainsKey(symbol) ||
-                    this
-                    .state
-                    .LiftedRecursiveLocalFunctions
-                    .ContainsKey(symbol) {
+                if this.state.LiftedStaticLocalFunctions.ContainsKey(symbol) ||
+                    this.state.LiftedRecursiveLocalFunctions.ContainsKey(symbol) {
                     continue
                 }
                 functions.Add((localFunction, symbol))
@@ -4337,10 +4182,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 let dependencies = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
                 for node in syntax.DescendantNodes() {
-                    if this
-                        .context
-                        .GetSymbolInfo(node)
-                        .Symbol is IMethodSymbol dependency &&
+                    if this.context.GetSymbolInfo(node).Symbol is IMethodSymbol dependency &&
                         reachableFunctions.Contains(dependency.OriginalDefinition) {
                         dependencies.Add(dependency.OriginalDefinition)
                     }
@@ -4430,9 +4272,7 @@ partial class CSharpToGSharpTranslator {
                 for node in syntax.DescendantNodes() {
                     var dependency IMethodSymbol? = this.context.GetSymbolInfo(node).Symbol as IMethodSymbol
                     if dependency != nil && allSymbols.Contains(dependency.OriginalDefinition) &&
-                        !SymbolEqualityComparer
-                        .Default
-                        .Equals(dependency.OriginalDefinition, symbol) {
+                        !SymbolEqualityComparer.Default.Equals(dependency.OriginalDefinition, symbol) {
                         dependency = dependency.OriginalDefinition
                         if !callers.TryGetValue(dependency, out var callerSet) {
                             callerSet = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
@@ -4599,14 +4439,11 @@ partial class CSharpToGSharpTranslator {
                         .DescendantNodes()
                         .OfType[SimpleNameSyntax]()
                         .Any(
-                        (id SimpleNameSyntax) -> id
-                            .Identifier
-                            .ValueText == localFunction
-                            .Identifier
-                            .ValueText &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(this.context.GetSymbolInfo(id).Symbol?.OriginalDefinition, funcSymbol)
+                        (id SimpleNameSyntax) -> id.Identifier.ValueText == localFunction.Identifier.ValueText &&
+                            SymbolEqualityComparer.Default.Equals(
+                            this.context.GetSymbolInfo(id).Symbol?.OriginalDefinition,
+                            funcSymbol
+                        )
                     )
                     if usedHere {
                         firstUseIndex = i
@@ -4668,9 +4505,7 @@ partial class CSharpToGSharpTranslator {
                                 pair.Key,
                                 function
                             ) &&
-                                SymbolEqualityComparer
-                                .Default
-                                .Equals(pair.Value, symbol.OriginalDefinition)
+                                SymbolEqualityComparer.Default.Equals(pair.Value, symbol.OriginalDefinition)
                         )
                             .Select((pair KeyValuePair[LocalFunctionStatementSyntax, IMethodSymbol]) -> pair.Key)
                     }
@@ -5145,9 +4980,7 @@ partial class CSharpToGSharpTranslator {
                     }
                     let projectedBinding = projectedLoopLocal != nil &&
                         forEachElement != nil &&
-                        !SymbolEqualityComparer
-                        .IncludeNullability
-                        .Equals(projectedLoopLocal.Type, forEachElement)
+                        !SymbolEqualityComparer.IncludeNullability.Equals(projectedLoopLocal.Type, forEachElement)
                     if projectedBinding {
                         this
                             .state
@@ -5265,8 +5098,7 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             if projectedCollection is INamedTypeSymbol projectedNamed &&
-                this
-                .TryGetProjectedForEachEnumeratorElementType(
+                this.TryGetProjectedForEachEnumeratorElementType(
                 projectedNamed,
                 forEachInfo,
                 out var enumeratorElement,
@@ -5305,9 +5137,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 )
             ) is {} reducedFrom &&
-                reducedFrom
-                .Parameters
-                .Length > 0 {
+                reducedFrom.Parameters.Length > 0 {
                 let constructedMethod = if getEnumerator.ReducedFrom != nil {
                     getEnumerator
                 } else {
@@ -5319,14 +5149,8 @@ partial class CSharpToGSharpTranslator {
                     let openExtension = reducedFrom.OriginalDefinition
                     let openReceiverType = openExtension.Parameters[0].Type
                     let replacements = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
-                    for var i = 0;
-                        i < openExtension
-                        .TypeParameters
-                        .Length &&
-                        i < constructedMethod
-                        .TypeArguments
-                        .Length;
-                        i++ {
+                    for var i = 0; i < openExtension.TypeParameters.Length &&
+                        i < constructedMethod.TypeArguments.Length; i++ {
                         var effectiveArg = GetEffectiveMethodTypeArgument(constructedMethod, i)
                         if this.TryGetProjectedTypeArgument(
                             openReceiverType,
@@ -5386,10 +5210,7 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated ||
-                argument.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                argument.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 Microsoft.CodeAnalysis.NullableAnnotation.Annotated
             } else {
                 method.TypeArgumentNullableAnnotations[index]
@@ -5419,11 +5240,7 @@ partial class CSharpToGSharpTranslator {
             }
             if projectedSource is INamedTypeSymbol{IsTupleType: true} sourceTuple &&
                 destination is INamedTypeSymbol{IsTupleType: true} destinationTuple &&
-                sourceTuple
-                .TupleElements
-                .Length == destinationTuple
-                .TupleElements
-                .Length {
+                sourceTuple.TupleElements.Length == destinationTuple.TupleElements.Length {
                 let arguments = ImmutableArray.CreateBuilder[ITypeSymbol](sourceTuple.TupleElements.Length)
                 let annotations = ImmutableArray.CreateBuilder[Microsoft.CodeAnalysis.NullableAnnotation](
                     sourceTuple.TupleElements.Length
@@ -5467,9 +5284,10 @@ partial class CSharpToGSharpTranslator {
                 TypeKind: TypeKind.Interface,
                 TypeArguments: {Length: 1}
             } destinationArrayInterface &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(sourceArray.ElementType, destinationArrayInterface.TypeArguments[0]) {
+                SymbolEqualityComparer.Default.Equals(
+                sourceArray.ElementType,
+                destinationArrayInterface.TypeArguments[0]
+            ) {
                 resolvedDestination = destinationArrayInterface
                     .OriginalDefinition
                     .Construct(sourceArray.ElementType)
@@ -5487,12 +5305,8 @@ partial class CSharpToGSharpTranslator {
                     return nil
                 }
             }
-            return if projectedSource.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated &&
-                this
-                .IsReferenceLikeOrManagedReference(projectedSource) {
+            return if projectedSource.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated &&
+                this.IsReferenceLikeOrManagedReference(projectedSource) {
                 resolvedDestination.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
             } else {
                 resolvedDestination
@@ -5647,18 +5461,12 @@ partial class CSharpToGSharpTranslator {
                 return expression is IdentifierNameSyntax ||
                     expression is ThisExpressionSyntax ||
                     expression is BaseExpressionSyntax ||
-                    expression is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .LiteralExpressionSyntax
+                    expression is Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax
             }
 
             private func IsIteratorBody(source MethodDeclarationSyntax?, owner Compilation?) bool {
                 let node = TranslationContext.GetEffectiveDeclaration(source!!, owner) as MethodDeclarationSyntax
-                let body Microsoft
-                    .CodeAnalysis
-                    .SyntaxNode? = cast[Microsoft.CodeAnalysis.SyntaxNode](node!!.Body) ??
+                let body Microsoft.CodeAnalysis.SyntaxNode? = cast[Microsoft.CodeAnalysis.SyntaxNode](node!!.Body) ??
                     node!!.ExpressionBody
                 if body == nil {
                     return false
@@ -5673,9 +5481,7 @@ partial class CSharpToGSharpTranslator {
             }
 
             private func IsIteratorBody(node LocalFunctionStatementSyntax) bool {
-                let body Microsoft
-                    .CodeAnalysis
-                    .SyntaxNode? = cast[Microsoft.CodeAnalysis.SyntaxNode](node.Body) ??
+                let body Microsoft.CodeAnalysis.SyntaxNode? = cast[Microsoft.CodeAnalysis.SyntaxNode](node.Body) ??
                     node.ExpressionBody
                 return body
                     ?.DescendantNodes((n Microsoft.CodeAnalysis.SyntaxNode) -> !(n is LocalFunctionStatementSyntax))
@@ -5772,11 +5578,7 @@ partial class CSharpToGSharpTranslator {
                 node Microsoft.CodeAnalysis.SyntaxNode
             ) bool -> node is VariableDeclaratorSyntax ||
                 node is VariableDesignationSyntax ||
-                node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .ParameterSyntax ||
+                node is Microsoft.CodeAnalysis.CSharp.Syntax.ParameterSyntax ||
                 node is LocalFunctionStatementSyntax ||
                 node is ForEachStatementSyntax ||
                 node is CatchDeclarationSyntax ||
@@ -5863,9 +5665,7 @@ partial class CSharpToGSharpTranslator {
                             definition
                         )
                     ) ||
-                        definition
-                        .AllInterfaces
-                        .Any(
+                        definition.AllInterfaces.Any(
                         (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
                             candidate.OriginalDefinition,
                             owner

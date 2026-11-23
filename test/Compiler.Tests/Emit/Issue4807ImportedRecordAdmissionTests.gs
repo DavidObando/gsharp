@@ -85,11 +85,8 @@ public static class Caller
         Assert.Equal(assemblies[0].ManifestModule, tagStorage!!.Module)
         let copyConstructor = Assert.Single(
             leaf.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic),
-            (constructor ConstructorInfo) -> constructor.GetParameters()
-                .Length == 1 &&
-                constructor
-                .GetParameters()[0]
-                .ParameterType == leaf
+            (constructor ConstructorInfo) -> constructor.GetParameters().Length == 1 &&
+                constructor.GetParameters()[0].ParameterType == leaf
         )
         let body = copyConstructor.GetMethodBody()?.GetILAsByteArray() ??
             throw InvalidOperationException("Missing copy constructor.")

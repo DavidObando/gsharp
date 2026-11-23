@@ -262,9 +262,7 @@ shared class AsyncStateMachineTypeBuilder {
         // return type produced by WrapAsTask.
         var inner Type?
         if kickoff.Type is NullableTypeSymbol nullable &&
-            nullable
-            .UnderlyingType
-            ?.ClrType is {IsValueType: true} innerVt {
+            nullable.UnderlyingType?.ClrType is {IsValueType: true} innerVt {
             if !references.TryResolveType(
                 "System.Nullable`1",
                 requireExternalVisibility: false,

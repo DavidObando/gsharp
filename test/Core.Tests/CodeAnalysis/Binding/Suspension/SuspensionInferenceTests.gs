@@ -337,14 +337,8 @@ func build(ch chan[int32]) (int32) -> int32 {
         }
 
         protected override func VisitImportedCallExpression(node BoundImportedCallExpression) {
-            if node
-                .Function
-                .Name == "Wait" &&
-                node
-                .Function
-                .ImportedClass
-                .ClassType
-                .FullName == "Gsharp.Concurrency.Blocking" {
+            if node.Function.Name == "Wait" &&
+                node.Function.ImportedClass.ClassType.FullName == "Gsharp.Concurrency.Blocking" {
                 Bridges.Add(node)
             }
             base.VisitImportedCallExpression(node)

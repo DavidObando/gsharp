@@ -1326,25 +1326,13 @@ class Box {
         let boxInitPos = LanguageServerTestHelpers.PositionOf(source, "Value", 3)
         Assert.Contains(
             changes,
-            (e GSharp.LanguageServer.Protocol.TextEdit) -> e
-                .Range
-                .Start
-                .Line == boxInitPos.Line &&
-                e
-                .Range
-                .Start
-                .Character == boxInitPos.Character
+            (e GSharp.LanguageServer.Protocol.TextEdit) -> e.Range.Start.Line == boxInitPos.Line &&
+                e.Range.Start.Character == boxInitPos.Character
         )
         Assert.DoesNotContain(
             changes,
-            (e GSharp.LanguageServer.Protocol.TextEdit) -> e
-                .Range
-                .Start
-                .Line == otherInitPos.Line &&
-                e
-                .Range
-                .Start
-                .Character == otherInitPos.Character
+            (e GSharp.LanguageServer.Protocol.TextEdit) -> e.Range.Start.Line == otherInitPos.Line &&
+                e.Range.Start.Character == otherInitPos.Character
         )
     }
 

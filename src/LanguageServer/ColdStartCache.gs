@@ -101,11 +101,7 @@ internal shared class ColdStartCache {
         }
     }
 
-    private prop CompilerVersion string -> typeof(ReferenceMetadataIndex)
-        .Assembly
-        .GetName()
-        .Version
-        ?.ToString() ??
+    private prop CompilerVersion string -> typeof(ReferenceMetadataIndex).Assembly.GetName().Version?.ToString() ??
         "0.0.0.0"
 
     /// Attempts to load a fingerprint-matching metadata index for the project.
@@ -336,10 +332,7 @@ internal shared class ColdStartCache {
             }
             return info.Length.ToString(CultureInfo.InvariantCulture) +
                 ":" +
-                info
-                .LastWriteTimeUtc
-                .Ticks
-                .ToString(CultureInfo.InvariantCulture)
+                info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture)
         } catch (ex Exception) when IsRecoverable(ex) {
             return "unreadable"
         }

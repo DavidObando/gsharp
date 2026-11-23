@@ -173,9 +173,7 @@ shared class IteratorRewriter {
         // BuildTask MetadataLoadContext path (host-process `typeof()` is
         // not reference-equal to types loaded into a separate context).
         if type is ImportedTypeSymbol{OpenDefinition: {} openDefinition} imported &&
-            !imported
-            .TypeArguments
-            .IsDefaultOrEmpty &&
+            !imported.TypeArguments.IsDefaultOrEmpty &&
             (
             openDefinition.FullName == "System.Collections.Generic.IEnumerable`1" ||
                 openDefinition.FullName == "System.Collections.Generic.IEnumerator`1"

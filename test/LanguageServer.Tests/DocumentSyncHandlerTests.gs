@@ -105,9 +105,7 @@ func Sample() {
                     "Variable 'null'",
                     StringComparison.Ordinal
                 ) ||
-                    d
-                    .Message
-                    .Contains("ReferenceEquals", StringComparison.Ordinal) || d.Message.Contains(
+                    d.Message.Contains("ReferenceEquals", StringComparison.Ordinal) || d.Message.Contains(
                     "function True",
                     StringComparison.Ordinal
                 )

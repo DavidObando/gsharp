@@ -974,12 +974,8 @@ partial class Parts {
             let lineStart = ReferenceFileA.LastIndexOf('\n', position - 1) + 1
             var best CallExpressionSyntax? = nil
             for call in Calls(Trees[0].Root) {
-                if call
-                    .Span
-                    .Start >= lineStart &&
-                    call
-                    .Span
-                    .End <= position &&
+                if call.Span.Start >= lineStart &&
+                    call.Span.End <= position &&
                     (best == nil || call.Span.End >= best.Span.End) {
                     best = call
                 }

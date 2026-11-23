@@ -220,12 +220,8 @@ run()`
         /// opcode.
         private func TypeOperand(il[]uint8, instruction IlInstruction) int32 {
             Assert.True(
-                instruction
-                    .OpCode
-                    .OperandType == OperandType.InlineType ||
-                    instruction
-                    .OpCode
-                    .OperandType == OperandType.InlineTok
+                instruction.OpCode.OperandType == OperandType.InlineType ||
+                    instruction.OpCode.OperandType == OperandType.InlineTok
             )
             return BitConverter.ToInt32(il, instruction.Offset + instruction.OpCode.Size)
         }
@@ -349,12 +345,8 @@ stderr:
                 let il = ReadMethodIl(peReader, metadata, name)
                 methodIl[name] = il
                 for instruction in IlInstructionReader.Read(il) {
-                    if instruction
-                        .OpCode
-                        .OperandType == OperandType.InlineType ||
-                        instruction
-                        .OpCode
-                        .OperandType == OperandType.InlineTok {
+                    if instruction.OpCode.OperandType == OperandType.InlineType ||
+                        instruction.OpCode.OperandType == OperandType.InlineTok {
                         let token = TypeOperand(il, instruction)
                         typeTokens[token] = DescribeTypeToken(metadata, token)
                     }

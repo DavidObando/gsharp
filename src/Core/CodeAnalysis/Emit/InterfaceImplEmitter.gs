@@ -66,10 +66,7 @@ internal class InterfaceImplEmitter {
         }
         for method in structSymbol.Methods {
             if method.ExternalOverriddenMethod != nil &&
-                this
-                .cache
-                .MethodHandles
-                .TryGetValue(method, out var implHandle) {
+                this.cache.MethodHandles.TryGetValue(method, out var implHandle) {
                 let declaration = this
                     .outer
                     .memberRefs
@@ -516,10 +513,7 @@ internal class InterfaceImplEmitter {
                 if IsExplicitlyImplemented(structSymbol, slotEvent) ||
                     !TryFindImplicitEvent(structSymbol, iface, slotEvent, out var ev, out var declaringType) ||
                     (object.ReferenceEquals(declaringType, structSymbol) && ev.IsFieldLike) ||
-                    !this
-                    .cache
-                    .EventAccessorHandles
-                    .TryGetValue(ev, out var implAccessors) {
+                    !this.cache.EventAccessorHandles.TryGetValue(ev, out var implAccessors) {
                     continue
                 }
                 let isGenericIface = ReflectionMetadataEmitter.IsUserGenericInterfaceReference(iface)
@@ -607,10 +601,7 @@ internal class InterfaceImplEmitter {
                         out var declaringType
                     ) ||
                         (object.ReferenceEquals(declaringType, structSymbol) && ev.IsFieldLike) ||
-                        !this
-                        .cache
-                        .EventAccessorHandles
-                        .TryGetValue(ev, out var implAccessors) {
+                        !this.cache.EventAccessorHandles.TryGetValue(ev, out var implAccessors) {
                         continue
                     }
                     if slotEvent.AddMethod != nil && emittedClrSlots.Add(slotEvent.AddMethod!!) {
@@ -649,9 +640,7 @@ internal class InterfaceImplEmitter {
     internal func PlanImportedAccessorBridges(structSymbol StructSymbol, firstMethodRow int32) int32 {
         let bridges = List[ImportedAccessorBridge]()
         for selection in structSymbol.ImportedInterfaceAccessors {
-            if selection
-                .Accessor
-                .IsVirtual ||
+            if selection.Accessor.IsVirtual ||
                 SourceBaseImplementsInterface(structSymbol.BaseClass, selection.Interface) {
                 continue
             }
@@ -692,10 +681,7 @@ internal class InterfaceImplEmitter {
                 Invariant.Required(slot, "a selected interface accessor has its slot symbol", expression: "slot")
             )
             var bodyOffset = -1
-            let parameterCount = bridge
-                .Property
-                .Parameters
-                .Length +
+            let parameterCount = bridge.Property.Parameters.Length +
                 (
                 if bridge.IsSetter {
                     1
@@ -1380,9 +1366,7 @@ internal class InterfaceImplEmitter {
     private func EmitInheritedStaticPropertyBridge(bridge InheritedStaticBridge) {
         let prop = Invariant.Required(bridge.Property, "a static property bridge has a property")
         let isSetter = bridge.Flag
-        let parameterCount = prop
-            .Parameters
-            .Length +
+        let parameterCount = prop.Parameters.Length +
             (
             if isSetter {
                 1
@@ -1623,9 +1607,7 @@ internal class InterfaceImplEmitter {
     /// GS0331/GS0332 and we skip silently here.
     internal func EmitStaticVirtualMethodImpls(structSymbol StructSymbol?) {
         if structSymbol == nil ||
-            structSymbol
-            .Interfaces
-            .IsDefaultOrEmpty ||
+            structSymbol.Interfaces.IsDefaultOrEmpty ||
             !HasStaticMethodsInHierarchy(structSymbol) {
             return
         }
@@ -1692,18 +1674,13 @@ internal class InterfaceImplEmitter {
     /// @param structSymbol The G# type being emitted.
     internal func EmitClrStaticVirtualMethodImpls(structSymbol StructSymbol?) {
         if structSymbol == nil ||
-            structSymbol
-            .ImplementedClrInterfaces
-            .IsDefaultOrEmpty ||
+            structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty ||
             (
             !HasStaticMethodsInHierarchy(structSymbol) &&
                 !HasStaticPropertiesInHierarchy(structSymbol) &&
                 !HasStaticEventsInHierarchy(structSymbol)
         ) ||
-            !this
-            .cache
-            .StructTypeDefs
-            .TryGetValue(structSymbol, out var implTypeDef) {
+            !this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef) {
             return
         }
         let closure = ClrInterfaceClosure.Build(structSymbol, this.outer.signatures)
@@ -1800,8 +1777,7 @@ internal class InterfaceImplEmitter {
                     object.ReferenceEquals(declaringType, structSymbol) ||
                         implementation.GetterAccessibility == Accessibility.Public
                 ) &&
-                    this
-                    .TryGetStaticPropertyAccessorBody(
+                    this.TryGetStaticPropertyAccessorBody(
                     structSymbol,
                     declaringType,
                     implementation,
@@ -1822,8 +1798,7 @@ internal class InterfaceImplEmitter {
                     object.ReferenceEquals(declaringType, structSymbol) ||
                         implementation.SetterAccessibility == Accessibility.Public
                 ) &&
-                    this
-                    .TryGetStaticPropertyAccessorBody(
+                    this.TryGetStaticPropertyAccessorBody(
                     structSymbol,
                     declaringType,
                     implementation,
@@ -1933,9 +1908,7 @@ internal class InterfaceImplEmitter {
     /// @param structSymbol The implementer struct/class.
     internal func EmitStaticVirtualPropertyMethodImpls(structSymbol StructSymbol?) {
         if structSymbol == nil ||
-            structSymbol
-            .Interfaces
-            .IsDefaultOrEmpty ||
+            structSymbol.Interfaces.IsDefaultOrEmpty ||
             !HasStaticPropertiesInHierarchy(structSymbol) {
             return
         }
@@ -1976,8 +1949,7 @@ internal class InterfaceImplEmitter {
                     object.ReferenceEquals(declaringType, structSymbol) ||
                         implProp.GetterAccessibility == Accessibility.Public
                 ) &&
-                    this
-                    .TryGetStaticPropertyAccessorBody(
+                    this.TryGetStaticPropertyAccessorBody(
                     structSymbol,
                     declaringType,
                     implProp,
@@ -1997,8 +1969,7 @@ internal class InterfaceImplEmitter {
                     object.ReferenceEquals(declaringType, structSymbol) ||
                         implProp.SetterAccessibility == Accessibility.Public
                 ) &&
-                    this
-                    .TryGetStaticPropertyAccessorBody(
+                    this.TryGetStaticPropertyAccessorBody(
                     structSymbol,
                     declaringType,
                     implProp,
@@ -2081,8 +2052,7 @@ internal class InterfaceImplEmitter {
                     if !candidate.HasExplicitInterfaceClause &&
                         candidate.Name == slot.Name &&
                         (object.ReferenceEquals(current, type) || candidate.Accessibility == Accessibility.Public) &&
-                        DeclarationBinder
-                        .InterfaceEventTypesEquivalent(iface, slot, candidate) {
+                        DeclarationBinder.InterfaceEventTypesEquivalent(iface, slot, candidate) {
                         implementation = candidate
                         declaringType = current
                         return true
@@ -2106,8 +2076,7 @@ internal class InterfaceImplEmitter {
                     if !candidate.HasExplicitInterfaceClause &&
                         candidate.Name == name &&
                         (object.ReferenceEquals(current, type) || candidate.Accessibility == Accessibility.Public) &&
-                        DeclarationBinder
-                        .ConformanceSignaturesEquivalent(slotType, candidate.Type) {
+                        DeclarationBinder.ConformanceSignaturesEquivalent(slotType, candidate.Type) {
                         implementation = candidate
                         declaringType = current
                         return true
@@ -2208,8 +2177,7 @@ internal class InterfaceImplEmitter {
                         (
                         object.ReferenceEquals(current, structSymbol) || candidate.Accessibility == Accessibility.Public
                     ) &&
-                        DeclarationBinder
-                        .StaticVirtualSignaturesMatch(
+                        DeclarationBinder.StaticVirtualSignaturesMatch(
                         slot,
                         DeclarationBinder.SubstituteStaticMethodForOwner(current, candidate)
                     ) {
@@ -2233,8 +2201,7 @@ internal class InterfaceImplEmitter {
         ) bool {
             for explicitCandidate in structSymbol.StaticProperties {
                 if object.ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slotProp) &&
-                    DeclarationBinder
-                    .ConformanceSignaturesEquivalent(
+                    DeclarationBinder.ConformanceSignaturesEquivalent(
                     Invariant.Required(
                         explicitCandidate.ExplicitInterfaceClauseTarget,
                         "an explicit property implementation has a target",

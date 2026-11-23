@@ -277,8 +277,7 @@ internal class MethodBodyPlanner {
             if nc.Receiver.Type is NullableTypeSymbol receiverNullable && NullableLifting.IsAnyValueTypeNullable(
                 receiverNullable
             ) &&
-                !receiverSpillSlots
-                .ContainsKey(nc.Receiver) {
+                !receiverSpillSlots.ContainsKey(nc.Receiver) {
                 let wrapperSlot = localTypes.Count
                 localTypes.Add(nc.Receiver.Type)
                 receiverSpillSlots[nc.Receiver] = wrapperSlot

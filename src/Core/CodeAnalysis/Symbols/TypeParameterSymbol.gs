@@ -217,14 +217,10 @@ class TypeParameterSymbol : TypeSymbol {
                     p.HasValueTypeConstraint ||
                     p.HasUnmanagedConstraint ||
                     (p.InterfaceConstraint != nil && !p.HasNullableInterfaceConstraint) ||
-                    p
-                    .ClrInterfaceConstraint
-                    ?.ReferenceNullability == ReferenceNullabilityKind.NotNull ||
+                    p.ClrInterfaceConstraint?.ReferenceNullability == ReferenceNullabilityKind.NotNull ||
                     (
                     !p.HasNullableClassBound &&
-                        p
-                        .ClassConstraint
-                        ?.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
+                        p.ClassConstraint?.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
                         !(p.ClassConstraint is TypeParameterSymbol)
                 ) {
                     return true

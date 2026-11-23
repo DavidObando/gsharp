@@ -885,9 +885,9 @@ internal class HotReloadDeltaBuilder {
         private func EquivalentEventAccessors(left EventAccessors, right EventAccessors) bool -> left.Adder.Equals(
             right.Adder
         ) &&
-            left
-            .Remover
-            .Equals(right.Remover) && left.Raiser.Equals(right.Raiser) && left.Others.SequenceEqual(right.Others)
+            left.Remover.Equals(right.Remover) && left.Raiser.Equals(right.Raiser) && left.Others.SequenceEqual(
+            right.Others
+        )
 
         private func EquivalentPropertyAccessors(left PropertyAccessors, right PropertyAccessors) bool -> left
             .Getter

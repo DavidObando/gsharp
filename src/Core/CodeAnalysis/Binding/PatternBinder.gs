@@ -366,8 +366,7 @@ internal class PatternBinder {
         if ExpressionBinder.IsIntegerType(adaptTarget) &&
             expression.Type != adaptTarget &&
             TryGetConstantIntegerLiteralValue(expression, out var literalValue) &&
-            ExpressionBinder
-            .TryAdaptIntegerLiteral(literalValue, adaptTarget, out var adaptedValue) {
+            ExpressionBinder.TryAdaptIntegerLiteral(literalValue, adaptTarget, out var adaptedValue) {
             expression = BoundLiteralExpression(syntax.Expression, adaptedValue)
         }
         // A successful type pattern can narrow `object` to a non-nullable
@@ -1074,9 +1073,7 @@ internal class PatternBinder {
             let indexer PropertyInfo? = indexableClr.GetProperties(BindingFlags.Public | BindingFlags.Instance)
                 .FirstOrDefault(
                 (p PropertyInfo) -> p.GetIndexParameters() is {Length: 1} indexParams &&
-                    indexParams[0]
-                    .ParameterType
-                    .IsSameAs(typeof(int32)) && p.GetGetMethod(nonPublic: false) != nil
+                    indexParams[0].ParameterType.IsSameAs(typeof(int32)) && p.GetGetMethod(nonPublic: false) != nil
             )
             if length != nil && indexer != nil {
                 elementType = if NativeSliceTypes.TryGetElement(discriminantType, out var nativeElement, out _) {
@@ -1097,8 +1094,7 @@ internal class PatternBinder {
                 for elementSyntax in syntax.Elements {
                     if elementSyntax is SlicePatternSyntax sliceSyntax &&
                         (sliceSyntax.Pattern != nil || sliceSyntax.CaptureIdentifier != nil) &&
-                        !NativeSliceTypes
-                        .TryGetElement(discriminantType, out _, out _) {
+                        !NativeSliceTypes.TryGetElement(discriminantType, out _, out _) {
                         Diagnostics.ReportListPatternRequiresArrayOrSlice(
                             sliceSyntax.DotDotToken.Location,
                             discriminantType
@@ -1203,16 +1199,9 @@ internal class PatternBinder {
 
     private func SyntaxPatternReadsInput(syntax PatternSyntax, inputType TypeSymbol) bool -> switch syntax {
         case DiscardPatternSyntax: false
-        case property is PropertyPatternSyntax: property
-            .Fields
-            .Count > 0 ||
+        case property is PropertyPatternSyntax: property.Fields.Count > 0 ||
             inputType is NullableTypeSymbol ||
-            !GSharp
-            .Core
-            .CodeAnalysis
-            .Emit
-            .ReflectionMetadataEmitter
-            .IsValueTypeSymbol(inputType)
+            !GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(inputType)
         case binary is BinaryPatternSyntax: SyntaxPatternReadsInput(binary.Left, inputType) ||
             SyntaxPatternReadsInput(binary.Right, inputType)
         case negation is NotPatternSyntax: SyntaxPatternReadsInput(negation.Pattern, inputType)
@@ -1377,16 +1366,12 @@ internal class PatternBinder {
                     value = lit.Value!!
                     return true
                 }
-                case unary is BoundUnaryExpression when unary
-                    .Op
-                    .Kind == BoundUnaryOperatorKind.Identity &&
+                case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.Identity &&
                     TryGetConstantIntegerLiteralValue(unary.Operand, out var positive) {
                     value = positive
                     return true
                 }
-                case unary is BoundUnaryExpression when unary
-                    .Op
-                    .Kind == BoundUnaryOperatorKind.Negation &&
+                case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.Negation &&
                     TryGetConstantIntegerLiteralValue(unary.Operand, out var operand) {
                     return TryNegateIntegerLiteral(operand, out value)
                 }

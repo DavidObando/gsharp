@@ -413,14 +413,8 @@ internal class MemberDefEmitter {
         if prop.IsAutoProperty &&
             prop.BackingField != nil &&
             (
-            this
-                .cache
-                .StructFieldDefs
-                .ContainsKey(prop.BackingField!!) ||
-                this
-                .cache
-                .DeclaredFieldDefs
-                .ContainsKey(prop.BackingField!!)
+            this.cache.StructFieldDefs.ContainsKey(prop.BackingField!!) ||
+                this.cache.DeclaredFieldDefs.ContainsKey(prop.BackingField!!)
         ) {
             // Issue #989: inside a generic type's own accessor body (or when the
             // backing field lives on a constructed generic base) the backing-field
@@ -754,9 +748,7 @@ internal class MemberDefEmitter {
         }
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
-            prop
-                .Parameters
-                .Length +
+            prop.Parameters.Length +
                 (
                 if isGetter {
                     0
@@ -1094,18 +1086,11 @@ internal class MemberDefEmitter {
         if !this.emitCtx.MetadataOnly {
             if ev.IsFieldLike &&
                 ev.BackingField != nil &&
-                this
-                .cache
-                .StructFieldDefs
-                .TryGetValue(ev.BackingField!!, out var backingHandle) {
+                this.cache.StructFieldDefs.TryGetValue(ev.BackingField!!, out var backingHandle) {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
                 bodyOffset = this.EmitEventCasLoopBody(structSym, ev, backingHandle, isStatic: true, isAdd: true)
             } else if ev.AddMethodSymbol != nil &&
-                this
-                .emitCtx
-                .Program
-                .Functions
-                .TryGetValue(ev.AddMethodSymbol!!, out var addBody) {
+                this.emitCtx.Program.Functions.TryGetValue(ev.AddMethodSymbol!!, out var addBody) {
                 let handle = this.emitFunction(ev.AddMethodSymbol!!, addBody, false)
                 return handle
             } else {
@@ -1167,18 +1152,11 @@ internal class MemberDefEmitter {
         if !this.emitCtx.MetadataOnly {
             if ev.IsFieldLike &&
                 ev.BackingField != nil &&
-                this
-                .cache
-                .StructFieldDefs
-                .TryGetValue(ev.BackingField!!, out var backingHandle) {
+                this.cache.StructFieldDefs.TryGetValue(ev.BackingField!!, out var backingHandle) {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
                 bodyOffset = this.EmitEventCasLoopBody(structSym, ev, backingHandle, isStatic: true, isAdd: false)
             } else if ev.RemoveMethodSymbol != nil &&
-                this
-                .emitCtx
-                .Program
-                .Functions
-                .TryGetValue(ev.RemoveMethodSymbol!!, out var removeBody) {
+                this.emitCtx.Program.Functions.TryGetValue(ev.RemoveMethodSymbol!!, out var removeBody) {
                 let handle = this.emitFunction(ev.RemoveMethodSymbol!!, removeBody, false)
                 return handle
             } else {
@@ -1347,10 +1325,7 @@ internal class MemberDefEmitter {
             return td
         }
         if type is InterfaceSymbol ifaceSym &&
-            this
-            .cache
-            .InterfaceTypeDefs
-            .TryGetValue(ifaceSym.Definition ?? ifaceSym, out var ifaceDef) {
+            this.cache.InterfaceTypeDefs.TryGetValue(ifaceSym.Definition ?? ifaceSym, out var ifaceDef) {
             return ifaceDef
         }
         // Fallback: encode as System.Delegate.
@@ -1481,18 +1456,11 @@ internal class MemberDefEmitter {
         if !this.emitCtx.MetadataOnly {
             if ev.IsFieldLike &&
                 ev.BackingField != nil &&
-                this
-                .cache
-                .StructFieldDefs
-                .TryGetValue(ev.BackingField!!, out var backingHandle) {
+                this.cache.StructFieldDefs.TryGetValue(ev.BackingField!!, out var backingHandle) {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
                 bodyOffset = this.EmitEventCasLoopBody(structSym, ev, backingHandle, isStatic: false, isAdd: true)
             } else if ev.AddMethodSymbol != nil &&
-                this
-                .emitCtx
-                .Program
-                .Functions
-                .TryGetValue(ev.AddMethodSymbol!!, out var addBody) {
+                this.emitCtx.Program.Functions.TryGetValue(ev.AddMethodSymbol!!, out var addBody) {
                 // Explicit accessor with bound body: emit using EmitFunction infrastructure.
                 let handle = this.emitFunction(ev.AddMethodSymbol!!, addBody, false)
                 return handle
@@ -1576,18 +1544,11 @@ internal class MemberDefEmitter {
         if !this.emitCtx.MetadataOnly {
             if ev.IsFieldLike &&
                 ev.BackingField != nil &&
-                this
-                .cache
-                .StructFieldDefs
-                .TryGetValue(ev.BackingField!!, out var backingHandle) {
+                this.cache.StructFieldDefs.TryGetValue(ev.BackingField!!, out var backingHandle) {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
                 bodyOffset = this.EmitEventCasLoopBody(structSym, ev, backingHandle, isStatic: false, isAdd: false)
             } else if ev.RemoveMethodSymbol != nil &&
-                this
-                .emitCtx
-                .Program
-                .Functions
-                .TryGetValue(ev.RemoveMethodSymbol!!, out var removeBody) {
+                this.emitCtx.Program.Functions.TryGetValue(ev.RemoveMethodSymbol!!, out var removeBody) {
                 // Explicit accessor with bound body: emit using EmitFunction infrastructure.
                 let handle = this.emitFunction(ev.RemoveMethodSymbol!!, removeBody, false)
                 return handle
@@ -1663,11 +1624,7 @@ internal class MemberDefEmitter {
         var bodyOffset = -1
         if !this.emitCtx.MetadataOnly {
             if ev.RaiseMethodSymbol != nil &&
-                this
-                .emitCtx
-                .Program
-                .Functions
-                .TryGetValue(ev.RaiseMethodSymbol!!, out var raiseBody) {
+                this.emitCtx.Program.Functions.TryGetValue(ev.RaiseMethodSymbol!!, out var raiseBody) {
                 let handle = this.emitFunction(ev.RaiseMethodSymbol!!, raiseBody, false)
                 return handle
             } else {
@@ -1871,11 +1828,7 @@ internal class MemberDefEmitter {
         // accessor order.
         if prop.GetterSymbol != nil &&
             !prop.GetterSymbol!!.IsAbstract &&
-            this
-            .emitCtx
-            .Program
-            .Functions
-            .TryGetValue(prop.GetterSymbol!!, out var getterBody) {
+            this.emitCtx.Program.Functions.TryGetValue(prop.GetterSymbol!!, out var getterBody) {
             emittedGetter = this.emitFunction(prop.GetterSymbol!!, getterBody, false)
         } else {
             let sigBlob = BlobBuilder()
@@ -1919,11 +1872,7 @@ internal class MemberDefEmitter {
         // (static-virtual or ordinary instance).
         if prop.SetterSymbol != nil &&
             !prop.SetterSymbol!!.IsAbstract &&
-            this
-            .emitCtx
-            .Program
-            .Functions
-            .TryGetValue(prop.SetterSymbol!!, out var setterBody) {
+            this.emitCtx.Program.Functions.TryGetValue(prop.SetterSymbol!!, out var setterBody) {
             emittedSetter = this.emitFunction(prop.SetterSymbol!!, setterBody, false)
         } else {
             let sigBlob = BlobBuilder()
@@ -2222,8 +2171,7 @@ internal class MemberDefEmitter {
                             !hasMatchingAccessor ||
                             (clrProp.GetMethod?.IsAbstract == true && !prop.HasGetter) ||
                             (clrProp.SetMethod?.IsAbstract == true && !prop.HasSetter) ||
-                            !MemberLookup
-                            .PropertyMatchesClrInterfaceSignature(
+                            !MemberLookup.PropertyMatchesClrInterfaceSignature(
                             prop,
                             Invariant.Required(
                                 ifaceSym,
@@ -2254,16 +2202,11 @@ internal class MemberDefEmitter {
                 (interfaceProperty.SetterSymbol == nil || interfaceProperty.SetterSymbol!!.IsAbstract)
             if property.Name != interfaceProperty.Name ||
                 property.IsIndexer != interfaceProperty.IsIndexer ||
-                property
-                .Parameters
-                .Length != interfaceProperty
-                .Parameters
-                .Length ||
+                property.Parameters.Length != interfaceProperty.Parameters.Length ||
                 !hasMatchingAccessor ||
                 (requiresGetter && !property.HasGetter) ||
                 (requiresSetter && !property.HasSetter) ||
-                !DeclarationBinder
-                .IsInterfacePropertyTypeCompatible(
+                !DeclarationBinder.IsInterfacePropertyTypeCompatible(
                 property.Type,
                 interfaceProperty.Type,
                 property.HasSetter && interfaceProperty.HasSetter,
@@ -2272,13 +2215,8 @@ internal class MemberDefEmitter {
                 return false
             }
             for var i = 0; i < property.Parameters.Length; i++ {
-                if interfaceProperty
-                    .Parameters[i]
-                    .RefKind != property
-                    .Parameters[i]
-                    .RefKind ||
-                    !DeclarationBinder
-                    .ConformanceSignaturesEquivalent(
+                if interfaceProperty.Parameters[i].RefKind != property.Parameters[i].RefKind ||
+                    !DeclarationBinder.ConformanceSignaturesEquivalent(
                     interfaceProperty.Parameters[i].Type,
                     property.Parameters[i].Type,
                     typeParameterMap

@@ -173,12 +173,8 @@ abstract class SyntaxNode {
             if token.Span.End > text.Length || text.ToString(token.Span) != token.Text {
                 continue
             }
-            if token
-                .Span
-                .Start <= position &&
-                position < token
-                .Span
-                .End &&
+            if token.Span.Start <= position &&
+                position < token.Span.End &&
                 (best == nil || token.Span.Length < best.Span.Length) {
                 best = token
             }

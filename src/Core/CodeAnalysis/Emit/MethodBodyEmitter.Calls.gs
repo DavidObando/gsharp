@@ -42,11 +42,7 @@ internal partial class MethodBodyEmitter {
     /// @param call The bound chaining expression to emit.
     private func EmitConstructorChaining(call BoundConstructorChainingExpression) {
         if call.SelectedConstructor == nil ||
-            !this
-            .outer
-            .cache
-            .ExplicitCtorHandles
-            .TryGetValue(call.SelectedConstructor, out var ctorDefHandle) {
+            !this.outer.cache.ExplicitCtorHandles.TryGetValue(call.SelectedConstructor, out var ctorDefHandle) {
             throw InvalidOperationException(
                 "Constructor chaining target on '${call.SelectedConstructor?.DeclaringType?.Name}' has no emitted handle."
             )
@@ -487,15 +483,9 @@ internal partial class MethodBodyEmitter {
         // (which the runtime rejects with BadImageFormat / "not fully
         // instantiated").
         var baseClass = call.BaseClass
-        if baseClass
-            .TypeArguments
-            .IsDefaultOrEmpty &&
-            !baseClass
-            .TypeParameters
-            .IsDefaultOrEmpty &&
-            call
-            .Receiver
-            .Type is StructSymbol baseReceiver {
+        if baseClass.TypeArguments.IsDefaultOrEmpty &&
+            !baseClass.TypeParameters.IsDefaultOrEmpty &&
+            call.Receiver.Type is StructSymbol baseReceiver {
             let baseDef = baseClass.Definition ?? baseClass
             let IsBaseDefinition = func (definition StructSymbol) bool {
                 return object.ReferenceEquals(definition, baseDef)
@@ -577,17 +567,9 @@ internal partial class MethodBodyEmitter {
         let fn = call.Function
         let tps = fn.TypeParameters
         if tps.IsDefaultOrEmpty ||
-            call
-            .MethodTypeArguments
-            .IsDefaultOrEmpty ||
-            call
-            .MethodTypeArguments
-            .Length != tps.Length ||
-            fn
-            .Parameters
-            .Length != call
-            .Arguments
-            .Length ||
+            call.MethodTypeArguments.IsDefaultOrEmpty ||
+            call.MethodTypeArguments.Length != tps.Length ||
+            fn.Parameters.Length != call.Arguments.Length ||
             fn.IsAsyncOrSuspending ||
             call.StaticGenericOwnerType != nil ||
             call.StaticGenericInterfaceOwnerType != nil {
@@ -697,9 +679,7 @@ internal partial class MethodBodyEmitter {
             this.il.Token(this.outer.memberRefs.GetNullableCtorMemberRefForUserValueType(lifted))
             return
         }
-        let innerClr = lifted
-            .UnderlyingType
-            .ClrType ??
+        let innerClr = lifted.UnderlyingType.ClrType ??
             throw InvalidOperationException("Nullable<${lifted.UnderlyingType.Name}> lift has no CLR underlying type.")
         if !NullableLifting.TryConstructNullable(this.outer.emitCtx.References, innerClr, out var nullableClr) {
             throw InvalidOperationException(
@@ -833,9 +813,7 @@ internal partial class MethodBodyEmitter {
             let staticPrivateMethods = receiverIface.StaticPrivateMethods
             for var i = 0; i < staticPrivateMethods.Length; i++ {
                 if object.ReferenceEquals(staticPrivateMethods[i], substitutedMethod) &&
-                    i < def
-                    .StaticPrivateMethods
-                    .Length {
+                    i < def.StaticPrivateMethods.Length {
                     return def.StaticPrivateMethods[i]
                 }
             }

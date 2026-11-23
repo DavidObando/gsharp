@@ -122,8 +122,7 @@ internal shared class GSharpDocumentationParser {
                 "@exception ",
                 StringComparison.Ordinal
             ) ||
-                trimmed
-                .StartsWith("@seealso ", StringComparison.Ordinal) {
+                trimmed.StartsWith("@seealso ", StringComparison.Ordinal) {
                 // Flush previous section.
                 if currentBody.Length > 0 || currentTag != nil {
                     sections.Add(Section(currentTag, currentBody.ToString()))

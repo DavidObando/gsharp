@@ -189,9 +189,7 @@ internal partial class StatementBinder {
         var statement = statement
         while statement is BoundBlockStatement labeled &&
             labeled.Syntax is LabeledStatementSyntax &&
-            labeled
-            .Statements
-            .Length == 2 &&
+            labeled.Statements.Length == 2 &&
             labeled.Statements[0] is BoundLabelStatement {
             statement = labeled.Statements[1]
         }
@@ -200,9 +198,7 @@ internal partial class StatementBinder {
         }
         if statement is BoundBlockStatement initialized &&
             initialized.Syntax is IfStatementSyntax &&
-            initialized
-            .Statements
-            .Length == 2 {
+            initialized.Statements.Length == 2 {
             return initialized.Statements[1] as BoundIfStatement
         }
         return nil
@@ -258,9 +254,7 @@ internal partial class StatementBinder {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock && !object.ReferenceEquals(exitOwner, statement) &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
-            labeledBlock
-            .Statements
-            .Length == 2 &&
+            labeledBlock.Statements.Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
         }

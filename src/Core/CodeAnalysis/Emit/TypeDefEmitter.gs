@@ -566,10 +566,7 @@ internal class TypeDefEmitter {
                 // self-instantiation TypeSpec, not the bare open TypeDef.
                 baseType = this.getUserStructTypeSpec(structSym.BaseClass!!)
             } else if structSym.BaseClass != nil &&
-                this
-                .cache
-                .StructTypeDefs
-                .TryGetValue(structSym.BaseClass!!, out var baseHandle) {
+                this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass!!, out var baseHandle) {
                 baseType = baseHandle
             } else if structSym.ImportedBaseType?.ClrType != nil {
                 // Issue #296: the class inherits from an imported CLR base
@@ -715,10 +712,7 @@ internal class TypeDefEmitter {
                 // the enclosing generic's reified TypeParameters.
                 baseType = this.getUserStructTypeSpec(structSym.BaseClass!!)
             } else if structSym.BaseClass != nil &&
-                this
-                .cache
-                .StructTypeDefs
-                .TryGetValue(structSym.BaseClass!!, out var baseHandle) {
+                this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass!!, out var baseHandle) {
                 baseType = baseHandle
             } else if structSym.ImportedBaseType?.ClrType != nil {
                 // Issue #296: nested class inheriting an imported CLR base.
@@ -1634,8 +1628,7 @@ internal class TypeDefEmitter {
             // ResolveFieldToken; the inline path below uses bare
             // FieldDefs which fail ilverify on a self-instantiation).
             if ConstructorBodyEmitter.NeedsInstanceFieldInitializerStatements(classSym) ||
-                ReflectionMetadataEmitter
-                .IsUserGenericTypeReference(classSym) {
+                ReflectionMetadataEmitter.IsUserGenericTypeReference(classSym) {
                 bodyOffset = this.emitClassPrimaryConstructorBodyBytes(classSym, baseCtorToken)
             } else {
                 let il = InstructionEncoder(BlobBuilder())
@@ -1999,10 +1992,7 @@ internal class TypeDefEmitter {
             return this.resolveConstructedBaseCtorToken(classSym.BaseClass!!)
         }
         if classSym.BaseClass != nil &&
-            this
-            .cache
-            .ClassCtorHandles
-            .TryGetValue(classSym.BaseClass!!, out var baseCtor) {
+            this.cache.ClassCtorHandles.TryGetValue(classSym.BaseClass!!, out var baseCtor) {
             return baseCtor
         }
         if classSym.IsAttributeClass {
@@ -2128,21 +2118,13 @@ internal class TypeDefEmitter {
         // constructor's metadata handle (pre-registered for every non-SM class
         // before any body is emitted), not just the base's primary/first ctor.
         if init.GSharpConstructor != nil &&
-            this
-            .cache
-            .ExplicitCtorHandles
-            .TryGetValue(init.GSharpConstructor, out var explicitHandle) {
+            this.cache.ExplicitCtorHandles.TryGetValue(init.GSharpConstructor, out var explicitHandle) {
             return explicitHandle
         }
-        if init
-            .Arguments
-            .Length > 0 &&
+        if init.Arguments.Length > 0 &&
             gsharpBase != nil &&
             gsharpBase.HasPrimaryConstructor &&
-            this
-            .cache
-            .ClassPrimaryCtorHandles
-            .TryGetValue(gsharpBase, out var primaryHandle) {
+            this.cache.ClassPrimaryCtorHandles.TryGetValue(gsharpBase, out var primaryHandle) {
             return primaryHandle
         }
         if gsharpBase != nil && this.cache.ClassCtorHandles.TryGetValue(gsharpBase, out var defaultHandle) {
@@ -2377,9 +2359,7 @@ internal class TypeDefEmitter {
             (classSym.Declaration?.HasPrimaryConstructor ?? false)
 
         private func IsExplicitlyAbstract(classSym StructSymbol) bool -> classSym.IsDeclaredAbstract ||
-            classSym
-            .Definition
-            ?.IsDeclaredAbstract == true
+            classSym.Definition?.IsDeclaredAbstract == true
 
         /// ADR-0087 §3 R1: emits one `GenericParam` row per supplied
         /// type parameter, in source order, owned by [`owner`](paramref)

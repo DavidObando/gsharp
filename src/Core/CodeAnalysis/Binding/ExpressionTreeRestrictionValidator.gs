@@ -22,8 +22,7 @@ internal shared class ExpressionTreeRestrictionValidator {
             return
         }
         if !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out var delegateType) ||
-            !MemberLookup
-            .TryGetDelegateFunctionTypeFromSymbol(delegateType, out _) {
+            !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(delegateType, out _) {
             diagnostics.ReportExpressionTreeTargetMustBeDelegate(
                 if literal.Syntax != nil {
                     literal.Syntax!!.Location
@@ -164,12 +163,8 @@ internal shared class ExpressionTreeRestrictionValidator {
     /// @param diagnostics The bag to report into.
     private func ValidateReceiver(receiver BoundExpression?, diagnostics DiagnosticBag) {
         if receiver is BoundUnaryExpression check &&
-            check
-            .Op
-            .Kind == BoundUnaryOperatorKind.NullAssertion &&
-            check
-            .Operand
-            .Type is PlatformTypeSymbol {
+            check.Op.Kind == BoundUnaryOperatorKind.NullAssertion &&
+            check.Operand.Type is PlatformTypeSymbol {
             ValidateExpression(check.Operand, diagnostics)
             return
         }
@@ -201,8 +196,7 @@ internal shared class ExpressionTreeRestrictionValidator {
             }
             case conversion is BoundConversionExpression {
                 if conversion.Expression is BoundFunctionLiteralExpression nestedLiteral &&
-                    MemberLookup
-                    .TryGetExpressionTreeDelegateTypeFromSymbol(conversion.Type, out _) {
+                    MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(conversion.Type, out _) {
                     Validate(nestedLiteral, conversion.Type, diagnostics)
                     return
                 }
@@ -215,12 +209,8 @@ internal shared class ExpressionTreeRestrictionValidator {
             case unary is BoundUnaryExpression {
                 if (unary.Op.Kind is BoundUnaryOperatorKind.ReferenceOf or BoundUnaryOperatorKind.DereferenceOf) {
                     diagnostics.ReportExpressionTreeUnsupported(LocationOf(unary.Syntax), "an unsafe pointer operation")
-                } else if unary
-                    .Op
-                    .Kind == BoundUnaryOperatorKind.NullAssertion &&
-                    unary
-                    .Operand
-                    .Type is PlatformTypeSymbol {
+                } else if unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion &&
+                    unary.Operand.Type is PlatformTypeSymbol {
                     // ADR-0186 §4: a null assertion over a PLATFORM operand is
                     // the one reference-typed `!!` that is not pure static
                     // annotation. It lowers to a real
@@ -253,9 +243,7 @@ internal shared class ExpressionTreeRestrictionValidator {
                         LocationOf(unary.Syntax),
                         "a nullability-oblivious value used where a non-null type is required"
                     )
-                } else if unary
-                    .Op
-                    .Kind == BoundUnaryOperatorKind.NullAssertion &&
+                } else if unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion &&
                     !unary.IsConversionUnwrap &&
                     !unary.IsNarrowingUnwrap &&
                     IsNullableValueTypeAssertion(unary) {
@@ -285,9 +273,7 @@ internal shared class ExpressionTreeRestrictionValidator {
                         LocationOf(binary.Syntax),
                         "a delegate combination operator"
                     )
-                } else if binary
-                    .Op
-                    .Kind == BoundBinaryOperatorKind.NullCoalesce &&
+                } else if binary.Op.Kind == BoundBinaryOperatorKind.NullCoalesce &&
                     (binary.Left is BoundLiteralExpression and {Value: nil} or BoundDefaultExpression) {
                     diagnostics.ReportExpressionTreeUnsupported(
                         LocationOf(binary.Syntax),
@@ -384,9 +370,7 @@ internal shared class ExpressionTreeRestrictionValidator {
                 return
             }
             case importedInstanceCall is BoundImportedInstanceCallExpression {
-                if importedInstanceCall
-                    .Method
-                    .Name == "<Clone>$$" &&
+                if importedInstanceCall.Method.Name == "<Clone>$$" &&
                     importedInstanceCall.Syntax is WithExpressionSyntax {
                     diagnostics.ReportExpressionTreeUnsupported(
                         LocationOf(importedInstanceCall.Syntax),
@@ -577,8 +561,7 @@ internal shared class ExpressionTreeRestrictionValidator {
         for var i = 0; i < arguments.Length; i++ {
             if !argumentRefKinds.IsDefaultOrEmpty &&
                 i < argumentRefKinds.Length &&
-                argumentRefKinds[i] != RefKind
-                .None {
+                argumentRefKinds[i] != RefKind.None {
                 diagnostics.ReportExpressionTreeUnsupported(
                     LocationOf(arguments[i].Syntax),
                     "a '${argumentRefKinds[i].ToString().ToLowerInvariant()}' argument"

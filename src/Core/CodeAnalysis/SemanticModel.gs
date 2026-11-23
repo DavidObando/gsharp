@@ -87,10 +87,7 @@ partial class SemanticModel {
             accessor.RightPart,
             node
         ) &&
-            index
-            .Value
-            .BoundBySyntax
-            .TryGetValue(accessor, out var qualified) {
+            index.Value.BoundBySyntax.TryGetValue(accessor, out var qualified) {
             return PublicCompletionView(qualified)
         }
         // Source-call producers anchor the genuine call before lowering. Keep
@@ -106,10 +103,7 @@ partial class SemanticModel {
             }
         }
         if node is BaseClassCallExpressionSyntax baseCallSyntax &&
-            index
-            .Value
-            .BoundBySyntax
-            .TryGetValue(baseCallSyntax.Call, out var baseCallBound) {
+            index.Value.BoundBySyntax.TryGetValue(baseCallSyntax.Call, out var baseCallBound) {
             return PublicCompletionView(baseCallBound)
         }
         return nil
@@ -118,10 +112,7 @@ partial class SemanticModel {
     private func PublicCompletionView(bound BoundNode) BoundNode {
         var current = bound
         while current is BoundExpression operand &&
-            index
-            .Value
-            .LogicalCompletions
-            .TryGetValue(operand, out var completion) &&
+            index.Value.LogicalCompletions.TryGetValue(operand, out var completion) &&
             completion != nil {
             current = completion
         }
@@ -157,25 +148,16 @@ partial class SemanticModel {
         // A shared class or a part of a partial type is declared by a node the binder copied or
         // merged; its identifier is the same token in the copy and in the tree.
         if node is StructDeclarationSyntax structDeclaration &&
-            index
-            .Value
-            .TypesByIdentifier
-            .TryGetValue(structDeclaration.Identifier, out var declaredStruct) {
+            index.Value.TypesByIdentifier.TryGetValue(structDeclaration.Identifier, out var declaredStruct) {
             return declaredStruct
         }
         if node is InterfaceDeclarationSyntax interfaceDeclaration &&
-            index
-            .Value
-            .TypesByIdentifier
-            .TryGetValue(interfaceDeclaration.Identifier, out var declaredInterface) {
+            index.Value.TypesByIdentifier.TryGetValue(interfaceDeclaration.Identifier, out var declaredInterface) {
             return declaredInterface
         }
         // A part of a nested partial type: the binder merged it in place (#5340).
         if node is StructDeclarationSyntax partStruct && object.ReferenceEquals(partStruct.SyntaxTree, syntaxTree) &&
-            index
-            .Value
-            .TypesByPartStart
-            .TryGetValue(partStruct.Identifier.Span.Start, out var declaredPartStruct) {
+            index.Value.TypesByPartStart.TryGetValue(partStruct.Identifier.Span.Start, out var declaredPartStruct) {
             return declaredPartStruct
         }
         if node is InterfaceDeclarationSyntax partInterface && object.ReferenceEquals(
@@ -342,10 +324,7 @@ partial class SemanticModel {
                 return false
             }
         }
-        if !index
-            .Value
-            .StaticQualifierReads
-            .TryGetValue(member, out var selected) ||
+        if !index.Value.StaticQualifierReads.TryGetValue(member, out var selected) ||
             selected == nil ||
             selected.StaticQualifierType == nil ||
             selected.StaticQualifierSyntax == nil {
@@ -533,8 +512,7 @@ partial class SemanticModel {
             }
             if node is BoundExpression{LogicalCompletionOperand: {} operand} completion &&
                 operand.Syntax is {} origin &&
-                object
-                .ReferenceEquals(origin.SyntaxTree, tree) {
+                object.ReferenceEquals(origin.SyntaxTree, tree) {
                 if !logicalCompletions.TryGetValue(operand, out var existingCompletion) {
                     logicalCompletions.Add(operand, completion)
                 } else if !object.ReferenceEquals(existingCompletion, completion) {
@@ -542,8 +520,7 @@ partial class SemanticModel {
                 }
             }
             if node is BoundExpression{StaticMemberSyntax: {} member, StaticQualifierType: not nil} expression &&
-                object
-                .ReferenceEquals(member.SyntaxTree, tree) {
+                object.ReferenceEquals(member.SyntaxTree, tree) {
                 if !staticQualifierReads.TryGetValue(member, out var existing) {
                     staticQualifierReads.Add(member, expression)
                 } else if !object.ReferenceEquals(existing, expression) {
@@ -552,8 +529,7 @@ partial class SemanticModel {
                 }
             }
             if node is BoundExpression{StaticQualifierSyntax: {} qualifier, StaticQualifierType: {} qualifierType} &&
-                object
-                .ReferenceEquals(qualifier.SyntaxTree, tree) {
+                object.ReferenceEquals(qualifier.SyntaxTree, tree) {
                 if !staticQualifierTypes.TryGetValue(qualifier, out var existingType) {
                     staticQualifierTypes.Add(qualifier, qualifierType)
                 } else if !object.ReferenceEquals(existingType, qualifierType) {
@@ -721,11 +697,7 @@ partial class SemanticModel {
                         if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
                             for location in partLocations {
                                 if SourcePathIdentity.AreSame(location.FileName, tree.Text?.FileName) &&
-                                    location
-                                    .Span
-                                    .Start == partIdentifier
-                                    .Span
-                                    .Start {
+                                    location.Span.Start == partIdentifier.Span.Start {
                                     structsByIdentifier.TryAdd(partIdentifier, declaredStruct)
                                 }
                             }
@@ -749,11 +721,7 @@ partial class SemanticModel {
                         if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
                             for location in merged.PartialPartLocations {
                                 if SourcePathIdentity.AreSame(location.FileName, tree.Text?.FileName) &&
-                                    location
-                                    .Span
-                                    .Start == partIdentifier
-                                    .Span
-                                    .Start {
+                                    location.Span.Start == partIdentifier.Span.Start {
                                     structsByIdentifier.TryAdd(partIdentifier, declaredInterface)
                                 }
                             }
@@ -783,9 +751,7 @@ partial class SemanticModel {
                     initDeclaration.Identifier.SyntaxTree,
                     tree
                 ) &&
-                    !declaredStruct
-                    .StaticInitializerStatements
-                    .IsDefaultOrEmpty {
+                    !declaredStruct.StaticInitializerStatements.IsDefaultOrEmpty {
                     for statement in declaredStruct.StaticInitializerStatements {
                         walker.Visit(statement)
                     }
@@ -914,9 +880,7 @@ partial class SemanticModel {
                 eventDeclaration.Identifier.SyntaxTree,
                 tree
             ) &&
-                !eventDeclaration
-                .Identifier
-                .IsMissing &&
+                !eventDeclaration.Identifier.IsMissing &&
                 !declaredBySyntax.ContainsKey(eventDeclaration.Identifier) {
                 declaredBySyntax.Add(eventDeclaration.Identifier, symbol)
             }

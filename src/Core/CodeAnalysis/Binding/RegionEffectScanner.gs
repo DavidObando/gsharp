@@ -716,8 +716,7 @@ internal sealed class RegionEffectScanner {
                     current.ContainsCall = true
                 }
                 if kind == SyntaxKind.CompoundIndexAssignmentExpression ||
-                    kind == SyntaxKind
-                    .MemberFieldAssignmentExpression {
+                    kind == SyntaxKind.MemberFieldAssignmentExpression {
                     if Active() {
                         // An operator or a setter can run code.
                         current.ContainsOperatorCandidate = true
@@ -757,12 +756,8 @@ internal sealed class RegionEffectScanner {
                     RecordOperator(binary.OperatorToken.Kind, binary.Left, binary.Right)
                 } else if Active() &&
                     (
-                    binary
-                        .OperatorToken
-                        .Kind == SyntaxKind.EqualsEqualsToken ||
-                        binary
-                        .OperatorToken
-                        .Kind == SyntaxKind.BangEqualsToken
+                    binary.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken ||
+                        binary.OperatorToken.Kind == SyntaxKind.BangEqualsToken
                 ) {
                     // A comparison with `nil` is a null test unless the other operand is a non-nullable value type.
                     let other = if IsNilLiteral(binary.Left) {
@@ -2080,12 +2075,8 @@ internal sealed class RegionEffectScanner {
             }
             default {
                 // Equality with `nil` is a null test, not a call of a user operator.
-                if binary
-                    .OperatorToken
-                    .Kind == SyntaxKind.EqualsEqualsToken ||
-                    binary
-                    .OperatorToken
-                    .Kind == SyntaxKind.BangEqualsToken {
+                if binary.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken ||
+                    binary.OperatorToken.Kind == SyntaxKind.BangEqualsToken {
                     return !IsNilLiteral(binary.Left) && !IsNilLiteral(binary.Right)
                 }
                 return true
@@ -2167,9 +2158,7 @@ internal sealed class RegionEffectScanner {
             return literal.LiteralToken.Kind == SyntaxKind.StringToken
         }
         return inner is BinaryExpressionSyntax binary &&
-            binary
-            .OperatorToken
-            .Kind == SyntaxKind.PlusToken &&
+            binary.OperatorToken.Kind == SyntaxKind.PlusToken &&
             IsPureStringForm(binary.Left) &&
             IsPureStringForm(binary.Right)
     }
@@ -2181,31 +2170,19 @@ internal sealed class RegionEffectScanner {
             return true
         }
         if inner is LiteralExpressionSyntax literal {
-            return literal
-                .LiteralToken
-                .Kind == SyntaxKind.TrueKeyword ||
-                literal
-                .LiteralToken
-                .Kind == SyntaxKind.FalseKeyword
+            return literal.LiteralToken.Kind == SyntaxKind.TrueKeyword ||
+                literal.LiteralToken.Kind == SyntaxKind.FalseKeyword
         }
         if inner is UnaryExpressionSyntax unary && unary.OperatorToken.Kind == SyntaxKind.BangToken {
             return IsPureBooleanForm(unary.Operand)
         }
         if inner is BinaryExpressionSyntax binary {
-            if binary
-                .OperatorToken
-                .Kind == SyntaxKind.AmpersandAmpersandToken ||
-                binary
-                .OperatorToken
-                .Kind == SyntaxKind.PipePipeToken {
+            if binary.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken ||
+                binary.OperatorToken.Kind == SyntaxKind.PipePipeToken {
                 return true
             }
-            if binary
-                .OperatorToken
-                .Kind == SyntaxKind.EqualsEqualsToken ||
-                binary
-                .OperatorToken
-                .Kind == SyntaxKind.BangEqualsToken {
+            if binary.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken ||
+                binary.OperatorToken.Kind == SyntaxKind.BangEqualsToken {
                 return IsPureBooleanForm(binary.Left) && IsPureBooleanForm(binary.Right)
             }
         }
@@ -2221,9 +2198,7 @@ internal sealed class RegionEffectScanner {
             return literal.LiteralToken.Kind == SyntaxKind.StringToken
         }
         return inner is BinaryExpressionSyntax binary &&
-            binary
-            .OperatorToken
-            .Kind == SyntaxKind.PlusToken &&
+            binary.OperatorToken.Kind == SyntaxKind.PlusToken &&
             (IsStringForm(binary.Left) || IsStringForm(binary.Right))
     }
 
@@ -2720,16 +2695,9 @@ internal sealed class RegionEffectScanner {
 
     private func IsIntrinsicCast(call CallExpressionSyntax) bool -> call.Callee == nil &&
         call.ConversionTypeClause == nil &&
-        call
-        .Identifier
-        .ValueText == "cast" &&
-        call
-        .TypeArgumentList
-        ?.Arguments
-        .Count == 1 &&
-        call
-        .Arguments
-        .Count == 1
+        call.Identifier.ValueText == "cast" &&
+        call.TypeArgumentList?.Arguments.Count == 1 &&
+        call.Arguments.Count == 1
 
     // The path of an expression whose type the consumer resolves at the entry scope, or `nil`. A local of the
     // region stands for its origin; a name of the entry scope, a named call and a literal are roots.

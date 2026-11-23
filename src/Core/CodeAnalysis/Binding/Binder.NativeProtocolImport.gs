@@ -70,9 +70,7 @@ partial class Binder {
                     if origin != assembly.FullName {
                         let original = NativeProtocolMetadata.Read(originAssembly)
                         if original.Error != nil ||
-                            original
-                            .Manifest
-                            .ValueKind == JsonValueKind.Undefined ||
+                            original.Manifest.ValueKind == JsonValueKind.Undefined ||
                             !original
                             .Manifest
                             .GetProperty("entries")
@@ -206,12 +204,9 @@ partial class Binder {
                             }
                             if !NativeProtocolSignaturesMatch(matchingSlots[0], candidate, offset) ||
                                 offset == 1 &&
-                                candidate
-                                .Parameters[0]
-                                .Type != source ||
+                                candidate.Parameters[0].Type != source ||
                                 offset == 0 &&
-                                !owner
-                                .IsAssignableFrom(sourceClr) {
+                                !owner.IsAssignableFrom(sourceClr) {
                                 throw InvalidDataException(
                                     "native protocol witness signature does not match its exact insertion type"
                                 )
@@ -227,8 +222,7 @@ partial class Binder {
                             if support == nil ||
                                 !support.IsVisible ||
                                 support.IsGenericType ||
-                                !NativeProtocolMetadata
-                                .HasSupportedFeatureMarker(support) {
+                                !NativeProtocolMetadata.HasSupportedFeatureMarker(support) {
                                 throw InvalidDataException("missing public native protocol bridge contract")
                             }
                             factory = FindNativeProtocolBridge(support, decision, "factory", protocol, source)
@@ -324,20 +318,14 @@ partial class Binder {
         let methods = type.GetMethods()
         if !type.IsInterface || !NativeProtocolMetadata.HasSupportedFeatureMarker(type) ||
             type.IsGenericType ||
-            type
-            .GetInterfaces().Length != 0 || type.GetProperties().Length != 0 || type.GetEvents()
-            .Length != 0 ||
-            methods
-            .Any(
+            type.GetInterfaces().Length != 0 || type.GetProperties().Length != 0 || type.GetEvents().Length != 0 ||
+            methods.Any(
             (method MethodInfo) -> method.IsStatic ||
                 !method.IsAbstract ||
                 !ImportedMethodMetadataSupported(method) ||
                 method.IsGenericMethod ||
-                method
-                .ReturnType
-                .IsByRef ||
-                method
-                .GetParameters().Any((parameter ParameterInfo) -> parameter.ParameterType.IsByRef)
+                method.ReturnType.IsByRef ||
+                method.GetParameters().Any((parameter ParameterInfo) -> parameter.ParameterType.IsByRef)
         ) {
             throw InvalidDataException("unsupported native protocol slot contract")
         }
@@ -390,15 +378,9 @@ partial class Binder {
                 let symbolic = CreateImportedAdapterContractMethod(method, owner)
                 return symbolic.ReturnRefKind == RefKind.None &&
                     symbolic.Type == result &&
-                    symbolic
-                    .Parameters
-                    .Length == 1 &&
-                    symbolic
-                    .Parameters[0]
-                    .RefKind == RefKind.None &&
-                    symbolic
-                    .Parameters[0]
-                    .Type == parameter
+                    symbolic.Parameters.Length == 1 &&
+                    symbolic.Parameters[0].RefKind == RefKind.None &&
+                    symbolic.Parameters[0].Type == parameter
             }
         )
             .ToArray()

@@ -197,9 +197,7 @@ open class Issue4312ReferenceReceiverAccessorOpcodeTests {
                     if enclosingIsInstance &&
                         index > 0 &&
                         instructions[index - 1].OpCode == OpCodes.Ldarg_0 &&
-                        !target
-                        .Owner
-                        .IsNil &&
+                        !target.Owner.IsNil &&
                         IsSameOrAncestor(reader, target.Owner, enclosingType) {
                         baseCalls++
                         continue

@@ -390,10 +390,7 @@ Console.WriteLine("done")
                 .Select(reader.GetMethodDefinition)
                 .Single(
                 (m MethodDefinition) -> reader.GetString(m.Name) == ".ctor" &&
-                    m
-                    .DecodeSignature(SignatureArity(), genericContext: nil)
-                    .ParameterTypes
-                    .Length == 0
+                    m.DecodeSignature(SignatureArity(), genericContext: nil).ParameterTypes.Length == 0
             )
             let body = pe.GetMethodBody(ctor.RelativeVirtualAddress)
             let il = body.GetILContent()

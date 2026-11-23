@@ -217,10 +217,7 @@ internal class ChannelRuntimeBinder {
         let waiter = Required(selectWaiterType)
         let rent = waiter.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(
             (m MethodInfo) -> m.Name == "Rent" &&
-                m
-                .GetParameters()[^1]
-                .ParameterType
-                .FullName == "Gsharp.Concurrency.Context"
+                m.GetParameters()[^1].ParameterType.FullName == "Gsharp.Concurrency.Context"
         )
         selectWaiterClass ??= ImportedClassSymbol(waiter, declaration: nil, references: references)
         let function = ImportedFunctionSymbol(
@@ -248,17 +245,9 @@ internal class ChannelRuntimeBinder {
     /// @param context The ambient context to park under.
     /// @returns The rebound call, or [`call`](paramref) when it is not a defaulted rent.
     func RetargetSelectRent(call BoundImportedCallExpression, context BoundExpression) BoundExpression {
-        if call
-            .Function
-            .Name != "Rent" ||
-            call
-            .Function
-            .ImportedClass
-            .ClassType
-            .FullName != SelectWaiterTypeName ||
-            call
-            .Arguments
-            .Length != 2 ||
+        if call.Function.Name != "Rent" ||
+            call.Function.ImportedClass.ClassType.FullName != SelectWaiterTypeName ||
+            call.Arguments.Length != 2 ||
             !(call.Arguments[1] is BoundDefaultExpression) {
             return call
         }
@@ -366,11 +355,8 @@ internal class ChannelRuntimeBinder {
         let open_ = Required(selectWaiterType).GetMethods(BindingFlags.Public | BindingFlags.Instance).Single(
             (m MethodInfo) -> m.Name == name &&
                 m.IsGenericMethodDefinition &&
-                m
-                .GetParameters()[0]
-                .ParameterType is {IsGenericType: true} first &&
-                first
-                .GetGenericTypeDefinition().Name == carrier
+                m.GetParameters()[0].ParameterType is {IsGenericType: true} first &&
+                first.GetGenericTypeDefinition().Name == carrier
         )
         // A same-compilation element (a user struct, say) has no reference-context
         // CLR type, so the method closes over System.Object here and travels
@@ -805,19 +791,10 @@ internal class ChannelRuntimeBinder {
     /// @param context The ambient context to park on.
     /// @returns The rebound call, or [`call`](paramref) when it is not a defaulted facade operation.
     func RetargetFacadeCancellation(call BoundImportedCallExpression, context BoundExpression) BoundExpression {
-        if call
-            .Function
-            .ImportedClass
-            .ClassType
-            .FullName != ChannelOpsTypeName ||
-            call
-            .Arguments
-            .Length == 0 ||
+        if call.Function.ImportedClass.ClassType.FullName != ChannelOpsTypeName ||
+            call.Arguments.Length == 0 ||
             call.Arguments[^1] is not BoundDefaultExpression defaulted ||
-            defaulted
-            .Type
-            ?.ClrType
-            ?.FullName != CancellationTokenTypeName {
+            defaulted.Type?.ClrType?.FullName != CancellationTokenTypeName {
             return call
         }
         let element = ElementTypeOf(call)
@@ -842,17 +819,9 @@ internal class ChannelRuntimeBinder {
     /// @param context The ambient context to enter under.
     /// @returns The rebound call, or [`call`](paramref) when it is not a defaulted scope entry.
     func RetargetScopeEnter(call BoundImportedCallExpression, context BoundExpression) BoundExpression {
-        if call
-            .Function
-            .Name != "Enter" ||
-            call
-            .Function
-            .ImportedClass
-            .ClassType
-            .FullName != "Gsharp.Concurrency.ScopeFrame" ||
-            call
-            .Arguments
-            .Length != 1 ||
+        if call.Function.Name != "Enter" ||
+            call.Function.ImportedClass.ClassType.FullName != "Gsharp.Concurrency.ScopeFrame" ||
+            call.Arguments.Length != 1 ||
             !(call.Arguments[0] is BoundDefaultExpression) {
             return call
         }
@@ -1018,16 +987,9 @@ internal class ChannelRuntimeBinder {
         let open_ = ops.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(
             (m MethodInfo) -> m.Name == name && m.IsGenericMethodDefinition && m.GetParameters()
                 .Length == arguments.Length &&
-                m
-                .GetParameters()[0]
-                .ParameterType is {IsGenericType: true} carrier &&
-                carrier
-                .GetGenericTypeDefinition()
-                .Name == carrierName &&
-                m
-                .GetParameters()[^1]
-                .ParameterType
-                .FullName == cancellationTypeName
+                m.GetParameters()[0].ParameterType is {IsGenericType: true} carrier &&
+                carrier.GetGenericTypeDefinition().Name == carrierName &&
+                m.GetParameters()[^1].ParameterType.FullName == cancellationTypeName
         )
         let (closedElement, symbolic) = ProjectElement(elementType)
         let closed = open_.MakeGenericMethod(closedElement)
@@ -1115,13 +1077,8 @@ internal class ChannelRuntimeBinder {
         /// @param node A bound node.
         /// @returns `true` for a cancelled-arm registration.
         func IsSelectAddCancelled(node BoundExpression) bool -> node is BoundImportedInstanceCallExpression call &&
-            call
-            .Method
-            .Name == "AddCancelled" &&
-            call
-            .Method
-            .DeclaringType
-            ?.FullName == SelectWaiterTypeName
+            call.Method.Name == "AddCancelled" &&
+            call.Method.DeclaringType?.FullName == SelectWaiterTypeName
 
         /// Recognizes the blocking select wait the binder emits (ADR-0174 D8).
         /// @param call An imported instance call.
@@ -1130,13 +1087,8 @@ internal class ChannelRuntimeBinder {
             Variable: {Name: var name}
         } &&
             name.StartsWith("<select$$waiter$$", StringComparison.Ordinal) &&
-            call
-            .Method
-            .Name == "Wait" &&
-            call
-            .Method
-            .DeclaringType
-            ?.FullName == "Gsharp.Concurrency.SelectWaiter"
+            call.Method.Name == "Wait" &&
+            call.Method.DeclaringType?.FullName == "Gsharp.Concurrency.SelectWaiter"
 
         /// Recognizes the blocking scope exit the binder emits.
         /// @param call An imported instance call.
@@ -1145,26 +1097,15 @@ internal class ChannelRuntimeBinder {
             Variable: {Name: var name}
         } &&
             name.StartsWith("<scope$$frame$$", StringComparison.Ordinal) &&
-            call
-            .Method
-            .Name == "Exit" &&
-            call
-            .Method
-            .DeclaringType
-            ?.FullName == "Gsharp.Concurrency.ScopeFrame"
+            call.Method.Name == "Exit" &&
+            call.Method.DeclaringType?.FullName == "Gsharp.Concurrency.ScopeFrame"
 
         /// Recognizes a bound call on the facade by name.
         /// @param call The call.
         /// @param name The facade method name.
         /// @returns `true` when [`call`](paramref) targets `ChannelOps.<name>`.
-        func IsFacadeCall(call BoundImportedCallExpression, name string) bool -> call
-            .Function
-            .Name == name &&
-            call
-            .Function
-            .ImportedClass
-            .ClassType
-            .FullName == ChannelOpsTypeName
+        func IsFacadeCall(call BoundImportedCallExpression, name string) bool -> call.Function.Name == name &&
+            call.Function.ImportedClass.ClassType.FullName == ChannelOpsTypeName
 
         /// ADR-0174 D4/D7: distinguishes a facade call the BINDER lowered from a
         /// channel operator (`<-ch`, `ch <- v`, a channel
@@ -1189,9 +1130,7 @@ internal class ChannelRuntimeBinder {
         /// @param call A facade call, already matched by (cref:IsFacadeCall).
         /// @returns `true` when the trailing cancellation argument was written by the author rather than
         /// supplied by the binder.
-        func HasAuthorWrittenCancellation(call BoundImportedCallExpression) bool -> call
-            .Arguments
-            .Length != 0 &&
+        func HasAuthorWrittenCancellation(call BoundImportedCallExpression) bool -> call.Arguments.Length != 0 &&
             (!(call.Arguments[^1] is BoundDefaultExpression) || call.Arguments[^1].Syntax is DefaultExpressionSyntax) &&
             (call.Arguments[^1].Type?.ClrType?.FullName is CancellationTokenTypeName or ContextTypeName)
 
@@ -1304,10 +1243,7 @@ internal class ChannelRuntimeBinder {
         func IsAsyncLetCancelIfUnread(node BoundExpression) bool -> node is BoundImportedInstanceCallExpression{
             Method: {Name: "CancelIfUnread"}
         } call &&
-            call
-            .Method
-            .DeclaringType
-            ?.FullName == AsyncLetCellTypeName
+            call.Method.DeclaringType?.FullName == AsyncLetCellTypeName
 
         private func Await(
             syntax SyntaxNode?,

@@ -108,10 +108,7 @@ open class GSharpDocumentationParserTests {
 ` + "```" + `gs
 let x = 1
 ` + "```"))
-        let cb = doc!!
-            .Summary
-            .OfType[DocInline.CodeBlock]()
-            .FirstOrDefault() ??
+        let cb = doc!!.Summary.OfType[DocInline.CodeBlock]().FirstOrDefault() ??
             doc!!
             .Summary
             .OfType[DocInline.Para]()
@@ -132,10 +129,7 @@ let x = 1
 ` + "```" + `xmldoc
 <note>Important</note>
 ` + "```"))
-        let unknown = doc!!
-            .Summary
-            .OfType[DocInline.UnknownXmlElement]()
-            .FirstOrDefault() ??
+        let unknown = doc!!.Summary.OfType[DocInline.UnknownXmlElement]().FirstOrDefault() ??
             doc!!
             .Summary
             .OfType[DocInline.Para]()
@@ -154,10 +148,7 @@ let x = 1
         let doc DocumentationComment? = GSharpDocumentationParser.Parse(`Options:
 - First
 - Second`)
-        let list = doc!!
-            .Summary
-            .OfType[DocInline.List]()
-            .FirstOrDefault() ??
+        let list = doc!!.Summary.OfType[DocInline.List]().FirstOrDefault() ??
             doc!!
             .Summary
             .OfType[DocInline.Para]()
@@ -177,10 +168,7 @@ let x = 1
         let doc DocumentationComment? = GSharpDocumentationParser.Parse(`Steps:
 1. Alpha
 2. Beta`)
-        let list = doc!!
-            .Summary
-            .OfType[DocInline.List]()
-            .FirstOrDefault() ??
+        let list = doc!!.Summary.OfType[DocInline.List]().FirstOrDefault() ??
             doc!!
             .Summary
             .OfType[DocInline.Para]()

@@ -343,11 +343,7 @@ internal shared class PartialTypeMerger {
             primary.StructKeyword,
             primaryCtorPart?.PrimaryConstructorOpenParenthesisToken,
             primaryCtorPart?.PrimaryConstructorParameters ??
-                GSharp
-                .Core
-                .CodeAnalysis
-                .Syntax
-                .SeparatedSyntaxList[ParameterSyntax](ImmutableArray[SyntaxNode].Empty),
+                GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ParameterSyntax](ImmutableArray[SyntaxNode].Empty),
             primaryCtorPart?.PrimaryConstructorCloseParenthesisToken,
             baseInfo.BaseColonToken,
             baseInfo.BaseTypeIdentifier,
@@ -495,11 +491,7 @@ internal shared class PartialTypeMerger {
             mergedClauses,
             ctorArgPart?.BaseConstructorOpenParenthesisToken,
             ctorArgPart?.BaseConstructorArguments ??
-                GSharp
-                .Core
-                .CodeAnalysis
-                .Syntax
-                .SeparatedSyntaxList[ExpressionSyntax](ImmutableArray[SyntaxNode].Empty),
+                GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax](ImmutableArray[SyntaxNode].Empty),
             ctorArgPart?.BaseConstructorCloseParenthesisToken
         )
     }
@@ -536,13 +528,8 @@ internal shared class PartialTypeMerger {
         let baseColon SyntaxToken? = basedParts.FirstOrDefault()?.BaseColonToken
         var mergedBaseInterfaces GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax]
         if basedParts.Count <= 1 {
-            mergedBaseInterfaces = basedParts.FirstOrDefault()
-                ?.BaseTypeClauses ??
-                GSharp
-                .Core
-                .CodeAnalysis
-                .Syntax
-                .SeparatedSyntaxList[TypeClauseSyntax](ImmutableArray[SyntaxNode].Empty)
+            mergedBaseInterfaces = basedParts.FirstOrDefault()?.BaseTypeClauses ??
+                GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax](ImmutableArray[SyntaxNode].Empty)
         } else {
             let seen = HashSet[string](StringComparer.Ordinal)
             let unique = List[TypeClauseSyntax]()

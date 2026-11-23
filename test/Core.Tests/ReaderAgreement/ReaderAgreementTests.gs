@@ -47,12 +47,9 @@ abstract class ReaderAgreementTestBase {
         for entry in ReaderAgreementAllowlist.Entries {
             this.output.WriteLine(
                 "  ${string.Join("+", entry.Readers)} [${entry.Tag ?? "any position"}] (${entry.Issue}): " +
-                    excused
-                    .Count(
+                    excused.Count(
                     (d ReaderAgreementHarness.Disagreement) -> (entry.Tag == nil || d.Tags.Contains(entry.Tag)) &&
-                        d
-                        .Results
-                        .Any((r ReaderAgreementHarness.ReaderResult) -> entry.Readers.Contains(r.Reader))
+                        d.Results.Any((r ReaderAgreementHarness.ReaderResult) -> entry.Readers.Contains(r.Reader))
                 )
                     .ToString()
             )
@@ -138,11 +135,7 @@ class BclReaderAgreementTests : ReaderAgreementTestBase {
         private func LocateRefPack() string {
             let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location) ??
                 throw XunitException("prerequisite missing: host runtime directory")
-            let dotnetRoot = Directory
-                .GetParent(runtimeDirectory)
-                ?.Parent
-                ?.Parent
-                ?.FullName ??
+            let dotnetRoot = Directory.GetParent(runtimeDirectory)?.Parent?.Parent?.FullName ??
                 throw XunitException("prerequisite missing: dotnet root")
             let packsRoot = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref")
             let tfm = "net${Environment.Version.Major}.0"

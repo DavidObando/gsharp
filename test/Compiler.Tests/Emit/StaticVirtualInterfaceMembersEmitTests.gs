@@ -148,12 +148,8 @@ class Adder : IAdd {
             var found = false
             for implHandle in impls {
                 let mi = reader.GetMethodImplementation(implHandle)
-                if mi
-                    .MethodBody
-                    .Kind != HandleKind.MethodDefinition ||
-                    mi
-                    .MethodDeclaration
-                    .Kind != HandleKind.MethodDefinition {
+                if mi.MethodBody.Kind != HandleKind.MethodDefinition ||
+                    mi.MethodDeclaration.Kind != HandleKind.MethodDefinition {
                     continue
                 }
                 let body = reader.GetMethodDefinition(MethodDefinitionHandle(mi.MethodBody))

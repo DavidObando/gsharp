@@ -1052,9 +1052,9 @@ partial data class Point(X int32) {
                 ) -> node is MethodDeclarationSyntax method &&
                     method.Body == nil &&
                     method.ExpressionBody == nil &&
-                    method
-                    .Modifiers
-                    .Any((modifier Microsoft.CodeAnalysis.SyntaxToken) -> modifier.ValueText == "partial"),
+                    method.Modifiers.Any(
+                    (modifier Microsoft.CodeAnalysis.SyntaxToken) -> modifier.ValueText == "partial"
+                ),
                 (syntaxContext GeneratorSyntaxContext, _ CancellationToken) -> cast[IMethodSymbol](
                     syntaxContext.SemanticModel.GetDeclaredSymbol(syntaxContext.Node)
                 )

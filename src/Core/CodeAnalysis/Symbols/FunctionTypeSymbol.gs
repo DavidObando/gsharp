@@ -323,8 +323,7 @@ class FunctionTypeSymbol : TypeSymbol {
             if type != nil &&
                 !(type is TypeParameterSymbol) &&
                 !(type is FunctionTypeSymbol) &&
-                TypeSymbol
-                .ContainsSameCompilationUserType(type) {
+                TypeSymbol.ContainsSameCompilationUserType(type) {
                 let uid = int64(UserTypeIds.GetValue(type, (_ TypeSymbol) -> NextTypeParameterId()))
                 builder.Append("!ut").Append(uid)
                 return
@@ -561,12 +560,8 @@ class FunctionTypeSymbol : TypeSymbol {
                     appendComponent(builder, functionPointer.ReturnType)
                     builder.Append(')')
                 }
-                case st is StructSymbol when !st
-                    .EnclosingTypeArguments
-                    .IsDefaultOrEmpty ||
-                    !st
-                    .TypeArguments
-                    .IsDefaultOrEmpty {
+                case st is StructSymbol when !st.EnclosingTypeArguments.IsDefaultOrEmpty ||
+                    !st.TypeArguments.IsDefaultOrEmpty {
                     builder.Append("!struct:").Append(st.Definition?.Name ?? st.Name).Append('(')
                     let effectiveArgs = GSharp.Core.CodeAnalysis.Binding.Conversion.GetEffectiveStructTypeArguments(st)
                     for var i = 0; i < effectiveArgs.Length; i++ {
@@ -577,12 +572,8 @@ class FunctionTypeSymbol : TypeSymbol {
                     }
                     builder.Append(')')
                 }
-                case iface is InterfaceSymbol when !iface
-                    .EnclosingTypeArguments
-                    .IsDefaultOrEmpty ||
-                    !iface
-                    .TypeArguments
-                    .IsDefaultOrEmpty {
+                case iface is InterfaceSymbol when !iface.EnclosingTypeArguments.IsDefaultOrEmpty ||
+                    !iface.TypeArguments.IsDefaultOrEmpty {
                     builder.Append("!iface:").Append(iface.Definition?.Name ?? iface.Name).Append('(')
                     let effectiveArgs = GSharp
                         .Core

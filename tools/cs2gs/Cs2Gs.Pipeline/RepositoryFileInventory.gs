@@ -55,8 +55,7 @@ internal shared class RepositoryFileInventory {
         return IsBuildOutputPath(relativePath) ||
             IsPythonBytecodePath(relativePath) ||
             (segments.Length > 1 && segments[0].Equals("out", StringComparison.OrdinalIgnoreCase)) ||
-            segments
-            .Any(
+            segments.Any(
             (segment string) -> segment.Equals(".git", StringComparison.OrdinalIgnoreCase) || segment.Equals(
                 "TestResults",
                 StringComparison.OrdinalIgnoreCase

@@ -382,8 +382,7 @@ open partial class Parser {
         var sawComma = false
         while parseNext &&
             Current.Kind != SyntaxKind.CloseParenthesisToken &&
-            Current.Kind != SyntaxKind
-            .EndOfFileToken {
+            Current.Kind != SyntaxKind.EndOfFileToken {
             // ADR-0172: an element may declare a name before its type —
             // `(line int32, column int32)` — mirroring the parameter form
             // `identifier TypeClause`. Committed only when the identifier is

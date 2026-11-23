@@ -200,9 +200,7 @@ internal shared class CaptureBoxingRewriter {
         protected override func VisitAddressOfExpression(node BoundAddressOfExpression) {
             if node.Operand is BoundVariableExpression bve && this.boxInfo.TryGetValue(bve.Variable, out var bi) &&
                 !(bi.Original is ParameterSymbol) &&
-                !this
-                .allocated
-                .Contains(bve.Variable) && this.foundSet.Add(bve.Variable) {
+                !this.allocated.Contains(bve.Variable) && this.foundSet.Add(bve.Variable) {
                 this.found.Add(bi)
             }
             base.VisitAddressOfExpression(node)

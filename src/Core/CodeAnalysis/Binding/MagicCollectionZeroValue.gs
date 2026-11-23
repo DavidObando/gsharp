@@ -119,9 +119,7 @@ internal shared class MagicCollectionZeroValue {
         type is RectangularArrayTypeSymbol ||
         type is SequenceTypeSymbol ||
         type is ImportedTypeSymbol &&
-        type
-        .Type
-        .IsValueType ||
+        type.Type.IsValueType ||
         type is StructSymbol &&
         type.IsClass == false &&
         type.IsInline == false
@@ -190,8 +188,7 @@ internal shared class MagicCollectionZeroValue {
                 if declaringTypeArguments.IsDefaultOrEmpty && MemberLookup.GetProjectionReceiverImportedType(
                     receiverType ?? owner
                 ) is {} importedReceiver &&
-                    MemberLookup
-                    .TryGetSymbolicDeclaringContext(
+                    MemberLookup.TryGetSymbolicDeclaringContext(
                     importedReceiver,
                     primaryCtor.DeclaringType,
                     out _,
@@ -221,8 +218,7 @@ internal shared class MagicCollectionZeroValue {
             let index = owner.PrimaryConstructorParameters.IndexOf(parameter)
             let field = owner.GetDataConstructionPrimaryField(imported, index)
             if field != nil && ImportedAssemblySemantics.TryGetMagicCollectionFields(imported, out var kinds) &&
-                kinds
-                .TryGetValue(field.Name, out var kind) {
+                kinds.TryGetValue(field.Name, out var kind) {
                 let zero = TrySynthesizeEmptyInstanceFromMarker(
                     field,
                     kind,
@@ -290,9 +286,7 @@ internal shared class MagicCollectionZeroValue {
         return literal.Initializers.All(
             (initializer BoundFieldInitializer) ->
             (
-                literal
-                    .StructType
-                    .ClrType == nil ||
+                literal.StructType.ClrType == nil ||
                     initializer.Field == nil ||
                     BoundStructLiteralExpression.CanWriteInitializerField(literal.StructType, initializer.Field)
             ) &&
@@ -330,9 +324,7 @@ internal shared class MagicCollectionZeroValue {
             nil,
             structField
         ) != nil: "struct"
-        case importedField is ImportedTypeSymbol when importedField
-            .Type
-            .IsValueType &&
+        case importedField is ImportedTypeSymbol when importedField.Type.IsValueType &&
             TrySynthesizeEmptyInstance(nil, importedField) != nil: "struct"
         default: default(string?)
     }
@@ -426,9 +418,7 @@ internal shared class MagicCollectionZeroValue {
                 out var rank
             ) ||
                 rank < 2 ||
-                fieldInfo
-                .FieldType
-                .GetArrayRank() != rank {
+                fieldInfo.FieldType.GetArrayRank() != rank {
                 return nil
             }
             type = RectangularArrayTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType), rank)

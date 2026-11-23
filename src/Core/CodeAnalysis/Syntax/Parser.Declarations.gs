@@ -230,8 +230,7 @@ open partial class Parser {
         if aggregateKind != SyntaxKind.ClassKeyword &&
             aggregateKind != SyntaxKind.StructKeyword &&
             aggregateKind != SyntaxKind.EnumKeyword &&
-            aggregateKind != SyntaxKind
-            .InterfaceKeyword {
+            aggregateKind != SyntaxKind.InterfaceKeyword {
             // Should not happen — TryDetectAggregateDeclarationHead already
             // verified the lookahead. Defensive recovery: emit and bail.
             Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword)
@@ -891,8 +890,7 @@ open partial class Parser {
         } else if Current.Kind == SyntaxKind.ClassKeyword ||
             Current.Kind == SyntaxKind.StructKeyword ||
             Current.Kind == SyntaxKind.EnumKeyword ||
-            Current.Kind == SyntaxKind
-            .InterfaceKeyword {
+            Current.Kind == SyntaxKind.InterfaceKeyword {
             aggregateKeyword = NextToken()
             kindText = aggregateKeyword.Text
             let modifierSpelling = if seenSpellings.Count == 0 {
@@ -1339,8 +1337,7 @@ open partial class Parser {
             if Current.Kind == SyntaxKind.PublicKeyword ||
                 Current.Kind == SyntaxKind.InternalKeyword ||
                 Current.Kind == SyntaxKind.PrivateKeyword ||
-                Current.Kind == SyntaxKind
-                .ProtectedKeyword {
+                Current.Kind == SyntaxKind.ProtectedKeyword {
                 // Accessibility modifier may be followed by an optional
                 // `open`/`override` and an optional `async` (only meaningful
                 // before `func`), then `func`, `prop`, or `event`.

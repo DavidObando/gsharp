@@ -75,12 +75,8 @@ class TranslateStage : IMigrationStage {
         let projectPath = Path.GetFullPath(context.App.ProjectPath)
         let workspaceConfig string? = DeclaredProjectItems.WorkspaceConfiguration(projectPath, context.Options.Config)
         var repositoryProject LoadedCSharpProject? = nil
-        let usedRepositoryLoadedProject = context
-            .Options
-            .RepositoryLoadedProjects != nil &&
-            context
-            .Options
-            .RepositoryLoadedProjects!!.TryGetValue(projectPath, out repositoryProject)
+        let usedRepositoryLoadedProject = context.Options.RepositoryLoadedProjects != nil &&
+            context.Options.RepositoryLoadedProjects!!.TryGetValue(projectPath, out repositoryProject)
         let projects IReadOnlyList[LoadedCSharpProject] = if usedRepositoryLoadedProject {
             []LoadedCSharpProject{repositoryProject!!}
         } else {
@@ -401,9 +397,7 @@ class TranslateStage : IMigrationStage {
                         throw InvalidOperationException(
                             "Could not resolve a local GSharp.CodeAnalysis.Analyzers.Testing " +
                                 "package for the mirrored analyzer test project '" +
-                                context
-                                .App
-                                .ProjectPath +
+                                context.App.ProjectPath +
                                 "'."
                         )
                     }
@@ -653,8 +647,7 @@ class TranslateStage : IMigrationStage {
                         let fullSourcePath = Path.GetFullPath(document.FilePath)
                         if context.Options.RepositoryEmittedOutputs!!.TryGetValue(fullGsPath, out var prior) {
                             if !string.Equals(prior.Source, fullSourcePath, StringComparison.OrdinalIgnoreCase) ||
-                                !string
-                                .Equals(prior.Text, printed, StringComparison.Ordinal) {
+                                !string.Equals(prior.Text, printed, StringComparison.Ordinal) {
                                 throw InvalidOperationException(
                                     "Migration output collision: '${document.FilePath}' and '${prior.Source}' both emit '$gsPath'."
                                 )
@@ -675,20 +668,14 @@ class TranslateStage : IMigrationStage {
                     let emitted = EmittedGsFile(gsPath, relativeGsPath, document.FilePath, printed){
                         IsFromReferencedProject = isReferencedProject
                     }
-                    if context
-                        .Options
-                        .OutputLayout == MigrationOutputLayout.Repository &&
-                        RepositoryFileInventory
-                        .IsBuildOutputPath(
+                    if context.Options.OutputLayout == MigrationOutputLayout.Repository &&
+                        RepositoryFileInventory.IsBuildOutputPath(
                         Path.GetRelativePath(
                             CanonicalRootPath.Resolve(context.Options.SourceRoot)!!,
                             CanonicalRootPath.Resolve(document.FilePath)!!
                         )
                     ) &&
-                        context
-                        .Options
-                        .RepositorySourceFiles
-                        ?.Contains(Path.GetFullPath(document.FilePath)) == false {
+                        context.Options.RepositorySourceFiles?.Contains(Path.GetFullPath(document.FilePath)) == false {
                         emitted.GeneratedSource = GeneratedValidationSource.Capture(
                             document.SyntaxTree.GetText().ToString(),
                             Path.GetRelativePath(
@@ -1103,12 +1090,8 @@ class TranslateStage : IMigrationStage {
                 .GetAttributes()
                 .Where(
                 (attribute AttributeData) -> attribute.AttributeClass?.ToDisplayString() == attributeName &&
-                    attribute
-                    .ConstructorArguments
-                    .Length == 1 &&
-                    attribute
-                    .ConstructorArguments[0]
-                    .Value is string &&
+                    attribute.ConstructorArguments.Length == 1 &&
+                    attribute.ConstructorArguments[0].Value is string &&
                     !handAuthoredTrees.Contains((attribute.ApplicationSyntaxReference?.SyntaxTree)!!)
             )
                 .Select((attribute AttributeData) -> cast[string](attribute.ConstructorArguments[0].Value))
@@ -1246,9 +1229,10 @@ class TranslateStage : IMigrationStage {
             .CodeAnalysis
             .DiagnosticSeverity
             .Error &&
-            diagnostic
-            .Id
-            .StartsWith("CS", StringComparison.Ordinal) && !diagnostic.Id.StartsWith("CS2GS", StringComparison.Ordinal)
+            diagnostic.Id.StartsWith("CS", StringComparison.Ordinal) && !diagnostic.Id.StartsWith(
+            "CS2GS",
+            StringComparison.Ordinal
+        )
 
         /// A best-effort, append-only per-app text log — the Translate-stage
         /// counterpart of (cref:TestParityStage)'s identical `Note`
@@ -1274,8 +1258,7 @@ class TranslateStage : IMigrationStage {
                     StringComparison.OrdinalIgnoreCase
                 ) ||
                     IsResxDesignerCodebehind(sourcePath) ||
-                    Path
-                    .GetExtension(sourcePath).Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
+                    Path.GetExtension(sourcePath).Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
                     IsUnderDirectory(sourcePath, outputDirectory) {
                     continue
                 }
@@ -1571,9 +1554,9 @@ class TranslateStage : IMigrationStage {
             return options.ExcludedProjectPaths.Any(
                 (p string) -> string.Equals(Path.GetFullPath(p), fullPath, StringComparison.OrdinalIgnoreCase)
             ) ||
-                options
-                .PassthroughProjectPaths
-                .Any((p string) -> string.Equals(Path.GetFullPath(p), fullPath, StringComparison.OrdinalIgnoreCase))
+                options.PassthroughProjectPaths.Any(
+                (p string) -> string.Equals(Path.GetFullPath(p), fullPath, StringComparison.OrdinalIgnoreCase)
+            )
         }
 
         private func IsUnselectedReferencedProjectValid(
@@ -1584,13 +1567,8 @@ class TranslateStage : IMigrationStage {
             cancellationToken CancellationToken
         ) bool {
             let referencedPath = Path.GetFullPath(referencedProject.ProjectPath!!)
-            if context
-                .Options
-                .ValidatedReferencedProjects != nil &&
-                context
-                .Options
-                .ValidatedReferencedProjects!!
-                .TryGetValue(referencedPath, out var cached) {
+            if context.Options.ValidatedReferencedProjects != nil &&
+                context.Options.ValidatedReferencedProjects!!.TryGetValue(referencedPath, out var cached) {
                 if !cached {
                     Note(
                         context,

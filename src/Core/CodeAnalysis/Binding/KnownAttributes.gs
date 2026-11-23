@@ -392,8 +392,7 @@ internal shared class KnownAttributes {
         let expectedToken = expectedAssembly.GetPublicKeyToken() ?? Array.Empty[uint8]()
         return (
             string.Equals(candidateAssembly.Name, expectedAssembly.Name, StringComparison.OrdinalIgnoreCase) &&
-                candidateToken
-                .AsSpan().SequenceEqual(expectedToken)
+                candidateToken.AsSpan().SequenceEqual(expectedToken)
         ) ||
             (
             IsPlatformAssemblyIdentity(candidateAssembly.Name, candidateToken) &&
@@ -510,8 +509,7 @@ internal shared class KnownAttributes {
                 continue
             }
             sawConditional = true
-            if attr.GetConstructorArgument(0, "conditionString")
-                ?.Value is string symbol &&
+            if attr.GetConstructorArgument(0, "conditionString")?.Value is string symbol &&
                 preprocessorSymbols != nil &&
                 preprocessorSymbols.Contains(symbol) {
                 return false
@@ -609,9 +607,7 @@ internal shared class KnownAttributes {
                 var localValidOn = AttributeTargets.All
                 var localAllowMultiple = false
                 if cad.ConstructorArguments != nil &&
-                    cad
-                    .ConstructorArguments
-                    .Count >= 1 &&
+                    cad.ConstructorArguments.Count >= 1 &&
                     TryConvertToInt32(cad.ConstructorArguments[0].Value, out var raw) {
                     localValidOn = AttributeTargets(raw)
                 }

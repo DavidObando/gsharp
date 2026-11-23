@@ -490,8 +490,7 @@ internal shared class MetadataMemberComparison {
         signature.Return.Type,
         signature.Return.IsDeferred
     ) +
-        string
-        .Concat(
+        string.Concat(
         signature.Parameters.Select(
             (p MetadataNullablePosition) -> ";" + MetadataNullability.Mark(p.Type, p.IsDeferred)
         )

@@ -460,11 +460,7 @@ Console.WriteLine(FirstChar("gsharp"))
                 throw XunitException("prerequisite missing: host runtime directory not resolvable")
                 default(string)
             } else {
-                Directory
-                    .GetParent(runtimeDirectory)
-                    ?.Parent
-                    ?.Parent
-                    ?.FullName ??
+                Directory.GetParent(runtimeDirectory)?.Parent?.Parent?.FullName ??
                     throw XunitException("prerequisite missing: dotnet root not resolvable")
             }
         }

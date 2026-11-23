@@ -304,8 +304,7 @@ internal shared class StructuralProjectionPlanner {
         for (parameter, parameterType) in parameters {
             constructorNames.Add(parameter.Name)
             if explicitNames?.Contains(parameter.Name) != true && !sourceMembers.ContainsKey(parameter.Name) &&
-                parameter
-                .HasExplicitDefaultValue {
+                parameter.HasExplicitDefaultValue {
                 constructorSlots.Add(
                     StructuralProjectionSlot(
                         parameter.Name,
@@ -431,9 +430,7 @@ internal shared class StructuralProjectionPlanner {
         if !explicitConstructors.IsDefaultOrEmpty {
             var selected ConstructorSymbol? = nil
             for candidate in explicitConstructors {
-                if candidate
-                    .Function
-                    .Accessibility != Accessibility.Public ||
+                if candidate.Function.Accessibility != Accessibility.Public ||
                     !ParametersCanBeSupplied(
                     candidate.Parameters,
                     target.GetConstructorParameterTypesForConstruction(candidate),
@@ -572,8 +569,7 @@ internal shared class StructuralProjectionPlanner {
             let parameterType = MemberLookup.GetClrMethodParameterTypeSymbol(target, constructor!!, parameterIndex)
             targetNames.Add(parameterName)
             if explicitNames?.Contains(parameterName) != true && !sourceMembers.ContainsKey(parameterName) &&
-                parameter
-                .IsOptional {
+                parameter.IsOptional {
                 constructorSlots.Add(
                     StructuralProjectionSlot(parameterName, parameterType, source: nil, clrDefaultParameter: parameter)
                 )
@@ -872,10 +868,7 @@ internal shared class StructuralProjectionPlanner {
                 continue
             }
             if sourceMember.Type != targetMember.Type &&
-                !sourceMember
-                .Type
-                .ClrType
-                .IsSameAs(targetMember.Type.ClrType) {
+                !sourceMember.Type.ClrType.IsSameAs(targetMember.Type.ClrType) {
                 return true
             }
         }
@@ -920,8 +913,7 @@ internal shared class StructuralProjectionPlanner {
                         property.HasGetter &&
                         !property.IsStatic &&
                         !property.IsIndexer &&
-                        !result
-                        .ContainsKey(property.Name) {
+                        !result.ContainsKey(property.Name) {
                         result.Add(
                             property.Name,
                             StructuralProjectionSourceMember(
@@ -939,8 +931,7 @@ internal shared class StructuralProjectionPlanner {
                         property.HasGetter &&
                         !property.IsStatic &&
                         !property.IsIndexer &&
-                        !result
-                        .ContainsKey(property.Name) {
+                        !result.ContainsKey(property.Name) {
                         result.Add(
                             property.Name,
                             StructuralProjectionSourceMember(
@@ -956,8 +947,7 @@ internal shared class StructuralProjectionPlanner {
                     if field.Accessibility == Accessibility.Public &&
                         !field.IsStatic &&
                         !field.IsConst &&
-                        !result
-                        .ContainsKey(field.Name) {
+                        !result.ContainsKey(field.Name) {
                         result.Add(
                             field.Name,
                             StructuralProjectionSourceMember(
@@ -978,8 +968,7 @@ internal shared class StructuralProjectionPlanner {
         }
         for property in ClrTypeUtilities.SafeGetProperties(clrType, PublicInstance) {
             if property.GetIndexParameters().Length == 0 && property.GetGetMethod(nonPublic: false) != nil &&
-                !result
-                .ContainsKey(property.Name) {
+                !result.ContainsKey(property.Name) {
                 result.Add(
                     property.Name,
                     StructuralProjectionSourceMember(

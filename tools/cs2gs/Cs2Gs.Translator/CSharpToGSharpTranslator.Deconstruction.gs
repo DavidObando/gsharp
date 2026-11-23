@@ -69,15 +69,9 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             let original = method.OriginalDefinition
             return original.ExplicitInterfaceImplementations.IsDefaultOrEmpty && contractMembers.Any(
-                (candidate IMethodSymbol) -> candidate
-                    .ExplicitInterfaceImplementations
-                    .IsDefaultOrEmpty &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(candidate.ContainingType, original.ContainingType) && string.CompareOrdinal(
-                    candidate.ToDisplayString(),
-                    original.ToDisplayString()
-                ) < 0
+                (candidate IMethodSymbol) -> candidate.ExplicitInterfaceImplementations.IsDefaultOrEmpty &&
+                    SymbolEqualityComparer.Default.Equals(candidate.ContainingType, original.ContainingType) &&
+                    string.CompareOrdinal(candidate.ToDisplayString(), original.ToDisplayString()) < 0
             )
         }
 
@@ -133,8 +127,7 @@ partial class CSharpToGSharpTranslator {
                         continue
                     }
                     if EmittedNameAllocator.IsUserRecordDeconstruct(inherited) ||
-                        allocator
-                        .HasRenamedDeconstructContract(inherited) {
+                        allocator.HasRenamedDeconstructContract(inherited) {
                         taken.Add(this.RecordDeconstructionAdapterName(inherited, compilation))
                     }
                 }
@@ -216,8 +209,7 @@ partial class CSharpToGSharpTranslator {
             )
                 .ToArray()
             return rootPatterns.Any((pattern RecursivePatternSyntax) -> pattern.PropertyPatternClause != nil) &&
-                allPatterns
-                .Any(
+                allPatterns.Any(
                 (pattern RecursivePatternSyntax) ->
                 this.UserRecordPatternDeconstruct(pattern) != nil && this.RecordPatternNeedsDeconstruction(pattern)
             )
@@ -360,9 +352,7 @@ partial class CSharpToGSharpTranslator {
             }
             let requiresConversion = receiverType == nil ||
                 IsNullableValueType(receiverType) ||
-                !SymbolEqualityComparer
-                .Default
-                .Equals(UnwrapNullablePatternType(receiverType), matchedType)
+                !SymbolEqualityComparer.Default.Equals(UnwrapNullablePatternType(receiverType), matchedType)
             let (guardFlag, guardValue) = this.GetOrCreateRecordPatternTypeGuard(
                 owner,
                 path,
@@ -405,16 +395,11 @@ partial class CSharpToGSharpTranslator {
                         valueExpr
                     }
                     if recursive.Designation is SingleVariableDesignationSyntax recVar &&
-                        this
-                        .context
-                        .GetDeclaredSymbol(recVar) is {} recBound {
+                        this.context.GetDeclaredSymbol(recVar) is {} recBound {
                         this.state.PatternBindings[recBound] = guardedMemberReceiver!!
                     }
                 } else if this.IsGSharpNullablePatternReceiver(receiver) ||
-                    receiverType?.NullableAnnotation == Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated ||
+                    receiverType?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated ||
                     IsNullableValueType(receiverType) {
                     guardedMemberReceiver = EnsureNonNullAssertion(receiver)
                 }
@@ -458,25 +443,17 @@ partial class CSharpToGSharpTranslator {
                         this.TryResolveMigratedProducerDeconstruct(method.OverriddenMethod, out _, out _)
                 ) &&
                     (
-                    !method.OverriddenMethod!!
-                        .DeclaringSyntaxReferences
-                        .IsDefaultOrEmpty ||
+                    !method.OverriddenMethod!!.DeclaringSyntaxReferences.IsDefaultOrEmpty ||
                         this.TryResolveMigratedProducerDeconstruct(method.OverriddenMethod, out _, out _)
                 )
             ) ||
-                method
-                .Parameters
-                .Length < 1 ||
-                method
-                .Parameters
-                .Any((parameter IParameterSymbol) -> parameter.RefKind != RefKind.Out) {
+                method.Parameters.Length < 1 ||
+                method.Parameters.Any((parameter IParameterSymbol) -> parameter.RefKind != RefKind.Out) {
                 return nil
             }
             if !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty {
                 let explicitSlot = method.ExplicitInterfaceImplementations[0]
-                if explicitSlot
-                    .DeclaringSyntaxReferences
-                    .IsDefaultOrEmpty &&
+                if explicitSlot.DeclaringSyntaxReferences.IsDefaultOrEmpty &&
                     !this.TryResolveMigratedProducerDeconstruct(explicitSlot, out _, out _) {
                     return nil
                 }
@@ -495,11 +472,8 @@ partial class CSharpToGSharpTranslator {
             let types = this.MapRecordDeconstructionParameterTypes(method)
             let resultType = this.RecordDeconstructionResultType(method, types)
             if !forceConcreteImplementation &&
-                method
-                .ContainingType
-                .TypeKind == TypeKind.Interface &&
-                method
-                .IsAbstract {
+                method.ContainingType.TypeKind == TypeKind.Interface &&
+                method.IsAbstract {
                 return MethodDeclaration(
                     this.RecordDeconstructionAdapterName(method),
                     Array.Empty[Parameter](),
@@ -609,12 +583,8 @@ partial class CSharpToGSharpTranslator {
                 !method.ReturnsVoid ||
                 method.Arity != 0 ||
                 method.IsPartialDefinition ||
-                !method
-                .ExplicitInterfaceImplementations
-                .IsDefaultOrEmpty ||
-                method
-                .ContainingType
-                .TypeKind == TypeKind.Interface ||
+                !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty ||
+                method.ContainingType.TypeKind == TypeKind.Interface ||
                 this.BuildRecordDeconstructionAdapter(method) == nil {
                 return results
             }
@@ -717,9 +687,7 @@ partial class CSharpToGSharpTranslator {
                 method.Name != "Deconstruct" ||
                 !method.ReturnsVoid ||
                 method.IsPartialDefinition ||
-                method
-                .Parameters
-                .Length < 2 ||
+                method.Parameters.Length < 2 ||
                 method
                 .Parameters
                 .Skip(1)
@@ -973,16 +941,12 @@ partial class CSharpToGSharpTranslator {
             }
             if method.IsOverride {
                 return method.OverriddenMethod != nil &&
-                    method.OverriddenMethod!!
-                    .DeclaringSyntaxReferences
-                    .IsDefaultOrEmpty &&
+                    method.OverriddenMethod!!.DeclaringSyntaxReferences.IsDefaultOrEmpty &&
                     !this.TryResolveMigratedProducerDeconstruct(method.OverriddenMethod, out _, out _)
             }
             for explicitSlot in method.ExplicitInterfaceImplementations {
                 if explicitSlot.Name == "Deconstruct" &&
-                    explicitSlot
-                    .DeclaringSyntaxReferences
-                    .IsDefaultOrEmpty &&
+                    explicitSlot.DeclaringSyntaxReferences.IsDefaultOrEmpty &&
                     !this.TryResolveMigratedProducerDeconstruct(explicitSlot, out _, out _) {
                     return true
                 }
@@ -997,9 +961,10 @@ partial class CSharpToGSharpTranslator {
                 }
                 for slot in iface.GetMembers("Deconstruct").OfType[IMethodSymbol]() {
                     if !this.TryResolveMigratedProducerDeconstruct(slot, out _, out _) &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(owner.FindImplementationForInterfaceMember(slot), method) {
+                        SymbolEqualityComparer.Default.Equals(
+                        owner.FindImplementationForInterfaceMember(slot),
+                        method
+                    ) {
                         return true
                     }
                 }
@@ -1034,13 +999,8 @@ partial class CSharpToGSharpTranslator {
                         !impl.IsPartialDefinition &&
                         (
                         EmittedNameAllocator.IsUserRecordDeconstruct(impl) ||
-                            this
-                            .nameAllocator
-                            .HasRenamedDeconstructContract(impl) || this.TryResolveMigratedProducerDeconstruct(
-                            impl,
-                            out _,
-                            out _
-                        )
+                            this.nameAllocator.HasRenamedDeconstructContract(impl) ||
+                            this.TryResolveMigratedProducerDeconstruct(impl, out _, out _)
                     ) &&
                         seen.Add(impl) {
                         results.Add(impl)
@@ -1089,12 +1049,11 @@ partial class CSharpToGSharpTranslator {
                         )
                     ) {
                         if symbol.BaseType is {} existingBase && baseInterfaces.Contains(iface) &&
-                            !existingBase
-                            .DeclaringSyntaxReferences
-                            .IsDefaultOrEmpty &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(existingBase.FindImplementationForInterfaceMember(slot), impl) {
+                            !existingBase.DeclaringSyntaxReferences.IsDefaultOrEmpty &&
+                            SymbolEqualityComparer.Default.Equals(
+                            existingBase.FindImplementationForInterfaceMember(slot),
+                            impl
+                        ) {
                             continue
                         }
                         if seenSlots.Add(slot) {
@@ -1113,23 +1072,14 @@ partial class CSharpToGSharpTranslator {
             if method == nil ||
                 method.IsStatic ||
                 method.IsPartialDefinition ||
-                !method
-                .ContainingType
-                .IsValueType ||
-                method
-                .ExplicitInterfaceImplementations
-                .IsDefaultOrEmpty {
+                !method.ContainingType.IsValueType ||
+                method.ExplicitInterfaceImplementations.IsDefaultOrEmpty {
                 return false
             }
             let explicitSlot = method.ExplicitInterfaceImplementations[0]
             return this.nameAllocator.HasRenamedDeconstructContract(method) ||
-                this
-                .nameAllocator
-                .HasRenamedDeconstructContract(explicitSlot) || this.TryResolveMigratedProducerDeconstruct(
-                explicitSlot,
-                out _,
-                out _
-            )
+                this.nameAllocator.HasRenamedDeconstructContract(explicitSlot) ||
+                this.TryResolveMigratedProducerDeconstruct(explicitSlot, out _, out _)
         }
 
         private func ValueTypeExplicitDeconstructHelperName(method IMethodSymbol) string {
@@ -1311,24 +1261,14 @@ partial class CSharpToGSharpTranslator {
             }
             for other in this.GetImportedDeconstructContractMethods(owner) {
                 if SymbolEqualityComparer.Default.Equals(other, method) ||
-                    other
-                    .Parameters
-                    .Length != method
-                    .Parameters
-                    .Length ||
+                    other.Parameters.Length != method.Parameters.Length ||
                     other.Arity != method.Arity {
                     continue
                 }
                 var sameParameters = true
                 for var i = 0; i < method.Parameters.Length; i++ {
-                    if other
-                        .Parameters[i]
-                        .RefKind != method
-                        .Parameters[i]
-                        .RefKind ||
-                        !SymbolEqualityComparer
-                        .Default
-                        .Equals(other.Parameters[i].Type, method.Parameters[i].Type) {
+                    if other.Parameters[i].RefKind != method.Parameters[i].RefKind ||
+                        !SymbolEqualityComparer.Default.Equals(other.Parameters[i].Type, method.Parameters[i].Type) {
                         sameParameters = false
                         break
                     }
@@ -1545,14 +1485,8 @@ partial class CSharpToGSharpTranslator {
             out helperName string?
         ) bool {
             helperName = nil
-            let enclosingType = this
-                .state
-                .CurrentEmittedAggregate ??
-                this
-                .context
-                .SemanticModel
-                .GetEnclosingSymbol(site.SpanStart)
-                ?.ContainingType
+            let enclosingType = this.state.CurrentEmittedAggregate ??
+                this.context.SemanticModel.GetEnclosingSymbol(site.SpanStart)?.ContainingType
             if enclosingType == nil || !enclosingType.IsRecord || enclosingType.IsValueType {
                 return false
             }
@@ -1560,9 +1494,10 @@ partial class CSharpToGSharpTranslator {
                 if contractMethod.IsOverride &&
                     contractMethod.OverriddenMethod != nil &&
                     !contractMethod.OverriddenMethod!!.IsAbstract &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(contractMethod.OverriddenMethod!!.OriginalDefinition, baseMethod.OriginalDefinition) {
+                    SymbolEqualityComparer.Default.Equals(
+                    contractMethod.OverriddenMethod!!.OriginalDefinition,
+                    baseMethod.OriginalDefinition
+                ) {
                     helperName = this.ImportedBaseDeconstructHelperName(contractMethod)
                     return true
                 }
@@ -1583,9 +1518,7 @@ partial class CSharpToGSharpTranslator {
             }
             let isOverride = method.IsOverride &&
                 method.OverriddenMethod != nil &&
-                method.OverriddenMethod!!
-                .DeclaringSyntaxReferences
-                .IsDefaultOrEmpty
+                method.OverriddenMethod!!.DeclaringSyntaxReferences.IsDefaultOrEmpty
             let slotVisibility = if isOverride &&
                 (
                 method.DeclaredAccessibility == Accessibility.Protected ||
@@ -1617,9 +1550,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 for reference in ctor.DeclaringSyntaxReferences {
                     if reference.GetSyntax() is ConstructorDeclarationSyntax{Initializer: {} initializer} &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(
+                        SymbolEqualityComparer.Default.Equals(
                         (
                             TranslationContext
                                 .GetEffectiveSemanticModel(owner, reference.SyntaxTree)
@@ -1651,9 +1582,7 @@ partial class CSharpToGSharpTranslator {
             var bridgeIsUnsafe = isUnsafe
             if symbol.BaseType is {} baseSymbol && baseSymbol.SpecialType != SpecialType.System_Object {
                 let compilations = this.context.RepositoryCompilations ?? this.context.SiblingCompilations
-                let isSourceOrMigratedBase = !baseSymbol
-                    .DeclaringSyntaxReferences
-                    .IsDefaultOrEmpty ||
+                let isSourceOrMigratedBase = !baseSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty ||
                     (
                     compilations != nil && ObliviousNullabilityAnalyzer.RunSourceDeclarations(
                         baseSymbol.OriginalDefinition,
@@ -1666,15 +1595,9 @@ partial class CSharpToGSharpTranslator {
                     if !this.context.Compilation.IsSymbolAccessibleWithin(ctor, symbol) {
                         continue
                     }
-                    let isBaseCopyCtor = ctor
-                        .Parameters
-                        .Length == 1 &&
-                        ctor
-                        .Parameters[0]
-                        .RefKind == RefKind.None &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(ctor.Parameters[0].Type, baseSymbol)
+                    let isBaseCopyCtor = ctor.Parameters.Length == 1 &&
+                        ctor.Parameters[0].RefKind == RefKind.None &&
+                        SymbolEqualityComparer.Default.Equals(ctor.Parameters[0].Type, baseSymbol)
                     if isBaseCopyCtor {
                         if !this.SelectsBaseCopyConstructor(symbol, ctor) {
                             continue
@@ -1908,9 +1831,7 @@ partial class CSharpToGSharpTranslator {
             if extension == nil ||
                 !extension.IsExtensionMethod ||
                 extension.Name != "Deconstruct" ||
-                extension
-                .Parameters
-                .Length < 2 {
+                extension.Parameters.Length < 2 {
                 return false
             }
             let receiverType = actualReceiverType as INamedTypeSymbol ??
@@ -1921,9 +1842,7 @@ partial class CSharpToGSharpTranslator {
                     extension.Parameters[0].Type
                 }
             ) as INamedTypeSymbol ??
-                extension
-                .Parameters[0]
-                .Type as INamedTypeSymbol
+                extension.Parameters[0].Type as INamedTypeSymbol
             if !this.IsSourceOrMigratedRecordType(receiverType) {
                 return false
             }
@@ -1947,13 +1866,8 @@ partial class CSharpToGSharpTranslator {
                 .GetMembers("PrintMembers")
                 .OfType[IMethodSymbol]()
                 .Any(
-                (member IMethodSymbol) -> member
-                    .Parameters
-                    .Length == 1 &&
-                    member
-                    .Parameters[0]
-                    .Type
-                    .ToDisplayString() == "System.Text.StringBuilder"
+                (member IMethodSymbol) -> member.Parameters.Length == 1 &&
+                    member.Parameters[0].Type.ToDisplayString() == "System.Text.StringBuilder"
             ) {
                 return true
             }
@@ -1970,16 +1884,13 @@ partial class CSharpToGSharpTranslator {
 
         private func IsImportedRecordUserDeconstruct(method IMethodSymbol?) bool -> method != nil &&
             method.Name == "Deconstruct" &&
-            method
-            .DeclaringSyntaxReferences
-            .IsDefaultOrEmpty &&
+            method.DeclaringSyntaxReferences.IsDefaultOrEmpty &&
             this.IsImportedRecordOrRecordStruct(method.ContainingType) && !this.TryResolveMigratedProducerDeconstruct(
             method,
             out _,
             out _
         ) &&
-            !method
-            .GetAttributes().Any(
+            !method.GetAttributes().Any(
             (attribute AttributeData) -> attribute.AttributeClass?.ToDisplayString() ==
             "System.Runtime.CompilerServices.CompilerGeneratedAttribute"
         )
@@ -2049,8 +1960,7 @@ partial class CSharpToGSharpTranslator {
                 nil
             }
             if method != nil && this.UsesRecordDeconstructionAdapter(method, receiverType) &&
-                this
-                .GetDeconstructOutputParameters(method).Any(
+                this.GetDeconstructOutputParameters(method).Any(
                 (parameter IParameterSymbol) -> parameter.Type.IsRefLikeType
             ) {
                 this.context.ReportUnsupported(
@@ -2113,8 +2023,7 @@ partial class CSharpToGSharpTranslator {
                 if receiverParam.RefKind == RefKind.Ref ||
                     receiverParam.RefKind == RefKind.Out ||
                     receiverParam.RefKind == RefKind.In ||
-                    receiverParam.RefKind == RefKind
-                    .RefReadOnlyParameter {
+                    receiverParam.RefKind == RefKind.RefReadOnlyParameter {
                     let receiverCopy = this.NewSpillName()
                     receiverPrologue = List[GStatement]{
                         LocalDeclarationStatement(BindingKind.Var, receiverCopy, initializer: receiver)
@@ -2363,9 +2272,7 @@ partial class CSharpToGSharpTranslator {
                         source.IsExtensionMethod &&
                             source.Name == "Deconstruct" &&
                             source.ReturnsVoid &&
-                            source
-                            .Parameters
-                            .Length >= 2 &&
+                            source.Parameters.Length >= 2 &&
                             this.ExtensionReceiverCanBeRecord(source.Parameters[0].Type)
                     ) {
                         sourceMethod = source
@@ -2401,9 +2308,7 @@ partial class CSharpToGSharpTranslator {
         private func DeconstructionOutputSyntax(receiver ExpressionSyntax?, index int32) ExpressionSyntax? {
             return if receiver != nil &&
                 Unparenthesize(receiver) is TupleExpressionSyntax tuple &&
-                index < tuple
-                .Arguments
-                .Count {
+                index < tuple.Arguments.Count {
                 tuple.Arguments[index].Expression
             } else {
                 nil
@@ -2449,10 +2354,7 @@ partial class CSharpToGSharpTranslator {
 
         private func UserRecordPatternDeconstruct(recursive RecursivePatternSyntax) IMethodSymbol? {
             if recursive.PositionalPatternClause != nil &&
-                this
-                .context
-                .SemanticModel
-                .GetOperation(recursive) is IRecursivePatternOperation operation &&
+                this.context.SemanticModel.GetOperation(recursive) is IRecursivePatternOperation operation &&
                 operation.DeconstructSymbol is IMethodSymbol method &&
                 this.UsesRecordDeconstructionAdapter(method, operation.MatchedType) {
                 return method
@@ -2506,8 +2408,7 @@ partial class CSharpToGSharpTranslator {
                     this.UserRecordPatternDeconstruct(recursive) != nil && this.RecordPatternNeedsDeconstruction(
                     recursive
                 ) &&
-                    this
-                    .RecordPatternDecisionPath(recursive, owner).StartsWith(path, StringComparison.Ordinal)
+                    this.RecordPatternDecisionPath(recursive, owner).StartsWith(path, StringComparison.Ordinal)
             )
         }
 
@@ -2564,10 +2465,7 @@ partial class CSharpToGSharpTranslator {
                 this.state.StoredPatternCaptures.Add(local)
             }
             if this.IsGSharpNullablePatternReceiver(memberAccess) ||
-                canonicalType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated {
+                canonicalType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 this.state.GSharpNullablePatternReceivers.Add(local)
             }
             let innerTest = buildInner(local)
@@ -2597,8 +2495,7 @@ partial class CSharpToGSharpTranslator {
             if memberType != nil && !IsTrivialOperand(memberAccess) && this.RecordPatternDecisionOwner(
                 subPattern
             ) is {} owner &&
-                this
-                .DecisionSubtreeRunsUserRecordDeconstruct(owner, subPattern) {
+                this.DecisionSubtreeRunsUserRecordDeconstruct(owner, subPattern) {
                 let path = this.RecordPatternDecisionPath(subPattern, owner)
                 let canonicalType = this.GetCanonicalPatternMemberStorageType(memberSymbol, memberType) ?? memberType
                 let hasCovariantMemberType = !SymbolEqualityComparer.Default.Equals(
@@ -2948,11 +2845,7 @@ partial class CSharpToGSharpTranslator {
                                     producerKey = parentOperation.MatchedType.ToDisplayString()
                                 }
                             } else if parentRecursive.Type != nil {
-                                producerKey = this
-                                    .context
-                                    .GetTypeInfo(parentRecursive.Type)
-                                    .Type
-                                    ?.ToDisplayString() ??
+                                producerKey = this.context.GetTypeInfo(parentRecursive.Type).Type?.ToDisplayString() ??
                                     ""
                             }
                         }
@@ -3233,10 +3126,7 @@ partial class CSharpToGSharpTranslator {
                     return group
                 }
             ) {
-                if this
-                    .state
-                    .HoistedExpressionValues
-                    .ContainsKey(preceding) ||
+                if this.state.HoistedExpressionValues.ContainsKey(preceding) ||
                     preceding is LiteralExpressionSyntax ||
                     preceding is ThisExpressionSyntax ||
                     preceding is BaseExpressionSyntax ||
@@ -3611,9 +3501,7 @@ partial class CSharpToGSharpTranslator {
         // `DiscardDesignationSyntax`).
         private func IsDeconstructionDiscard(targetExpr ExpressionSyntax) bool -> (
             targetExpr is IdentifierNameSyntax discardCandidate &&
-                discardCandidate
-                .Identifier
-                .ValueText == "_" &&
+                discardCandidate.Identifier.ValueText == "_" &&
                 this.IsTrueDiscard(discardCandidate)
         ) ||
             targetExpr is DeclarationExpressionSyntax &&
@@ -3683,11 +3571,7 @@ partial class CSharpToGSharpTranslator {
             let rightTypeSymbol = rightTypeInfo.Type ?? rightTypeInfo.ConvertedType
             if rightTypeSymbol is not INamedTypeSymbol rightType ||
                 !rightType.IsTupleType ||
-                rightType
-                .TupleElements
-                .Length != leftTuple
-                .Arguments
-                .Count {
+                rightType.TupleElements.Length != leftTuple.Arguments.Count {
                 return false
             }
             // Nested target tuples/designations still need recursive lowering.
@@ -3697,15 +3581,11 @@ partial class CSharpToGSharpTranslator {
                     (
                     argument.Expression is DeclarationExpressionSyntax declaration &&
                         (
-                        !declaration
-                            .Type
-                            .IsVar ||
+                        !declaration.Type.IsVar ||
                             declaration.Designation is ParenthesizedVariableDesignationSyntax ||
                             (
                             declaration.Designation is SingleVariableDesignationSyntax single &&
-                                this
-                                .context
-                                .GetDeclaredSymbol(single) is ILocalSymbol local &&
+                                this.context.GetDeclaredSymbol(single) is ILocalSymbol local &&
                                 this.DeconstructionLocalRequiresTypedDeclaration(local, declaration.Type.IsVar)
                         )
                     )
@@ -3891,25 +3771,17 @@ partial class CSharpToGSharpTranslator {
                     Designation: SingleVariableDesignationSyntax directSingle
                 } directDecl &&
                     !this.IsPointerDeconstructTupleOutput(deconstruction.Method, i, effectiveReceiverType) &&
-                    this
-                    .context
-                    .GetDeclaredSymbol(directSingle) is ILocalSymbol directLocal && !this.IsLocalReassigned(
+                    this.context.GetDeclaredSymbol(directSingle) is ILocalSymbol directLocal && !this.IsLocalReassigned(
                     directLocal
                 ) &&
                     !this.DeconstructionLocalRequiresTypedDeclaration(directLocal, directDecl.Type.IsVar) &&
                     (
-                    directDecl
-                        .Type
-                        .IsVar ||
+                    directDecl.Type.IsVar ||
                         (
                         rhsTupleType != nil &&
                             rhsTupleType.IsTupleType == true &&
-                            i < rhsTupleType
-                            .TupleElements
-                            .Length &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(directLocal.Type, rhsTupleType.TupleElements[i].Type)
+                            i < rhsTupleType.TupleElements.Length &&
+                            SymbolEqualityComparer.Default.Equals(directLocal.Type, rhsTupleType.TupleElements[i].Type)
                     )
                 ) {
                     temps.Add(this.EmittedName(directSingle, directSingle.Identifier)!!)
@@ -3925,9 +3797,7 @@ partial class CSharpToGSharpTranslator {
                     this.HasOnlyImmediateDiscards(nestedDiscardCheck) &&
                     rhsTupleType != nil &&
                     rhsTupleType.IsTupleType == true &&
-                    i < rhsTupleType
-                    .TupleElements
-                    .Length &&
+                    i < rhsTupleType.TupleElements.Length &&
                     (rhsTupleType.TupleElements[i].Type is INamedTypeSymbol and {IsTupleType: true})
                 let needsRealTemp = forceRealTemps ||
                     (!sideEffectFreeAllDiscardTuple && !this.IsDeconstructionDiscard(targetExpr))
@@ -4146,10 +4016,7 @@ partial class CSharpToGSharpTranslator {
                 // unbridged store: a wrong
                 // `!!` would throw where C# stores the null, and a wrong
                 // omission is a compile error that gsc reports.
-                return if this
-                    .state
-                    .EmittedLocalStorageAcceptsNil
-                    .TryGetValue(local, out var acceptsNil) &&
+                return if this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var acceptsNil) &&
                     !acceptsNil {
                     this.ReportStoreBridge(target, value, EnsureNonNullAssertion(value), slot, slotType)
                 } else {
@@ -4303,8 +4170,7 @@ partial class CSharpToGSharpTranslator {
                         type = MakeNullable(type)
                     }
                     if this.TryGetDeconstructionSlotInfo(single, out var conversion, out var sourceType) &&
-                        !conversion
-                        .IsIdentity {
+                        !conversion.IsIdentity {
                         initializer = this.BuildConvertedDeconstructionValue(
                             value,
                             sourceType,
@@ -4349,11 +4215,10 @@ partial class CSharpToGSharpTranslator {
                     effectiveReceiverType
                 ) &&
                     child is SingleVariableDesignationSyntax childSingle &&
-                    this
-                    .context
-                    .GetDeclaredSymbol(childSingle) is ILocalSymbol local && !this.IsLocalReassigned(local) &&
-                    !this
-                    .DeconstructionLocalRequiresTypedDeclaration(local, inferredType) {
+                    this.context.GetDeclaredSymbol(childSingle) is ILocalSymbol local && !this.IsLocalReassigned(
+                    local
+                ) &&
+                    !this.DeconstructionLocalRequiresTypedDeclaration(local, inferredType) {
                     temps.Add(this.EmittedName(childSingle, childSingle.Identifier)!!)
                     directNames[i] = true
                 } else {
@@ -4462,9 +4327,7 @@ partial class CSharpToGSharpTranslator {
             if !this.IsLocalReassigned(local) ||
                 !(
                 this.InferredLocalDeclarationIsNullable(local) ||
-                    local
-                    .Type
-                    .IsReferenceType &&
+                    local.Type.IsReferenceType &&
                     this.TryGetRefStorageSlot(local, 0) is {} slot && this.RefStorageIsNullable(
                     slot,
                     includeArrays: true
@@ -4474,10 +4337,7 @@ partial class CSharpToGSharpTranslator {
             }
             let storage = this.GetDeconstructedTupleStorageType(local)
             if storage != nil &&
-                local
-                .DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax() is SingleVariableDesignationSyntax d &&
+                local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is SingleVariableDesignationSyntax d &&
                 d
                 .Ancestors()
                 .OfType[AssignmentExpressionSyntax]()
@@ -4516,14 +4376,8 @@ partial class CSharpToGSharpTranslator {
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
                 ?.GetSyntax() is not SingleVariableDesignationSyntax single ||
-                single
-                .Ancestors()
-                .OfType[AssignmentExpressionSyntax]()
-                .FirstOrDefault() is not{} assignment ||
-                this
-                .context
-                .GetTypeInfo(assignment.Right)
-                .Type is not INamedTypeSymbol{IsTupleType: true} tuple ||
+                single.Ancestors().OfType[AssignmentExpressionSyntax]().FirstOrDefault() is not{} assignment ||
+                this.context.GetTypeInfo(assignment.Right).Type is not INamedTypeSymbol{IsTupleType: true} tuple ||
                 !TryFindDeconstructionPath(single, assignment.Left, List[int32](), out var path) {
                 return nil
             }
@@ -4598,9 +4452,7 @@ partial class CSharpToGSharpTranslator {
                     let declaration = cast[DeclarationExpressionSyntax](argument.Expression)
                     if declaration.Designation is ParenthesizedVariableDesignationSyntax ||
                         (
-                        !declaration
-                            .Type
-                            .IsVar &&
+                        !declaration.Type.IsVar &&
                             (
                             !this.TryGetDeconstructionSlotInfo(declaration, out var conversion, out _) ||
                                 !conversion.IsIdentity
@@ -4694,15 +4546,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func CanAssignShortCircuitSpill(operandSyntax SyntaxNode) bool {
-            if this
-                .state
-                .ShortCircuitSpillDeclarations == nil ||
-                this
-                .state
-                .PendingSpillPrologue == nil ||
-                this
-                .state
-                .ShortCircuitSpillScope == nil {
+            if this.state.ShortCircuitSpillDeclarations == nil ||
+                this.state.PendingSpillPrologue == nil ||
+                this.state.ShortCircuitSpillScope == nil {
                 return false
             }
             for var current SyntaxNode? = operandSyntax; current != nil; current = current!!.Parent {
@@ -4885,8 +4731,7 @@ partial class CSharpToGSharpTranslator {
                         default(ITypeSymbol?)
                     }
                     let spilledReceiver = if receiverType != nil &&
-                        CSharpTypeMapper
-                        .CanAnnotateNullableReferenceInGSharp(receiverType) {
+                        CSharpTypeMapper.CanAnnotateNullableReferenceInGSharp(receiverType) {
                         let receiverSymbol = this.context.GetSymbolInfo(receiverSyntax).Symbol
                         let forceSnapshot = safeReceiver is IdentifierExpression &&
                             (receiverSymbol is ILocalSymbol || receiverSymbol is IParameterSymbol) &&
@@ -4912,15 +4757,8 @@ partial class CSharpToGSharpTranslator {
                         (syntax as ElementAccessExpressionSyntax)?.Expression
                     )
                     let isFromEnd = syntax is ElementAccessExpressionSyntax elementAccess &&
-                        elementAccess
-                        .ArgumentList
-                        .Arguments
-                        .Count == 1 &&
-                        elementAccess
-                        .ArgumentList
-                        .Arguments[0]
-                        .Expression
-                        .IsKind(SyntaxKind.IndexExpression)
+                        elementAccess.ArgumentList.Arguments.Count == 1 &&
+                        elementAccess.ArgumentList.Arguments[0].Expression.IsKind(SyntaxKind.IndexExpression)
                     if index.Indices.Count > 1 {
                         // Issue #4350: a multi-parameter indexer spills every
                         // argument, left to right, so each still runs once.
@@ -4970,10 +4808,7 @@ partial class CSharpToGSharpTranslator {
 
         private func TranslateLocalFunction(localFunction LocalFunctionStatementSyntax) IReadOnlyList[GStatement] {
             if this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedSuspending &&
-                this
-                .state
-                .UnsupportedSuspendingRefCaptureLocalFunctions
-                .Contains(unsupportedSuspending) {
+                this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Contains(unsupportedSuspending) {
                 this.context.ReportUnsupported(
                     localFunction,
                     "recursive async or iterator local function '${localFunction.Identifier.Text}' captures written or address-exposed storage in its declaring scope; G# forbids the by-reference parameter needed to preserve that shared storage on a suspending helper."
@@ -4985,10 +4820,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedNestedClosure &&
-                this
-                .state
-                .UnsupportedNestedClosureRefCaptureLocalFunctions
-                .Contains(unsupportedNestedClosure) {
+                this.state.UnsupportedNestedClosureRefCaptureLocalFunctions.Contains(unsupportedNestedClosure) {
                 this.context.ReportUnsupported(
                     localFunction,
                     "lifted recursive local function '${localFunction.Identifier.Text}' captures written or address-exposed storage inside a nested closure; G# forbids capturing the by-reference parameter needed to preserve that shared storage."
@@ -5000,10 +4832,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedGeneric &&
-                this
-                .state
-                .UnsupportedRecursiveEnclosingTypeParameterLocalFunctions
-                .Contains(unsupportedGeneric) {
+                this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Contains(unsupportedGeneric) {
                 this.context.ReportUnsupported(
                     localFunction,
                     "recursive local function '${localFunction.Identifier.Text}' cannot preserve an enclosing type parameter in G# lowering."
@@ -5015,10 +4844,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol unsupportedTopLevel &&
-                this
-                .state
-                .UnsupportedTopLevelRecursiveLocalFunctions
-                .Contains(unsupportedTopLevel) {
+                this.state.UnsupportedTopLevelRecursiveLocalFunctions.Contains(unsupportedTopLevel) {
                 this.context.ReportUnsupported(
                     localFunction,
                     "top-level recursive local function '${localFunction.Identifier.Text}' requires a member-helper fallback, but top-level statements have no containing aggregate for that helper."
@@ -5052,13 +4878,8 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol recursiveLocal &&
-                this
-                .state
-                .LiftedRecursiveLocalFunctions
-                .TryGetValue(recursiveLocal, out var recursiveLift) {
-                if recursiveLift
-                    .Captures
-                    .Count > 0 &&
+                this.state.LiftedRecursiveLocalFunctions.TryGetValue(recursiveLocal, out var recursiveLift) {
+                if recursiveLift.Captures.Count > 0 &&
                     (
                     this.IsLocalFunctionReferencedAsValue(
                         recursiveLocal,
@@ -5092,10 +4913,7 @@ partial class CSharpToGSharpTranslator {
                     }
                     if captureType.IsReferenceType &&
                         capture.Symbol is ILocalSymbol local &&
-                        this
-                        .state
-                        .EmittedLocalStorageAcceptsNil
-                        .TryGetValue(local, out var acceptsNil) {
+                        this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var acceptsNil) {
                         captureType = captureType.WithNullableAnnotation(
                             if acceptsNil {
                                 Microsoft.CodeAnalysis.NullableAnnotation.Annotated
@@ -5161,18 +4979,14 @@ partial class CSharpToGSharpTranslator {
                 )
                 if recursiveLift.IsStatic {
                     (
-                        this
-                            .state
-                            .PendingStaticSynthHelpers ??
+                        this.state.PendingStaticSynthHelpers ??
                             throw InvalidOperationException(
                             "A recursive static local-function lift must be emitted inside an aggregate."
                         )
                     ).Add(helper)
                 } else {
                     (
-                        this
-                            .state
-                            .PendingInstanceSynthHelpers ??
+                        this.state.PendingInstanceSynthHelpers ??
                             throw InvalidOperationException(
                             "A recursive instance local-function lift must be emitted inside an aggregate."
                         )
@@ -5183,13 +4997,8 @@ partial class CSharpToGSharpTranslator {
             if localFunction.Modifiers.Any(SyntaxKind.StaticKeyword) && this.context.GetDeclaredSymbol(
                 localFunction
             ) is IMethodSymbol staticLocal &&
-                this
-                .state
-                .LiftedStaticLocalFunctions
-                .TryGetValue(staticLocal, out var liftedName) &&
-                this
-                .state
-                .PendingStaticSynthHelpers != nil {
+                this.state.LiftedStaticLocalFunctions.TryGetValue(staticLocal, out var liftedName) &&
+                this.state.PendingStaticSynthHelpers != nil {
                 if !this.state.EmittedLiftedStaticLocalFunctions.Add(staticLocal) {
                     return []GStatement{RawStatement("// lifted static local function $liftedName")}
                 }
@@ -5389,10 +5198,7 @@ partial class CSharpToGSharpTranslator {
             // capture-by-reference closures preserve C#'s shared mutation of the
             // captured sibling locals.
             if localSymbol != nil &&
-                this
-                .state
-                .RecursiveLocalFunctionGroups
-                .TryGetValue(localSymbol, out var recursiveBinding) {
+                this.state.RecursiveLocalFunctionGroups.TryGetValue(localSymbol, out var recursiveBinding) {
                 let statements = List[GStatement]()
                 if !recursiveBinding.Members.Any(
                     (m IMethodSymbol) -> this.state.EmittedRecursiveGroupMembers.Contains(m)

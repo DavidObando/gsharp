@@ -71,9 +71,7 @@ class RewriterClonePreservationAnalyzer : GSharpDiagnosticAnalyzer {
                 declaration,
                 context.CancellationToken
             ) is not FunctionSymbol method ||
-                method
-                .Parameters
-                .Length != 1 ||
+                method.Parameters.Length != 1 ||
                 RewriterBase(method.ContainingType?.BaseType) == nil {
                 return
             }
@@ -195,8 +193,7 @@ class RewriterClonePreservationAnalyzer : GSharpDiagnosticAnalyzer {
                 for invocation in initializer.DescendantNodesAndSelf().OfType[CallExpressionSyntax]() {
                     if invocation.Parent is BaseClassCallExpressionSyntax && invocation.Arguments.Any(
                         (argument ExpressionSyntax) -> argument is NameExpressionSyntax identifier &&
-                            identifier
-                            .GetLastToken().Text == parameterName
+                            identifier.GetLastToken().Text == parameterName
                     ) {
                         names.Add(declarator.Identifier.Text)
                         break
@@ -265,8 +262,7 @@ class RewriterClonePreservationAnalyzer : GSharpDiagnosticAnalyzer {
                     case CallExpressionSyntax{
                         Parent: AccessorExpressionSyntax{IsNullConditional: false} access
                     } when access.LeftPart is NameExpressionSyntax owner &&
-                        owner
-                        .GetLastToken().Text == nodeTypeName {
+                        owner.GetLastToken().Text == nodeTypeName {
                         return true
                     }
                 }
@@ -295,18 +291,15 @@ class RewriterClonePreservationAnalyzer : GSharpDiagnosticAnalyzer {
                     case access is AccessorExpressionSyntax{
                         IsNullConditional: false
                     } when access.LeftPart is NameExpressionSyntax target &&
-                        target
-                        .GetLastToken().Text == parameterName {
+                        target.GetLastToken().Text == parameterName {
                         reads.Add(access.RightPart.GetFirstToken().Text)
                     }
                     case pattern is IsExpressionSyntax when pattern.Expression is NameExpressionSyntax target &&
-                        target
-                        .GetLastToken().Text == parameterName {
+                        target.GetLastToken().Text == parameterName {
                         AddPatternMembers(pattern.Pattern, reads)
                     }
                     case switchStatement is SwitchStatementSyntax when switchStatement.Expression is NameExpressionSyntax target &&
-                        target
-                        .GetLastToken().Text == parameterName {
+                        target.GetLastToken().Text == parameterName {
                         for label in switchStatement.Cases.Where(
                             (switchCase SwitchCaseSyntax) -> !switchCase.IsDefault &&
                                 (switchCase.Guard != nil || switchCase.Value is not ConstantPatternSyntax)
@@ -353,11 +346,8 @@ class RewriterClonePreservationAnalyzer : GSharpDiagnosticAnalyzer {
                     break
                 }
             }
-            if index < 0 || model.GetSymbolInfo(invocation, cancellationToken)
-                .Symbol is not FunctionSymbol target ||
-                index >= target
-                .Parameters
-                .Length {
+            if index < 0 || model.GetSymbolInfo(invocation, cancellationToken).Symbol is not FunctionSymbol target ||
+                index >= target.Parameters.Length {
                 return
             }
             let helper FunctionDeclarationSyntax? = SourceDeclaration(target, cancellationToken)

@@ -94,12 +94,8 @@ shared class PositionalPatternClauseFixture {
         for line in[]PpLine{originLine, otherLine} {
             let lineDescription = switch line {
                 case ppLine is PpLine when ppLine.Start is PpPoint &&
-                    ppLine
-                    .Start
-                    .X == 0 &&
-                    ppLine
-                    .Start
-                    .Y == 0: "starts-at-origin"
+                    ppLine.Start.X == 0 &&
+                    ppLine.Start.Y == 0: "starts-at-origin"
                 default: "other-start"
             }
             Console.WriteLine(

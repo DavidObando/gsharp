@@ -455,8 +455,7 @@ shared class NullAssertionPolishPass {
                 return path
             }
             let info = DirectoryInfo(directory)
-            let resolvedDirectory = info.ResolveLinkTarget(returnFinalTarget: true)
-                ?.FullName ??
+            let resolvedDirectory = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName ??
                 ResolveAncestrySymlinks(directory)
             return Path.Combine(resolvedDirectory, Path.GetFileName(path))
         } catch (e Exception) when e is IOException || e is UnauthorizedAccessException || e is ArgumentException {

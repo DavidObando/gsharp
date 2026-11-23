@@ -594,8 +594,7 @@ internal partial class StatementBinder {
         if bound.IsValid &&
             isFinalBeforeGuard &&
             binding.Initializer is not ParenthesizedExpressionSyntax &&
-            IfLetBindingSupport
-            .HasAmbiguousBooleanContinuation(bound.Initializer, binding.Initializer) {
+            IfLetBindingSupport.HasAmbiguousBooleanContinuation(bound.Initializer, binding.Initializer) {
             Diagnostics.ReportIfLetGuardSplitsInitializer(
                 binding.Initializer.Location,
                 binding.Identifier.ValueText,
@@ -1132,8 +1131,7 @@ internal partial class StatementBinder {
             return nil
         }
         if SmartCastStability.TryGetStableMemberPath(operand, out var path, out var currentType) &&
-            removedFacts
-            .TryGetValue(path, out var removedMemberType) {
+            removedFacts.TryGetValue(path, out var removedMemberType) {
             let declared = MemberLookup.GetDeclaredAccessPathType(path, currentType)
             if IsNullabilityOnlyFact(declared, removedMemberType) &&
                 (currentType == removedMemberType || currentType == declared) {
@@ -1585,8 +1583,7 @@ internal partial class StatementBinder {
             if effectiveValueSyntax == nil && equalsToken != nil {
                 if boundTargetExpr is not BoundErrorExpression &&
                     boundTargetExpr.Type != nil &&
-                    boundTargetExpr.Type != TypeSymbol
-                    .Error {
+                    boundTargetExpr.Type != TypeSymbol.Error {
                     let probeLocal = LocalVariableSymbol("$$macap_probe", isReadOnly: true, boundTargetExpr.Type)
                     $scope.TryDeclareVariable(probeLocal)
                     effectiveValueSyntax = NameExpressionSyntax(
@@ -1677,10 +1674,7 @@ internal partial class StatementBinder {
                 let boundReceiver = bindExpression(receiver, false)
                 ApplySubExpressionNarrowingEffects(receiver, boundReceiver)
             } else if unwrapped is UnaryExpressionSyntax dereference &&
-                dereference
-                .OperatorToken
-                .Kind == SyntaxKind
-                .StarToken {
+                dereference.OperatorToken.Kind == SyntaxKind.StarToken {
                 let boundOperand = bindExpression(dereference.Operand, false)
                 ApplySubExpressionNarrowingEffects(dereference.Operand, boundOperand)
             }
@@ -1779,14 +1773,11 @@ internal partial class StatementBinder {
             let plan = BindMultiAssignmentTarget(targets[i], sourceSyntax, syntax.OperatorToken, captures)
             rawPlans[i] = plan
             let sourceTargetType = FindMultiAssignmentSourceConversionType(plan.AssignedValue, source) ??
-                plan
-                .AssignedValue
-                ?.Type
+                plan.AssignedValue?.Type
             if (rawElement == TypeSymbol.Null || rawElement is TupleTypeSymbol{HasNilElement: true}) &&
                 sourceTargetType != nil &&
                 sourceTargetType != TypeSymbol.Error &&
-                !TypeSymbol
-                .ContainsNullLiteralType(sourceTargetType) {
+                !TypeSymbol.ContainsNullLiteralType(sourceTargetType) {
                 resolvedElements.Add(TupleTypeSymbol.ResolveNilElements(rawElement, sourceTargetType))
             } else {
                 resolvedElements.Add(TupleTypeSymbol.ResolveNilElements(rawElement))
@@ -2296,12 +2287,9 @@ internal partial class StatementBinder {
         }
 
         protected override func RewriteBlockExpression(node BoundBlockExpression) BoundExpression {
-            if node
-                .Statements
-                .Length == 1 &&
+            if node.Statements.Length == 1 &&
                 node.Statements[0] is BoundVariableDeclaration{Initializer: BoundVariableExpression v} &&
-                object
-                .ReferenceEquals(v.Variable, source) {
+                object.ReferenceEquals(v.Variable, source) {
                 if node.Type == replacement.Type {
                     return replacement
                 }
@@ -2336,9 +2324,7 @@ internal partial class StatementBinder {
                 return FindMultiAssignmentSourceConversionType(conv.Expression, source)
             }
             case block is BoundBlockExpression {
-                if block
-                    .Statements
-                    .Length == 1 &&
+                if block.Statements.Length == 1 &&
                     block.Statements[0] is BoundVariableDeclaration{Initializer: BoundVariableExpression v} &&
                     object.ReferenceEquals(v.Variable, source) {
                     return block.Type
@@ -2868,8 +2854,7 @@ internal partial class StatementBinder {
                 }
                 case fa is BoundFieldAccessExpression when fa.Receiver != nil &&
                     fa.InterfaceType == nil &&
-                    SmartCastStability
-                    .IsStableField(fa.Field) {
+                    SmartCastStability.IsStableField(fa.Field) {
                     return TryResolveStablePathWithCaptures(fa.Receiver!!, captures)?.Append(fa.Field)
                 }
                 case pa is BoundPropertyAccessExpression when pa.Receiver != nil && SmartCastStability.IsStableProperty(
@@ -2878,8 +2863,7 @@ internal partial class StatementBinder {
                     return TryResolveStablePathWithCaptures(pa.Receiver!!, captures)?.Append(pa.Property)
                 }
                 case ca is BoundClrPropertyAccessExpression when ca.Receiver != nil &&
-                    SmartCastStability
-                    .IsStableClrMember(ca.Member) {
+                    SmartCastStability.IsStableClrMember(ca.Member) {
                     return TryResolveStablePathWithCaptures(ca.Receiver!!, captures)?.Append(ca.Member)
                 }
                 case nested is BoundNullConditionalAccessExpression {
@@ -2921,15 +2905,11 @@ internal partial class StatementBinder {
                     return (true, false)
                 }
                 case rel is BoundRelationalPattern {
-                    return if rel
-                        .Op
-                        .Kind == BoundBinaryOperatorKind.Equals &&
+                    return if rel.Op.Kind == BoundBinaryOperatorKind.Equals &&
                         (rel.Test == nil || rel.Test is BoundBinaryExpression) &&
                         IsNullOperand(rel.Value) {
                         (false, true)
-                    } else if rel
-                        .Op
-                        .Kind == BoundBinaryOperatorKind.NotEquals &&
+                    } else if rel.Op.Kind == BoundBinaryOperatorKind.NotEquals &&
                         (rel.Test == nil || rel.Test is BoundBinaryExpression) &&
                         IsNullOperand(rel.Value) {
                         (true, false)
@@ -2997,8 +2977,7 @@ internal partial class StatementBinder {
                 )
             }
             if inner is BoundImportedInstanceCallExpression importedInstanceCall &&
-                importedInstanceCall.Type == TypeSymbol
-                .Bool {
+                importedInstanceCall.Type == TypeSymbol.Bool {
                 var (thenFrame, elseFrame) = ClassifyImportedMethodBoolCallNarrowing(
                     importedInstanceCall,
                     importedInstanceCall.Method.GetParameters(),
@@ -3443,15 +3422,9 @@ internal partial class StatementBinder {
                     if widenArg is BoundVariableExpression widenVarExpr &&
                         (!restrictBareVariableToLocalsAndParams || widenVarExpr.Variable is LocalVariableSymbol) &&
                         !(widenVarExpr.Variable.Type is NullableTypeSymbol) &&
-                        !widenVarExpr
-                        .Variable
-                        .Type
-                        .IsValueType &&
+                        !widenVarExpr.Variable.Type.IsValueType &&
                         NullabilityImportRule.ClassifyArgument(widenVarExpr.Variable.Type) != TypeArgumentKind.Value &&
-                        widenVarExpr
-                        .Variable
-                        .Type != TypeSymbol
-                        .Null {
+                        widenVarExpr.Variable.Type != TypeSymbol.Null {
                         let widenedType = NullableTypeSymbol.Get(widenVarExpr.Variable.Type)
                         let preserved = PreservesArgumentTarget(
                             call,
@@ -3552,9 +3525,7 @@ internal partial class StatementBinder {
             )
             // Issue #4216: user extensions use the same compatibility rule as
             // imported extensions; an explicit receiver contract wins.
-            if call
-                .Function
-                .IsExtension &&
+            if call.Function.IsExtension &&
                 !HasUserNullabilityContract(parameters.FirstOrDefault()) &&
                 IsNullOrEmptyCompatibilityCandidate(call.Function.Name, parameters, call.Arguments) {
                 result = MergeNotNullWhenFalseReceiver(
@@ -3665,15 +3636,9 @@ internal partial class StatementBinder {
                     widenVarExpr != nil &&
                     (!restrictBareVariableToLocalsAndParams || widenVarExpr.Variable is LocalVariableSymbol) &&
                     !(widenVarExpr.Variable.Type is NullableTypeSymbol) &&
-                    !widenVarExpr
-                    .Variable
-                    .Type
-                    .IsValueType &&
+                    !widenVarExpr.Variable.Type.IsValueType &&
                     NullabilityImportRule.ClassifyArgument(widenVarExpr.Variable.Type) != TypeArgumentKind.Value &&
-                    widenVarExpr
-                    .Variable
-                    .Type != TypeSymbol
-                    .Null {
+                    widenVarExpr.Variable.Type != TypeSymbol.Null {
                     let widenedType = NullableTypeSymbol.Get(widenVarExpr.Variable.Type)
                     let preserved = PreservesArgumentTarget(
                         call,
@@ -4020,9 +3985,7 @@ internal partial class StatementBinder {
                 function.IsOverride ||
                 function.HasCaptures ||
                 function.ReceiverType != nil ||
-                function
-                .Declaration
-                ?.Body is not{} body {
+                function.Declaration?.Body is not{} body {
                 return false
             }
             for node in body.DescendantNodesAndSelf() {
@@ -4345,13 +4308,8 @@ internal partial class StatementBinder {
             if conversion.Type is NullableTypeSymbol widened && widened.UnderlyingType == conversion.Expression.Type {
                 return true
             }
-            return conversion
-                .Type
-                ?.ClrType != nil &&
-                conversion
-                .Expression
-                .Type
-                ?.ClrType != nil &&
+            return conversion.Type?.ClrType != nil &&
+                conversion.Expression.Type?.ClrType != nil &&
                 ClrTypeUtilities.AreSame(conversion.Type.ClrType, conversion.Expression.Type.ClrType)
         }
 

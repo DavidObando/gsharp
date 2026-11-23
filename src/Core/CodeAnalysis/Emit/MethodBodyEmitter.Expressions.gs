@@ -81,9 +81,7 @@ internal partial class MethodBodyEmitter {
                     this.il.LoadLocal(assignTmp)
                 } else if a.Variable is LocalVariableSymbol assignLocal &&
                     assignLocal.RefKind != RefKind.None &&
-                    this
-                    .locals
-                    .TryGetValue(assignLocal, out var refLocalSlot) {
+                    this.locals.TryGetValue(assignLocal, out var refLocalSlot) {
                     // Issue #491 (ADR-0060 follow-up): assign-through-ref-alias-local lowers to
                     // `ldloc slot; value; dup; stloc tmp; stind.*; ldloc tmp`.
                     // The temp slot is pre-allocated by AssignmentValueSpillCollector.
@@ -190,8 +188,7 @@ internal partial class MethodBodyEmitter {
             case staticCall is BoundClrStaticCallExpression {
                 this.EmitImportedCallArguments(staticCall.Arguments, staticCall.ArgumentRefKinds)
                 if ManagedReferenceTypes.IsDefinition(staticCall.Method.DeclaringType, out _) &&
-                    ManagedReferenceTypes
-                    .TryGetElement(staticCall.Type, out _, out _) {
+                    ManagedReferenceTypes.TryGetElement(staticCall.Type, out _, out _) {
                     this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(staticCall.Method, staticCall.Type))
                 } else {
                     this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(staticCall.Method))
@@ -511,9 +508,7 @@ internal partial class MethodBodyEmitter {
                 // whichever is present. A setter accessor pushes nothing to
                 // dereference, hence the read-only guard.
                 this.EmitRefReturnDereferenceIfNeeded(
-                    bcc
-                        .Method
-                        ?.ReturnRefKind ??
+                    bcc.Method?.ReturnRefKind ??
                         (
                         if bcc.IsSetterAccessor {
                             RefKind.None
@@ -732,9 +727,7 @@ internal partial class MethodBodyEmitter {
             case member is BoundClrPropertyAccessExpression {
                 let receiverType = member.ConstrainedInterfaceType ??
                     member.StaticContainerType ??
-                    member
-                    .Receiver
-                    ?.Type
+                    member.Receiver?.Type
                 var owner TypeSymbol? = nil
                 if receiverType != nil {
                     var imported = MemberLookup.GetProjectionReceiverImportedType(receiverType)
@@ -1089,9 +1082,7 @@ internal partial class MethodBodyEmitter {
         }
         // Safe form: construct a Span<T> over [ptr, count].
         this.il.LoadLocal(countSlot)
-        let spanClr = node
-            .ResultType
-            .ClrType ??
+        let spanClr = node.ResultType.ClrType ??
             throw InvalidOperationException(
             "stackalloc result type '${node.ResultType.Name}' has no CLR reflection shape."
         )
@@ -1127,9 +1118,7 @@ internal partial class MethodBodyEmitter {
             }
             this.il.OpCode(ILOpCode.Callvirt)
             this.il.Token(getCountRef)
-        } else if len
-            .Operand
-            .Type is RectangularArrayTypeSymbol ||
+        } else if len.Operand.Type is RectangularArrayTypeSymbol ||
             (
             len.Operand.Type.ClrType is {IsArray: true} clrArray && (clrArray.GetArrayRank() > 1 || !clrArray.IsSZArray)
         ) {
@@ -1165,16 +1154,8 @@ internal partial class MethodBodyEmitter {
         // (registered in MethodHandles, e.g. issue #1906's `shared { func
         // Square(...) }`) — check both caches, mirroring GetMethodReference's
         // own FunctionHandles/MethodHandles fallback below.
-        if !this
-            .outer
-            .cache
-            .FunctionHandles
-            .TryGetValue(node.Method, out var methodHandle) &&
-            !this
-            .outer
-            .cache
-            .MethodHandles
-            .TryGetValue(node.Method, out methodHandle) {
+        if !this.outer.cache.FunctionHandles.TryGetValue(node.Method, out var methodHandle) &&
+            !this.outer.cache.MethodHandles.TryGetValue(node.Method, out methodHandle) {
             throw InvalidOperationException(
                 "Function '${node.Method.Name}' has no emitted MethodDef for '&${node.Method.Name}' (ldftn)."
             )
@@ -1340,14 +1321,8 @@ internal partial class MethodBodyEmitter {
             // value (explicit override or a copy read off the temp
             // variable) as a constructor argument in declaration order.
             if !isGeneric &&
-                !this
-                .outer
-                .cache
-                .ClassCtorHandles
-                .ContainsKey(literal.StructType) &&
-                literal
-                .StructType
-                .ClrType is {} importedClrTypeForCtorCheck &&
+                !this.outer.cache.ClassCtorHandles.ContainsKey(literal.StructType) &&
+                literal.StructType.ClrType is {} importedClrTypeForCtorCheck &&
                 (
                 importedClrTypeForCtorCheck.GetConstructor(Type.EmptyTypes) == nil || literal.Initializers.Any(
                     (init BoundFieldInitializer) -> init.Property is {HasSetter: false}
@@ -1393,10 +1368,7 @@ internal partial class MethodBodyEmitter {
                     // both a parameterless and a primary constructor), then set each
                     // overridden/copied field below. Mirrors the imported field /
                     // setter resolution branches already gated on ClrType != null.
-                    let clrCtor = literal
-                        .StructType
-                        .ClrType
-                        .GetConstructor(Type.EmptyTypes) ??
+                    let clrCtor = literal.StructType.ClrType.GetConstructor(Type.EmptyTypes) ??
                         throw InvalidOperationException(
                         "Imported data class '${literal.StructType.Name}' has no parameterless constructor."
                     )
@@ -1463,11 +1435,7 @@ internal partial class MethodBodyEmitter {
         // construct through it and skip the literal's injected
         // declaration-origin entries, whose provenance survives lowering,
         // so initializer side effects run once while authored overrides remain.
-        let usesOwningInitializerConstructor = this
-            .outer
-            .cache
-            .ClassCtorHandles
-            .ContainsKey(structDefinition) &&
+        let usesOwningInitializerConstructor = this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition) &&
             (
             if literal.IsZeroInitialization {
                 structDefinition.UsesOwningZeroInitializerConstructor
@@ -1558,9 +1526,7 @@ internal partial class MethodBodyEmitter {
                 expression: "init.Field"
             )
             if (initField.IsReadOnly || initField.Accessibility != Accessibility.Public) &&
-                literal
-                .StructType
-                .ClrType == nil &&
+                literal.StructType.ClrType == nil &&
                 this
                 .outer
                 .userTokens
@@ -1749,8 +1715,7 @@ internal partial class MethodBodyEmitter {
         this.EmitNullConditionalReceiverProbe(nc, nonNull)
         if nc.ResultSlot != nil &&
             nc.Type is NullableTypeSymbol referenceResult &&
-            !NullableLifting
-            .IsAnyValueTypeNullable(referenceResult) {
+            !NullableLifting.IsAnyValueTypeNullable(referenceResult) {
             let slot = this.locals[nc.ResultSlot]
             this.il.LoadLocalAddress(slot)
             this.il.OpCode(ILOpCode.Initobj)
@@ -1892,9 +1857,7 @@ internal partial class MethodBodyEmitter {
                 this.il.OpCode(ILOpCode.Call)
                 this.il.Token(this.outer.memberRefs.GetNullableGetValueMemberRefForUserValueType(receiverNullable))
             } else {
-                let innerClr = receiverNullable
-                    .UnderlyingType
-                    .ClrType ??
+                let innerClr = receiverNullable.UnderlyingType.ClrType ??
                     throw InvalidOperationException(
                     "Value-type Nullable<${receiverNullable.UnderlyingType.Name}> null-conditional receiver has no CLR underlying type."
                 )
@@ -2172,21 +2135,12 @@ internal partial class MethodBodyEmitter {
                 .userTokens
                 .ResolveUserInterfaceStaticMethodToken(call.StaticGenericInterfaceOwnerType!!, call.Function)
         } else {
-            if !this
-                .outer
-                .cache
-                .FunctionHandles
-                .TryGetValue(call.Function, out var fnHandle) &&
-                !this
-                .outer
-                .cache
-                .MethodHandles
-                .TryGetValue(call.Function, out fnHandle) {
+            if !this.outer.cache.FunctionHandles.TryGetValue(call.Function, out var fnHandle) &&
+                !this.outer.cache.MethodHandles.TryGetValue(call.Function, out fnHandle) {
                 throw InvalidOperationException("Call to function '${call.Function.Name}' has no emitted MethodDef.")
             }
             callTokenToEmit = if call.StaticGenericOwnerType != nil &&
-                ReflectionMetadataEmitter
-                .IsUserGenericTypeReference(call.StaticGenericOwnerType) {
+                ReflectionMetadataEmitter.IsUserGenericTypeReference(call.StaticGenericOwnerType) {
                 this.outer.userTokens.ResolveUserStaticMethodToken(call.StaticGenericOwnerType!!, call.Function)
             } else {
                 fnHandle
@@ -2240,8 +2194,7 @@ internal partial class MethodBodyEmitter {
         if node.IsUnmanaged &&
             node.FixedBufferEscapeSyntax != nil &&
             node.Operand is BoundFieldAccessExpression{Field: {IsFixedBuffer: true}} buffer &&
-            !StatementBinder
-            .IsFixedVariable(
+            !StatementBinder.IsFixedVariable(
             buffer,
             this.IsHeapPromotedFixedBufferVariable,
             allowTemporaryValues: this.asyncFieldMap == nil && this.iteratorEmitCtx == nil

@@ -130,8 +130,7 @@ internal shared class DataPrintMembersModel {
                         (method.IsFamily || method.IsFamilyOrAssembly) &&
                         ClrTypeUtilities.AreSame(method.ReturnType, typeof(bool)) &&
                         parameters.Length == 1 &&
-                        ClrTypeUtilities
-                        .AreSame(parameters[0].ParameterType, typeof(StringBuilder)) {
+                        ClrTypeUtilities.AreSame(parameters[0].ParameterType, typeof(StringBuilder)) {
                         if method.IsFinal {
                             return nil
                         }
@@ -284,8 +283,7 @@ internal shared class DataPrintMembersModel {
                             backingField
                         )
                     ) ||
-                        declaredFields
-                        .Any(
+                        declaredFields.Any(
                         (field FieldSymbol) -> field.Accessibility == Accessibility.Public && object.ReferenceEquals(
                             field,
                             backingField
@@ -349,7 +347,5 @@ internal shared class DataPrintMembersModel {
         slot.ReturnRefKind == RefKind.None &&
         !slot.IsAsync &&
         !slot.IsSuspending &&
-        slot
-        .TypeParameters
-        .IsDefaultOrEmpty
+        slot.TypeParameters.IsDefaultOrEmpty
 }

@@ -58,12 +58,8 @@ internal partial class OverloadResolver {
         // while the type clause / return / member paths surface the aggregate,
         // reintroducing the dual identity that breaks `with` non-deterministically.
         if bound is BoundConstructorCallExpression ctorCall &&
-            ctorCall
-            .StructType
-            .ClrType != nil &&
-            ctorCall
-            .StructType
-            .IsData &&
+            ctorCall.StructType.ClrType != nil &&
+            ctorCall.StructType.IsData &&
             (ctorCall.StructType.IsClass || ctorCall.StructType.UsesConstructorOwnedDataConstruction) {
             return LowerImportedDataClassConstruction(ctorCall)
         }
@@ -91,17 +87,11 @@ internal partial class OverloadResolver {
         // Issue #306: a class declaring an explicit `init(...)` constructor is
         // constructed against that constructor's parameter list rather than a
         // primary-constructor parameter list.
-        if !classType
-            .EffectiveExplicitConstructors
-            .IsDefaultOrEmpty &&
+        if !classType.EffectiveExplicitConstructors.IsDefaultOrEmpty &&
             !(
             classType.HasSynthesizedDataConstructor &&
-                classType
-                .PrimaryConstructorParameters
-                .IsEmpty &&
-                syntax
-                .Arguments
-                .Count == 0
+                classType.PrimaryConstructorParameters.IsEmpty &&
+                syntax.Arguments.Count == 0
         ) {
             return BindExplicitConstructorCallExpression(syntax, classType)
         }
@@ -372,8 +362,7 @@ internal partial class OverloadResolver {
                 // fixed-portion loop for a variadic constructor's arguments.
                 if parameter.Type is DelegateTypeSymbol namedDelegateCtorFixedTarget &&
                     argument.Type is FunctionTypeSymbol &&
-                    !object
-                    .ReferenceEquals(argument.Type, namedDelegateCtorFixedTarget) {
+                    !object.ReferenceEquals(argument.Type, namedDelegateCtorFixedTarget) {
                     boundArguments[i] = conversions.BindConversion(
                         parameterSyntaxV[i].Location,
                         argument,
@@ -625,8 +614,7 @@ internal partial class OverloadResolver {
             // nullable special cases below.
             if parameter.Type is DelegateTypeSymbol namedDelegateCtorTarget &&
                 argument.Type is FunctionTypeSymbol &&
-                !object
-                .ReferenceEquals(argument.Type, namedDelegateCtorTarget) {
+                !object.ReferenceEquals(argument.Type, namedDelegateCtorTarget) {
                 boundArguments[i] = conversions.BindConversion(
                     Invariant.Required(
                         parameterSyntax[i],
@@ -923,12 +911,8 @@ internal partial class OverloadResolver {
                 boundArgument = bindRefArgumentExpression(refArgument, nil)
             }
             let lambdaArgument LambdaExpressionSyntax? = GetLambdaArgumentSyntax(argument)
-            let isUnconstructedGenericClass = !classType
-                .TypeParameters
-                .IsDefaultOrEmpty &&
-                classType
-                .TypeArguments
-                .IsDefaultOrEmpty
+            let isUnconstructedGenericClass = !classType.TypeParameters.IsDefaultOrEmpty &&
+                classType.TypeArguments.IsDefaultOrEmpty
             let paramTypeForArg TypeSymbol? = if parameterForArg != nil && !isUnconstructedGenericClass {
                 classType.SubstituteMemberType(parameterForArg.Type)
             } else {
@@ -1340,8 +1324,13 @@ internal partial class OverloadResolver {
                 let pointee = condAddrCtor.PointeeType
                 if pointee == TypeSymbol.Error ||
                     paramType == TypeSymbol.Error ||
-                    conversions
-                    .CheckByRefArgumentStorage(refArgumentLocation, parameter, pointee, paramType, condAddrCtor) {
+                    conversions.CheckByRefArgumentStorage(
+                    refArgumentLocation,
+                    parameter,
+                    pointee,
+                    paramType,
+                    condAddrCtor
+                ) {
                     convertedArguments.Add(argument)
                     continue
                 }
@@ -1366,8 +1355,7 @@ internal partial class OverloadResolver {
             if argument is BoundErrorExpression{Syntax: LambdaExpressionSyntax deferredLambda} &&
                 bindLambdaWithTarget != nil &&
                 MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var deferredTarget) &&
-                !TypeSymbol
-                .ContainsTypeParameter(deferredTarget) {
+                !TypeSymbol.ContainsTypeParameter(deferredTarget) {
                 if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(paramType, out _) {
                     let targetedTree = bindExpressionWithTargetType(deferredLambda, paramType)
                     let targetedTreeArgument = if isImplicitIn {
@@ -1418,8 +1406,7 @@ internal partial class OverloadResolver {
             // delegate's own TypeDef.
             if paramType is DelegateTypeSymbol namedDelegateParamTarget &&
                 argument.Type is FunctionTypeSymbol &&
-                !object
-                .ReferenceEquals(argument.Type, namedDelegateParamTarget) {
+                !object.ReferenceEquals(argument.Type, namedDelegateParamTarget) {
                 convertedArguments.Add(conversions.BindConversion(argLocation, argument, paramType))
                 continue
             }
@@ -1622,12 +1609,8 @@ internal partial class OverloadResolver {
     ) {
         let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(classType)
         for var i = 0; i < enclosingParams.Length; i++ {
-            substitution[enclosingParams[i]] = if !classType
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty &&
-                i < classType
-                .EnclosingTypeArguments
-                .Length {
+            substitution[enclosingParams[i]] = if !classType.EnclosingTypeArguments.IsDefaultOrEmpty &&
+                i < classType.EnclosingTypeArguments.Length {
                 classType.EnclosingTypeArguments[i]
             } else {
                 enclosingParams[i]
@@ -1794,8 +1777,7 @@ internal partial class OverloadResolver {
                 } else {
                     if inferredCandidateCount == 0 {
                         let hasFailedExplicitInlineOutType = !inlineOutArgumentIndices.IsDefaultOrEmpty &&
-                            inlineOutArgumentIndices
-                            .Any(
+                            inlineOutArgumentIndices.Any(
                             (index int32) -> (
                                 cast[RefArgumentExpressionSyntax](UnwrapNamedArgumentValue(syntax.Arguments[index]))
                             ).DeclaredType != nil &&
@@ -2355,8 +2337,13 @@ internal partial class OverloadResolver {
                 let pointee = condAddrInit.PointeeType
                 if pointee == TypeSymbol.Error ||
                     parameter.Type == TypeSymbol.Error ||
-                    conversions
-                    .CheckByRefArgumentStorage(argLocation, parameter, pointee, parameter.Type, condAddrInit) {
+                    conversions.CheckByRefArgumentStorage(
+                    argLocation,
+                    parameter,
+                    pointee,
+                    parameter.Type,
+                    condAddrInit
+                ) {
                     convertedArgs.Add(argument)
                     continue
                 }
@@ -2378,8 +2365,7 @@ internal partial class OverloadResolver {
             // for the full rationale.
             if parameter.Type is DelegateTypeSymbol namedDelegateInitTarget &&
                 argument.Type is FunctionTypeSymbol &&
-                !object
-                .ReferenceEquals(argument.Type, namedDelegateInitTarget) {
+                !object.ReferenceEquals(argument.Type, namedDelegateInitTarget) {
                 convertedArgs.Add(conversions.BindConversion(argLocation, argument, parameter.Type))
                 continue
             }
@@ -2617,9 +2603,7 @@ internal partial class OverloadResolver {
             let parameters = classType.PrimaryConstructorParameters
             if classType.IsClass &&
                 classType.ClrType is {} clrType &&
-                ctorCall
-                .Arguments
-                .Length == parameters.Length &&
+                ctorCall.Arguments.Length == parameters.Length &&
                 ImportedTypeSymbol.FindPrimaryConstructor(clrType, parameters) is {} primaryConstructor {
                 return BoundClrConstructorCallExpression(
                     ctorCall.Syntax,
@@ -2655,12 +2639,8 @@ internal partial class OverloadResolver {
         /// @param classType The candidate aggregate.
         /// @returns `true` when [`classType`](paramref) is a closed-generic imported aggregate.
         private func IsClosedGenericImportedAggregate(classType StructSymbol) bool -> classType.ClrType != nil &&
-            classType
-            .ClrType
-            .IsGenericType &&
-            !classType
-            .ClrType
-            .IsGenericTypeDefinition
+            classType.ClrType.IsGenericType &&
+            !classType.ClrType.IsGenericTypeDefinition
 
         private func GetInlineOutArgumentIndices(
             arguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax]
@@ -2816,12 +2796,9 @@ internal partial class OverloadResolver {
                     FindParameterIndex(constructor.Parameters, name)
                 }
                 if parameterIndex < 0 ||
-                    parameterIndex >= constructor
-                    .Parameters
-                    .Length ||
+                    parameterIndex >= constructor.Parameters.Length ||
                     argumentTypes[argumentIndex] is not{} argumentType ||
-                    !ByRefStorageMatching
-                    .AreSameStorageType(
+                    !ByRefStorageMatching.AreSameStorageType(
                     argumentType,
                     constructor.Parameters[parameterIndex].Type,
                     out _,

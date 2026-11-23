@@ -370,8 +370,7 @@ internal partial class ExpressionBinder {
             if result is BoundDefaultExpression bareDefault &&
                 bareDefault.Type == TypeSymbol.Error &&
                 resultType != TypeSymbol.Error &&
-                resultType != TypeSymbol
-                .Void {
+                resultType != TypeSymbol.Void {
                 RestoreExpressionNarrowingFrames(armExits[armIndex], truncateSiblings: false)
                 result = BindExpression(arm.Syntax.Result, resultType)
                 armExits[armIndex] = CaptureExpressionNarrowingFrames(recordSiblingCount: false)

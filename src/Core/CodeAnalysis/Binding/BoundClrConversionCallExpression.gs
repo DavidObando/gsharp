@@ -83,8 +83,7 @@ class BoundClrConversionCallExpression : BoundExpression {
         }
 
         internal func CanLiftImplicitlyTo(target TypeSymbol) bool -> CanLiftTo(target) &&
-            Conversion
-            .ClassifyNonStructural(NullableTypeSymbol.Get(target), target).IsImplicit
+            Conversion.ClassifyNonStructural(NullableTypeSymbol.Get(target), target).IsImplicit
 
         internal func CanApplyImplicitClrConversion(source TypeSymbol, target TypeSymbol, method MethodInfo) bool {
             let effectiveSource = GetEffectiveOperandType(source, method)
@@ -133,8 +132,7 @@ class BoundClrConversionCallExpression : BoundExpression {
                 method != nil &&
                 AcceptsNullableValueSource(nullable, target, method, out var declaredResult) {
                 if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(declaredResult, target) &&
-                    !Conversion
-                    .ClassifyNonStructural(declaredResult, target).IsImplicit {
+                    !Conversion.ClassifyNonStructural(declaredResult, target).IsImplicit {
                     return declaredResult
                 }
             }
@@ -161,15 +159,11 @@ class BoundClrConversionCallExpression : BoundExpression {
                 let symbolicOwner ImportedTypeSymbol? = if sourceUnderlying is ImportedTypeSymbol{
                     OpenDefinition: {} sourceOpen
                 } importedSource &&
-                    !importedSource
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
+                    !importedSource.TypeArguments.IsDefaultOrEmpty &&
                     ClrTypeUtilities.AreSame(sourceOpen, openDeclaring) {
                     importedSource
                 } else if targetUnderlying is ImportedTypeSymbol{OpenDefinition: {} targetOpen} importedTarget &&
-                    !importedTarget
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
+                    !importedTarget.TypeArguments.IsDefaultOrEmpty &&
                     ClrTypeUtilities.AreSame(targetOpen, openDeclaring) {
                     importedTarget
                 } else {
@@ -218,22 +212,15 @@ class BoundClrConversionCallExpression : BoundExpression {
                 conversionType
             }
             if function != nil {
-                if function
-                    .Parameters
-                    .Length != 1 ||
-                    function
-                    .Parameters[0]
-                    .RefKind != RefKind.None ||
+                if function.Parameters.Length != 1 ||
+                    function.Parameters[0].RefKind != RefKind.None ||
                     function.ReturnRefKind != RefKind.None {
                     return false
                 }
                 let parameterType = functionOwnerType?.SubstituteMemberType(function.Parameters[0].Type) ??
-                    function
-                    .Parameters[0]
-                    .Type
+                    function.Parameters[0].Type
                 let resultType = functionOwnerType?.SubstituteMemberType(function.Type) ?? function.Type
-                return Conversion.ClassifyNonStructural(source.UnderlyingType, parameterType)
-                    .IsIdentity &&
+                return Conversion.ClassifyNonStructural(source.UnderlyingType, parameterType).IsIdentity &&
                     (
                     TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resultType, target) ||
                         TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resultType, conversionType)
@@ -242,13 +229,9 @@ class BoundClrConversionCallExpression : BoundExpression {
             let parameters = method?.GetParameters()
             return parameters != nil &&
                 parameters.Length == 1 &&
-                !parameters[0]
-                .ParameterType
-                .IsByRef &&
+                !parameters[0].ParameterType.IsByRef &&
                 method != nil &&
-                method
-                .ReturnType
-                .IsByRef == false &&
+                method.ReturnType.IsByRef == false &&
                 ClrTypeUtilities.AreSame(parameters[0].ParameterType, source.UnderlyingType.ClrType) &&
                 (
                 ClrTypeUtilities.AreSame(method.ReturnType, target.ClrType) || ClrTypeUtilities.AreSame(

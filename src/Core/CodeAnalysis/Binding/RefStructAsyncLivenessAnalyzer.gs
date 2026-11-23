@@ -232,8 +232,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 Locals.Add(local)
             } else if collectByRefLikeLocals &&
                 variable is GlobalVariableSymbol global &&
-                global
-                .RequiresEntryPointLocalStorage {
+                global.RequiresEntryPointLocalStorage {
                 // ADR-0228 / #6169: top-level by-ref-like and managed-pointer
                 // globals live in <Main>$ locals (neither hoisted to state-machine
                 // fields nor reconstructed by RefInitializationHoister).
@@ -384,9 +383,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             ) &&
                 !(
                 node is BoundBinaryExpression bin &&
-                    bin
-                    .Op
-                    .Kind is BoundBinaryOperatorKind.LogicalAnd or
+                    bin.Op.Kind is BoundBinaryOperatorKind.LogicalAnd or
                     BoundBinaryOperatorKind.LogicalOr or
                     BoundBinaryOperatorKind.NullCoalesce
             ) &&
@@ -589,12 +586,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
 
         protected override func VisitBinaryExpression(node BoundBinaryExpression) {
-            if node
-                .Op
-                .Kind is BoundBinaryOperatorKind.LogicalAnd or
+            if node.Op.Kind is BoundBinaryOperatorKind.LogicalAnd or
                 BoundBinaryOperatorKind.LogicalOr or
-                BoundBinaryOperatorKind
-                .NullCoalesce {
+                BoundBinaryOperatorKind.NullCoalesce {
                 VisitExpression(node.Left)
                 if !HasNormalExit || node.Left.Type == TypeSymbol.Never {
                     HasNormalExit = false
@@ -1370,8 +1364,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         )(OutOver HashSet[VariableSymbol], Normal bool) {
             for cached in cache {
                 if RefStructAsyncLivenessAnalyzer.PointsToEqual(cached.PointsTo, pts) &&
-                    RefStructAsyncLivenessAnalyzer
-                    .SetsEqual(cached.Overwritten, over) {
+                    RefStructAsyncLivenessAnalyzer.SetsEqual(cached.Overwritten, over) {
                     return (HashSet[VariableSymbol](cached.OutOver), cached.IsNormal)
                 }
             }
@@ -2157,8 +2150,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                                 stmtCollector.VisitExpression(cgs.Condition)
                                 if !labelToBlock.ContainsKey(cgs.Label) &&
                                     escapingLabelLiveIn != nil &&
-                                    escapingLabelLiveIn
-                                    .TryGetValue(cgs.Label, out var targetLive) {
+                                    escapingLabelLiveIn.TryGetValue(cgs.Label, out var targetLive) {
                                     for v in targetLive {
                                         if !curOverwritten.Contains(v) && !stmtCollector.definitelyOverwritten.Contains(
                                             v
@@ -2171,8 +2163,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                             case gs is BoundGotoStatement {
                                 if !labelToBlock.ContainsKey(gs.Label) &&
                                     escapingLabelLiveIn != nil &&
-                                    escapingLabelLiveIn
-                                    .TryGetValue(gs.Label, out var targetLive) {
+                                    escapingLabelLiveIn.TryGetValue(gs.Label, out var targetLive) {
                                     for v in targetLive {
                                         if !curOverwritten.Contains(v) {
                                             Reads.Add(v)
@@ -2636,9 +2627,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     let armKills = HashSet[VariableSymbol]()
                     for v in resultCollector.definitelyOverwritten {
                         if !discrCollector.definitelyOverwritten.Contains(v) && !discrCollector.Reads.Contains(v) &&
-                            !patternCollector
-                            .Reads
-                            .Contains(v) && !guardCollector.Reads.Contains(v) && !resultCollector.Reads.Contains(v) {
+                            !patternCollector.Reads.Contains(v) && !guardCollector.Reads.Contains(v) &&
+                            !resultCollector.Reads.Contains(v) {
                             armKills.Add(v)
                         }
                     }
@@ -2752,9 +2742,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             for killed in guaranteedOverwritten {
                 if !leftCollector.definitelyOverwritten.Contains(killed) && !leftCollector.Reads.Contains(killed) &&
-                    !patternCollector
-                    .Reads
-                    .Contains(killed) && !isBindings.Contains(killed) {
+                    !patternCollector.Reads.Contains(killed) && !isBindings.Contains(killed) {
                     if definitelyOverwritten.Add(killed) && !Reads.Contains(killed) {
                         PatternKills.Add(killed)
                     }
@@ -3103,9 +3091,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     if clrProp.Receiver != nil &&
                         (
                         (
-                            clrProp.Member is System
-                                .Reflection
-                                .FieldInfo &&
+                            clrProp.Member is System.Reflection.FieldInfo &&
                                 !RefStructAsyncLivenessAnalyzer.IsReferenceOwnerType(clrProp.Receiver.Type)
                         ) ||
                             RefCapabilities.IsRefReturningAccess(clrProp)
@@ -3263,14 +3249,11 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             ) &&
                 !(
                 node is BoundBinaryExpression bin &&
-                    bin
-                    .Op
-                    .Kind is BoundBinaryOperatorKind.LogicalAnd or
+                    bin.Op.Kind is BoundBinaryOperatorKind.LogicalAnd or
                     BoundBinaryOperatorKind.LogicalOr or
                     BoundBinaryOperatorKind.NullCoalesce
             ) &&
-                !RefStructAsyncLivenessAnalyzer
-                .ExpressionCannotThrow(node) {
+                !RefStructAsyncLivenessAnalyzer.ExpressionCannotThrow(node) {
                 RefStructAsyncLivenessAnalyzer.UnionPointsToInto(exceptionalUnion, state)
             }
         }
@@ -3975,12 +3958,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
 
         protected override func VisitBinaryExpression(node BoundBinaryExpression) {
-            if node
-                .Op
-                .Kind is BoundBinaryOperatorKind.LogicalAnd or
+            if node.Op.Kind is BoundBinaryOperatorKind.LogicalAnd or
                 BoundBinaryOperatorKind.LogicalOr or
-                BoundBinaryOperatorKind
-                .NullCoalesce {
+                BoundBinaryOperatorKind.NullCoalesce {
                 VisitExpression(node.Left)
                 if !HasNormalExit || node.Left.Type == TypeSymbol.Never {
                     HasNormalExit = false
@@ -4216,9 +4196,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     private func IsCatchAllExceptionType(type TypeSymbol?) bool -> type == nil || type.ClrType?.IsSameAs(
         typeof(System.Exception)
     ) == true ||
-        type
-        .ClrType
-        ?.IsSameAs(typeof(System.Object)) == true
+        type.ClrType?.IsSameAs(typeof(System.Object)) == true
 
     private func AddressOperandCannotThrow(operand BoundExpression?) bool {
         switch operand {
@@ -4270,9 +4248,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(conv.Expression.Type, conv.Type) {
                     return true
                 }
-                if conv
-                    .Expression
-                    .Type == TypeSymbol.Null &&
+                if conv.Expression.Type == TypeSymbol.Null &&
                     (conv.Type is PointerTypeSymbol || IsReferenceOwnerType(conv.Type)) {
                     return true
                 }
@@ -4311,9 +4287,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 } else {
                     structDef.NeedsSynthesizedValueStructDefaultCtor
                 }
-                if structLit
-                    .StructType
-                    .IsClass ||
+                if structLit.StructType.IsClass ||
                     structLit.CallsDataConstructor ||
                     structLit.CallsPrimaryConstructor ||
                     structLit.CopySource != nil ||
@@ -4329,15 +4303,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             case unary is BoundUnaryExpression {
                 return (
-                    unary
-                        .Op
-                        .Kind == BoundUnaryOperatorKind.LogicalNegation ||
-                        unary
-                        .Op
-                        .Kind == BoundUnaryOperatorKind.OnesComplement ||
-                        unary
-                        .Op
-                        .Kind == BoundUnaryOperatorKind.Identity
+                    unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation ||
+                        unary.Op.Kind == BoundUnaryOperatorKind.OnesComplement ||
+                        unary.Op.Kind == BoundUnaryOperatorKind.Identity
                 ) &&
                     ExpressionCannotThrow(unary.Operand)
             }
@@ -4368,9 +4336,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     return true
                 }
                 if !(
-                    binary
-                        .Op
-                        .Kind is BoundBinaryOperatorKind.Equals or
+                    binary.Op.Kind is BoundBinaryOperatorKind.Equals or
                         BoundBinaryOperatorKind.NotEquals or
                         BoundBinaryOperatorKind.Less or
                         BoundBinaryOperatorKind.LessOrEquals or
@@ -4388,24 +4354,16 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     if (
                         leftIsNull &&
                             (
-                            binary
-                                .Right
-                                .Type is NullableTypeSymbol ||
-                                binary
-                                .Right
-                                .Type is PointerTypeSymbol ||
+                            binary.Right.Type is NullableTypeSymbol ||
+                                binary.Right.Type is PointerTypeSymbol ||
                                 IsReferenceOwnerType(binary.Right.Type)
                         )
                     ) ||
                         (
                         rightIsNull &&
                             (
-                            binary
-                                .Left
-                                .Type is NullableTypeSymbol ||
-                                binary
-                                .Left
-                                .Type is PointerTypeSymbol ||
+                            binary.Left.Type is NullableTypeSymbol ||
+                                binary.Left.Type is PointerTypeSymbol ||
                                 IsReferenceOwnerType(binary.Left.Type)
                         )
                     ) {
@@ -4433,9 +4391,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             current is FunctionPointerTypeSymbol {
             return true
         }
-        if current
-            .ClrType
-            ?.FullName is {} clrName &&
+        if current.ClrType?.FullName is {} clrName &&
             clrName != "System.Decimal" &&
             NumericWideningLattice.IsNumericPrimitive(clrName) {
             return true
@@ -4730,9 +4686,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             case pp is BoundPropertyPattern {
                 for field in pp.Fields {
                     if field.IsProperty ||
-                        field.ClrMember is System
-                        .Reflection
-                        .PropertyInfo ||
+                        field.ClrMember is System.Reflection.PropertyInfo ||
                         PatternMayThrow(field.Pattern) {
                         return true
                     }
@@ -7279,8 +7233,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             return
         }
         // Synthetic statements stay hidden to stepping; their await retains the diagnostic source.
-        let suspensionLocation = AsyncBoundTreeQueries.FindFirstAwaitSyntax(owningStatement)
-            ?.Location ??
+        let suspensionLocation = AsyncBoundTreeQueries.FindFirstAwaitSyntax(owningStatement)?.Location ??
             default(TextLocation)
         let fallbackLocation = if suspensionLocation.Text != nil {
             suspensionLocation

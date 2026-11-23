@@ -39,8 +39,7 @@ internal partial class ExpressionBinder {
         let classSymbol = $scope.CreateImportedClassSymbol(programType, syntax)
         result = BindAccessorStep(receiver: nil, classSymbol, syntax)
         if result is BoundClrPropertyAccessExpression{Receiver: nil, Member: FieldInfo globalField} fieldRead &&
-            SubmissionBinding
-            .TryFindGlobalVariable($scope, name, out _, out var declaredGlobal) {
+            SubmissionBinding.TryFindGlobalVariable($scope, name, out _, out var declaredGlobal) {
             result = BoundClrPropertyAccessExpression(
                 fieldRead.Syntax,
                 receiver: nil,
@@ -59,9 +58,7 @@ internal partial class ExpressionBinder {
             )
         }
         if result is BoundClrMethodGroupExpression{ResolvedMethod: nil} submissionGroup &&
-            submissionGroup
-            .Candidates
-            .Length == 1 &&
+            submissionGroup.Candidates.Length == 1 &&
             TryGetNaturalClrMethodGroupType(submissionGroup, out var naturalFunctionType) {
             result = conversions.BindConversion(syntax.Location, submissionGroup, naturalFunctionType)
         }

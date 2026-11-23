@@ -564,9 +564,7 @@ Console.WriteLine(result.ToString())`
                 if opcode == OpCodes.Newobj {
                     return (sig.ParameterTypes.Length, 1)
                 }
-                let pop = sig
-                    .ParameterTypes
-                    .Length +
+                let pop = sig.ParameterTypes.Length +
                     (
                     if sig.Header.IsInstance {
                         1

@@ -1156,9 +1156,7 @@ public static class Demo {
                     (edge(Target ISymbol, Source ISymbol)) ->
                     edge.Target is IParameterSymbol{Name: "value"} &&
                         edge.Source is IFieldSymbol{Name: "Storage"} &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(edge.Source, special.GetSymbolInfo(member).Symbol)
+                        SymbolEqualityComparer.Default.Equals(edge.Source, special.GetSymbolInfo(member).Symbol)
                 )
             )
         }

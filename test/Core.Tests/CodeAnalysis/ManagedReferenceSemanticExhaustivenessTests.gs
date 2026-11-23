@@ -132,15 +132,11 @@ class ManagedReferenceSemanticExhaustivenessTests {
             "AssignmentExpression",
             StringComparison.Ordinal
         ) ||
-            type
-            .Name
-            .Contains("CallExpression", StringComparison.Ordinal) || type.Name.Contains(
+            type.Name.Contains("CallExpression", StringComparison.Ordinal) || type.Name.Contains(
             "InvocationExpression",
             StringComparison.Ordinal
         ) ||
-            type
-            .Name
-            .Contains("MethodGroupExpression", StringComparison.Ordinal) || type.GetProperty(
+            type.Name.Contains("MethodGroupExpression", StringComparison.Ordinal) || type.GetProperty(
             "Arguments",
             BindingFlags.Instance | BindingFlags.Public
         ) != nil ||

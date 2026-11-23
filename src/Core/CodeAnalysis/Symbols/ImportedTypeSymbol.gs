@@ -494,9 +494,7 @@ class ImportedTypeSymbol : TypeSymbol {
             let baseType = annotated?.BaseType ?? unwrapped
             // The CLR-keyed aggregate cannot retain unreified generic arguments.
             if baseType is not ImportedTypeSymbol imported ||
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty ||
+                !imported.TypeArguments.IsDefaultOrEmpty ||
                 !TryCreateSemanticAggregate(
                 clrType,
                 references,
@@ -574,11 +572,8 @@ class ImportedTypeSymbol : TypeSymbol {
                     case field is FieldInfo: !field.IsStatic &&
                         IsVisible(field, GrantsInternalAccess(field.DeclaringType, consumerAssemblyName)) &&
                         !field.IsSpecialName &&
-                        !field
-                        .Name
-                        .StartsWith("<", StringComparison.Ordinal)
-                    case property is PropertyInfo: property.GetIndexParameters()
-                        .Length == 0 &&
+                        !field.Name.StartsWith("<", StringComparison.Ordinal)
+                    case property is PropertyInfo: property.GetIndexParameters().Length == 0 &&
                         (
                         property.GetMethod is {} getter &&
                             IsVisible(getter, GrantsInternalAccess(getter.DeclaringType, consumerAssemblyName)) ||
@@ -774,12 +769,8 @@ class ImportedTypeSymbol : TypeSymbol {
                 let name = semantics.PrimaryConstructorParameterNames[i]
                 var parameter ParameterSymbol? = nil
                 // Foreign records retain property identity; G# metadata retains field-token ownership.
-                if !semantics
-                    .PrimaryConstructorProperties
-                    .IsDefaultOrEmpty &&
-                    i < semantics
-                    .PrimaryConstructorProperties
-                    .Length {
+                if !semantics.PrimaryConstructorProperties.IsDefaultOrEmpty &&
+                    i < semantics.PrimaryConstructorProperties.Length {
                     let selectedProperty = ClrTypeUtilities.FindMetadataDefinition(
                         type,
                         semantics.PrimaryConstructorProperties[i],
@@ -853,12 +844,8 @@ class ImportedTypeSymbol : TypeSymbol {
                         break
                     }
                     var member MemberInfo? = nil
-                    if !shape
-                        .PrimaryConstructorProperties
-                        .IsDefaultOrEmpty &&
-                        i < shape
-                        .PrimaryConstructorProperties
-                        .Length {
+                    if !shape.PrimaryConstructorProperties.IsDefaultOrEmpty &&
+                        i < shape.PrimaryConstructorProperties.Length {
                         member = shape.PrimaryConstructorProperties[i]
                     } else {
                         member = ImportedAssemblySemantics.GetPrimaryConstructorSignatureMember(definition, i)

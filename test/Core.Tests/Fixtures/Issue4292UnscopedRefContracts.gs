@@ -356,9 +356,9 @@ public interface IRuntimeScoped
             return reader.TypeDefinitions.Count(
                 (handle TypeDefinitionHandle) -> reader.GetString(reader.GetTypeDefinition(handle).Name) == name
             ) +
-                reader
-                .TypeReferences
-                .Count((handle TypeReferenceHandle) -> reader.GetString(reader.GetTypeReference(handle).Name) == name)
+                reader.TypeReferences.Count(
+                (handle TypeReferenceHandle) -> reader.GetString(reader.GetTypeReference(handle).Name) == name
+            )
         }
     }
 }

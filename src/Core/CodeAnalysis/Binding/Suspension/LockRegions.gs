@@ -34,24 +34,13 @@ internal shared class LockRegions {
     /// non-suspending caller.
     /// @param node An imported call.
     /// @returns `true` for the bridge.
-    func IsBlockingBridge(node BoundImportedCallExpression) bool -> node
-        .Function
-        .Name == "Wait" &&
-        node
-        .Function
-        .ImportedClass
-        .ClassType
-        .FullName == "Gsharp.Concurrency.Blocking" &&
-        node
-        .Arguments
-        .Length == 1 &&
+    func IsBlockingBridge(node BoundImportedCallExpression) bool -> node.Function.Name == "Wait" &&
+        node.Function.ImportedClass.ClassType.FullName == "Gsharp.Concurrency.Blocking" &&
+        node.Arguments.Length == 1 &&
         object.ReferenceEquals(node.Syntax, node.Arguments[0].Syntax)
 
     private func IsMonitorExit(expression BoundExpression) bool -> expression is BoundImportedCallExpression{
         Function: {Name: "Exit"} function
     } &&
-        function
-        .ImportedClass
-        .ClassType
-        .FullName == "System.Threading.Monitor"
+        function.ImportedClass.ClassType.FullName == "System.Threading.Monitor"
 }

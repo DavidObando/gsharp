@@ -121,86 +121,34 @@ internal class PlannerScratch {
     /// Gets the storage the collectors keep after a `Clear`: list capacities and hash table sizes.
     /// A collector that grew in an earlier planning region keeps its storage when a later
     /// region clears it, so the count of live entries cannot tell how large the scratch is.
-    prop RetainedCapacity int32 -> this
-        .StructLiterals
-        .Capacity +
-        this
-        .NullConditionals
-        .Capacity +
-        this
-        .MapIndexReads
-        .Capacity +
-        this
-        .DefaultExpressions
-        .Capacity +
-        this
-        .StackAllocs
-        .Capacity +
-        this
-        .RootStackAllocs
-        .EnsureCapacity(0) +
-        this
-        .ReceiverSpills
-        .Capacity +
-        this
-        .IndexAssignmentValueSpills
-        .Capacity +
-        this
-        .AssignmentValueSpills
-        .Capacity +
-        this
-        .NullableUnwraps
-        .Capacity +
-        this
-        .NullableCoalesces
-        .Capacity +
-        this
-        .LiftedBinaryOperators
-        .Capacity +
-        this
-        .NullableConversions
-        .Capacity
+    prop RetainedCapacity int32 -> this.StructLiterals.Capacity +
+        this.NullConditionals.Capacity +
+        this.MapIndexReads.Capacity +
+        this.DefaultExpressions.Capacity +
+        this.StackAllocs.Capacity +
+        this.RootStackAllocs.EnsureCapacity(0) +
+        this.ReceiverSpills.Capacity +
+        this.IndexAssignmentValueSpills.Capacity +
+        this.AssignmentValueSpills.Capacity +
+        this.NullableUnwraps.Capacity +
+        this.NullableCoalesces.Capacity +
+        this.LiftedBinaryOperators.Capacity +
+        this.NullableConversions.Capacity
 
     /// Gets the total number of elements still held (zero after `Clear`).
-    prop HeldCount int32 -> this
-        .StructLiterals
-        .Count +
-        this
-        .NullConditionals
-        .Count +
-        this
-        .MapIndexReads
-        .Count +
-        this
-        .DefaultExpressions
-        .Count +
-        this
-        .StackAllocs
-        .Count +
-        this
-        .RootStackAllocs
-        .Count +
-        this
-        .ReceiverSpills
-        .Count +
-        this
-        .IndexAssignmentValueSpills
-        .Count +
-        this
-        .AssignmentValueSpills
-        .Count +
-        this
-        .NullableUnwraps
-        .Count +
-        this
-        .NullableCoalesces
-        .Count +
-        this
-        .LiftedBinaryOperators
-        .Count +
-        this
-        .NullableConversions
-        .Count
+    prop HeldCount int32 -> this.StructLiterals.Count +
+        this.NullConditionals.Count +
+        this.MapIndexReads.Count +
+        this.DefaultExpressions.Count +
+        this.StackAllocs.Count +
+        this.RootStackAllocs.Count +
+        this.ReceiverSpills.Count +
+        this.IndexAssignmentValueSpills.Count +
+        this.AssignmentValueSpills.Count +
+        this.NullableUnwraps.Count +
+        this.NullableCoalesces.Count +
+        this.LiftedBinaryOperators.Count +
+        this.NullableConversions.Count
 
     func Clear() {
         this.StructLiterals.Clear()
@@ -277,79 +225,35 @@ internal class SessionScratch {
     }
 
     /// Gets the total number of entries held by the collections (zero after `Reset`).
-    prop HeldCount int32 -> this
-        .Locals
-        .Count +
-        this
-        .Labels
-        .Count +
-        this
-        .LocalTypes
-        .Count +
-        this
-        .StructLiteralSlots
-        .Count +
-        this
-        .DefaultExpressionSlots
-        .Count +
-        this
-        .MapIndexSlots
-        .Count +
-        this
-        .PatternSwitchSlots
-        .Count +
-        this
-        .TypePatternScratchSlots
-        .Count +
-        this
-        .SwitchExpressionSlots
-        .Count +
-        this
-        .ChannelOpSlots
-        .Count +
-        this
-        .ReceiverSpillSlots
-        .Count +
-        this
-        .StackAllocResultSlots
-        .Count +
-        this
-        .IndexAssignmentValueSlots
-        .Count +
-        this
-        .LiftedBinaryOperatorSlots
-        .Count +
-        this
-        .NullableCoalesceSpillSlots
-        .Count +
-        this
-        .ConstValues
-        .Count +
+    prop HeldCount int32 -> this.Locals.Count +
+        this.Labels.Count +
+        this.LocalTypes.Count +
+        this.StructLiteralSlots.Count +
+        this.DefaultExpressionSlots.Count +
+        this.MapIndexSlots.Count +
+        this.PatternSwitchSlots.Count +
+        this.TypePatternScratchSlots.Count +
+        this.SwitchExpressionSlots.Count +
+        this.ChannelOpSlots.Count +
+        this.ReceiverSpillSlots.Count +
+        this.StackAllocResultSlots.Count +
+        this.IndexAssignmentValueSlots.Count +
+        this.LiftedBinaryOperatorSlots.Count +
+        this.NullableCoalesceSpillSlots.Count +
+        this.ConstValues.Count +
         (this.planner?.HeldCount ?? 0)
 
     /// Gets the storage the collections keep, counting unused capacity. It stays high after
     /// `Reset` for a collection that grew, which is why `Reset` decides on it and not on `HeldCount`.
     prop RetainedCapacity int32 -> this.Locals.EnsureCapacity(0) + this.Labels.EnsureCapacity(0) +
-        this
-        .LocalTypes
-        .Capacity +
-        this
-        .StructLiteralSlots
-        .EnsureCapacity(0) + this.DefaultExpressionSlots.EnsureCapacity(0) + this.MapIndexSlots.EnsureCapacity(0) +
-        this
-        .PatternSwitchSlots
-        .EnsureCapacity(0) + this.TypePatternScratchSlots.EnsureCapacity(0) + this.SwitchExpressionSlots.EnsureCapacity(
-        0
-    ) +
-        this
-        .ChannelOpSlots
-        .EnsureCapacity(0) + this.ReceiverSpillSlots.EnsureCapacity(0) + this.StackAllocResultSlots.EnsureCapacity(0) +
-        this
-        .IndexAssignmentValueSlots
-        .EnsureCapacity(0) + this.LiftedBinaryOperatorSlots.EnsureCapacity(0) +
-        this
-        .NullableCoalesceSpillSlots
-        .EnsureCapacity(0) + this.ConstValues.EnsureCapacity(0) + (this.planner?.RetainedCapacity ?? 0)
+        this.LocalTypes.Capacity +
+        this.StructLiteralSlots.EnsureCapacity(0) + this.DefaultExpressionSlots.EnsureCapacity(0) +
+        this.MapIndexSlots.EnsureCapacity(0) + this.PatternSwitchSlots.EnsureCapacity(0) +
+        this.TypePatternScratchSlots.EnsureCapacity(0) + this.SwitchExpressionSlots.EnsureCapacity(0) +
+        this.ChannelOpSlots.EnsureCapacity(0) + this.ReceiverSpillSlots.EnsureCapacity(0) +
+        this.StackAllocResultSlots.EnsureCapacity(0) + this.IndexAssignmentValueSlots.EnsureCapacity(0) +
+        this.LiftedBinaryOperatorSlots.EnsureCapacity(0) + this.NullableCoalesceSpillSlots.EnsureCapacity(0) +
+        this.ConstValues.EnsureCapacity(0) + (this.planner?.RetainedCapacity ?? 0)
 
     /// Empties every collection. Returns `false` when the scratch keeps too much storage to reuse.
     func Reset() bool {

@@ -193,8 +193,7 @@ internal partial class ExpressionBinder {
                     out propertyDeclaringType
                 )
             ) &&
-                property
-                .HasSetter {
+                property.HasSetter {
                 propertyDeclaringType = Invariant.Required(
                     propertyDeclaringType,
                     "a user-defined struct property has a declaring type",
@@ -376,8 +375,7 @@ internal partial class ExpressionBinder {
         }
         if target is BoundStructLiteralExpression{StructType: {IsClass: false}} literal &&
             !literal.CallsDataConstructor &&
-            !(literal.StructType.Definition ?? literal.StructType)
-            .NeedsSynthesizedValueStructDefaultCtor {
+            !(literal.StructType.Definition ?? literal.StructType).NeedsSynthesizedValueStructDefaultCtor {
             let initializers = literal.Initializers.ToBuilder()
             let initializedMembers = literal
                 .Initializers
@@ -1265,8 +1263,7 @@ internal partial class ExpressionBinder {
         // resolve construction through the one semantic aggregate.
         if syntax.Arguments.Count == 0 && $scope.TryCreateSemanticAggregate(resolvedClrType, out var zeroAggregate) &&
             zeroAggregate is {IsData: true, IsClass: false, HasDataConstructionPrimary: false} zeroData &&
-            !BoundStructLiteralExpression
-            .ValidateDataConstructor(
+            !BoundStructLiteralExpression.ValidateDataConstructor(
             zeroData,
             Diagnostics,
             syntax,
@@ -1281,8 +1278,7 @@ internal partial class ExpressionBinder {
             out var dataClassAggregate
         ) &&
             dataClassAggregate.IsData &&
-            dataClassAggregate
-            .HasPrimaryConstructor {
+            dataClassAggregate.HasPrimaryConstructor {
             // Issue #2550: gsc data classes also expose a parameterless CLR
             // constructor as an implementation detail. Bind their source-level
             // construction through the imported primary-constructor metadata
@@ -1422,8 +1418,7 @@ internal partial class ExpressionBinder {
             let index = symbolicTypeArgs.IndexOf(element)
             if index >= 0 && constructedClrType.IsGenericType && index < constructedClrType.GetGenericArguments()
                 .Length &&
-                ClrTypeUtilities
-                .AreSame(constructedClrType.GetGenericArguments()[index], typeof(object)) {
+                ClrTypeUtilities.AreSame(constructedClrType.GetGenericArguments()[index], typeof(object)) {
                 return typeof(object).MakeArrayType()
             }
         }
@@ -1440,9 +1435,7 @@ internal partial class ExpressionBinder {
     ) bool {
         var conversionTarget = conversionTarget
         if noApplicableOverload &&
-            syntax
-            .Arguments
-            .Count == 1 &&
+            syntax.Arguments.Count == 1 &&
             boundArguments.Length == 1 &&
             conversionTarget != nil {
             if syntax.NullableQuestionToken is {} nullableTargetQuestion {
@@ -1460,8 +1453,7 @@ internal partial class ExpressionBinder {
             // exactly as checked (and as runtime-throwing) as the reference
             // case, so it belongs on the same fallback.
             if Conversion.HasCheckedReferenceConversion(argument.Type, conversionTarget) ||
-                Conversion
-                .HasCheckedUnboxingConversion(argument.Type, conversionTarget) {
+                Conversion.HasCheckedUnboxingConversion(argument.Type, conversionTarget) {
                 result = conversions.BindConversion(
                     syntax.Arguments[0].Location,
                     argument,
@@ -1479,8 +1471,7 @@ internal partial class ExpressionBinder {
             // an argument that cannot convert still falls through to GS0267.
             if conversionTarget.ClrType is {} targetClr && ClrTypeUtilities.IsDelegateType(targetClr) &&
                 argument.Type is {} argumentType &&
-                Conversion
-                .Classify(argumentType, conversionTarget).Exists {
+                Conversion.Classify(argumentType, conversionTarget).Exists {
                 result = conversions.BindConversion(
                     syntax.Arguments[0].Location,
                     argument,
@@ -1568,8 +1559,7 @@ internal partial class ExpressionBinder {
                 // instead of List<ValueTuple<...>>.
                 hasSymbolicArg = true
                 if ((ta is TupleTypeSymbol or NullableTypeSymbol and {UnderlyingType: TupleTypeSymbol})) &&
-                    MemberLookup
-                    .TryProjectErasedClrType(ta, out var projected) {
+                    MemberLookup.TryProjectErasedClrType(ta, out var projected) {
                     clrArgs[i] = $scope.References!!.MapClrTypeToReferences(projected)!!
                 } else {
                     clrArgs[i] = $scope.References!!.GetCoreType("System.Object")
@@ -2060,9 +2050,7 @@ internal partial class ExpressionBinder {
             // `ldloca/initobj/ldloc`. Reference types (and anything with no
             // declared parameterless ctor) still fall through to the generic
             // "no overload" diagnostic.
-            if syntax
-                .Arguments
-                .Count == 0 &&
+            if syntax.Arguments.Count == 0 &&
                 argumentNames.IsDefault &&
                 clrType.IsValueType &&
                 !clrType.IsEnum &&
@@ -2070,8 +2058,7 @@ internal partial class ExpressionBinder {
                 !(
                 ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out var zeroSemantics) && zeroSemantics.IsData
             ) &&
-                !clrType
-                .ContainsGenericParameters {
+                !clrType.ContainsGenericParameters {
                 result = BoundDefaultExpression(
                     syntax,
                     resultTypeOverride ??
@@ -2372,13 +2359,9 @@ internal partial class ExpressionBinder {
                     let parameterIndex = mapping[index]
                     if parameterIndex < 0 ||
                         parameterIndex >= parameters.Length ||
-                        !parameters[parameterIndex]
-                        .ParameterType
-                        .IsByRef ||
+                        !parameters[parameterIndex].ParameterType.IsByRef ||
                         (
-                        parameters[parameterIndex]
-                            .ParameterType
-                            .ContainsGenericParameters &&
+                        parameters[parameterIndex].ParameterType.ContainsGenericParameters &&
                             symbolicTypeArguments.IsDefaultOrEmpty
                     ) {
                         continue
@@ -2568,8 +2551,7 @@ internal partial class ExpressionBinder {
                 openGenericDefinition,
                 symbolicTypeArguments
             ) ??
-                ClrNullability
-                .GetParameterTypeSymbol(parameter).StripToBareShape()
+                ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape()
             let resolvedParameter = RefCapabilities.CreateParameterSymbol(parameter, pointeeType, "value")
             let _ = BindRefArgumentExpression(inlineOut, resolvedParameter)
         }
@@ -2604,8 +2586,7 @@ internal partial class ExpressionBinder {
                 openGenericDefinition,
                 symbolicTypeArguments
             ) ??
-                ClrNullability
-                .GetParameterTypeSymbol(parameter).StripToBareShape()
+                ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape()
             let syntheticParameter = RefCapabilities.CreateParameterSymbol(parameter, pointeeType, "value")
             rebuilt ??= arguments.ToBuilder()
             rebuilt[i] = BindRefArgumentExpression(refArgument, syntheticParameter)
@@ -2991,12 +2972,8 @@ internal partial class ExpressionBinder {
         for var i = 0; i < outerClrArgs.Length; i++ {
             combinedClrArgs[i] = outerClrArgs[i]
             let outerArg = if outerReceiver != nil &&
-                !outerReceiver
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                i < outerReceiver
-                .TypeArguments
-                .Length {
+                !outerReceiver.TypeArguments.IsDefaultOrEmpty &&
+                i < outerReceiver.TypeArguments.Length {
                 outerReceiver.TypeArguments[i]
             } else {
                 TypeSymbol.FromClrTypeWithoutNullability(outerClrArgs[i], NullabilityFreeReason.TypeStructure)
@@ -3087,8 +3064,7 @@ internal partial class ExpressionBinder {
                     return true
                 }
                 case imported is ImportedTypeSymbol when imported.OpenDefinition != nil &&
-                    MemberLookup
-                    .TryGetClrEnumerableElementType(imported.OpenDefinition, out var openElement) {
+                    MemberLookup.TryGetClrEnumerableElementType(imported.OpenDefinition, out var openElement) {
                     elementType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         openElement,
                         imported,
@@ -3097,14 +3073,12 @@ internal partial class ExpressionBinder {
                     return true
                 }
                 case annotated is NullabilityAnnotatedTypeSymbol when annotated.ClrType != nil &&
-                    MemberLookup
-                    .TryGetClrEnumerableElementType(annotated.ClrType, out var annotatedElement) {
+                    MemberLookup.TryGetClrEnumerableElementType(annotated.ClrType, out var annotatedElement) {
                     elementType = annotated.GetTypeArgumentSymbolForClrType(annotatedElement)
                     return true
                 }
                 case imported is ImportedTypeSymbol when imported.ClrType != nil &&
-                    MemberLookup
-                    .TryGetClrEnumerableElementType(imported.ClrType, out var importedElement) {
+                    MemberLookup.TryGetClrEnumerableElementType(imported.ClrType, out var importedElement) {
                     elementType = TypeSymbol.FromClrTypeWithoutNullability(
                         importedElement,
                         NullabilityFreeReason.TypeStructure
@@ -3116,12 +3090,8 @@ internal partial class ExpressionBinder {
                 .GetMethods(collectionType, "Add", MemberQuery.Instance(MemberKinds.Method))
                 .Where(
                 (method FunctionSymbol) -> IsCallableWithSingleArgument(method) &&
-                    method
-                    .Parameters[0]
-                    .RefKind != RefKind.Ref &&
-                    method
-                    .Parameters[0]
-                    .RefKind != RefKind.Out
+                    method.Parameters[0].RefKind != RefKind.Ref &&
+                    method.Parameters[0].RefKind != RefKind.Out
             )
                 .ToArray()
             if singleArityAddMethods.Length > 0 && !singleArityAddMethods.Any(
@@ -3166,8 +3136,7 @@ internal partial class ExpressionBinder {
             }
             if singleArityAddMethods.Length == 0 &&
                 collectionType is StructSymbol user &&
-                MemberLookup
-                .TryGetUserPatternEnumerableElementType(user, out var userElement) {
+                MemberLookup.TryGetUserPatternEnumerableElementType(user, out var userElement) {
                 elementType = Invariant.Required(
                     userElement,
                     "a successful user enumerable-element lookup produces an element type",
@@ -3539,9 +3508,7 @@ internal partial class ExpressionBinder {
                     if paramIndex >= parameters.Length &&
                         !(
                         last >= 0 && ClrOverloadResolution.IsParamsArrayParameter(parameters[last]) &&
-                            !parameters[last]
-                            .ParameterType
-                            .ContainsGenericParameters
+                            !parameters[last].ParameterType.ContainsGenericParameters
                     ) {
                         continue
                     }
@@ -3718,9 +3685,7 @@ internal partial class ExpressionBinder {
                     if !SameDelegateIdentity(previousTarget.DelegateType, mappedDelegate) ||
                         (
                         !object.ReferenceEquals(previousTarget.FunctionType, candidate) &&
-                            !previousTarget
-                            .FunctionType
-                            .Equals(candidate)
+                            !previousTarget.FunctionType.Equals(candidate)
                     ) {
                         target = nil
                         return false

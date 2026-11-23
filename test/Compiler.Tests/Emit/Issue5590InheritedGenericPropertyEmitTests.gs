@@ -243,8 +243,7 @@ public func RunAll() string {
                 )
                     .Single(
                     (method MethodInfo) -> method.Name.Contains("Invoke", StringComparison.Ordinal) &&
-                        method
-                        .GetParameters().Length == 1 && method.GetParameters()[0].ParameterType == receiverType
+                        method.GetParameters().Length == 1 && method.GetParameters()[0].ParameterType == receiverType
                 )
                 let methodBody = invoke.GetMethodBody()!!
                 Assert.Contains(methodBody.LocalVariables, (local LocalVariableInfo) -> local.LocalType == bigType)

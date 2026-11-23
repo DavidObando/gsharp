@@ -492,8 +492,7 @@ open partial class Parser {
         var parseNextArgument = true
         while parseNextArgument &&
             Current.Kind != SyntaxKind.CloseParenthesisToken &&
-            Current.Kind != SyntaxKind
-            .EndOfFileToken {
+            Current.Kind != SyntaxKind.EndOfFileToken {
             var expression ExpressionSyntax
             // Issue #343: a call-site named argument is `name: value`.
             // Issue #4503: attribute lists also preserve C#'s `Name = value`
@@ -1483,12 +1482,8 @@ open partial class Parser {
                 let probeParser = Parser(syntaxTree, fragment.Position, fragment.Position + fragment.Text.Length)
                 probeParser.unsafeDepth = this.unsafeDepth
                 let _ = probeParser.ParseExpression()
-                expressionLength = if probeParser
-                    .Current
-                    .Kind == SyntaxKind.CommaToken ||
-                    probeParser
-                    .Current
-                    .Kind == SyntaxKind.ColonToken {
+                expressionLength = if probeParser.Current.Kind == SyntaxKind.CommaToken ||
+                    probeParser.Current.Kind == SyntaxKind.ColonToken {
                     probeParser.Current.Position - fragment.Position
                 } else {
                     fragment.Text.Length

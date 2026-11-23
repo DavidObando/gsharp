@@ -269,9 +269,7 @@ name=Sample
                 "\n" +
                 "# a comment\n" +
                 "formatVersion=" +
-                ReferenceMetadataIndex
-                .FormatVersion
-                .ToString() +
+                ReferenceMetadataIndex.FormatVersion.ToString() +
                 "\n" +
                 "assemblyCount=2\n" +
                 "\n" +

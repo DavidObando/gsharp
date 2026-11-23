@@ -852,8 +852,7 @@ open class CompilerWorkerTests : IDisposable {
     @Fact
     func RealBuildTaskUsesEachLeaseInsteadOfAStaleReusableGrant() {
         let source = "package LeaseRequests\nimport System\nfunc Main() { Console.WriteLine(Value0(0)) }\n" +
-            string
-            .Concat(
+            string.Concat(
             Enumerable.Range(0, 16).Select(
                 (method int32) -> "func Value$method(x int32) int32 {\nlet n0 = x + 1\n" + string.Concat(
                     Enumerable.Range(1, 64).Select((n int32) -> "let n$n = n${n - 1} + $n\n")

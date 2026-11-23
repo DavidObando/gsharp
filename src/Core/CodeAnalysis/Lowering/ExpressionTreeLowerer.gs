@@ -26,8 +26,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
 
     protected override func RewriteConversionExpression(node BoundConversionExpression) BoundExpression {
         if node.Expression is BoundFunctionLiteralExpression literal &&
-            MemberLookup
-            .TryGetExpressionTreeDelegateTypeFromSymbol(node.Type, out _) {
+            MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(node.Type, out _) {
             return this.BuildExpressionTreeValue(node.Syntax, literal, node.Type)
         }
         return base.RewriteConversionExpression(node)
@@ -752,12 +751,8 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         }
         if structLiteral.IsZeroInitialization ||
             (
-            !structLiteral
-                .StructType
-                .HasPrimaryConstructor &&
-                structLiteral
-                .StructType
-                .NeedsSynthesizedValueStructDefaultCtor
+            !structLiteral.StructType.HasPrimaryConstructor &&
+                structLiteral.StructType.NeedsSynthesizedValueStructDefaultCtor
         ) {
             return this.BuildOwningStructLiteralExpression(structLiteral, parameterMap)
         }
@@ -866,12 +861,8 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
     ) BoundExpression {
         let markerCount = literal.StructType.LiteralInitializerMarkerCount
         if literal.IsZeroInitialization &&
-            !literal
-            .StructType
-            .IsClass &&
-            !literal
-            .StructType
-            .UsesOwningZeroInitializerConstructor {
+            !literal.StructType.IsClass &&
+            !literal.StructType.UsesOwningZeroInitializerConstructor {
             return this.BuildZeroStorageStructLiteralExpression(literal, parameterMap)
         }
         var construction BoundExpression
@@ -913,9 +904,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         let bindings = ImmutableArray.CreateBuilder[BoundExpression](literal.Initializers.Length)
         for initializer in literal.Initializers {
             if literal.IsZeroInitialization &&
-                literal
-                .StructType
-                .ValueStructDefaultCtorIsZeroInitialization &&
+                literal.StructType.ValueStructDefaultCtorIsZeroInitialization &&
                 markerCount > 0 &&
                 initializer.Field is {} zeroField &&
                 MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(
@@ -1063,13 +1052,9 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         } else {
             nil
         }
-        if constructor
-            .StructType
-            .ClrType != nil &&
+        if constructor.StructType.ClrType != nil &&
             importedConstructor == nil &&
-            constructor
-            .Arguments
-            .IsDefaultOrEmpty {
+            constructor.Arguments.IsDefaultOrEmpty {
             return BoundClrStaticCallExpression(
                 constructor.Syntax,
                 ExpressionNewTypeMethod,
@@ -1147,8 +1132,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
         if conversion.Expression is BoundFunctionLiteralExpression nestedLiteral &&
-            MemberLookup
-            .TryGetExpressionTreeDelegateTypeFromSymbol(conversion.Type, out _) {
+            MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(conversion.Type, out _) {
             return this.BuildExpressionTreeValue(conversion.Syntax, nestedLiteral, conversion.Type)
         }
         if conversion.Expression is BoundFunctionLiteralExpression ||
@@ -1701,8 +1685,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 case field is BoundFieldAssignmentExpression when field.Receiver != nil && receivers.Contains(
                     field.Receiver
                 ) ||
-                    ReferencesReceiver(field.ReceiverExpression, receivers): this
-                    .BuildFieldAccessExpression(
+                    ReferencesReceiver(field.ReceiverExpression, receivers): this.BuildFieldAccessExpression(
                     BoundFieldAccessExpression(
                         field.Syntax,
                         field.ReceiverExpression ?? BoundVariableExpression(field.Syntax, field.Receiver ?? receiver),

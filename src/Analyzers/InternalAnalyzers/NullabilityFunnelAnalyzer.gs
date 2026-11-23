@@ -335,9 +335,7 @@ class NullabilityFunnelAnalyzer : GSharpDiagnosticAnalyzer {
                     name == "FieldType" ||
                     name == "EventHandlerType"
             ) &&
-                property
-                .ContainingType
-                ?.ContainingNamespace == "System.Reflection"
+                property.ContainingType?.ContainingNamespace == "System.Reflection"
         }
     }
 }

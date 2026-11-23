@@ -799,8 +799,7 @@ public static class NativeConsumer
                                     )
                                 ) +
                                     ":" +
-                                    string
-                                    .Join(
+                                    string.Join(
                                     ",",
                                     attribute.NamedArguments.Select(
                                         (argument CustomAttributeNamedArgument) -> argument.MemberName +

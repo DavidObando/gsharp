@@ -101,14 +101,10 @@ internal class IndependentMethodBody {
             !function.IsAbstract &&
             !function.IsAsyncOrSuspending &&
             function.StateMachineType == nil &&
-            function
-            .TypeParameters
-            .IsDefaultOrEmpty &&
+            function.TypeParameters.IsDefaultOrEmpty &&
             function.ReturnRefKind == RefKind.None &&
             (Primitive(function.Type) || function.Type == TypeSymbol.Void) &&
-            function
-            .EmittedParameters
-            .All(
+            function.EmittedParameters.All(
             (p ParameterSymbol) ->
             object.ReferenceEquals(p, function.ThisParameter) || Primitive(p.Type) && p.RefKind == RefKind.None
         ) &&
@@ -141,13 +137,9 @@ internal class IndependentMethodBody {
                     (variable.NarrowedType == nil || variable.NarrowedType == variable.Variable.Type)
                 case assignment is BoundAssignmentExpression: Variable(assignment.Variable) &&
                     IsLocal(assignment.Expression)
-                case unary is BoundUnaryExpression: unary
-                    .Op
-                    .Kind != BoundUnaryOperatorKind.NullAssertion &&
+                case unary is BoundUnaryExpression: unary.Op.Kind != BoundUnaryOperatorKind.NullAssertion &&
                     IsLocal(unary.Operand)
-                case binary is BoundBinaryExpression: !binary
-                    .Op
-                    .IsDelegateCombination &&
+                case binary is BoundBinaryExpression: !binary.Op.IsDelegateCombination &&
                     IsLocal(binary.Left) &&
                     IsLocal(binary.Right)
                 default: false

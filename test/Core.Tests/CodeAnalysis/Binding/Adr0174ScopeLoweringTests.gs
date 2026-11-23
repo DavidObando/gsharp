@@ -43,14 +43,8 @@ func run() int32 {
         let calls = Collect[BoundImportedCallExpression](run)
         Assert.Contains(
             calls,
-            (c BoundImportedCallExpression) -> c
-                .Function
-                .Name == "Enter" &&
-                c
-                .Function
-                .ImportedClass
-                .ClassType
-                .FullName == "Gsharp.Concurrency.ScopeFrame"
+            (c BoundImportedCallExpression) -> c.Function.Name == "Enter" &&
+                c.Function.ImportedClass.ClassType.FullName == "Gsharp.Concurrency.ScopeFrame"
         )
         let tries = Collect[BoundTryStatement](run)
         let scopeTry = Assert.Single(tries)

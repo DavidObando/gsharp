@@ -41,16 +41,9 @@ internal shared class RendezvousBatchAnalyzer {
             // capacity. The binder has already reported GS0548 there; this only
             // remembers which locals it applies to.
             if node.Initializer is BoundClrConstructorCallExpression construction &&
-                construction
-                .ClrType
-                .IsGenericType &&
-                construction
-                .ClrType
-                .GetGenericTypeDefinition()
-                .FullName == RendezvousBatchAnalyzer.ChanTypeName &&
-                construction
-                .Arguments
-                .Length == 1 &&
+                construction.ClrType.IsGenericType &&
+                construction.ClrType.GetGenericTypeDefinition().FullName == RendezvousBatchAnalyzer.ChanTypeName &&
+                construction.Arguments.Length == 1 &&
                 (construction.Arguments[0] is BoundLiteralExpression and {Value: 0}) {
                 rendezvous.Add(node.Variable)
             }
@@ -71,16 +64,9 @@ internal shared class RendezvousBatchAnalyzer {
             // rendezvous channel handed to it is the most likely way to reach
             // the degenerate case. The callee is G#-authored, so it is an
             // ordinary call rather than an imported one.
-            if node
-                .Function
-                .Name == "chunks" &&
-                node
-                .Function
-                .Package
-                ?.Name == "Gsharp.Concurrency" &&
-                node
-                .Arguments
-                .Length > 0 &&
+            if node.Function.Name == "chunks" &&
+                node.Function.Package?.Name == "Gsharp.Concurrency" &&
+                node.Arguments.Length > 0 &&
                 Receiver(node.Arguments[0]) is {} chunked {
                 Report(chunked, node.Syntax)
             }
@@ -90,14 +76,8 @@ internal shared class RendezvousBatchAnalyzer {
         protected override func VisitImportedCallExpression(node BoundImportedCallExpression) {
             // The extension form: the receiver is the first argument.
             if RendezvousBatchAnalyzer.BatchMethodNames.Contains(node.Function.Name) &&
-                node
-                .Function
-                .ImportedClass
-                .ClassType
-                .FullName == RendezvousBatchAnalyzer.BatchExtensionsTypeName &&
-                node
-                .Arguments
-                .Length > 0 &&
+                node.Function.ImportedClass.ClassType.FullName == RendezvousBatchAnalyzer.BatchExtensionsTypeName &&
+                node.Arguments.Length > 0 &&
                 Receiver(node.Arguments[0]) is {} variable {
                 Report(variable, node.Syntax)
             }
@@ -105,17 +85,9 @@ internal shared class RendezvousBatchAnalyzer {
             // rendezvous channel handed to it is the likeliest way to reach the
             // degenerate case. It is G#-authored but lives in another assembly,
             // so it arrives as a static call on that package's `<Program>`.
-            if node
-                .Function
-                .Name == "chunks" &&
-                node
-                .Function
-                .ImportedClass
-                .ClassType
-                .FullName == RendezvousBatchAnalyzer.ConcurrencyHelpersTypeName &&
-                node
-                .Arguments
-                .Length > 0 &&
+            if node.Function.Name == "chunks" &&
+                node.Function.ImportedClass.ClassType.FullName == RendezvousBatchAnalyzer.ConcurrencyHelpersTypeName &&
+                node.Arguments.Length > 0 &&
                 Receiver(node.Arguments[0]) is {} chunked {
                 Report(chunked, node.Syntax)
             }

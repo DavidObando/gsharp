@@ -473,9 +473,7 @@ Failed!  - Failed:     1, Passed:     3, Skipped:     0, Total:     4, Duration:
                 "InternalAnalyzers.Tests",
                 StringComparison.Ordinal
             ) ||
-                entry
-                .App
-                .Contains("LanguageServer.Tests", StringComparison.Ordinal) || entry.App.Contains(
+                entry.App.Contains("LanguageServer.Tests", StringComparison.Ordinal) || entry.App.Contains(
                 "GeneratorHost.Tests",
                 StringComparison.Ordinal
             )

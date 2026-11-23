@@ -303,11 +303,7 @@ partial class CSharpToGSharpTranslator {
                     for id in CoveringGsaSuppressions(member, out _, out _) {
                         inherited.Add(id)
                     }
-                } else if ancestor is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .StatementSyntax ancestorStatement &&
+                } else if ancestor is Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax ancestorStatement &&
                     (!(ancestorStatement is BlockSyntax) || ancestorStatement.Parent is BlockSyntax) {
                     for id in CoveringSpanSuppressions(
                         directives,
@@ -397,10 +393,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 if declared is List[AttributeUse]attributes &&
                     source != nil &&
-                    !source
-                    .DescendantNodes()
-                    .OfType[BlockSyntax]()
-                    .Any() {
+                    !source.DescendantNodes().OfType[BlockSyntax]().Any() {
                     attributes.Add(
                         AttributeUse(
                             "SuppressDiagnostic",
@@ -446,18 +439,10 @@ partial class CSharpToGSharpTranslator {
                     return selfBlock.Span.Start <= interruptionPosition && interruptionPosition <= selfBlock.Span.End
                 }
                 for block in node.DescendantNodes().OfType[BlockSyntax]() {
-                    if block
-                        .Span
-                        .Start <= disableStart &&
-                        disableStart <= block
-                        .Span
-                        .End &&
-                        block
-                        .Span
-                        .Start <= interruptionPosition &&
-                        interruptionPosition <= block
-                        .Span
-                        .End {
+                    if block.Span.Start <= disableStart &&
+                        disableStart <= block.Span.End &&
+                        block.Span.Start <= interruptionPosition &&
+                        interruptionPosition <= block.Span.End {
                         return true
                     }
                 }
@@ -726,8 +711,7 @@ partial class CSharpToGSharpTranslator {
                                     directiveStarts[id] = directive.SpanStart
                                 } else if state.TryGetValue(id, out var wasActive) &&
                                     wasActive &&
-                                    directiveStarts
-                                    .TryGetValue(id, out var activeStart) {
+                                    directiveStarts.TryGetValue(id, out var activeStart) {
                                     interruptedDirectives.Add((activeStart, id, directive.SpanStart))
                                     state[id] = false
                                     directiveStarts.Remove(id)

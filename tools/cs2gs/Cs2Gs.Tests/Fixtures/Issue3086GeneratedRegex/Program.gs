@@ -29,9 +29,7 @@ partial data class GitHubUrl(Owner string, Name string, PrNumber int32?) : IEqua
             let regex = Pattern()
             return regex.ToString() == PatternText &&
                 regex.Options == RegexOptions.ExplicitCapture &&
-                regex
-                .MatchTimeout
-                .TotalMilliseconds == float64(1000.0) &&
+                regex.MatchTimeout.TotalMilliseconds == float64(1000.0) &&
                 object.ReferenceEquals(regex, Pattern())
         }
 
@@ -40,9 +38,7 @@ partial data class GitHubUrl(Owner string, Name string, PrNumber int32?) : IEqua
             let infiniteRegex = InfinitePattern()
             return defaultRegex.ToString() == "^default$$" &&
                 defaultRegex.Options == RegexOptions.None &&
-                defaultRegex
-                .MatchTimeout
-                .TotalMilliseconds == float64(250.0) &&
+                defaultRegex.MatchTimeout.TotalMilliseconds == float64(250.0) &&
                 object.ReferenceEquals(defaultRegex, DefaultPattern()) &&
                 infiniteRegex.MatchTimeout == Regex.InfiniteMatchTimeout &&
                 object.ReferenceEquals(infiniteRegex, InfinitePattern())
@@ -119,8 +115,7 @@ if !firstRegex.IsMatch("lowercase") || firstRegex.IsMatch("UPPERCASE") || !objec
     firstRegex,
     firstOwner.LowercaseWords()
 ) ||
-    !object
-    .ReferenceEquals(firstRegex, secondOwner.LowercaseWords()) {
+    !object.ReferenceEquals(firstRegex, secondOwner.LowercaseWords()) {
     throw InvalidOperationException("GeneratedRegex instance lowering changed.")
 }
 

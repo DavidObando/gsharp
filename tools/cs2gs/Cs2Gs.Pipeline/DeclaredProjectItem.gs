@@ -145,10 +145,7 @@ internal shared class DeclaredProjectItems {
                 if string.IsNullOrEmpty(item.SourceInclude) {
                     continue
                 }
-                let referenceOutputAssembly = item
-                    .Element
-                    .Attribute(XName?("ReferenceOutputAssembly")!!)
-                    ?.Value ??
+                let referenceOutputAssembly = item.Element.Attribute(XName?("ReferenceOutputAssembly")!!)?.Value ??
                     item
                     .Element
                     .Elements()

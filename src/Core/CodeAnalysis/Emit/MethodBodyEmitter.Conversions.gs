@@ -86,8 +86,12 @@ internal partial class MethodBodyEmitter {
             out var targetDirection,
             out var targetConstructed
         ) &&
-            ChannelTypeSymbol
-            .TryGetChannelShape(conv.Expression.Type, out _, out var sourceDirection, out var sourceConstructed) {
+            ChannelTypeSymbol.TryGetChannelShape(
+            conv.Expression.Type,
+            out _,
+            out var sourceDirection,
+            out var sourceConstructed
+        ) {
             this.EmitExpression(conv.Expression)
             if sourceDirection == targetDirection {
                 if targetConstructed && !sourceConstructed {
@@ -129,8 +133,7 @@ internal partial class MethodBodyEmitter {
         if delegateSourceType is FunctionTypeSymbol && !(conv.Expression is BoundFunctionLiteralExpression) {
             if !Conversion.KeepsFunctionValueDelegate(conv.Expression.Type, conv.Type) {
                 if !Conversion.HasCheckedReferenceConversion(conv.Expression.Type, conv.Type) ||
-                    !Conversion
-                    .ChecksFunctionValueDelegate(conv.Expression.Type, conv.Type) {
+                    !Conversion.ChecksFunctionValueDelegate(conv.Expression.Type, conv.Type) {
                     throw InvalidOperationException(
                         "Conversion from '${conv.Expression.Type.Name}' to '${conv.Type.Name}' needs a function literal."
                     )
@@ -141,8 +144,7 @@ internal partial class MethodBodyEmitter {
                 return
             }
             if !(conv.Expression is BoundMethodGroupExpression || conv.Expression is BoundClrMethodGroupExpression) &&
-                Conversion
-                .ReusesFunctionValueDelegate(delegateSourceType, delegateTargetType) {
+                Conversion.ReusesFunctionValueDelegate(delegateSourceType, delegateTargetType) {
                 this.EmitExpression(conv.Expression)
                 return
             }
@@ -159,8 +161,7 @@ internal partial class MethodBodyEmitter {
             delegateTargetType is ImportedTypeSymbol constructedDelegateTarget &&
             constructedDelegateTarget.OpenDefinition != nil &&
             constructedDelegateTarget.HasSubstitutableTypeArgument &&
-            ClrTypeUtilities
-            .IsDelegateType(constructedDelegateTarget.ClrType) {
+            ClrTypeUtilities.IsDelegateType(constructedDelegateTarget.ClrType) {
             this.EmitFunctionToDelegateConversion(
                 conv.Expression,
                 constructedDelegateSource,
@@ -199,8 +200,7 @@ internal partial class MethodBodyEmitter {
         // so the adapter body and its outer delegate constructor both verify.
         if delegateTargetType is FunctionTypeSymbol delegateTargetFn &&
             delegateSourceType is ImportedTypeSymbol{ClrType: Type importedDelegateSource} &&
-            ClrTypeUtilities
-            .IsDelegateType(importedDelegateSource) {
+            ClrTypeUtilities.IsDelegateType(importedDelegateSource) {
             if Conversion.ReusesFunctionValueDelegate(delegateSourceType, delegateTargetType) {
                 this.EmitExpression(conv.Expression)
                 return
@@ -233,8 +233,7 @@ internal partial class MethodBodyEmitter {
         // instantiation IL.
         if delegateSourceType is FunctionTypeSymbol sourceFn &&
             delegateTargetType?.ClrType != nil &&
-            ClrTypeUtilities
-            .IsDelegateType(delegateTargetType.ClrType) {
+            ClrTypeUtilities.IsDelegateType(delegateTargetType.ClrType) {
             this.EmitFunctionToDelegateConversion(conv.Expression, sourceFn, delegateTargetType.ClrType)
             return
         }
@@ -243,8 +242,7 @@ internal partial class MethodBodyEmitter {
         // which is already a valid target reference.
         if delegateSourceType is FunctionTypeSymbol &&
             delegateTargetType is FunctionTypeSymbol &&
-            Conversion
-            .ReusesFunctionValueDelegate(delegateSourceType, delegateTargetType) {
+            Conversion.ReusesFunctionValueDelegate(delegateSourceType, delegateTargetType) {
             this.EmitExpression(conv.Expression)
             return
         }
@@ -345,8 +343,7 @@ internal partial class MethodBodyEmitter {
         }
         if from == TypeSymbol.Null &&
             to is NullableTypeSymbol toValueNullForNil &&
-            ReflectionMetadataEmitter
-            .IsValueTypeNullable(toValueNullForNil) {
+            ReflectionMetadataEmitter.IsValueTypeNullable(toValueNullForNil) {
             throw InvalidOperationException(
                 "Conversion 'nil' -> '${to.Name}' (a value-type Nullable) must be lowered to a " +
                     "BoundDefaultExpression by the binder so emit can allocate a temp slot for " +
@@ -396,9 +393,7 @@ internal partial class MethodBodyEmitter {
                 this.il.Token(this.outer.memberRefs.GetNullableCtorMemberRefForOpenTypeParameter(toValueNullableLift))
                 return
             }
-            let innerClr = toValueNullableLift
-                .UnderlyingType
-                .ClrType ??
+            let innerClr = toValueNullableLift.UnderlyingType.ClrType ??
                 throw InvalidOperationException(
                 "Nullable<${toValueNullableLift.UnderlyingType.Name}> lift has no CLR underlying type."
             )
@@ -445,8 +440,7 @@ internal partial class MethodBodyEmitter {
         if to is NullableTypeSymbol toNullable && !ReflectionMetadataEmitter.IsValueTypeNullable(toNullable) &&
             !ReflectionMetadataEmitter.IsValueTypeSymbol(from) &&
             (
-            Conversion.ClassifyNonStructural(from, toNullable.UnderlyingType)
-                .IsIdentity ||
+            Conversion.ClassifyNonStructural(from, toNullable.UnderlyingType).IsIdentity ||
                 IsReferenceCompatible(from, toNullable.UnderlyingType)
         ) {
             return
@@ -482,9 +476,7 @@ internal partial class MethodBodyEmitter {
             ReflectionMetadataEmitter.IsValueTypeNullable(toValueNullableWiden) &&
             from != toValueNullableWiden.UnderlyingType &&
             TryEmitNumericConversion(from, toValueNullableWiden.UnderlyingType, conv.IsChecked) {
-            let widenInnerClr = toValueNullableWiden
-                .UnderlyingType
-                .ClrType ??
+            let widenInnerClr = toValueNullableWiden.UnderlyingType.ClrType ??
                 throw InvalidOperationException(
                 "Nullable<${toValueNullableWiden.UnderlyingType.Name}> lift has no CLR underlying type."
             )
@@ -520,8 +512,7 @@ internal partial class MethodBodyEmitter {
         ) &&
             to is NullableTypeSymbol toValueNullableLift2 &&
             ReflectionMetadataEmitter.IsValueTypeNullable(toValueNullableLift2) &&
-            fromValueNullableLift.UnderlyingType != toValueNullableLift2
-            .UnderlyingType {
+            fromValueNullableLift.UnderlyingType != toValueNullableLift2.UnderlyingType {
             this.EmitLiftedNullableConversion(conv, fromValueNullableLift, toValueNullableLift2)
             return
         }
@@ -541,8 +532,7 @@ internal partial class MethodBodyEmitter {
             return
         }
         if (to.ClrType?.IsSameAs(typeof(object)) == true || IsInterfaceTargetType(to)) &&
-            ReflectionMetadataEmitter
-            .IsValueTypeSymbol(from) {
+            ReflectionMetadataEmitter.IsValueTypeSymbol(from) {
             this.il.OpCode(ILOpCode.Box)
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(from))
             return
@@ -640,8 +630,7 @@ internal partial class MethodBodyEmitter {
         if from.ClrType?.IsSameAs(typeof(object)) == true &&
             (to.ClrType == nil || !to.ClrType.IsSameAs(typeof(object))) &&
             !(to is TypeParameterSymbol) &&
-            !ReflectionMetadataEmitter
-            .IsValueTypeSymbol(to) {
+            !ReflectionMetadataEmitter.IsValueTypeSymbol(to) {
             this.il.OpCode(ILOpCode.Castclass)
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(to))
             return
@@ -653,13 +642,10 @@ internal partial class MethodBodyEmitter {
         // Type, so the synthesized final step is an explicit reference cast
         // from LambdaExpression to Expression<TDelegate>.
         let toClrType = to.ClrType
-        if from
-            .ClrType
-            ?.FullName == "System.Linq.Expressions.LambdaExpression" &&
+        if from.ClrType?.FullName == "System.Linq.Expressions.LambdaExpression" &&
             toClrType != nil &&
             toClrType.IsGenericType &&
-            string
-            .Equals(
+            string.Equals(
             (
                 if toClrType.IsGenericTypeDefinition {
                     toClrType
@@ -799,8 +785,7 @@ internal partial class MethodBodyEmitter {
         // `T -> Nullable<T>` lift through unwrapped, and the identity check
         // alone would admit an alias whose backing legitimately differs.
         if from.ClrType != nil && to.ClrType != nil && ClrTypeUtilities.AreSame(from.ClrType, to.ClrType) &&
-            Conversion
-            .Classify(from, to).IsIdentity {
+            Conversion.Classify(from, to).IsIdentity {
             return
         }
         // Issue #3998 (review finding 2): the explicit `cast[[M]T]([N]T)` the
@@ -944,9 +929,7 @@ internal partial class MethodBodyEmitter {
             expectedType == nil ||
             expectedType == TypeSymbol.Void ||
             expectedType == TypeSymbol.Error ||
-            expectedType
-            .ClrType
-            ?.IsSameAs(typeof(object)) == true {
+            expectedType.ClrType?.IsSameAs(typeof(object)) == true {
             return
         }
         // ADR-0087 §3 R4: when the source is `object` (erased return from a
@@ -1113,12 +1096,8 @@ internal partial class MethodBodyEmitter {
             // iterating the operator overloads ourselves.
             var op MethodInfo? = nil
             for m in typeof(decimal).GetMethods() {
-                if m.Name == "op_Explicit" && m.ReturnType.IsSameAs(to) && m.GetParameters()
-                    .Length == 1 &&
-                    m
-                    .GetParameters()[0]
-                    .ParameterType
-                    .IsSameAs(typeof(decimal)) {
+                if m.Name == "op_Explicit" && m.ReturnType.IsSameAs(to) && m.GetParameters().Length == 1 &&
+                    m.GetParameters()[0].ParameterType.IsSameAs(typeof(decimal)) {
                     op = m
                     break
                 }
@@ -1334,8 +1313,7 @@ internal partial class MethodBodyEmitter {
         for method in typeof(Activator).GetMethods(BindingFlags.Public | BindingFlags.Static) {
             if method.Name == "CreateInstance" && method.IsGenericMethodDefinition && method.GetGenericArguments()
                 .Length == 1 &&
-                method
-                .GetParameters().Length == 0 {
+                method.GetParameters().Length == 0 {
                 openCreateInstance = method
                 break
             }
@@ -1357,9 +1335,7 @@ internal partial class MethodBodyEmitter {
 
     private func EmitClrConversionCall(conv BoundClrConversionCallExpression) {
         if conv.IsLifted &&
-            conv
-            .Source
-            .Type is NullableTypeSymbol sourceNullable &&
+            conv.Source.Type is NullableTypeSymbol sourceNullable &&
             conv.Type is NullableTypeSymbol liftedTargetNullable {
             this.EmitLiftedNullableClrConversion(conv, sourceNullable, liftedTargetNullable)
             return
@@ -1459,8 +1435,7 @@ internal partial class MethodBodyEmitter {
             } else {
                 (
                     if conversionMethod.DeclaringType is {IsGenericTypeDefinition: true} ||
-                        ConversionClassifier
-                        .NeedsSymbolicConversion(symbolicOwner) {
+                        ConversionClassifier.NeedsSymbolicConversion(symbolicOwner) {
                         this
                             .outer
                             .memberRefs
@@ -1690,9 +1665,7 @@ internal partial class MethodBodyEmitter {
             let owner = SymbolicConversionOwner(method, conversion.Source.Type, conversion.Type)
             if owner is not ImportedTypeSymbol importedOwner ||
                 importedOwner.OpenDefinition is not{} openDefinition ||
-                importedOwner
-                .TypeArguments
-                .IsDefaultOrEmpty ||
+                importedOwner.TypeArguments.IsDefaultOrEmpty ||
                 (
                 method.DeclaringType is not{IsGenericTypeDefinition: true} &&
                     !ConversionClassifier.NeedsSymbolicConversion(importedOwner)

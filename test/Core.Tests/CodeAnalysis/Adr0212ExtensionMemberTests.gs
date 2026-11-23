@@ -243,12 +243,8 @@ func Use(xs []int32) {
             var best AccessorExpressionSyntax? = nil
             for node in TreeOf(marker).Root.DescendantNodes() {
                 if node is AccessorExpressionSyntax accessor &&
-                    accessor
-                    .Span
-                    .Start >= lineStart &&
-                    accessor
-                    .Span
-                    .End <= position &&
+                    accessor.Span.Start >= lineStart &&
+                    accessor.Span.End <= position &&
                     (best == nil || accessor.Span.Start <= best.Span.Start) {
                     best = accessor
                 }

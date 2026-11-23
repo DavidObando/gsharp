@@ -40,13 +40,8 @@ class C {
 }`)
         let field FieldInfo? = FindField(asm, "p", "C", "g")
         Assert.True(
-            field!!
-                .FieldType
-                .IsGenericType &&
-                field!!
-                .FieldType
-                .GetGenericTypeDefinition()
-                .FullName == "System.Action`1",
+            field!!.FieldType.IsGenericType &&
+                field!!.FieldType.GetGenericTypeDefinition().FullName == "System.Action`1",
             "expected System.Action`1 but was '${field!!.FieldType.FullName}'"
         )
         Assert.Equal(typeof(int32).FullName, field!!.FieldType.GetGenericArguments()[0].FullName)

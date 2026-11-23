@@ -187,8 +187,7 @@ data class BoundBinaryOperator : IEquatable[BoundBinaryOperator] {
             if (syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken) &&
                 leftType is TypeParameterSymbol ltp &&
                 ltp == rightType &&
-                ltp.Constraint == TypeParameterConstraint
-                .Comparable {
+                ltp.Constraint == TypeParameterConstraint.Comparable {
                 let cmpKind = if syntaxKind == SyntaxKind.EqualsEqualsToken {
                     BoundBinaryOperatorKind.Equals
                 } else {
@@ -279,8 +278,7 @@ data class BoundBinaryOperator : IEquatable[BoundBinaryOperator] {
                 leftStructural.UnderlyingType is StructSymbol structural &&
                 !structural.IsClass &&
                 (structural.IsData || structural.IsInline) &&
-                structural == rightStructural
-                .UnderlyingType {
+                structural == rightStructural.UnderlyingType {
                 let kind = if syntaxKind == SyntaxKind.EqualsEqualsToken {
                     BoundBinaryOperatorKind.Equals
                 } else {
@@ -345,8 +343,7 @@ data class BoundBinaryOperator : IEquatable[BoundBinaryOperator] {
                     leftType.ReferenceNullability is ReferenceNullabilityKind.Nullable or
                         ReferenceNullabilityKind.Platform
                 ) &&
-                    Conversion
-                    .IsReferenceLikeTarget(leftUnderlying!!) {
+                    Conversion.IsReferenceLikeTarget(leftUnderlying!!) {
                     return BoundBinaryOperator(
                         syntaxKind,
                         BoundBinaryOperatorKind.NullCoalesce,
@@ -396,8 +393,7 @@ data class BoundBinaryOperator : IEquatable[BoundBinaryOperator] {
                 if leftUnderlying != nil &&
                     rightUnderlying != nil &&
                     leftType != TypeSymbol.Error &&
-                    rightType != TypeSymbol
-                    .Error {
+                    rightType != TypeSymbol.Error {
                     var common TypeSymbol? = nil
                     let rightToLeft = Conversion.Classify(rightUnderlying, leftUnderlying)
                     if rightToLeft.Exists && rightToLeft.IsImplicit {
@@ -439,9 +435,7 @@ data class BoundBinaryOperator : IEquatable[BoundBinaryOperator] {
             if leftType is NullableTypeSymbol lN &&
                 rightType is NullableTypeSymbol rN &&
                 lN == rN &&
-                lN
-                .UnderlyingType
-                ?.ClrType is {IsValueType: true} {
+                lN.UnderlyingType?.ClrType is {IsValueType: true} {
                 // Look up the underlying-form operator. If it does not exist
                 // (e.g. the user wrote `+` on `bool?`, which has no underlying
                 // form), there is no lifted form either.
@@ -466,12 +460,8 @@ data class BoundBinaryOperator : IEquatable[BoundBinaryOperator] {
             if leftType is NullableTypeSymbol lHet &&
                 rightType is NullableTypeSymbol rHet &&
                 lHet != rHet &&
-                lHet
-                .UnderlyingType
-                ?.ClrType is {IsValueType: true} &&
-                rHet
-                .UnderlyingType
-                ?.ClrType is {IsValueType: true} {
+                lHet.UnderlyingType?.ClrType is {IsValueType: true} &&
+                rHet.UnderlyingType?.ClrType is {IsValueType: true} {
                 let underlyingOp BoundBinaryOperator? = Bind(syntaxKind, lHet.UnderlyingType, rHet.UnderlyingType)
                 if underlyingOp != nil && IsLiftableKind(underlyingOp.Kind) {
                     let liftedResult = if IsLiftedToBoolKind(underlyingOp.Kind) {

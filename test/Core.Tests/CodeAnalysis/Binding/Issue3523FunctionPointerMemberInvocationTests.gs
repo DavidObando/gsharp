@@ -413,12 +413,8 @@ func read(box IDerivedBox[int32], smart SmartBox) {
         let genericProperties = collector
             .Properties
             .Where(
-            (access BoundPropertyAccessExpression) -> access
-                .Property
-                .Name == "Value" &&
-                access
-                .Receiver
-                ?.Type is InterfaceSymbol
+            (access BoundPropertyAccessExpression) -> access.Property.Name == "Value" &&
+                access.Receiver?.Type is InterfaceSymbol
         )
             .ToArray()
         Assert.Equal(2, genericProperties.Length)
@@ -473,9 +469,7 @@ func read(box IDerivedBox[int32], smart SmartBox) {
         )
         let narrowedProperty = Assert.Single(
             collector.Properties,
-            (access BoundPropertyAccessExpression) -> access
-                .Property
-                .Name == "Pet" &&
+            (access BoundPropertyAccessExpression) -> access.Property.Name == "Pet" &&
                 (access.NarrowedType is StructSymbol and {Name: "Dog"})
         )
         Assert.Null(narrowedProperty.SubstitutedType)

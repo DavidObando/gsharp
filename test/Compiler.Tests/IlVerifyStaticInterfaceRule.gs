@@ -66,8 +66,7 @@ internal shared class IlVerifyStaticInterfaceRule {
             // ponytail: one basic block only; remove this boundary after the stable verifier supports static dispatch.
             if instructions.Length == 0 ||
                 instructions[instructions.Length - 1].OpCode != OpCodes.Ret ||
-                instructions
-                .Take(instructions.Length - 1).Any(
+                instructions.Take(instructions.Length - 1).Any(
                 (i IlInstruction) -> {
                     let flow = i.OpCode.FlowControl
                     return i.OpCode == OpCodes.Jmp ||
@@ -97,11 +96,8 @@ internal shared class IlVerifyStaticInterfaceRule {
             var signature = reader.GetBlobReader(slot.Signature)
             let flags = MethodAttributes.Static | MethodAttributes.Virtual
             // Default static, nongeneric signatures have an all-zero header.
-            if slot.GetGenericParameters().Count != 0 || slotType.GetGenericParameters()
-                .Count != 0 ||
-                signature
-                .ReadSignatureHeader()
-                .RawValue != uint8(0) ||
+            if slot.GetGenericParameters().Count != 0 || slotType.GetGenericParameters().Count != 0 ||
+                signature.ReadSignatureHeader().RawValue != uint8(0) ||
                 (slot.Attributes & flags) != flags ||
                 (code == "CallAbstract" && (slot.Attributes & MethodAttributes.Abstract) == 0) ||
                 (slotType.Attributes & TypeAttributes.Interface) == 0 {

@@ -222,13 +222,11 @@ internal shared class ByRefStorageMatching {
             return storageRank == parameterRank && IsSameRuntimeType(storageMultiElement, parameterMultiElement)
         }
         if MapTypeSymbol.TryGetMapShape(bareStorage, out var storageKey, out var storageValue) &&
-            MapTypeSymbol
-            .TryGetMapShape(bareParameter, out var parameterKey, out var parameterValue) {
+            MapTypeSymbol.TryGetMapShape(bareParameter, out var parameterKey, out var parameterValue) {
             return IsSameRuntimeType(storageKey, parameterKey) && IsSameRuntimeType(storageValue, parameterValue)
         }
         if TupleTypeSymbol.TryGetTupleShape(bareStorage, out var storageTupleElements) &&
-            TupleTypeSymbol
-            .TryGetTupleShape(bareParameter, out var parameterTupleElements) {
+            TupleTypeSymbol.TryGetTupleShape(bareParameter, out var parameterTupleElements) {
             return AreSameRuntimeElementSequence(storageTupleElements, parameterTupleElements)
         }
         if SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
@@ -236,8 +234,11 @@ internal shared class ByRefStorageMatching {
             out var storageSeqDef,
             out var storageSeqElement
         ) &&
-            SequenceTypeSymbol
-            .TryGetEnumerableInterfaceShape(bareParameter, out var parameterSeqDef, out var parameterSeqElement) {
+            SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
+            bareParameter,
+            out var parameterSeqDef,
+            out var parameterSeqElement
+        ) {
             return ClrTypeUtilities.AreSame(storageSeqDef, parameterSeqDef) &&
                 IsSameRuntimeType(storageSeqElement, parameterSeqElement)
         }
@@ -247,8 +248,7 @@ internal shared class ByRefStorageMatching {
             out var storageChanDirection,
             out var storageChanConstructed
         ) &&
-            ChannelTypeSymbol
-            .TryGetChannelShape(
+            ChannelTypeSymbol.TryGetChannelShape(
             bareParameter,
             out var parameterChanElement,
             out var parameterChanDirection,
@@ -404,9 +404,7 @@ internal shared class ByRefStorageMatching {
                 typeSymbol is TupleTypeSymbol valueTuple {
                 let clrElements = ImmutableArray.CreateBuilder[Type]()
                 if TryCollectFlattenedValueTupleClrElements(clrType, clrElements) &&
-                    clrElements.Count == valueTuple
-                    .ElementTypes
-                    .Length {
+                    clrElements.Count == valueTuple.ElementTypes.Length {
                     let builder = ImmutableArray.CreateBuilder[TypeSymbol](clrElements.Count)
                     var changed = false
                     for var i = 0; i < clrElements.Count; i++ {
@@ -591,9 +589,7 @@ internal shared class ByRefStorageMatching {
             clrType.GetGenericTypeDefinition()
         }
         return openDef.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true ||
-            openDef
-            .FullName
-            ?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true
+            openDef.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true
     }
 
     private func TryCollectFlattenedValueTupleClrElements(clrType Type, sink ImmutableArray[Type].Builder) bool {

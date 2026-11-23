@@ -32,9 +32,7 @@ open class Issue5124TypeNameIndexTests {
             let missing = string.Join(";", expectedNames.Except(index.TypeNames[i]).Take(5))
             var firstDifference = 0
             while firstDifference < expectedNames.Count &&
-                firstDifference < index
-                .TypeNames[i]
-                .Length &&
+                firstDifference < index.TypeNames[i].Length &&
                 expectedNames[firstDifference] == index.TypeNames[i][firstDifference] {
                 firstDifference++
             }
