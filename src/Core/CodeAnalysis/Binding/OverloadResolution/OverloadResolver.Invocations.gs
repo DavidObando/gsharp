@@ -1246,6 +1246,11 @@ internal partial class OverloadResolver {
         if callee is BoundErrorExpression {
             return callee
         }
+        // A function value has no type parameters (#6186).
+        if syntax.TypeArgumentList is {} unexpectedTypeArguments && IsCallableValueType(callee.Type) {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, calleeName)
+            return BoundErrorExpression(nil)
+        }
         var nullConditionalCallee BoundNullConditionalAccessExpression? = nil
         let assertions = Stack[BoundUnaryExpression]()
         var assertedCallee = callee
@@ -1437,6 +1442,11 @@ internal partial class OverloadResolver {
         ce CallExpressionSyntax,
         argumentNames ImmutableArray[string] = default(ImmutableArray[string])
     ) BoundExpression {
+        // The type arguments are checked before the value arguments, as C# reports CS0308 (#6186).
+        if !extension.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, extension.Name)
+            return BoundErrorExpression(nil)
+        }
         // The extension's first parameter is the receiver; user arguments line
         // up against parameters[1..].
         let userParamCount = extension.Parameters.Length - 1
@@ -1890,6 +1900,11 @@ internal partial class OverloadResolver {
                 methodDeclaringType.Name,
                 method.Accessibility
             )
+        }
+        // The type arguments are checked before the value arguments, as C# reports CS0308 (#6186).
+        if !method.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, method.Name)
+            return BoundErrorExpression(nil)
         }
         let parameterOffset = if method.ExplicitReceiverParameter == nil {
             0

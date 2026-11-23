@@ -1582,6 +1582,14 @@ internal partial class OverloadResolver {
                 () -> BuildFailedCalleeLoad(calleeVariable, syntax, narrowedCallTargetType)
             )
         }
+        // A callable variable has no type parameters (#6186). A variable that is not callable keeps
+        // its GS0131 below.
+        if symbol is VariableSymbol typedCalleeVariable &&
+            syntax.TypeArgumentList is {} unexpectedTypeArguments &&
+            IsCallableValueType(narrowedCallTargetType ?? typedCalleeVariable.Type) {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, typedCalleeVariable.Name)
+            return BoundErrorExpression(nil)
+        }
         // ADR-0122 §9 / issues #1035 and #3523: invoking a function-pointer-
         // typed variable goes through the shared `calli` path. Implicit field
         // and property symbols must first become real member loads rather than
@@ -1890,6 +1898,14 @@ internal partial class OverloadResolver {
         // first declared overload; we now consult the overload-set store.
         var overloadSet = Scope.TryLookupFunctions(syntax.Identifier.ValueText)
         CallCandidateRecorder.RecordFunctions(overloadSet)
+        // No candidate has type parameters: the type arguments are wrong whatever the value
+        // arguments are (#6186).
+        if syntax.TypeArgumentList is {} unexpectedTypeArguments &&
+            !function.IsGeneric &&
+            !HasGenericCandidate(overloadSet) {
+            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, function.Name)
+            return BoundErrorExpression(nil)
+        }
         var explicitOverloadTypeArguments = default(ImmutableArray[TypeSymbol])
         if overloadSet.Length > 1 {
             if syntax.TypeArgumentList != nil {
@@ -1988,6 +2004,15 @@ internal partial class OverloadResolver {
             function = selected
         }
         reportObsoleteUseIfApplicable(syntax.Identifier.Location, function, function.Name)
+        // The type arguments are checked before the value arguments, as C# reports CS0308 (#6186).
+        if !function.IsGeneric && syntax.TypeArgumentList is {} unexpectedTypeArguments {
+            ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                function.Name,
+                typeArgumentsBound: !explicitOverloadTypeArguments.IsDefault
+            )
+            return BoundErrorExpression(nil)
+        }
         let isVariadic = function.Parameters.Length > 0 &&
             function.Parameters[function.Parameters.Length - 1].IsVariadic
         let fixedParamCount = if isVariadic {
@@ -3110,6 +3135,58 @@ internal partial class OverloadResolver {
             return completeSuspendingCall(suspendingCall, function.Type, syntax.Location, function.Name)
         }
         return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType: nil, methodTypeArguments)
+    }
+
+    /// Gets whether a value of [`type`](paramref) can be called: a function type, a function
+    /// pointer or a delegate, also when nullable or a platform type.
+    /// @param type The type of the value.
+    /// @returns `true` when the value can be called.
+    private func IsCallableValueType(type TypeSymbol?) bool {
+        if type == nil {
+            return false
+        }
+        var callable = PlatformTypeSymbol.StripTopLevel(type)
+        if callable is NullableTypeSymbol nullable {
+            callable = nullable.UnderlyingType
+        }
+        return callable is FunctionTypeSymbol or
+            FunctionPointerTypeSymbol or
+            DelegateTypeSymbol ||
+            ClrTypeUtilities.IsDelegateType(callable.ClrType)
+    }
+
+    /// Gets whether any of [`candidates`](paramref) declares type parameters.
+    /// @param candidates The candidate functions.
+    /// @returns `true` when a candidate is generic.
+    private func HasGenericCandidate(candidates ImmutableArray[FunctionSymbol]) bool {
+        if candidates.IsDefault {
+            return false
+        }
+        for candidate in candidates {
+            if candidate.IsGeneric {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Reports a type-argument list on a call to a function that declares no type parameters
+    /// (#6186, C# CS0308). The binder binds each type argument first, so an undefined type name
+    /// gets its own diagnostic.
+    /// @param typeArgumentList The type-argument list of the call.
+    /// @param name The function name.
+    /// @param typeArgumentsBound Whether overload selection already bound the type arguments.
+    internal func ReportTypeArgumentsOnNonGenericFunction(
+        typeArgumentList TypeArgumentListSyntax,
+        name string,
+        typeArgumentsBound bool = false
+    ) {
+        if !typeArgumentsBound {
+            for argument in typeArgumentList.Arguments {
+                let _ = bindTypeClause(argument)
+            }
+        }
+        Diagnostics.ReportWrongTypeArgumentCount(typeArgumentList.Location, name, 0, typeArgumentList.Arguments.Count)
     }
 
     private func TryConstructConversionTarget(syntax CallExpressionSyntax, type TypeSymbol) TypeSymbol? {

@@ -80,6 +80,16 @@ class BoundErrorExpression : BoundExpression {
         set;
     }
 
+    /// Gets or sets the operands of an operator expression that did not bind, when the operands
+    /// are not failed calls, so the semantic model still answers their symbols and types (#6187).
+    /// For a compound assignment, they include the target read and the receiver and index values
+    /// that the binder saved in temporaries. The operands are not children of this node: walkers
+    /// and rewriters do not visit them.
+    internal prop FailedOperands ImmutableArray[BoundExpression] {
+        get;
+        set;
+    }
+
     /// Gets or sets the bound callee of a call through a function value that did not bind (`f(x, 2)`
     /// with `f` a local, a parameter, a field or a property of function or delegate type), anchored
     /// at the callee's identifier, so the semantic model answers the callee as in a call that binds
@@ -90,12 +100,46 @@ class BoundErrorExpression : BoundExpression {
     }
 
     /// Gets whether this error keeps a record the semantic model reads: a candidate group, an
-    /// inner failed call, a failed receiver, failed arguments or a failed callee.
+    /// inner failed call, a failed receiver, failed arguments, a failed callee or failed operands.
     internal prop HasFailedRecords bool -> !MemberGroup.IsDefaultOrEmpty ||
         !FailedChildren.IsDefaultOrEmpty ||
         FailedReceiver != nil ||
         !FailedArguments.IsDefaultOrEmpty ||
-        FailedCallee != nil
+        FailedCallee != nil ||
+        !FailedOperands.IsDefaultOrEmpty
+
+    /// Keeps the operands of the operator expression that this error replaces, for the semantic
+    /// model only (#6187). An operand that is an error gives its failed-call records. Any other
+    /// operand, a wrapper around a failed call included, is kept as a failed operand.
+    /// @param left The bound left (or only) operand.
+    /// @param right The bound right operand, or null.
+    internal func KeepOperands(left BoundExpression, right BoundExpression? = nil) {
+        KeepOperand(left)
+        if right != nil {
+            KeepOperand(right)
+        }
+    }
+
+    private func KeepOperand(operand BoundExpression) {
+        if object.ReferenceEquals(operand, this) {
+            return
+        }
+        // A wrapper around a failed call (a block that saves a receiver, a conversion) is kept
+        // whole: the index reaches the failed call through it, and also the values it saves.
+        if operand is BoundErrorExpression operandError {
+            if operandError.HasFailedRecords && (FailedChildren.IsDefault || !FailedChildren.Contains(operandError)) {
+                FailedChildren = if FailedChildren.IsDefault {
+                    ImmutableArray.Create(operandError)
+                } else {
+                    FailedChildren.Add(operandError)
+                }
+            }
+        } else if FailedOperands.IsDefault {
+            FailedOperands = ImmutableArray.Create(operand)
+        } else if !FailedOperands.Contains(operand) {
+            FailedOperands = FailedOperands.Add(operand)
+        }
+    }
 
     shared {
         /// Finds the error of a failed call through the wrappers a call bind can put around it: a
@@ -135,23 +179,14 @@ class BoundErrorExpression : BoundExpression {
             return error
         }
 
-        /// Creates an error expression that retains any failed-call records from [`left`](paramref) and [`right`](paramref).
+        /// Creates the error of an operator expression that did not bind. It keeps the failed-call
+        /// records of the operands that are errors and the operands that are not (#6187).
+        /// @param left The bound left (or only) operand.
+        /// @param right The bound right operand, or null.
+        /// @returns The error expression.
         internal func WithFailedOperands(left BoundExpression, right BoundExpression? = nil) BoundErrorExpression {
             let error = BoundErrorExpression(nil)
-            var builder ImmutableArray[BoundErrorExpression].Builder? = nil
-            if FindFailedCall(left) is {HasFailedRecords: true} leftError {
-                builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
-                builder.Add(leftError)
-            }
-            if right != nil && FindFailedCall(right) is {HasFailedRecords: true} rightError {
-                builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
-                if !builder.Contains(rightError) {
-                    builder.Add(rightError)
-                }
-            }
-            if builder != nil {
-                error.FailedChildren = builder.ToImmutable()
-            }
+            error.KeepOperands(left, right)
             return error
         }
     }
