@@ -399,10 +399,7 @@ open class Issue6189FunctionValueCalleeTests {
 
         private func Describe(d Diagnostic) string -> d.Id + " " + d.Severity.ToString() +
             " " +
-            d
-            .Location
-            .Span
-            .ToString() +
+            d.Location.Span.ToString() +
             " " +
             d.ToString()
 
