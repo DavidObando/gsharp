@@ -658,6 +658,44 @@ public static class P
         };
     }
 
+    public static int MeasureClosureAssignedFieldConditionalAccess(int kind)
+    {
+        Box? box = new Box();
+        System.Func<int> reader = () => (box?.Text ?? "").Length;
+        return kind switch
+        {
+            1 when box?.Text != null => box.Text.Length,
+            _ => reader(),
+        };
+    }
+
+    public static int MeasureNestedConditionalAccessMutated(int kind, string? value, bool drop)
+    {
+        return kind switch
+        {
+            1 when (value?.Substring((drop ? (value = null) : null) == null ? 0 : 0))?.Length != null => value!.Length,
+            _ => 0,
+        };
+    }
+
+    public static int MeasureNestedMultiLabel(int outer, int inner, string? value)
+    {
+        switch (outer)
+        {
+            case 1 when value is not null:
+            case 2:
+                switch (inner)
+                {
+                    case 10:
+                        return value!.Length;
+                    default:
+                        return 0;
+                }
+            default:
+                return -1;
+        }
+    }
+
     public static string Run() =>
         MeasureStmt(1, "ab") + "|" +
         MeasureExpr(1, "abc") + "|" +
@@ -666,11 +704,15 @@ public static class P
         MeasureConditionalAccessMutated(1, false) + "|" +
         MeasureMultiLabel(1, "xy") + "|" +
         MeasureMultiLabel(2, "z") + "|" +
-        MeasureMutatedInGuard(1, "q", false);
+        MeasureMutatedInGuard(1, "q", false) + "|" +
+        MeasureClosureAssignedFieldConditionalAccess(1) + "|" +
+        MeasureNestedConditionalAccessMutated(1, "wxyz", false) + "|" +
+        MeasureNestedMultiLabel(1, 10, "hi") + "|" +
+        MeasureNestedMultiLabel(2, 10, "bye");
 }`
         let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
             "using System;\nnamespace Demo {\n" + source + "\n}",
-            "2|3|4|0|2|2|1|1",
+            "2|3|4|0|2|2|1|1|2|4|2|3",
             rejectRedundantAssertions: true
         )
         Assert.Contains(
@@ -683,6 +725,10 @@ public static class P
         Assert.Contains("box!!.Text", printed, StringComparison.Ordinal)
         Assert.Contains("case 2 {\n                return value!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("&& Clear(): value!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when box?.Text != nil: box.Text.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(")?.Length != nil: value!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 10 {\n                        return value.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 10 {\n                        return value!!.Length", printed, StringComparison.Ordinal)
     }
 
     shared {

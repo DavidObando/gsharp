@@ -1439,12 +1439,15 @@ partial class CSharpToGSharpTranslator {
                                     switchStmt
                                 )
                             ) {
-                                let matchesActiveLabel = if this.state.SwitchSectionActiveLabels.Count > 0 &&
-                                    object.ReferenceEquals(
-                                    this.state.SwitchSectionActiveLabels.Peek().Section,
-                                    section
-                                ) {
-                                    object.ReferenceEquals(this.state.SwitchSectionActiveLabels.Peek().Label, label)
+                                var activeLabelForSection SwitchLabelSyntax? = nil
+                                for entry in this.state.SwitchSectionActiveLabels {
+                                    if object.ReferenceEquals(entry.Section, section) {
+                                        activeLabelForSection = entry.Label
+                                        break
+                                    }
+                                }
+                                let matchesActiveLabel = if activeLabelForSection != nil {
+                                    object.ReferenceEquals(activeLabelForSection, label)
                                 } else {
                                     section.Labels.Count == 1
                                 }

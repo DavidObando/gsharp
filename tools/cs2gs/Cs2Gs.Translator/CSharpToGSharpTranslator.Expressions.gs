@@ -16110,8 +16110,12 @@ partial class CSharpToGSharpTranslator {
                 ) ||
                     (anyRootWrites != nil && anyRootWrites.Contains(node))
             }
-            if access.WhenNotNull.DescendantNodesAndSelf(OutsideNestedFunctions).Any(NodeMutates) {
-                return true
+            var current ConditionalAccessExpressionSyntax? = access
+            while current != nil {
+                if current.WhenNotNull.DescendantNodesAndSelf(OutsideNestedFunctions).Any(NodeMutates) {
+                    return true
+                }
+                current = StripParentheses(current.Expression) as ConditionalAccessExpressionSyntax
             }
             if extraPattern != nil {
                 if closureAssigned &&
@@ -22235,8 +22239,9 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             // Source instance fields emit direct loads; imported storage remains conservative.
-            if node is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax memberAccess {
-                let accessed ISymbol? = this.context.GetSymbolInfo(memberAccess).Symbol
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax or
+                Microsoft.CodeAnalysis.CSharp.Syntax.MemberBindingExpressionSyntax {
+                let accessed ISymbol? = this.context.GetSymbolInfo(node).Symbol
                 return accessed is IMethodSymbol or
                     INamespaceSymbol or
                     ITypeSymbol ||
