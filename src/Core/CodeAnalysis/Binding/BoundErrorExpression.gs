@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import System.Collections.Generic
 import System.Collections.Immutable
 
 /// Bound error expression.
@@ -158,13 +159,26 @@ class BoundErrorExpression : BoundExpression {
         if statements.IsDefaultOrEmpty {
             return
         }
-        for statement in statements {
-            if FailedStatements.IsDefault {
-                FailedStatements = ImmutableArray.Create(statement)
-            } else if !FailedStatements.Contains(statement) {
-                FailedStatements = FailedStatements.Add(statement)
+        let existingCount = if FailedStatements.IsDefault {
+            0
+        } else {
+            FailedStatements.Length
+        }
+        let builder = ImmutableArray.CreateBuilder[BoundStatement](existingCount + statements.Length)
+        let seen = HashSet[BoundStatement](ReferenceEqualityComparer.Instance)
+        if !FailedStatements.IsDefaultOrEmpty {
+            for existing in FailedStatements {
+                if seen.Add(existing) {
+                    builder.Add(existing)
+                }
             }
         }
+        for statement in statements {
+            if seen.Add(statement) {
+                builder.Add(statement)
+            }
+        }
+        FailedStatements = builder.ToImmutable()
     }
 
     private func KeepOperand(operand BoundExpression) {

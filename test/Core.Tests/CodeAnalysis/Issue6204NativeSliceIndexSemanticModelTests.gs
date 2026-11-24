@@ -186,6 +186,32 @@ func F(c C) {
     }
 
     @Fact
+    func InferredSuspendingNativeSliceIndex_PreservesCapturedTypeAndSymbol() {
+        let source = `package P
+
+func Take(ch chan[uint8]) uint8 -> <-ch
+
+func Run(ch chan[uint8]) int32 {
+    let s = slice[int32]{1, 2}
+    return s[Take(ch)]
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6204_suspend.gs"))
+        let compilation = Compilation(tree)
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error))
+        let take = compilation.GlobalScope.Functions.Single((f FunctionSymbol) -> f.Name == "Take")
+        Assert.Equal("Inferred", take.SuspendingKind.ToString())
+        let model = compilation.GetSemanticModel(tree)
+        let call = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .Single((call CallExpressionSyntax) -> call.Identifier.Text == "Take")
+        Assert.Same(take, model.GetSymbolInfo(call).Symbol)
+        Assert.Same(TypeSymbol.UInt8, model.GetTypeInfo(call).Type)
+    }
+
+    @Fact
     func CallIndexInFailedOperator_CallAndArgumentAnswer() {
         let (model, tree, compilation) = CreateModel("let k = s[Use(x)] + c")
         Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Id == "GS0129")
