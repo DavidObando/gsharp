@@ -581,10 +581,20 @@ public static class C
 
     @Fact
     func SwitchWhenNullGuard_NarrowsSectionBodyAndSwitchExpression() {
-        let printed = Translate(`#nullable enable
+        let source = `#nullable enable
 
-public static class C
+public static class P
 {
+    public sealed class Box
+    {
+        public string Text = "ok";
+        public string? Touch(System.Action cb)
+        {
+            cb();
+            return Text;
+        }
+    }
+
     public static int MeasureStmt(int kind, string? value)
     {
         switch (kind)
@@ -603,6 +613,24 @@ public static class C
             _ => 0,
         };
 
+    public static int MeasureConditionalAccess(int kind, string? value) =>
+        kind switch
+        {
+            1 when value?.Length != null => value.Length,
+            _ => 0,
+        };
+
+    public static int MeasureConditionalAccessMutated(int kind, bool drop)
+    {
+        Box? box = new Box();
+        System.Action clear = () => { if (drop) box = null; };
+        return kind switch
+        {
+            1 when box?.Touch(clear) != null => box!.Text.Length,
+            _ => 0,
+        };
+    }
+
     public static int MeasureMultiLabel(int kind, string? value)
     {
         switch (kind)
@@ -615,11 +643,11 @@ public static class C
         }
     }
 
-    public static int MeasureMutatedInGuard(int kind, string? value)
+    public static int MeasureMutatedInGuard(int kind, string? value, bool drop)
     {
         bool Clear()
         {
-            value = null;
+            if (drop) value = null;
             return true;
         }
 
@@ -629,11 +657,31 @@ public static class C
             _ => 0,
         };
     }
-}`)
-        Assert.Contains("case 1 when value != nil", printed, StringComparison.Ordinal)
-        Assert.Contains("return value.Length", printed, StringComparison.Ordinal)
+
+    public static string Run() =>
+        MeasureStmt(1, "ab") + "|" +
+        MeasureExpr(1, "abc") + "|" +
+        MeasureConditionalAccess(1, "abcd") + "|" +
+        MeasureConditionalAccess(1, null) + "|" +
+        MeasureConditionalAccessMutated(1, false) + "|" +
+        MeasureMultiLabel(1, "xy") + "|" +
+        MeasureMultiLabel(2, "z") + "|" +
+        MeasureMutatedInGuard(1, "q", false);
+}`
+        let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
+            "using System;\nnamespace Demo {\n" + source + "\n}",
+            "2|3|4|0|2|2|1|1",
+            rejectRedundantAssertions: true
+        )
+        Assert.Contains(
+            "case 1 when value != nil {\n                return value.Length",
+            printed,
+            StringComparison.Ordinal
+        )
         Assert.Contains("case 1 when value != nil: value.Length", printed, StringComparison.Ordinal)
-        Assert.Contains("return value!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when value?.Length != nil: value.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("box!!.Text", printed, StringComparison.Ordinal)
+        Assert.Contains("case 2 {\n                return value!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("&& Clear(): value!!.Length", printed, StringComparison.Ordinal)
     }
 

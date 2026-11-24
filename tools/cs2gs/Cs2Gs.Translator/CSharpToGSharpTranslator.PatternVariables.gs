@@ -1432,14 +1432,25 @@ partial class CSharpToGSharpTranslator {
                     }
                     case whenClause is WhenClauseSyntax {
                         if whenTrue {
-                            if whenClause.Parent is CasePatternSwitchLabelSyntax{Parent: SwitchSectionSyntax section} &&
-                                section.Labels.Count == 1 &&
+                            if whenClause.Parent is CasePatternSwitchLabelSyntax label &&
+                                label.Parent is SwitchSectionSyntax section &&
                                 !(
                                 section.Parent is SwitchStatementSyntax switchStmt && this.HasGotoIntoSwitchSection(
                                     switchStmt
                                 )
                             ) {
-                                regions.AddRange(section.Statements)
+                                let matchesActiveLabel = if this.state.SwitchSectionActiveLabels.Count > 0 &&
+                                    object.ReferenceEquals(
+                                    this.state.SwitchSectionActiveLabels.Peek().Section,
+                                    section
+                                ) {
+                                    object.ReferenceEquals(this.state.SwitchSectionActiveLabels.Peek().Label, label)
+                                } else {
+                                    section.Labels.Count == 1
+                                }
+                                if matchesActiveLabel {
+                                    regions.AddRange(section.Statements)
+                                }
                             } else if whenClause.Parent is SwitchExpressionArmSyntax arm {
                                 regions.Add(arm.Expression)
                             }

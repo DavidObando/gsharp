@@ -76,6 +76,7 @@ internal class DocumentTranslationState {
         CollectionElementSlots = Dictionary[SyntaxNode, ITypeSymbol]()
         StoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         NonNullStoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
+        SwitchSectionActiveLabels = Stack[(Section SwitchSectionSyntax, Label SwitchLabelSyntax)]()
         EmittedLocalGSharpNullability = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         EmittedLocalStorageAcceptsNil = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         LocalHoldsPromotedValueAnswers = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
@@ -454,6 +455,11 @@ internal class DocumentTranslationState {
 
     // Issue #5643: delayed switch compound captures whose guard unconditionally assigns a non-null value.
     prop NonNullStoredPatternCaptures HashSet[GExpression] {
+        get;
+    }
+
+    // Issue #5643: currently emitted label of a multi-label switch section, so only guarded arms drop `!!`.
+    prop SwitchSectionActiveLabels Stack[(Section SwitchSectionSyntax, Label SwitchLabelSyntax)] {
         get;
     }
 
