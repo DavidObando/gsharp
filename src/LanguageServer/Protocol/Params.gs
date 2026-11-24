@@ -314,6 +314,26 @@ class LanguageServerInitializationOptions {
     }
 }
 
+class ExecuteCommandParams {
+    @JsonPropertyName("command")
+    prop Command string
+
+    @JsonPropertyName("arguments")
+    prop Arguments([]JsonElement)?
+}
+
+/// The parameters of the `window/showDocument` request (LSP 3.16).
+class ShowDocumentParams {
+    @JsonPropertyName("uri")
+    prop Uri DocumentUri
+
+    @JsonPropertyName("takeFocus")
+    prop TakeFocus bool?
+
+    @JsonPropertyName("selection")
+    prop Selection Range?
+}
+
 class ServerInfo {
     @JsonPropertyName("name")
     prop Name string

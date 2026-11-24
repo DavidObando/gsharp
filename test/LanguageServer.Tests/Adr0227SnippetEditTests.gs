@@ -11,7 +11,9 @@ import GSharp.Core.CodeAnalysis.Text
 import GSharp.LanguageServer
 import GSharp.LanguageServer.Protocol
 import GSharp.LanguageServer.Server
+import Nerdbank.Streams
 import Range = GSharp.LanguageServer.Protocol.Range
+import StreamJsonRpc
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -256,6 +258,240 @@ open class Adr0227SnippetEditTests {
         let text = document.GetChangedText().ToString()
         Assert.Equal("<int32>", text.Substring(document.Placeholders[0].Start, document.Placeholders[0].Length))
         Assert.Equal("<n>", text.Substring(document.Placeholders[1].Start, document.Placeholders[1].Length))
+    }
+
+    // ADR-0227 D5 (issue #6185): a client without snippet edits that supports `window/showDocument`
+    // gets a command that selects the placeholder after the edit.
+    @Theory
+    @InlineData(true, false)
+    @InlineData(false, false)
+    @InlineData(false, true)
+    func PlainClientWithShowDocument_GetsACommand_ThatSelectsThePlaceholderInTheChangedText(
+        documentChanges bool,
+        resolve bool
+    ) {
+        let client = CodeActionClientOptions{
+            SupportsDocumentChanges: documentChanges,
+            SupportsShowDocument: true,
+            SupportsResolveEdit: resolve
+        }
+        let content = LanguageServerTestHelpers.Content(Source).WithVersion(1)
+        var action = FixAction(client, content, "value", 0, 5)
+        if resolve {
+            Assert.Null(action.Edit)
+            // The command survives the round trip of a lazy client.
+            let json = JsonSerializer.Serialize(action, LspJson.Options)
+            action = CodeActionComputer.ResolveCodeAction(
+                JsonSerializer.Deserialize[CodeAction](json, LspJson.Options),
+                content,
+                client
+            )
+        }
+        let change = SingleEdit(action.Edit!!)
+        Assert.Equal("default /* TODO: value */", change.NewText)
+        let command = action.Command!!
+        Assert.Equal(CodeActionComputer.SelectPlaceholderCommand, command.Name)
+        let arguments = Arguments(Assert.Single(command.Arguments))
+        Assert.Equal("file:///a.gs", arguments.Uri)
+        Assert.Equal("default /* TODO: value */", arguments.Text)
+        // The range is in the text after the edit: `    return default /* TODO: value */` on line 3.
+        Assert.Equal(3, arguments.Range.Start.Line)
+        Assert.Equal(11, arguments.Range.Start.Character)
+        Assert.Equal(3, arguments.Range.End.Line)
+        Assert.Equal(36, arguments.Range.End.Character)
+        let edited = Apply(change)
+        Assert.Equal("default /* TODO: value */", Slice(edited, arguments.Range))
+        // The range in the text before the edit would end on another line.
+        Assert.NotEqual(
+            arguments.Range.End.Line,
+            SemanticLookup.ToRange(SourceText.From(Source), TextSpan(Source.IndexOf("null"), 25)).End.Line
+        )
+        Assert.True(CodeActionComputer.HoldsPlaceholder(LanguageServerTestHelpers.Content(edited), arguments))
+        Assert.False(CodeActionComputer.HoldsPlaceholder(content, arguments))
+    }
+
+    @Fact
+    func ClientsWithoutShowDocument_OrWithSnippetEdits_GetNoCommand() {
+        let content = LanguageServerTestHelpers.Content(Source).WithVersion(1)
+        // A client with neither capability keeps the plain edit alone.
+        let plain = FixAction(CodeActionClientOptions{SupportsDocumentChanges: true}, content, "value", 0, 5)
+        Assert.Equal("default /* TODO: value */", SingleEdit(plain.Edit!!).NewText)
+        Assert.Null(plain.Command)
+        Assert.DoesNotContain("\"command\"", JsonSerializer.Serialize(plain, LspJson.Options))
+        // A snippet client gets the tab stop.
+        let snippet = FixAction(
+            CodeActionClientOptions{
+                SupportsDocumentChanges: true,
+                SupportsSnippetEdits: true,
+                SupportsShowDocument: true
+            },
+            content,
+            "value",
+            0,
+            5
+        )
+        Assert.IsType[SnippetTextEdit](SingleEdit(snippet.Edit!!))
+        Assert.Null(snippet.Command)
+        // A fix without placeholders gets no command.
+        let at = LanguageServerTestHelpers.PositionOf(Source, "null")
+        let builtIn = CodeActionComputer
+            .ComputeCodeActions(
+            DocumentUri.From("file:///a.gs")!!,
+            content,
+            Range(at, at),
+            nil,
+            CodeActionClientOptions{SupportsShowDocument: true}
+        )
+            .Single((a CommandOrCodeAction) -> a.CodeAction.Title == "Use 'nil'")
+            .CodeAction
+        Assert.Null(builtIn.Command)
+    }
+
+    @Theory
+    @InlineData("{\"window\":{\"showDocument\":{\"support\":true}}}", true, true)
+    @InlineData(
+        "{\"window\":{\"showDocument\":{\"support\":true}},\"workspace\":{\"workspaceEdit\":{\"documentChanges\":true,\"snippetEditSupport\":true}}}",
+        true,
+        false
+    )
+    @InlineData("{\"window\":{\"showDocument\":{\"support\":false}}}", false, false)
+    @InlineData("{}", false, false)
+    async func Initialize_ReadsShowDocumentSupport_AndAdvertisesTheCommandForAPlainClient(
+        capabilities string,
+        showDocument bool,
+        command bool
+    ) {
+        let server = LspServer(DocumentContentService(), WorkspaceState())
+        using let document = JsonDocument.Parse(capabilities)
+        let result = await server.InitializeAsync(InitializeParams{Capabilities: document.RootElement.Clone()})
+        Assert.Equal(showDocument, server.CodeActionOptions.SupportsShowDocument)
+        if command {
+            Assert.Equal(
+                CodeActionComputer.SelectPlaceholderCommand,
+                Assert.Single(result.Capabilities.ExecuteCommandProvider!!.Commands)
+            )
+        } else {
+            Assert.Null(result.Capabilities.ExecuteCommandProvider)
+            Assert.DoesNotContain(
+                "executeCommandProvider",
+                JsonSerializer.Serialize(result.Capabilities, LspJson.Options)
+            )
+        }
+    }
+
+    // Over JSON-RPC: the client runs the command after it applies the edit, and the server asks it to
+    // show the document with the placeholder selected.
+    @Fact
+    async func ExecuteCommand_OverRpc_SendsShowDocumentWithThePlaceholderSelected() {
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let client = CodeActionClientOptions{SupportsDocumentChanges: true, SupportsShowDocument: true}
+        let action = FixAction(client, LanguageServerTestHelpers.Content(Source).WithVersion(1), "value", 0, 5)
+        let edited = Apply(SingleEdit(action.Edit!!))
+        let server = LspServer(DocumentContentService(), WorkspaceState())
+        let (clientStream, serverStream) = FullDuplexStream.CreatePair()
+        using let serverRpc = JsonRpc(
+            HeaderDelimitedMessageHandler(serverStream, serverStream, LspJson.CreateFormatter())
+        )
+        serverRpc.AddLocalRpcTarget(server, JsonRpcTargetOptions{DisposeOnDisconnect: false})
+        server.Attach(serverRpc)
+        serverRpc.StartListening()
+        using let clientRpc = JsonRpc(
+            HeaderDelimitedMessageHandler(clientStream, clientStream, LspJson.CreateFormatter())
+        )
+        let window = ShowDocumentClient()
+        clientRpc.AddLocalRpcTarget(window)
+        clientRpc.StartListening()
+        using let capabilities = JsonDocument.Parse(
+            "{\"capabilities\":{\"window\":{\"showDocument\":{\"support\":true}},\"workspace\":{\"workspaceEdit\":{\"documentChanges\":true}}}}"
+        )
+        let initialized = await clientRpc.InvokeWithParameterObjectAsync[InitializeResult](
+            "initialize",
+            capabilities.RootElement.Clone()
+        )
+        Assert.Equal(
+            CodeActionComputer.SelectPlaceholderCommand,
+            Assert.Single(initialized.Capabilities.ExecuteCommandProvider!!.Commands)
+        )
+        await clientRpc.NotifyWithParameterObjectAsync(
+            "textDocument/didOpen",
+            DidOpenTextDocumentParams{
+                TextDocument: TextDocumentItem{Uri: uri, LanguageId: "gsharp", Version: 2, Text: edited}
+            }
+        )
+        // The command as the client got it, over JSON.
+        let wire = JsonSerializer.Deserialize[CodeAction](
+            JsonSerializer.Serialize(action, LspJson.Options),
+            LspJson.Options
+        )
+        let command = wire.Command!!
+        await clientRpc.InvokeWithParameterObjectAsync[JsonElement](
+            "workspace/executeCommand",
+            ExecuteCommandParams{
+                Command: command.Name,
+                Arguments: command.Arguments.Select((a object?) -> cast[JsonElement](a!!)).ToArray()
+            }
+        )
+        let shown = await window.Shown.Task.WaitAsync(TimeSpan.FromSeconds(30))
+        Assert.Equal(uri.ToString(), shown.Uri.ToString())
+        Assert.True(shown.TakeFocus)
+        Assert.Equal("default /* TODO: value */", Slice(edited, shown.Selection!!))
+        Assert.Equal(3, shown.Selection!!.Start.Line)
+        Assert.Equal(11, shown.Selection!!.Start.Character)
+        Assert.Equal(36, shown.Selection!!.End.Character)
+    }
+
+    // The client side of `window/showDocument`.
+    class ShowDocumentClient {
+        let Shown TaskCompletionSource[ShowDocumentParams] = TaskCompletionSource[ShowDocumentParams](
+            TaskCreationOptions.RunContinuationsAsynchronously
+        )
+
+        @JsonRpcMethod("window/showDocument", UseSingleObjectParameterDeserialization = true)
+        func ShowDocument(request ShowDocumentParams) JsonElement {
+            Shown.TrySetResult(request)
+            using let reply = JsonDocument.Parse("{\"success\":true}")
+            return reply.RootElement.Clone()
+        }
+    }
+
+    private func FixAction(
+        client CodeActionClientOptions,
+        content DocumentContent,
+        text string,
+        start int32,
+        length int32
+    ) CodeAction {
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = LanguageServerTestHelpers.PositionOf(Source, "null")
+        let registry = CodeFixRegistry()
+        registry.Add(PlaceholderProvider(text, start, length))
+        return CodeActionComputer
+            .ComputeCodeActions(uri, content, Range(at, at), nil, client, registry, default(CancellationToken))
+            .Single((a CommandOrCodeAction) -> a.CodeAction.Title == "Write a value")
+            .CodeAction
+    }
+
+    // The argument of the command, in memory or as the client read it back from JSON.
+    private func Arguments(argument object?) SelectPlaceholderArguments {
+        if argument is JsonElement element {
+            return element.Deserialize[SelectPlaceholderArguments](LspJson.Options)
+        }
+        return Assert.IsType[SelectPlaceholderArguments](argument)
+    }
+
+    // The source after the edit.
+    private func Apply(change GSharp.LanguageServer.Protocol.TextEdit) string {
+        let text = SourceText.From(Source, "a.gs")
+        let start = text.Lines[cast[int32](change.Range.Start.Line)].Start + cast[int32](change.Range.Start.Character)
+        let end = text.Lines[cast[int32](change.Range.End.Line)].Start + cast[int32](change.Range.End.Character)
+        return Source.Substring(0, start) + change.NewText + Source.Substring(end)
+    }
+
+    private func Slice(source string, $range Range) string {
+        let text = SourceText.From(source)
+        let start = text.Lines[$range.Start.Line].Start + $range.Start.Character
+        let end = text.Lines[$range.End.Line].Start + $range.End.Character
+        return source.Substring(start, end - start)
     }
 
     private func SingleEdit(edit WorkspaceEdit) GSharp.LanguageServer.Protocol.TextEdit {
