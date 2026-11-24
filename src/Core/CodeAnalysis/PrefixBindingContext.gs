@@ -524,8 +524,119 @@ internal shared class PrefixBindingContext {
             }
             node = next
         }
-        return statement != nil && HeaderContainsProvisional(cut, statement, statement, false, false)
+        return statement != nil &&
+            (
+            HeaderContainsProvisional(cut, statement, statement, false, false) ||
+                HeaderUsesProvisionalName(cut, tree, statement, 4, HashSet[object](ReferenceEqualityComparer.Instance))
+        )
     }
+
+    // A statement can read a variable whose type an earlier statement inferred from a provisional
+    // expression, through any form of read (an assignment target, the `await` of an `async let`, a narrowed
+    // read, the call of a function value). The check is by name, so it errs toward a provisional report: a
+    // name of the header that an earlier statement in scope, or an enclosing statement's header, also
+    // contains, where that statement uses a provisional expression, directly or by another such name.
+    private func HeaderUsesProvisionalName(
+        cut PrefixCut,
+        tree SyntaxTree,
+        statement SyntaxNode,
+        depth int32,
+        visited HashSet[object]
+    ) bool {
+        if depth < 0 || !visited.Add(statement) {
+            return false
+        }
+        let names = HashSet[string](StringComparer.Ordinal)
+        CollectHeaderNames(statement, statement, false, names, declared: false)
+        if names.Count == 0 {
+            return false
+        }
+        let earlier = List[SyntaxNode]()
+        var current SyntaxNode = statement
+        while tree.GetParent(current) is {} parent {
+            if parent is StatementSyntax && parent is not BlockStatementSyntax {
+                earlier.Add(parent)
+            }
+            for sibling in parent.GetChildren() {
+                if sibling.Span.End <= statement.Span.Start &&
+                    (sibling is StatementSyntax || sibling is GlobalStatementSyntax) {
+                    earlier.Add(sibling)
+                }
+            }
+            current = parent
+        }
+        // A global is visible in every member, wherever its statement is.
+        for member in tree.Root.Members {
+            if member is GlobalStatementSyntax global && !(global.Span.End <= statement.Span.Start) {
+                earlier.Add(global)
+            }
+        }
+        for entry in earlier {
+            let candidate SyntaxNode = if entry is GlobalStatementSyntax global {
+                global.Statement
+            } else {
+                entry
+            }
+            let declared = HashSet[string](StringComparer.Ordinal)
+            CollectHeaderNames(candidate, candidate, false, declared, declared: true)
+            if !declared.Overlaps(names) {
+                continue
+            }
+            if HeaderContainsProvisional(cut, candidate, candidate, false, false) ||
+                HeaderUsesProvisionalName(cut, tree, candidate, depth - 1, visited) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // The identifiers of a statement's header, not those of its nested statements or of a function
+    // literal's body. With [`declared`](paramref), the names that it declares or writes (an identifier that
+    // is not a read in an expression, or the target of an assignment); otherwise the simple names that it
+    // reads (not the member name of an access).
+    private func CollectHeaderNames(
+        statement SyntaxNode,
+        node SyntaxNode,
+        inExpression bool,
+        names HashSet[string],
+        declared bool
+    ) {
+        for child in node.GetChildren() {
+            if child is SyntaxToken token {
+                if token.Kind == SyntaxKind.IdentifierToken && !token.IsMissing && IsNameOfKind(node, declared) {
+                    names.Add(token.ValueText)
+                }
+                continue
+            }
+            if !inExpression && child is StatementSyntax && !object.ReferenceEquals(child, statement) {
+                continue
+            }
+            if child is FunctionLiteralExpressionSyntax {
+                continue
+            }
+            CollectHeaderNames(statement, child, inExpression || child is ExpressionSyntax, names, declared)
+        }
+    }
+
+    // Whether an identifier whose parent is [`parent`](paramref) declares a name (with
+    // [`declared`](paramref)) or reads a simple name.
+    private func IsNameOfKind(parent SyntaxNode, declared bool) bool {
+        if parent is AssignmentExpressionSyntax {
+            return true
+        }
+        let read = (
+            parent is NameExpressionSyntax || parent is CallExpressionSyntax || parent is GenericNameExpressionSyntax
+        ) &&
+            !IsMemberName(parent)
+        return if declared {
+            parent is not ExpressionSyntax
+        } else {
+            read
+        }
+    }
+
+    private func IsMemberName(node SyntaxNode) bool -> node.Parent is AccessorExpressionSyntax accessor &&
+        object.ReferenceEquals(accessor.RightPart, node)
 
     /// Returns a value that tells whether a later declaration can change the type of
     /// [`variable`](paramref): the type is inferred from an expression whose type can change (#6179).

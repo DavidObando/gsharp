@@ -1217,6 +1217,180 @@ partial class Middle {
     }
 
     @Fact
+    func AssignmentToALocalThatACallTypes_ChangesWithThatCall() {
+        const prefix = `package P
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    var y = G(1)
+    y = ""
+    let done = 0
+`
+        const witness = `}
+
+func G(i int32) string {
+    return ""
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
+    func ObsoleteCandidate_CanBeALaterBetterOverload() {
+        const prefix = `package P
+
+@Obsolete("use the other")
+func F(o object) int32 {
+    return 0
+}
+
+func Main() {
+    let x = F(1)
+    let done = 0
+`
+        const witness = `}
+
+func F(i int32) int32 {
+    return i
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0204")
+        AssertFutureDependent(result, "GS0204", "later-overload")
+    }
+
+    @Fact
+    func NarrowedReadOfALocalThatACallTypes_ChangesWithThatCall() {
+        const prefix = `package P
+
+func G(o object) int32? {
+    return 0
+}
+
+func Main() {
+    let v = G(1)
+    if v != nil {
+        let s string = v
+    }
+    let done = 0
+`
+        const witness = `}
+
+func G(i int32) string? {
+    return ""
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
+    func AwaitOfAnAsyncLetThatACallTypes_ChangesWithThatCall() {
+        const prefix = `package P
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    scope {
+        async let y = G(1)
+        let s string = await y
+        let done = 0
+`
+        const witness = `    }
+}
+
+func G(i int32) string {
+    return ""
+}
+`
+        let result = BindNothing(prefix, []string{"    }\n}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
+    func ImportedExtensionCall_ALaterReceiverFunctionCanBeBetter() {
+        const prefix = `package P
+
+import System.Linq
+
+func Main() {
+    let xs = []int32{1}
+    let s string = xs.Count()
+    let done = 0
+`
+        const witness = `}
+
+func (xs []int32) Count() string {
+    return ""
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
+    func ImportedMemberWithAFunctionLiteral_ALaterReceiverFunctionCanBeBetter() {
+        const prefix = `package P
+
+import System.Collections.Generic
+
+func Main() {
+    let v = List[int32]().ForEach((i int32) -> i + 1)
+    let done = 0
+`
+        const witness = `}
+
+func (l List[int32]) ForEach(f (int32) -> int32) int32 {
+    return 0
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0124")
+        AssertFutureDependent(result, "GS0124", "later-overload")
+    }
+
+    @Fact
+    func ReceiverDeconstructOfAPartialType_ALaterMemberCanBeBetter() {
+        const prefix = `package P
+
+partial class Box {
+}
+
+func (b Box) Deconstruct(out p int32, out q int32) {
+    p = 0
+    q = 0
+}
+
+func Main() {
+    let (p, q) = Box()
+    let s string = p
+    let done = 0
+`
+        const witness = `}
+
+partial class Box {
+    func Deconstruct(out p string, out q string) {
+        p = ""
+        q = ""
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
     func ResolvedCall_AnExactNonGenericMatchCannotBeBeaten() {
         const prefix = `package P
 
@@ -1417,8 +1591,13 @@ func (sb StringBuilder) Deconstruct(out p int32, out q int32) {
         AssertWitness(prefix + witness, "GS0116", "GS0164")
         Assert.Equal(2, result.Diagnostics.Count((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0116"))
         Assert.Equal(2, result.Diagnostics.Count((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0164"))
-        AssertFutureDependent(result, "GS0116", "later-member")
-        AssertFutureDependent(result, "GS0164", "later-member")
+        // A later member can declare what the lookup misses; the lookup is also of a type that can get members.
+        for d in result.Diagnostics.Where(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0116" || d.Diagnostic.Id == "GS0164"
+        ) {
+            Assert.Equal(DiagnosticFinality.FutureDependent, d.Finality)
+            Assert.Contains(d.Reason, []string{"later-member", "later-overload"})
+        }
         // Every later member is present.
         for d in BindKeep(prefix + "/*CUT*/}\n").Diagnostics {
             Assert.Equal(DiagnosticFinality.Final, d.Finality)

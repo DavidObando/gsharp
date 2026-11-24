@@ -149,6 +149,9 @@ internal partial class StatementBinder {
         bindLoopPrelude((VariableSymbol) -> ImmutableArray[BoundStatement])? = nil
     ) BoundStatement {
         var collection = bindExpression(syntax.Collection, false)
+        // #6179: a later member of a type in the collection's hierarchy can hide the `GetEnumerator` that
+        // types the loop variable.
+        PrefixRetarget.NoteImplicitLookup(syntax.Collection, collection.Type, deconstruction: false)
         ApplyHeaderCallableEffects(collection)
         // ADR-0186 §4/§5: a `foreach`/`range` source is one of the positions
         // the ADR names explicitly — "used where the language requires a

@@ -10862,6 +10862,9 @@ internal partial class StatementBinder {
         // probes for an imported `Deconstruct`, none of which a platform
         // wrapper matches.
         initializer = binderCtx.InsertPlatformCheck(initializer, syntax.Initializer.Location, "a deconstruction source")
+        // #6179: a later `Deconstruct` member or receiver function can be better than the one that types the
+        // targets.
+        PrefixRetarget.NoteImplicitLookup(syntax.Initializer, initializer.Type, deconstruction: true)
         if initializer.Type is TupleTypeSymbol rawTupleType {
             if syntax.Identifiers.Count != rawTupleType.Arity {
                 // #6179: the source of the deconstruction can change type, although the report is on its pattern.
@@ -11987,6 +11990,9 @@ internal partial class StatementBinder {
         // StructSymbol, so `let { X = x } = obliviousCall()` reported GS0164
         // where `DPt` compiled.
         initializer = binderCtx.InsertPlatformCheck(initializer, syntax.Initializer.Location, "a deconstruction source")
+        // #6179: a later `Deconstruct` member or receiver function can be better than the one that types the
+        // targets.
+        PrefixRetarget.NoteImplicitLookup(syntax.Initializer, initializer.Type, deconstruction: true)
         if !TryResolveDeconstructionAggregate(initializer.Type, out var structType) {
             // #6179: the source of the deconstruction can change type, although the report is on its pattern.
             let provisionalSource = Diagnostics.PushPremiseIf(

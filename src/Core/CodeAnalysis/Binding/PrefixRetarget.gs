@@ -38,6 +38,22 @@ internal shared class PrefixRetarget {
         }
     }
 
+    /// Records the source of an implicit lookup (the `GetEnumerator` of a loop, the `Deconstruct` of a
+    /// deconstruction) when a later declaration can change what it finds: a type of the source's hierarchy
+    /// can get members, or, for a deconstruction of a value that is not a tuple, a later receiver
+    /// `Deconstruct` can be better.
+    /// @param source The collection or the deconstructed value.
+    /// @param type The type of the source.
+    /// @param deconstruction Whether the lookup is a deconstruction.
+    func NoteImplicitLookup(source SyntaxNode, type TypeSymbol?, deconstruction bool) {
+        if PrefixBindingContext.Current is not{} cut || !cut.LaterOverloadsPossible {
+            return
+        }
+        if HierarchyCanGrow(type, nil) || (deconstruction && !(type is TupleTypeSymbol) && type != nil) {
+            PrefixBindingContext.AddProvisional(source)
+        }
+    }
+
     /// Records [`syntax`](paramref) when it names a variable whose inferred type a later declaration can
     /// change.
     /// @param syntax The name.
@@ -126,8 +142,15 @@ internal shared class PrefixRetarget {
             }
         }
         if node is BoundImportedInstanceCallExpression importedInstance {
-            // A later member of a source receiver type beats the member it inherits from an imported base.
-            return HierarchyCanGrow(qualifierType ?? importedInstance.Receiver.Type, nil)
+            // A later member of a source receiver type beats the member it inherits from an imported base. A
+            // later receiver function can beat a CLR member when it takes a function literal argument without
+            // a lossy delegate conversion (ExpressionBinder.TryPreferBetterExtensionOverClrInstanceMethod).
+            return HierarchyCanGrow(qualifierType ?? importedInstance.Receiver.Type, nil) ||
+                HasArgumentTypedByCandidate(syntax)
+        }
+        if node is BoundImportedCallExpression importedCall && IsImportedExtension(importedCall) {
+            // A later receiver function of this package takes precedence over an imported extension method.
+            return true
         }
         if node is BoundClrStaticCallExpression ||
             node is BoundClrConstructorCallExpression ||
@@ -210,6 +233,42 @@ internal shared class PrefixRetarget {
                 }
             }
             current = tree.GetParent(current)
+        }
+        return false
+    }
+
+    private func HasArgumentTypedByCandidate(syntax SyntaxNode) bool {
+        if syntax is not CallExpressionSyntax call {
+            return false
+        }
+        for argument in call.Arguments {
+            let value = if argument is NamedArgumentExpressionSyntax named {
+                named.Expression
+            } else {
+                argument
+            }
+            if PrefixBindingContext.IsTypedByCandidate(value) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func IsImportedExtension(call BoundImportedCallExpression) bool {
+        // The metadata can come from a load context of its own, so the attribute is matched by name.
+        let method = call.Function.Method
+        if !method.IsStatic {
+            return false
+        }
+        try {
+            for attribute in method.GetCustomAttributesData() {
+                if attribute.AttributeType.FullName == "System.Runtime.CompilerServices.ExtensionAttribute" {
+                    return true
+                }
+            }
+        } catch (Exception) {
+            // Metadata that cannot be read counts as an extension, so the call stays provisional.
+            return true
         }
         return false
     }
