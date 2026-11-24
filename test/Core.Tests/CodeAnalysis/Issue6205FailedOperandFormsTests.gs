@@ -101,6 +101,16 @@ open class Issue6205FailedOperandFormsTests {
     }
 
     @Fact
+    func FailedIfLetUnusedHeaderBinding_RetainsDeclaredSymbol() {
+        let (model, tree, compilation) = CreateModel("let k = if let unused = Opt(x) { Use(x, x) } else { Use(x) }")
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let clause = tree.Root.DescendantNodes().OfType[IfLetBindingClauseSyntax]().Single()
+        let local = Assert.IsAssignableFrom[LocalVariableSymbol](model.GetDeclaredSymbol(clause.Identifier))
+        Assert.Equal("unused", local.Name)
+        Assert.Equal("int32?", local.Type.ToString())
+    }
+
+    @Fact
     func UnsafeVoidPointerDereference_RetainsOperand() {
         let source = `package P
 

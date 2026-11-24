@@ -302,7 +302,8 @@ internal partial class ExpressionBinder {
             arguments = ImmutableArray.Create[BoundExpression](fromEndOperand, BoundLiteralExpression(nil, true))
             indexer = clrType.GetProperties().Single((p PropertyInfo) -> p.GetIndexParameters().Length == 2)
         } else {
-            var index = boundIndex ?? BindExpression(syntax)
+            let originalIndex = boundIndex ?? BindExpression(syntax)
+            var index = originalIndex
             if ClrTypeUtilities.AreSame(index.Type.ClrType, typeof(Range)) {
                 ApplySubExpressionNarrowingEffects(syntax, index)
                 let method = clrType.GetMethods().Single(
@@ -318,7 +319,7 @@ internal partial class ExpressionBinder {
                         target.Type,
                         ImmutableArray.Create(index)
                     )
-                )
+                ){CapturedIndexExpression = originalIndex}
             }
             let isIndex = ClrTypeUtilities.AreSame(index.Type.ClrType, typeof(Index))
             if !isIndex {
@@ -335,6 +336,19 @@ internal partial class ExpressionBinder {
                         typeof(int32)
                     }
                 )
+            )
+            let pointerWithIndex = BoundClrIndexExpression(
+                syntax,
+                receiver,
+                indexer,
+                arguments,
+                ByRefTypeSymbol.Get(elementType)
+            )
+            return BoundDereferenceExpression(
+                syntax,
+                BoundBlockExpression(syntax, statements.ToImmutable(), pointerWithIndex){
+                    CapturedIndexExpression = originalIndex
+                }
             )
         }
         let pointer = BoundClrIndexExpression(syntax, receiver, indexer, arguments, ByRefTypeSymbol.Get(elementType))

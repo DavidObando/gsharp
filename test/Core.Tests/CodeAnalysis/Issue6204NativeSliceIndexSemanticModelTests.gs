@@ -143,6 +143,49 @@ func F(flag bool) {
     }
 
     @Fact
+    func FailedConversionAndNestedSliceIndex_AnswerOwnSymbolsAndTypes() {
+        let source = `package P
+
+class C { }
+
+func F(c C) {
+    let x = 0
+    let s = slice[int32]{1, 2}
+    let ss = slice[string]{"a", "b"}
+    let bad = s[c]
+    let nested = ss[s[x]]
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6204_nested.gs"))
+        let compilation = Compilation(tree)
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Id == "GS0155")
+        let model = compilation.GetSemanticModel(tree)
+
+        let c = Assert.Single(Names(tree, "c"))
+        let cParam = Assert.IsType[ParameterSymbol](model.GetSymbolInfo(c).Symbol)
+        Assert.Equal("c", cParam.Name)
+        Assert.Equal("C", model.GetTypeInfo(c).Type?.Name)
+        Assert.Same(cParam, model.GetSymbolInfo(c.IdentifierToken).Symbol)
+
+        let innerAccess = tree
+            .Root
+            .DescendantNodes()
+            .OfType[IndexExpressionSyntax]()
+            .Single(
+            (ix IndexExpressionSyntax) -> ix.Target is NameExpressionSyntax name &&
+                name.IdentifierToken.Text == "s" &&
+                ix.Parent is IndexExpressionSyntax
+        )
+        Assert.Null(model.GetSymbolInfo(innerAccess).Symbol)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(innerAccess).Type)
+
+        let x = Assert.Single(Names(tree, "x"))
+        let xLocal = Assert.IsAssignableFrom[LocalVariableSymbol](model.GetSymbolInfo(x).Symbol)
+        Assert.Equal("x", xLocal.Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(x).Type)
+    }
+
+    @Fact
     func CallIndexInFailedOperator_CallAndArgumentAnswer() {
         let (model, tree, compilation) = CreateModel("let k = s[Use(x)] + c")
         Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Id == "GS0129")

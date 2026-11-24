@@ -29,6 +29,13 @@ class BoundBlockExpression : BoundExpression {
         get;
     }
 
+    /// Gets or sets the original pre-conversion index argument captured by a native-slice
+    /// index block, for semantic-model recovery only (#6204).
+    internal prop CapturedIndexExpression BoundExpression? {
+        get;
+        set;
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```

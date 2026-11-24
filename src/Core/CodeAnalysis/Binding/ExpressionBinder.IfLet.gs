@@ -271,8 +271,14 @@ internal partial class ExpressionBinder {
         whenFalse BoundExpression
     ) BoundErrorExpression {
         let error = BoundErrorExpression.WithFailedOperands(whenTrue, whenFalse)
-        for clause in clauses {
-            error.KeepOperands(clause.Binding.Initializer)
+        if !clauses.IsDefaultOrEmpty {
+            let declarations = System.Collections.Immutable.ImmutableArray.CreateBuilder[BoundStatement](clauses.Length)
+            for clause in clauses {
+                declarations.Add(
+                    BoundVariableDeclaration(clause.Syntax, clause.Binding.Variable, clause.Binding.Initializer)
+                )
+            }
+            error.KeepStatements(declarations.MoveToImmutable())
         }
         if guard_ != nil {
             error.KeepOperands(guard_)

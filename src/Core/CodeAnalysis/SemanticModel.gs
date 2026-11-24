@@ -217,8 +217,10 @@ partial class SemanticModel {
         }
         var bound BoundNode? = GetBoundNode(target, cancellationToken)
         if bound is BoundExpression candidate &&
-            CapturedIndexArgument(candidate) is {} capturedArgument &&
-            object.ReferenceEquals(capturedArgument.Syntax, target) {
+            CapturedIndexArgument(candidate, expectedBlockSyntax: target) is {} capturedArgument {
+            if !object.ReferenceEquals(capturedArgument.Syntax, target) {
+                return SymbolInfo.None
+            }
             bound = capturedArgument
         }
         for var depth = 0; depth < 16; depth++ {
@@ -297,18 +299,7 @@ partial class SemanticModel {
     /// @returns The resolution result; (cref:TypeInfo.Type) is null for non-expressions.
     func GetTypeInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) TypeInfo {
         return if GetBoundNode(node, cancellationToken) is BoundExpression expression {
-            TypeInfo(
-                (
-                    if CapturedIndexArgument(expression) is {} capturedArgument && object.ReferenceEquals(
-                        capturedArgument.Syntax,
-                        node
-                    ) {
-                        capturedArgument
-                    } else {
-                        expression
-                    }
-                ).Type
-            )
+            TypeInfo((CapturedIndexArgument(expression, expectedBlockSyntax: node) ?? expression).Type)
         } else {
             TypeInfo.None
         }
