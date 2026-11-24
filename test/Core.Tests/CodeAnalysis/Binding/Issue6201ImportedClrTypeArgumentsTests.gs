@@ -44,6 +44,8 @@ open class Issue6201ImportedClrTypeArgumentsTests {
     )
     @InlineData("Console.MissingMethod[int32](x)", "GS0159", "Cannot find function MissingMethod.")
     @InlineData("let s = \"a\".MissingMethod[int32](x)", "GS0159", "Cannot find function MissingMethod.")
+    @InlineData("let ys = user.ToList[int32, int32]()", "GS0159", "Cannot find function ToList.")
+    @InlineData("let ys = seq.ToList[int32, int32]()", "GS0148", "requires 1 type arguments but was given 2")
     func ImportedClrCallsWithWrongTypeArguments_ReportExpectedDiagnosticAndKeepArguments(
         statement string,
         expectedId string,
@@ -228,11 +230,16 @@ class User {
     var V int32 = 1
 }
 
+class MySeq : IEnumerable[int32] {
+    public func GetEnumerator() IEnumerator[int32] -> List[int32]{1}.GetEnumerator()
+    private func (System.Collections.IEnumerable) GetEnumerator() System.Collections.IEnumerator -> GetEnumerator()
+}
+
 enum E {
     A = 1
 }
 
-func F(xs List[int32], d IDisposable, user User, e E) {
+func F(xs List[int32], d IDisposable, user User, seq MySeq, e E) {
     let x = 1
     ` + statement + `
 }

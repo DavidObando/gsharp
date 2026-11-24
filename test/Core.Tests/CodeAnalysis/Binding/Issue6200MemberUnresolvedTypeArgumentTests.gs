@@ -27,6 +27,8 @@ open class Issue6200MemberUnresolvedTypeArgumentTests {
     @InlineData("Console.WriteLine[Nope](x)", "GS0113 Nope|GS0148 [Nope]")
     @InlineData("let a = \"a\".Trim[Nope]()", "GS0113 Nope|GS0148 [Nope]")
     @InlineData("let a = xs.ToList[Nope]()", "GS0113 Nope")
+    @InlineData("let a = c.ToList[Nope]()", "GS0113 Nope|GS0159 ToList[Nope]()")
+    @InlineData("let a = seq.ToList[Nope]()", "GS0113 Nope")
     @InlineData("let a = List[Nope](x)", "GS0113 Nope")
     @InlineData("let a = StringBuilder[Nope](x)", "GS0113 Nope|GS0148 [Nope]")
     @InlineData("let a = System.Text.StringBuilder.ChunkEnumerator[Nope]()", "GS0113 Nope|GS0148 [Nope]")
@@ -167,7 +169,12 @@ class C {
     func Mixed[T](x T) T -> x
 }
 
-func F(c C, n Named, xs List[int32]) {
+class MySeq : IEnumerable[int32] {
+    public func GetEnumerator() IEnumerator[int32] -> List[int32]{1}.GetEnumerator()
+    private func (System.Collections.IEnumerable) GetEnumerator() System.Collections.IEnumerator -> GetEnumerator()
+}
+
+func F(c C, n Named, xs List[int32], seq MySeq) {
     let x = 1
     ` + statement + `
 }
