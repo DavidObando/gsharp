@@ -1187,6 +1187,36 @@ func G(i int32) []int32 {
     }
 
     @Fact
+    func MemberFoundThroughATypeParameterConstraint_ALaterMemberCanHideIt() {
+        const prefix = `package P
+
+open class Root {
+    func F(o object) int32 {
+        return 0
+    }
+}
+
+open partial class Middle : Root {
+}
+
+func Use[T Middle](v T) {
+    let x string = v.F(1)
+    let done = 0
+`
+        const witness = `}
+
+partial class Middle {
+    func F(i int32) string {
+        return ""
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
     func ResolvedCall_AnExactNonGenericMatchCannotBeBeaten() {
         const prefix = `package P
 

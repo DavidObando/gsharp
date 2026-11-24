@@ -169,6 +169,12 @@ internal shared class PrefixRetarget {
         if current is PlatformTypeSymbol platform {
             current = platform.UnderlyingType
         }
+        // Member lookup on a type parameter follows its constraints.
+        if current is TypeParameterSymbol parameter {
+            return HierarchyCanGrow(parameter.EffectiveClassConstraint, stop) ||
+                HierarchyCanGrow(parameter.InterfaceConstraint, stop) ||
+                HierarchyCanGrow(parameter.ClrInterfaceConstraint, stop)
+        }
         if current is StructSymbol aggregate {
             for level in aggregate.GetHierarchy() {
                 if stop != nil && object.ReferenceEquals(level, stop) {
