@@ -28,6 +28,8 @@ open class Issue6217MemberAccessNameTests {
     @InlineData("sb.Length", "Length", 0, "Property", "int32")
     @InlineData("sb.Append(1).Length", "Length", 0, "Property", "int32") // after a call
     @InlineData("bag.Inner!!.D", "D", 0, "Field", "Descriptor") // after a null assertion
+    @InlineData("bag.Names[0]", "Names", 0, "Field", "[]string") // an indexed member
+    @InlineData("bag.Names[0].Length", "Names", 0, "Field", "[]string")
     func NameOfAMember_AnswersTheMemberAndItsType(
         expression string,
         name string,
@@ -75,6 +77,22 @@ open class Issue6217MemberAccessNameTests {
     }
 
     @Fact
+    func NameOfANarrowedMember_HasTheNarrowedType() {
+        let source = Template.Replace(
+            "    let value = @@EXPR\n",
+            "    if bag.Count != nil {\n        let value = bag.Count + 1\n    }\n"
+        )
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6217.gs"))
+        let compilation = Compilation(tree)
+        Assert.DoesNotContain(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let model = compilation.GetSemanticModel(tree)
+        let count = Names(tree, "Count").Last()
+        let accessor = Assert.IsType[AccessorExpressionSyntax](count.Parent)
+        Assert.Equal("int32", model.GetTypeInfo(accessor).Type?.ToString())
+        Assert.Equal(model.GetTypeInfo(accessor).Type?.ToString(), model.GetTypeInfo(count).Type?.ToString())
+    }
+
+    @Fact
     func NameOfAMemberThatDoesNotExist_AnswersNothing() {
         let (model, tree, compilation) = CreateModel("bag.D.Missing")
         Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Id == "GS0158")
@@ -100,6 +118,8 @@ shared class Descriptors {
 class Bag {
     var Inner Bag? = nil
     let D Descriptor = Descriptor()
+    let Names []string = []string{"a"}
+    let Count int32? = 1
 }
 
 func Use(bag Bag) {

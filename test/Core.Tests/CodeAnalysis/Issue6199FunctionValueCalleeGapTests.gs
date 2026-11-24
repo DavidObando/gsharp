@@ -97,6 +97,19 @@ open class Issue6199FunctionValueCalleeGapTests {
     }
 
     @Fact
+    func MethodOfTheSameNameAsAnInheritedField_IsNotAnsweredAsTheField() {
+        // The call path selects the derived method over the base's function-valued field. A call whose
+        // arguments do not analyse keeps no callee for a method (#6221), so it answers nothing, not the field.
+        let source = "package P\n\nopen class B {\n    var G (int32) -> int32 = (v int32) -> v\n}\n\nclass C : B {\n    func G(v int32) string -> \"\"\n}\n\nfunc F(c C) {\n    let x = 1\n    let k = @@CALL\n}\n"
+        let (boundModel, boundTree, boundCompilation) = CreateModel(source.Replace("@@CALL", "c.G(x)"))
+        AssertDiagnostic(boundCompilation, "")
+        Assert.IsAssignableFrom[FunctionSymbol](boundModel.GetSymbolInfo(Callee(boundTree, "G")).Symbol)
+        let (model, tree, compilation) = CreateModel(source.Replace("@@CALL", "c.G(v: x, v: x)"))
+        AssertDiagnostic(compilation, "GS0245")
+        Assert.Null(model.GetSymbolInfo(Callee(tree, "G")).Symbol)
+    }
+
+    @Fact
     func FieldDeclarationToken_AnswersAsBeforeWhenACallFails() {
         // A failed call of an implicit field keeps its callee load. The declaration's token answers what it
         // answers when the call binds.

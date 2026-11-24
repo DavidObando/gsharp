@@ -331,13 +331,18 @@ partial class SemanticModel {
         } else {
             return nil
         }
-        if node.Parent is not AccessorExpressionSyntax accessor {
+        // An indexed member (`Text` in `c.Text[0]`) is the target of an index expression in the chain.
+        var member SyntaxNode = node
+        while member.Parent is IndexExpressionSyntax index && object.ReferenceEquals(index.Target, member) {
+            member = index
+        }
+        if member.Parent is not AccessorExpressionSyntax accessor {
             return nil
         }
-        if object.ReferenceEquals(accessor.RightPart, node) {
+        if object.ReferenceEquals(accessor.RightPart, member) {
             return identifier
         }
-        return if object.ReferenceEquals(accessor.LeftPart, node) && IsInnerAccessor(accessor) {
+        return if object.ReferenceEquals(accessor.LeftPart, member) && IsInnerAccessor(accessor) {
             identifier
         } else {
             default(SyntaxToken?)
@@ -375,7 +380,8 @@ partial class SemanticModel {
         // #6217: the name of a member has the type of the member read, and an inner accessor the type of its
         // terminal.
         if MemberNameToken(node) is {} memberName {
-            return if Unwrap(FindReferencedNode(memberName)) is {} read && GetTokenSymbol(memberName) != nil {
+            // The read keeps its narrowing: a null assertion that the binder adds carries the narrowed type.
+            return if FindReferencedNode(memberName) is {} read && GetTokenSymbol(memberName) != nil {
                 TypeInfo(read.Type)
             } else {
                 TypeInfo.None

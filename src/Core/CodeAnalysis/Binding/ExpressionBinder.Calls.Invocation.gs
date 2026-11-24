@@ -1519,6 +1519,12 @@ internal partial class ExpressionBinder {
         if classSymbol != nil || receiver == nil || !(receiver.Type is StructSymbol or InterfaceSymbol) {
             return
         }
+        // A method of the name wins over a callable field or property (the order of the call path), and the
+        // layout failure gives no callee to a method call (#6221).
+        if !TypeMemberModel.GetMethods(receiver.Type, methodName, MemberQuery.Instance(MemberKinds.Method))
+            .IsDefaultOrEmpty {
+            return
+        }
         let mark = Diagnostics.Count
         let narrowing = CaptureNarrowingBindSnapshot()
         let selectedProperty = lastSelectedCallablePropertyLoad

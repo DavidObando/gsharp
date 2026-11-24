@@ -80,6 +80,22 @@ open class Adr0227TransformationProgramTests {
         let structCompilation = Compilation(structTree)
         let structTarget = structCompilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
         Assert.Empty(ProgramService(DropNew).GetFixes(structCompilation, structTarget))
+        // An imported construction answers its constructor and gets the same fix (#6177).
+        let importedTree = SyntaxTree.Parse(
+            "package P\n\nimport System.Text\n\nfunc F() string {\n    let sb = new StringBuilder() // keep\n    return sb.ToString()\n}\n"
+        )
+        let importedCompilation = Compilation(importedTree)
+        let importedTarget = importedCompilation.GetDiagnostics().First((d Diagnostic) -> d.Id == "GS0125")
+        let importedFix = Assert.Single(ProgramService(DropNew).GetFixes(importedCompilation, importedTarget))
+        let importedBuiltIn = CodeFixService(CodeFixRegistry.CreateDefault()).GetFixes(
+            importedCompilation,
+            importedTarget
+        )
+            .Single()
+        Assert.Equal(
+            Assert.Single(importedFix.GetChanges().Documents).GetChangedText().ToString(),
+            Assert.Single(importedBuiltIn.GetChanges().Documents).GetChangedText().ToString()
+        )
     }
 
     @Fact
