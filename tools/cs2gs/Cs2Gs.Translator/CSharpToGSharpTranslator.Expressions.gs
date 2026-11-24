@@ -10222,23 +10222,24 @@ partial class CSharpToGSharpTranslator {
             let valueSymbol ISymbol? = this.context.GetSymbolInfo(unwrappedValue).Symbol
             let valueLocal ILocalSymbol? = valueSymbol as ILocalSymbol ??
                 GetReferencedLocal(this.context.SemanticModel.GetOperation(unwrappedValue!!))
+            let guardSymbol ISymbol? = valueLocal ?? valueSymbol
             let isFlowNarrowedLocal = this.IsGSharpFlowNarrowedLocal(unwrappedValue) ||
                 (
-                valueLocal != nil &&
-                    (
-                    this.IsDominatedByNullCheckGuard(unwrappedValue, valueLocal) ||
-                        (
-                        !this.IsObliviousCompilation() &&
-                            this
-                            .context
-                            .GetTypeInfo(unwrappedValue)
-                            .Nullability
-                            .FlowState == Microsoft
-                            .CodeAnalysis
-                            .NullableFlowState
-                            .NotNull
-                    )
+                (valueLocal != nil || valueSymbol is IParameterSymbol) && this.IsDominatedByNullCheckGuard(
+                    unwrappedValue,
+                    guardSymbol
                 )
+            ) ||
+                (
+                valueLocal != nil && !this.IsObliviousCompilation() &&
+                    this
+                    .context
+                    .GetTypeInfo(unwrappedValue)
+                    .Nullability
+                    .FlowState == Microsoft
+                    .CodeAnalysis
+                    .NullableFlowState
+                    .NotNull
             )
             let nullableObservedLambdaResult = this.LambdaResultFeedsNullableObservedInvocation(value)
             let importedStatedNullableValue = unwrappedValue is InvocationExpressionSyntax &&
@@ -14077,12 +14078,7 @@ partial class CSharpToGSharpTranslator {
             for nullCheck in index.BinaryTestsFor(symbol) {
                 CompilationMeasurements.Count("translation.guard_candidate_visits")
                 // Roslyn represents the classic `x is T` form as a binary expression, not a pattern expression.
-                let typeTest = nullCheck.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression) &&
-                    this.IsTypeReferencePattern(nullCheck.Right) && this.BindsToGuardSymbol(nullCheck.Left, symbol) &&
-                    this.TypeTestNarrowing(
-                    this.context.GetTypeInfo(nullCheck.Right).Type,
-                    this.GetPatternScrutineeUnderlyingType(nullCheck.Left)
-                ) != nil
+                let typeTest = this.IsClassicTypeTestGuardForSymbol(nullCheck, symbol, $scope)
                 var whenTrue = true
                 let directMatch = typeTest || this.TryGetNullComparisonNonNullPolarity(nullCheck, symbol, out whenTrue)
                 let conditionalMatch = !directMatch && this.TryGetNullConditionalComparisonNonNullPolarity(
@@ -14448,12 +14444,14 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             var node Microsoft.CodeAnalysis.SyntaxNode = expression
+            var crossedStatement = false
             while true {
                 let parent = node.Parent
                 if parent == nil {
                     break
                 }
-                if parent is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary &&
+                if !crossedStatement &&
+                    parent is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary &&
                     (
                     binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.LogicalAndExpression) || binary.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.LogicalOrExpression
@@ -14472,10 +14470,88 @@ partial class CSharpToGSharpTranslator {
                         return true
                     }
                 }
-                if !CanClimbExpressionParentForConditionNarrowing(node, parent, expression) {
-                    return false
+                if !crossedStatement &&
+                    parent is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax arm &&
+                    arm.Expression == node &&
+                    arm.WhenClause is {} armWhenClause &&
+                    this.ConditionGuardNarrowsSameStablePath(
+                    armWhenClause.Condition,
+                    arm.Expression,
+                    expression,
+                    wantNonNullWhenTrue: true
+                ) {
+                    return true
                 }
-                node = parent
+                if parent is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax section &&
+                    node is Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax &&
+                    section.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax switchStmt &&
+                    !this.HasGotoIntoSwitchSection(switchStmt) && this.ActiveSwitchSectionLabel(
+                    section
+                ) is CasePatternSwitchLabelSyntax{WhenClause: {} sectionWhenClause} &&
+                    !this.SwitchSectionHasUserLabelOrGoto(section) && this.ConditionGuardNarrowsSameStablePath(
+                    sectionWhenClause.Condition,
+                    section,
+                    expression,
+                    wantNonNullWhenTrue: true
+                ) {
+                    return true
+                }
+                if CanClimbExpressionParentForConditionNarrowing(node, parent, expression) {
+                    node = parent
+                    continue
+                }
+                if CanClimbStatementParentForSwitchSectionNarrowing(parent) {
+                    crossedStatement = true
+                    node = parent
+                    continue
+                }
+                return false
+            }
+            return false
+        }
+
+        private func CanClimbStatementParentForSwitchSectionNarrowing(parent Microsoft.CodeAnalysis.SyntaxNode) bool {
+            if parent is Microsoft.CodeAnalysis.CSharp.Syntax.WhileStatementSyntax ||
+                parent is DoStatementSyntax ||
+                parent is ForStatementSyntax ||
+                parent is ForEachStatementSyntax ||
+                parent is ForEachVariableStatementSyntax ||
+                parent is Microsoft.CodeAnalysis.CSharp.Syntax.TryStatementSyntax ||
+                parent is Microsoft.CodeAnalysis.CSharp.Syntax.LabeledStatementSyntax ||
+                parent is Microsoft.CodeAnalysis.CSharp.Syntax.UsingStatementSyntax ||
+                parent is Microsoft.CodeAnalysis.CSharp.Syntax.FixedStatementSyntax ||
+                parent is LocalFunctionStatementSyntax {
+                return false
+            }
+            return parent is Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax ||
+                parent is Microsoft.CodeAnalysis.CSharp.Syntax.ElseClauseSyntax ||
+                parent is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax ||
+                parent is Microsoft.CodeAnalysis.CSharp.Syntax.EqualsValueClauseSyntax ||
+                parent is VariableDeclaratorSyntax ||
+                parent is Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclarationSyntax
+        }
+
+        private func SwitchSectionHasUserLabelOrGoto(
+            section Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax
+        ) bool {
+            let OutsideNestedFunctions = func (n Microsoft.CodeAnalysis.SyntaxNode) bool {
+                return !(this.IsClosureBoundary(n) || n is LocalFunctionStatementSyntax)
+            }
+            for statement in section.Statements {
+                if statement is Microsoft.CodeAnalysis.CSharp.Syntax.LabeledStatementSyntax {
+                    return true
+                }
+                for descendant in statement.DescendantNodesAndSelf(OutsideNestedFunctions) {
+                    if descendant is Microsoft.CodeAnalysis.CSharp.Syntax.LabeledStatementSyntax ||
+                        (
+                        descendant is Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax jump && !jump.IsKind(
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.GotoCaseStatement
+                        ) &&
+                            !jump.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.GotoDefaultStatement)
+                    ) {
+                        return true
+                    }
+                }
             }
             return false
         }
@@ -14521,7 +14597,7 @@ partial class CSharpToGSharpTranslator {
 
         private func ConditionGuardNarrowsSameStablePath(
             leftCondition Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
-            rightOperand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            rightOperand Microsoft.CodeAnalysis.SyntaxNode,
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             wantNonNullWhenTrue bool
         ) bool {
@@ -14754,20 +14830,24 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 default {
-                    if (
-                        this.TryGetNullCheckedOperand(
-                            condition,
-                            nonNull: wantNonNullWhenTrue,
-                            out var checkedOperand
-                        ) ||
-                            this.TryGetPatternProvedNonNullOperand(
-                            condition,
-                            nonNull: wantNonNullWhenTrue,
-                            targetRoot,
-                            out checkedOperand
-                        )
-                    ) &&
-                        this.TryDecomposeStableAccessPath(
+                    let matchedOperand = this.TryGetNullCheckedOperand(
+                        condition,
+                        nonNull: wantNonNullWhenTrue,
+                        out var checkedOperand
+                    ) ||
+                        this.TryGetPatternProvedNonNullOperand(
+                        condition,
+                        nonNull: wantNonNullWhenTrue,
+                        targetRoot,
+                        out checkedOperand
+                    ) ||
+                        (
+                        wantNonNullWhenTrue && this.TryGetBooleanConditionalAccessOperand(condition, out checkedOperand)
+                    )
+                    if !matchedOperand {
+                        return false
+                    }
+                    if this.TryDecomposeStableAccessPath(
                         checkedOperand,
                         out var candidateIsThisRoot,
                         out var candidateRoot,
@@ -14784,9 +14864,209 @@ partial class CSharpToGSharpTranslator {
                         ) &&
                             this.AllStableReceiverCheckpointsNonNull(candidateReceiverCheckpoints)
                     }
+                    if StripParentheses(checkedOperand) is ConditionalAccessExpressionSyntax access {
+                        return this.ConditionalAccessMatchesStablePath(
+                            access,
+                            targetIsThisRoot,
+                            targetRoot,
+                            targetMembers,
+                            rootIsByReference,
+                            rootIsClosureAssigned,
+                            rootType
+                        )
+                    }
                     return false
                 }
             }
+        }
+
+        private func TryGetBooleanConditionalAccessOperand(
+            condition Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            out operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            operand = nil
+            if StripParentheses(condition) is not Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary ||
+                !binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression) ||
+                this.NullComparisonUsesUserOperator(binary) {
+                return false
+            }
+            let left = StripParentheses(binary.Left)
+            let right = StripParentheses(binary.Right)
+            var access ConditionalAccessExpressionSyntax? = nil
+            var other Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
+            if left is ConditionalAccessExpressionSyntax leftAccess {
+                access = leftAccess
+                other = right
+            } else if right is ConditionalAccessExpressionSyntax rightAccess {
+                access = rightAccess
+                other = left
+            } else {
+                return false
+            }
+            if other is not Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax literal ||
+                (
+                !literal.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.TrueLiteralExpression) && !literal.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.FalseLiteralExpression
+                )
+            ) {
+                return false
+            }
+            var accessType = this.context.GetTypeInfo(access).Type
+            if accessType is INamedTypeSymbol nullable &&
+                nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T {
+                accessType = nullable.TypeArguments[0]
+            }
+            if accessType?.SpecialType != SpecialType.System_Boolean {
+                return false
+            }
+            operand = access
+            return true
+        }
+
+        private func ConditionalAccessEffectsInvalidateStablePath(
+            access ConditionalAccessExpressionSyntax,
+            targetIsThisRoot bool,
+            targetRoot ISymbol?,
+            rootIsByReference bool,
+            rootIsClosureAssigned bool,
+            rootType ITypeSymbol?
+        ) bool {
+            let OutsideNestedFunctions = func (n Microsoft.CodeAnalysis.SyntaxNode) bool {
+                return !(this.IsClosureBoundary(n) || this.IsDroppedStatementOrLoopClause(n))
+            }
+            var current ConditionalAccessExpressionSyntax? = access
+            while current is {} step {
+                if step
+                    .WhenNotNull
+                    .DescendantNodesAndSelf(OutsideNestedFunctions)
+                    .Any(
+                    (candidate Microsoft.CodeAnalysis.SyntaxNode) -> this
+                        .ConditionSubexpressionInvalidatesStablePathBeforeUse(
+                        candidate,
+                        targetIsThisRoot,
+                        targetRoot,
+                        rootIsByReference,
+                        rootIsClosureAssigned,
+                        rootType
+                    )
+                ) {
+                    return true
+                }
+                current = StripParentheses(step.Expression) as ConditionalAccessExpressionSyntax
+            }
+            return false
+        }
+
+        private func ConditionalAccessMatchesStablePath(
+            access ConditionalAccessExpressionSyntax,
+            targetIsThisRoot bool,
+            targetRoot ISymbol?,
+            targetMembers List[ISymbol],
+            rootIsByReference bool,
+            rootIsClosureAssigned bool,
+            rootType ITypeSymbol?
+        ) bool {
+            if this.ConditionalAccessEffectsInvalidateStablePath(
+                access,
+                targetIsThisRoot,
+                targetRoot,
+                rootIsByReference,
+                rootIsClosureAssigned,
+                rootType
+            ) {
+                return false
+            }
+            var current ConditionalAccessExpressionSyntax? = access
+            while current is {} step {
+                if this.TryDecomposeStableAccessPath(
+                    step.Expression,
+                    out var exprIsThisRoot,
+                    out var exprRoot,
+                    out var exprMembers,
+                    out var exprCheckpoints
+                ) &&
+                    StableAccessPathsMatch(
+                    targetIsThisRoot,
+                    targetRoot,
+                    targetMembers,
+                    exprIsThisRoot,
+                    exprRoot,
+                    exprMembers
+                ) &&
+                    this.AllStableReceiverCheckpointsNonNull(exprCheckpoints) {
+                    return true
+                }
+                if this.TryDecomposeConditionalBindingPath(
+                    step,
+                    out var bindIsThisRoot,
+                    out var bindRoot,
+                    out var bindMembers,
+                    out var bindCheckpoints
+                ) &&
+                    StableAccessPathsMatch(
+                    targetIsThisRoot,
+                    targetRoot,
+                    targetMembers,
+                    bindIsThisRoot,
+                    bindRoot,
+                    bindMembers
+                ) &&
+                    this.AllStableReceiverCheckpointsNonNull(bindCheckpoints) {
+                    return true
+                }
+                current = StripParentheses(step.Expression) as ConditionalAccessExpressionSyntax
+            }
+            return false
+        }
+
+        private func TryDecomposeConditionalBindingPath(
+            access ConditionalAccessExpressionSyntax,
+            out isThisRoot bool,
+            out rootSymbol ISymbol?,
+            out members List[ISymbol],
+            out receiverCheckpoints List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]
+        ) bool {
+            isThisRoot = false
+            rootSymbol = nil
+            members = List[ISymbol]()
+            receiverCheckpoints = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            var current Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = StripParentheses(access.WhenNotNull)
+            let bindingMembers = List[ISymbol]()
+            while current is MemberAccessExpressionSyntax member && member.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleMemberAccessExpression
+            ) {
+                let memberSymbol = this.context.GetSymbolInfo(member).Symbol
+                if !IsStableMemberSymbol(memberSymbol) {
+                    return false
+                }
+                bindingMembers.Insert(0, memberSymbol!!)
+                current = StripParentheses(member.Expression)
+            }
+            if current is not MemberBindingExpressionSyntax binding {
+                return false
+            }
+            let bindingSymbol = this.context.GetSymbolInfo(binding).Symbol
+            if !IsStableMemberSymbol(bindingSymbol) {
+                return false
+            }
+            bindingMembers.Insert(0, bindingSymbol!!)
+            if !this.TryDecomposeStableAccessPath(
+                access.Expression,
+                out isThisRoot,
+                out rootSymbol,
+                out members,
+                out receiverCheckpoints
+            ) {
+                return false
+            }
+            let strippedReceiver = StripParentheses(access.Expression)
+            if receiverCheckpoints.Count > 0 && object.ReferenceEquals(receiverCheckpoints[0], strippedReceiver) {
+                receiverCheckpoints.RemoveAt(0)
+            }
+            for member in bindingMembers {
+                members.Add(member)
+            }
+            return true
         }
 
         private func TryGetPatternProvedNonNullOperand(
@@ -14835,7 +15115,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func RightOperandInvalidatesStablePathBeforeUse(
-            rightOperand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            rightOperand Microsoft.CodeAnalysis.SyntaxNode,
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             targetIsThisRoot bool,
             targetRoot ISymbol?,
@@ -14843,30 +15123,46 @@ partial class CSharpToGSharpTranslator {
             rootIsClosureAssigned bool,
             rootType ITypeSymbol?
         ) bool {
+            let scope_ = NearestFunctionBoundary(expression) ?? rightOperand
             let OutsideNestedFunctions = func (n Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return object.ReferenceEquals(n, rightOperand) ||
                     !(this.IsClosureBoundary(n) || this.IsDroppedStatementOrLoopClause(n))
             }
-            for candidate in rightOperand.DescendantNodesAndSelf(OutsideNestedFunctions) {
-                if candidate is Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax interpolation &&
-                    interpolation.Span.Contains(expression.Span) && this.InterpolationUsesHandler(interpolation) {
-                    return true
-                }
-                if EvaluationEffectEnd(candidate) > expression.SpanStart {
-                    continue
-                }
-                if this.IsInSiblingBranchOfRead(candidate, expression, rightOperand) {
-                    continue
-                }
-                if this.ConditionSubexpressionInvalidatesStablePathBeforeUse(
-                    candidate,
-                    targetIsThisRoot,
-                    targetRoot,
-                    rootIsByReference,
-                    rootIsClosureAssigned,
-                    rootType
-                ) {
-                    return true
+            let roots IEnumerable[Microsoft.CodeAnalysis.SyntaxNode] = if rightOperand is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SwitchSectionSyntax section {
+                section.Statements
+            } else {
+                []Microsoft.CodeAnalysis.SyntaxNode{rightOperand}
+            }
+            for root in roots {
+                for candidate in root.DescendantNodesAndSelf(OutsideNestedFunctions) {
+                    if candidate is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .InterpolatedStringExpressionSyntax interpolation &&
+                        interpolation.Span.Contains(expression.Span) && this.InterpolationUsesHandler(interpolation) {
+                        return true
+                    }
+                    if EvaluationEffectEnd(candidate) > expression.SpanStart {
+                        continue
+                    }
+                    if this.IsInSiblingBranchOfRead(candidate, expression, scope_) {
+                        continue
+                    }
+                    if this.ConditionSubexpressionInvalidatesStablePathBeforeUse(
+                        candidate,
+                        targetIsThisRoot,
+                        targetRoot,
+                        rootIsByReference,
+                        rootIsClosureAssigned,
+                        rootType
+                    ) {
+                        return true
+                    }
                 }
             }
             return false
@@ -21774,6 +22070,24 @@ partial class CSharpToGSharpTranslator {
                 Implements("System.Collections.IDictionary")
         }
 
+        private func IsClassicTypeTestGuardForSymbol(
+            comparison Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax,
+            symbol ISymbol?,
+            $scope Microsoft.CodeAnalysis.SyntaxNode
+        ) bool -> comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression) &&
+            this.IsTypeReferencePattern(comparison.Right) && this.TypeTestNarrowing(
+            this.context.GetTypeInfo(comparison.Right).Type,
+            this.GetPatternScrutineeUnderlyingType(comparison.Left)
+        ) != nil &&
+            (
+            this.BindsToGuardSymbol(comparison.Left, symbol) ||
+                (
+                StripParentheses(comparison.Left) is ConditionalAccessExpressionSyntax access &&
+                    this.ConditionalAccessRootBindsToGuardSymbol(access, symbol) &&
+                    !this.ConditionalAccessEffectsLoseNarrowing(access, nil, symbol, $scope)
+            )
+        )
+
         private func ActiveSwitchSectionLabel(section SwitchSectionSyntax) SwitchLabelSyntax? {
             for entry in this.state.SwitchSectionActiveLabels {
                 if object.ReferenceEquals(entry.Section, section) {
@@ -21811,20 +22125,7 @@ partial class CSharpToGSharpTranslator {
             var whenTrue = false
             switch guardTest {
                 case comparison is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax {
-                    let isTypeTest = comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression) &&
-                        this.IsTypeReferencePattern(comparison.Right) && this.TypeTestNarrowing(
-                        this.context.GetTypeInfo(comparison.Right).Type,
-                        this.GetPatternScrutineeUnderlyingType(comparison.Left)
-                    ) != nil &&
-                        (
-                        this.BindsToGuardSymbol(comparison.Left, field) ||
-                            (
-                            StripParentheses(comparison.Left) is ConditionalAccessExpressionSyntax access &&
-                                this.ConditionalAccessRootBindsToGuardSymbol(access, field) &&
-                                !this.ConditionalAccessEffectsLoseNarrowing(access, nil, field, scope_)
-                        )
-                    )
-                    if isTypeTest {
+                    if this.IsClassicTypeTestGuardForSymbol(comparison, field, scope_) {
                         whenTrue = true
                     } else if !this.TryGetNullComparisonNonNullPolarity(comparison, field, out whenTrue) &&
                         !this.TryGetNullConditionalComparisonNonNullPolarity(comparison, field, scope_, out whenTrue) {

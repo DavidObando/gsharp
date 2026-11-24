@@ -703,6 +703,35 @@ public static class P
         return value.Length;
     }
 
+    public static int MeasureConditionalIsTypeTestExpr(int kind, string? value)
+    {
+        return kind switch
+        {
+            1 when value?.Length is int => value.Length,
+            _ => 0,
+        };
+    }
+
+    public static int MeasureConditionalIsTypeTestStmt(int kind, string? value)
+    {
+        switch (kind)
+        {
+            case 1 when value?.Length is int:
+                return value.Length;
+            default:
+                return 0;
+        }
+    }
+
+    public static int MeasureConditionalIsTypeTestMutated(int kind, string? value, bool drop)
+    {
+        return kind switch
+        {
+            1 when (value?.Substring((drop ? (value = null) : null) == null ? 0 : 0))?.Length is int => value!.Length,
+            _ => 0,
+        };
+    }
+
     public static string Run() =>
         MeasureStmt(1, "ab") + "|" +
         MeasureExpr(1, "abc") + "|" +
@@ -717,11 +746,14 @@ public static class P
         MeasureNestedMultiLabel(1, 10, "hi") + "|" +
         MeasureNestedMultiLabel(2, 10, "bye") + "|" +
         MeasureConditionalRelationalNotGuard("hello") + "|" +
-        MeasureConditionalRelationalNotGuard(null);
+        MeasureConditionalRelationalNotGuard(null) + "|" +
+        MeasureConditionalIsTypeTestExpr(1, "abcde") + "|" +
+        MeasureConditionalIsTypeTestStmt(1, "abcdef") + "|" +
+        MeasureConditionalIsTypeTestMutated(1, "ab", false);
 }`
         let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
             "using System;\nnamespace Demo {\n" + source + "\n}",
-            "2|3|4|0|2|2|1|1|2|4|2|3|5|-1",
+            "2|3|4|0|2|2|1|1|2|4|2|3|5|-1|5|6|2",
             rejectRedundantAssertions: true
         )
         Assert.Contains(
@@ -739,6 +771,13 @@ public static class P
         Assert.Contains("case 10 {\n                        return value.Length", printed, StringComparison.Ordinal)
         Assert.Contains("case 10 {\n                        return value!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("value!!.Length > 10", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when value?.Length is int32: value.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "case 1 when value?.Length is int32 {\n                return value.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(")?.Length is int32: value!!.Length", printed, StringComparison.Ordinal)
     }
 
     @Fact
@@ -748,6 +787,18 @@ using System;
 
 namespace Demo
 {
+    public sealed class Holder
+    {
+        public readonly string? Text;
+        public string? Mutable;
+
+        public Holder(string? text, string? mutable)
+        {
+            Text = text;
+            Mutable = mutable;
+        }
+    }
+
     public sealed class P
     {
         private readonly string? field;
@@ -806,6 +857,64 @@ namespace Demo
                 _ => 0,
             };
 
+        public int QualifiedExpr(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when holder.Text != null => holder.Text.Length,
+                _ => 0,
+            };
+
+        public int QualifiedStmt(int kind, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    return holder.Text.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedConditionalIsInt(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when holder.Text?.Length is int => holder.Text.Length,
+                _ => 0,
+            };
+
+        public int QualifiedNullableReceiverConditional(int kind, Holder? holder) =>
+            kind switch
+            {
+                1 when holder?.Text != null => holder.Text.Length,
+                _ => 0,
+            };
+
+        public int QualifiedStmtCallInvalidates(int kind, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    Touch();
+                    return holder.Text!.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedExprCallInvalidates(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when holder.Text != null => (Touch0() + holder.Text!.Length),
+                _ => 0,
+            };
+
+        public int QualifiedMutableKeepsAssertion(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when holder.Mutable != null => holder.Mutable!.Length,
+                _ => 0,
+            };
+
         public int MultiLabel(int kind)
         {
             switch (kind)
@@ -860,12 +969,20 @@ namespace Demo
         public static string Run()
         {
             var p = new P("abcd", "xy");
+            var h = new Holder("abcde", "zw");
             return p.Stmt(1) + "|" +
                 p.Expr(1) + "|" +
                 p.ExprThisIsNotNull(1) + "|" +
                 p.ExprNegatedEqualsNull(1) + "|" +
                 p.ExprTypePattern(1) + "|" +
                 p.ExprConditionalAccess(1) + "|" +
+                p.QualifiedExpr(1, h) + "|" +
+                p.QualifiedStmt(1, h) + "|" +
+                p.QualifiedConditionalIsInt(1, h) + "|" +
+                p.QualifiedNullableReceiverConditional(1, h) + "|" +
+                p.QualifiedStmtCallInvalidates(1, h) + "|" +
+                p.QualifiedExprCallInvalidates(1, h) + "|" +
+                p.QualifiedMutableKeepsAssertion(1, h) + "|" +
                 p.MultiLabel(1) + "|" +
                 p.MultiLabel(2) + "|" +
                 p.StmtCallInvalidates(1) + "|" +
@@ -877,7 +994,7 @@ namespace Demo
 }`
         let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
             source,
-            "4|4|4|4|4|4|4|4|4|4|2|5",
+            "4|4|4|4|4|4|5|5|5|5|5|5|2|4|4|4|4|2|5",
             rejectRedundantAssertions: true
         )
         Assert.Contains(
@@ -890,11 +1007,113 @@ namespace Demo
         Assert.Contains("case 1 when !(field == nil): field.Length", printed, StringComparison.Ordinal)
         Assert.Contains("case 1 when field is string: field.Length", printed, StringComparison.Ordinal)
         Assert.Contains("case 1 when field?.Length != nil: field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when holder.Text != nil: holder.Text.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "case 1 when holder.Text != nil {\n                return holder.Text.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "case 1 when holder.Text?.Length is int32: holder.Text.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("case 1 when holder?.Text != nil: holder.Text.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("Touch()\n                return holder.Text!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("Touch0() + holder.Text!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("holder.Mutable != nil: holder.Mutable!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("case 2 {\n                return field!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("Touch()\n                return field!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("Touch0() + field!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("mutableField != nil: mutableField!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("!string.IsNullOrEmpty(s): s.Length", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func SwitchWhenNullGuard_ObliviousSectionWritesAndGuardOrderFlow() {
+        let source = `using System;
+
+namespace Demo
+{
+    public static class P
+    {
+        private static int lastConsumed;
+        private static int lastSafe;
+
+        private static void Consume(string x)
+        {
+            lastConsumed = x == null ? -1 : x.Length;
+        }
+
+        private static bool Observe(string x)
+        {
+            return x == null || x.Length >= 0;
+        }
+
+        private static void SafeConsume(string x)
+        {
+            lastSafe = x.Length;
+        }
+
+        public static int TestSectionWriteInvalidates(int kind, string s)
+        {
+            switch (kind)
+            {
+                case 1 when s != null:
+                    s = null;
+                    Consume(s);
+                    break;
+                case 2 when s != null:
+                    SafeConsume(s);
+                    break;
+            }
+            return lastConsumed + lastSafe;
+        }
+
+        public static int TestGuardOrderObserveBeforeNullCheck(int kind, string s)
+        {
+            switch (kind)
+            {
+                case 1 when Observe(s) && s != null:
+                    return s.Length;
+                default:
+                    return -1;
+            }
+        }
+
+        public static int TestSectionConditionalWriteKeepsAssertion(int kind, string s, bool drop)
+        {
+            switch (kind)
+            {
+                case 1 when s != null:
+                    if (drop) s = null;
+                    return s.Length;
+                default:
+                    return -1;
+            }
+        }
+
+        public static string Run()
+        {
+            int a = TestSectionWriteInvalidates(1, "hi");
+            int b = TestSectionWriteInvalidates(2, "abc");
+            int c = TestGuardOrderObserveBeforeNullCheck(1, null);
+            int d = TestGuardOrderObserveBeforeNullCheck(1, "xy");
+            int e = TestSectionConditionalWriteKeepsAssertion(1, "abcd", false);
+            return a + "|" + b + "|" + c + "|" + d + "|" + e;
+        }
+    }
+}`
+        let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
+            source,
+            "-1|2|-1|2|4",
+            rejectRedundantAssertions: true
+        )
+        Assert.Contains("func Consume(x string?)", printed, StringComparison.Ordinal)
+        Assert.Contains("func Observe(x string?) bool", printed, StringComparison.Ordinal)
+        Assert.Contains("func SafeConsume(x string)", printed, StringComparison.Ordinal)
+        Assert.Contains("SafeConsume(s)", printed, StringComparison.Ordinal)
+        Assert.Contains("return s!!.Length", printed, StringComparison.Ordinal)
     }
 
     shared {

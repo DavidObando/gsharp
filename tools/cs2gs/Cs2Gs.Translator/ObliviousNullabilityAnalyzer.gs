@@ -12575,9 +12575,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     GuardValueRemainsUnchanged(whenClause.Condition, node, stripped, symbol, model) {
                     return guardTest
                 }
-                case section is SwitchSectionSyntax when !(
-                    section.Parent is SwitchStatementSyntax switchStmt && HasGotoIntoSwitchSection(switchStmt)
-                ) {
+                case section is SwitchSectionSyntax when node is StatementSyntax &&
+                    !(section.Parent is SwitchStatementSyntax switchStmt && HasGotoIntoSwitchSection(switchStmt)) {
                     let activeLabel = if activeSwitchLabel != nil {
                         activeSwitchLabel(section)
                     } else if section.Labels.Count == 1 {
@@ -12587,7 +12586,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     }
                     if activeLabel is CasePatternSwitchLabelSyntax{WhenClause: {} whenClause} &&
                         NullTestOf(whenClause.Condition, symbol, model, whenTrueIsNull: false) is {} guardTest &&
-                        GuardValueRemainsUnchanged(whenClause.Condition, node, stripped, symbol, model) {
+                        GuardValueRemainsUnchanged(whenClause.Condition, section, stripped, symbol, model) {
                         return guardTest
                     }
                 }
