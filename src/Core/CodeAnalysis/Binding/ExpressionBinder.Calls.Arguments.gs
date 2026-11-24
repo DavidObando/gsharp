@@ -4684,20 +4684,14 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
+        if ce.TypeArgumentList != nil {
+            return false
+        }
         let candidates = List[MethodInfo](
             MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(typeof(object), methodName)
         )
         if candidates.Count == 0 {
             return false
-        }
-        if ce.TypeArgumentList is {} unexpectedTypeArguments {
-            overloads.ReportTypeArgumentsOnNonGenericFunction(
-                unexpectedTypeArguments,
-                methodName,
-                typeArgumentsBound: true
-            )
-            result = BoundErrorExpression(nil)
-            return true
         }
         let argTypes = [arguments.Length]Type?
         for var i = 0; i < arguments.Length; i++ {
@@ -4828,20 +4822,14 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
+        if ce.TypeArgumentList != nil {
+            return false
+        }
         let candidates = List[MethodInfo](
             MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(typeof(object), methodName)
         )
         if candidates.Count == 0 {
             return false
-        }
-        if ce.TypeArgumentList is {} unexpectedTypeArguments {
-            overloads.ReportTypeArgumentsOnNonGenericFunction(
-                unexpectedTypeArguments,
-                methodName,
-                typeArgumentsBound: true
-            )
-            result = BoundErrorExpression(nil)
-            return true
         }
         let argTypes = [arguments.Length]Type?
         for var i = 0; i < arguments.Length; i++ {

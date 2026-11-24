@@ -29,6 +29,7 @@ open class Issue6200MemberUnresolvedTypeArgumentTests {
     @InlineData("let a = xs.ToList[Nope]()", "GS0113 Nope")
     @InlineData("let a = List[Nope](x)", "GS0113 Nope")
     @InlineData("let a = StringBuilder[Nope](x)", "GS0113 Nope|GS0148 [Nope]")
+    @InlineData("let a = System.Text.StringBuilder.ChunkEnumerator[Nope]()", "GS0113 Nope|GS0148 [Nope]")
     @InlineData("let a = c.Missing[Nope](x)", "GS0113 Nope|GS0159 Missing[Nope](x)")
     func MemberCallWithUnresolvedTypeArgument_ReportsExpectedDiagnosticsAndKeepsArguments(
         statement string,
@@ -59,6 +60,29 @@ open class Issue6200MemberUnresolvedTypeArgumentTests {
             Assert.Equal("n", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(del).Symbol).Name)
             Assert.Equal("Named", model.GetTypeInfo(del).Type?.Name)
         }
+    }
+
+    @Fact
+    func MemberCallWithUnresolvedTypeArgumentAndDeferredLambda_KeepsLambdaBodyInSemanticModel() {
+        let source = Template("let a = c.M[Nope]((v) -> x)")
+        let (model, tree, compilation) = CreateModel(source)
+        let errorIds = compilation
+            .GetDiagnostics()
+            .Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            .Select((d Diagnostic) -> d.Id)
+            .ToArray()
+        Assert.Contains("GS0113", errorIds)
+        Assert.Contains("GS0148", errorIds)
+        Assert.DoesNotContain("GS0159", errorIds)
+        let fBody = tree.Root.DescendantNodes().OfType[FunctionDeclarationSyntax]().Last()
+        let captured = Assert.Single(
+            fBody
+                .DescendantNodes()
+                .OfType[NameExpressionSyntax]()
+                .Where((n NameExpressionSyntax) -> n.IdentifierToken.Text == "x")
+        )
+        Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(captured).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(captured).Type)
     }
 
     shared {

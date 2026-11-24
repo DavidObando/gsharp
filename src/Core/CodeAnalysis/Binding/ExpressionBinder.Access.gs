@@ -843,7 +843,8 @@ internal partial class ExpressionBinder {
             out clrType,
             out openGenericDefinition,
             out symbolicTypeArgs,
-            out constraintFailed
+            out constraintFailed,
+            out typeArgumentsFailed
         ) {
             return true
         }
@@ -907,6 +908,51 @@ internal partial class ExpressionBinder {
                 }
             }
         }
+        if !string.IsNullOrEmpty(namespacePrefix) {
+            let prefixSegments = namespacePrefix.Split('.')
+            for var outerLen = prefixSegments.Length; outerLen >= 1; outerLen-- {
+                let outerName = string.Join(".", prefixSegments, 0, outerLen)
+                var outerType Type? = nil
+                if !$scope.TryResolveType(outerName, out outerType) {
+                    for import_ in $scope.GetDeclaredImports() {
+                        let qualified = import_.Target + "." + outerName
+                        if $scope.TryResolveType(qualified, out outerType) {
+                            break
+                        }
+                    }
+                }
+                if outerType == nil {
+                    continue
+                }
+                var current = outerType
+                var walkFailed = false
+                for var i = outerLen; i < prefixSegments.Length; i++ {
+                    if !$scope.References!!.TryResolveNestedType(current, prefixSegments[i], out var next) {
+                        walkFailed = true
+                        break
+                    }
+                    current = next
+                }
+                if walkFailed {
+                    continue
+                }
+                if $scope.References!!.TryResolveNestedType(current, typeSimpleName, out var plainNested) &&
+                    !plainNested.IsGenericTypeDefinition {
+                    expectedArity = 0
+                    return true
+                }
+                for var arity = 1; arity <= 16; arity++ {
+                    if arity != excludedArity && $scope.References!!.TryResolveNestedType(
+                        current,
+                        typeSimpleName + "`" + arity.ToString(),
+                        out _
+                    ) {
+                        expectedArity = arity
+                        return true
+                    }
+                }
+            }
+        }
         expectedArity = 0
         return false
     }
@@ -923,9 +969,11 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out clrType Type?,
         out openGenericDefinition Type?,
         out symbolicTypeArgs ImmutableArray[TypeSymbol],
-        out constraintFailed bool
+        out constraintFailed bool,
+        out typeArgumentsFailed bool
     ) bool {
         constraintFailed = false
+        typeArgumentsFailed = false
         clrType = nil
         openGenericDefinition = nil
         symbolicTypeArgs = default(ImmutableArray[TypeSymbol])
@@ -976,17 +1024,22 @@ internal partial class ExpressionBinder {
                     typeSimpleName + "`" + arity.ToString(),
                     out nestedType
                 )
-            }
-            if nestedType == nil {
+            } else {
                 $scope.References!!.TryResolveNestedType(current, typeSimpleName, out nestedType)
             }
             if nestedType == nil {
                 continue
             }
             // Close the generic if type arguments are supplied.
-            if arity > 0 && nestedType.IsGenericTypeDefinition {
+            if arity > 0 {
+                if !nestedType.IsGenericTypeDefinition {
+                    continue
+                }
                 if typeArgumentList is not TypeArgumentListSyntax typeArguments {
                     return false
+                }
+                if nestedType.GetGenericArguments().Length != arity {
+                    continue
                 }
                 if !TryResolveClrConstructionTypeArgs(
                     typeArguments,
@@ -994,7 +1047,8 @@ internal partial class ExpressionBinder {
                     out var symbolic,
                     out var hasSymbolicArg
                 ) {
-                    continue
+                    typeArgumentsFailed = true
+                    return false
                 }
                 if Binder.ReportUnsatisfiedGenericTypeConstraint(
                     Diagnostics,

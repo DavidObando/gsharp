@@ -1849,25 +1849,27 @@ internal partial class ExpressionBinder {
                 }
                 argSlot++
             }
-            if !hasUnresolvedTypeArguments && deferredArrowLambdaIndices.Count > 0 {
+            if deferredArrowLambdaIndices.Count > 0 {
                 let mutableArgs = boundArguments.ToArray()
-                ResolveDeferredArrowLambdaArguments(
-                    receiver,
-                    classSymbol,
-                    methodName,
-                    ce,
-                    explicitTypeArgs,
-                    typeArgSymbols,
-                    deferredArrowLambdaIndices,
-                    mutableArgs
-                )
-                ResolveDeferredArrowLambdaArgumentsFromUserMethods(
-                    receiver,
-                    methodName,
-                    ce,
-                    deferredArrowLambdaIndices,
-                    mutableArgs
-                )
+                if !hasUnresolvedTypeArguments {
+                    ResolveDeferredArrowLambdaArguments(
+                        receiver,
+                        classSymbol,
+                        methodName,
+                        ce,
+                        explicitTypeArgs,
+                        typeArgSymbols,
+                        deferredArrowLambdaIndices,
+                        mutableArgs
+                    )
+                    ResolveDeferredArrowLambdaArgumentsFromUserMethods(
+                        receiver,
+                        methodName,
+                        ce,
+                        deferredArrowLambdaIndices,
+                        mutableArgs
+                    )
+                }
                 for idx in deferredArrowLambdaIndices {
                     let placeholder = mutableArgs[idx] as BoundErrorExpression
                     let pendingLambda LambdaExpressionSyntax? = placeholder?.Syntax as LambdaExpressionSyntax
@@ -3598,13 +3600,14 @@ internal partial class ExpressionBinder {
             }
         }
         if ce.TypeArgumentList is {} instanceTypeArgumentList &&
+            WithInterfaceObjectFallbackCandidates(clrType, candidates, methodName) is {} instanceTypeArgCandidates &&
             TryHandleFailedClrMethodTypeArguments(
-            candidates,
+            instanceTypeArgCandidates,
             CollectApplicableExtensionTypeArgumentCandidates(
                 effectiveReceiverType,
                 methodName,
                 explicitTypeArgs,
-                hasDirectInstanceCandidates: candidates.Count > 0
+                hasDirectInstanceCandidates: instanceTypeArgCandidates.Count > 0
             ),
             instanceTypeArgumentList,
             methodName,
@@ -4354,16 +4357,29 @@ internal partial class ExpressionBinder {
         return hasUnresolvedTypeArguments
     }
 
+    private func WithInterfaceObjectFallbackCandidates(
+        clrType Type?,
+        candidates List[MethodInfo],
+        methodName string
+    ) List[MethodInfo] {
+        if clrType?.IsInterface != true {
+            return candidates
+        }
+        let combined = List[MethodInfo](candidates)
+        combined.AddRange(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(typeof(object), methodName))
+        return combined
+    }
+
     private func CollectSymbolicPathClrCandidates(receiverType TypeSymbol?, methodName string) List[MethodInfo] {
         let candidates = List[MethodInfo]()
         if receiverType == nil {
             return candidates
         }
-        if receiverType is TypeParameterSymbol tp &&
-            (tp.ClrInterfaceConstraint != nil || tp.ClassConstraint?.ClrType != nil) {
+        if receiverType is TypeParameterSymbol tp {
             if (tp.ClrInterfaceConstraint ?? tp.ClassConstraint)?.ClrType is {} constraintClr {
                 candidates.AddRange(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(constraintClr, methodName))
             }
+            candidates.AddRange(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(typeof(object), methodName))
             return candidates
         }
         if receiverType is StructSymbol derived {
@@ -4382,6 +4398,7 @@ internal partial class ExpressionBinder {
         }
         if receiverType is InterfaceSymbol iface {
             candidates.AddRange(MemberLookup.GetInterfaceImportedBaseInstanceMethods(iface, methodName, out _))
+            candidates.AddRange(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(typeof(object), methodName))
         }
         return candidates
     }

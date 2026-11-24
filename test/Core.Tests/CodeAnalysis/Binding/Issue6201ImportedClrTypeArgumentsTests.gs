@@ -37,6 +37,11 @@ open class Issue6201ImportedClrTypeArgumentsTests {
         "GS0148",
         "requires 1 type arguments but was given 2"
     )
+    @InlineData(
+        "let ce = System.Text.StringBuilder.ChunkEnumerator[int32]()",
+        "GS0148",
+        "requires 0 type arguments but was given 1"
+    )
     @InlineData("Console.MissingMethod[int32](x)", "GS0159", "Cannot find function MissingMethod.")
     @InlineData("let s = \"a\".MissingMethod[int32](x)", "GS0159", "Cannot find function MissingMethod.")
     func ImportedClrCallsWithWrongTypeArguments_ReportExpectedDiagnosticAndKeepArguments(
@@ -127,6 +132,39 @@ Run()
 `)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(true, result.Value)
+    }
+
+    @Fact
+    func ImportedInterfaceGenericObjectMethod_ReportsInterfaceArity_NotObjectFallbackArity() {
+        using let fixture = GSharp.Core.Tests.CSharpFixture(`namespace WeirdInterface6201;
+public interface IWeirdToString {
+    string ToString<A, B>();
+}`)
+        using let resolver = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let source = `package P
+import WeirdInterface6201
+
+func F1(w IWeirdToString) string -> w.ToString[int32]()
+func F2(w IWeirdToString) string -> w.ToString[Nope, int32]()
+func F3[T IWeirdToString](w T) string -> w.ToString[int32]()
+func F4[T IWeirdToString](w T) string -> w.ToString[Nope, int32]()
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6201_weird_iface.gs"))
+        let compilation = Compilation(resolver, tree)
+        let errors = compilation
+            .GetDiagnostics()
+            .Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            .Select((d Diagnostic) -> d.Id + " " + d.Message)
+            .ToArray()
+        Assert.Equal(
+            []string{
+                "GS0148 Generic function 'ToString' requires 2 type arguments but was given 1.",
+                "GS0113 Type 'Nope' doesn't exist.",
+                "GS0148 Generic function 'ToString' requires 2 type arguments but was given 1.",
+                "GS0113 Type 'Nope' doesn't exist."
+            },
+            errors
+        )
     }
 
     shared {
