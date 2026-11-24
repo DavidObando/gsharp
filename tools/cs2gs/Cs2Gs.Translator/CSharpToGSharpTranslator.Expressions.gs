@@ -14054,16 +14054,11 @@ partial class CSharpToGSharpTranslator {
                     (!directSubject && !conditionalSubject) ||
                     !IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true) ||
                     !TryGetPatternNonNullPolarity(isPattern.Pattern, out var whenTrue) ||
+                    !this.GSharpPatternPreservesNonNullNarrowing(isPattern, whenTrue) ||
                     (
-                    directSubject &&
-                        (
-                        !this.GSharpPatternPreservesNonNullNarrowing(isPattern, whenTrue) ||
-                            (
-                            this.PatternHasWholeValueCapture(isPattern.Pattern) &&
-                                PatternUsesNativeVariableSyntax(isPattern.Pattern) &&
-                                !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern))
-                        )
-                    )
+                    this.PatternHasWholeValueCapture(isPattern.Pattern) &&
+                        PatternUsesNativeVariableSyntax(isPattern.Pattern) &&
+                        !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern))
                 ) ||
                     !this.ComputePatternFlowRegions(isPattern, whenTrue, includeWhenClauseRegion: false).Any(
                     (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(effectiveTarget.Span)

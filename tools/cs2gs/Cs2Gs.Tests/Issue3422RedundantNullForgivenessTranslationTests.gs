@@ -696,6 +696,13 @@ public static class P
         }
     }
 
+    public static int MeasureConditionalRelationalNotGuard(string? value)
+    {
+        if (value?.Length is not > 0 || value.Length > 10)
+            return -1;
+        return value.Length;
+    }
+
     public static string Run() =>
         MeasureStmt(1, "ab") + "|" +
         MeasureExpr(1, "abc") + "|" +
@@ -708,11 +715,13 @@ public static class P
         MeasureClosureAssignedFieldConditionalAccess(1) + "|" +
         MeasureNestedConditionalAccessMutated(1, "wxyz", false) + "|" +
         MeasureNestedMultiLabel(1, 10, "hi") + "|" +
-        MeasureNestedMultiLabel(2, 10, "bye");
+        MeasureNestedMultiLabel(2, 10, "bye") + "|" +
+        MeasureConditionalRelationalNotGuard("hello") + "|" +
+        MeasureConditionalRelationalNotGuard(null);
 }`
         let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
             "using System;\nnamespace Demo {\n" + source + "\n}",
-            "2|3|4|0|2|2|1|1|2|4|2|3",
+            "2|3|4|0|2|2|1|1|2|4|2|3|5|-1",
             rejectRedundantAssertions: true
         )
         Assert.Contains(
@@ -729,6 +738,7 @@ public static class P
         Assert.Contains(")?.Length != nil: value!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("case 10 {\n                        return value.Length", printed, StringComparison.Ordinal)
         Assert.Contains("case 10 {\n                        return value!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("value!!.Length > 10", printed, StringComparison.Ordinal)
     }
 
     shared {
