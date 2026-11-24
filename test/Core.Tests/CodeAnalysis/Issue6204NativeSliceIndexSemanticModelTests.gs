@@ -120,6 +120,29 @@ func F(c C) {
     }
 
     @Fact
+    func ContextuallyConvertedSliceAccess_KeepsConvertedAccessTypeAndOwnIndexSymbol() {
+        let source = `package P
+
+func F(flag bool) {
+    let x = 0
+    let s = slice[int32]{1, 2}
+    let k int64 = if flag { s[x] } else { 0 }
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6204_converted.gs"))
+        let compilation = Compilation(tree)
+        Assert.Empty(compilation.GetDiagnostics())
+        let model = compilation.GetSemanticModel(tree)
+        let indexExpr = tree.Root.DescendantNodes().OfType[IndexExpressionSyntax]().Single()
+        Assert.Null(model.GetSymbolInfo(indexExpr).Symbol)
+        Assert.Same(TypeSymbol.Int64, model.GetTypeInfo(indexExpr).Type)
+        let x = Assert.Single(Names(tree, "x"))
+        let local = Assert.IsAssignableFrom[LocalVariableSymbol](model.GetSymbolInfo(x).Symbol)
+        Assert.Equal("x", local.Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(x).Type)
+    }
+
+    @Fact
     func CallIndexInFailedOperator_CallAndArgumentAnswer() {
         let (model, tree, compilation) = CreateModel("let k = s[Use(x)] + c")
         Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Id == "GS0129")

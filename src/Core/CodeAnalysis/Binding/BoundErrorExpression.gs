@@ -98,6 +98,14 @@ class BoundErrorExpression : BoundExpression {
         set;
     }
 
+    /// Gets or sets the bound prefix statements of a block or if-initializer expression whose tail
+    /// failed to bind, so the semantic model still visits nested statements and declarations (#6205).
+    /// The statements are not children of this node: walkers and rewriters do not visit them.
+    internal prop FailedStatements ImmutableArray[BoundStatement] {
+        get;
+        set;
+    }
+
     /// Gets or sets the bound callee of a call through a function value that did not bind (`f(x, 2)`
     /// with `f` a local, a parameter, a field or a property of function or delegate type), anchored
     /// at the callee's identifier, so the semantic model answers the callee as in a call that binds
@@ -108,15 +116,16 @@ class BoundErrorExpression : BoundExpression {
     }
 
     /// Gets whether this error keeps a record the semantic model reads: a candidate group, an
-    /// inner failed call, a failed receiver, failed arguments, a failed callee, failed operands, or
-    /// failed patterns.
+    /// inner failed call, a failed receiver, failed arguments, a failed callee, failed operands,
+    /// failed patterns, or failed prefix statements.
     internal prop HasFailedRecords bool -> !MemberGroup.IsDefaultOrEmpty ||
         !FailedChildren.IsDefaultOrEmpty ||
         FailedReceiver != nil ||
         !FailedArguments.IsDefaultOrEmpty ||
         FailedCallee != nil ||
         !FailedOperands.IsDefaultOrEmpty ||
-        !FailedPatterns.IsDefaultOrEmpty
+        !FailedPatterns.IsDefaultOrEmpty ||
+        !FailedStatements.IsDefaultOrEmpty
 
     /// Keeps the operands of the operator expression that this error replaces, for the semantic
     /// model only (#6187). An operand that is an error gives its failed-call records. Any other
@@ -143,18 +152,17 @@ class BoundErrorExpression : BoundExpression {
         }
     }
 
-    /// Keeps the bound expressions inside prefix statements when the enclosing block or
-    /// initializer expression fails (#6205).
+    /// Keeps prefix statements when the enclosing block or initializer expression fails (#6205).
     /// @param statements The bound prefix statements.
     internal func KeepStatements(statements ImmutableArray[BoundStatement]) {
         if statements.IsDefaultOrEmpty {
             return
         }
         for statement in statements {
-            if statement is BoundVariableDeclaration{Initializer: {} initializer} {
-                KeepOperand(initializer)
-            } else if statement is BoundExpressionStatement{Expression: {} expression} {
-                KeepOperand(expression)
+            if FailedStatements.IsDefault {
+                FailedStatements = ImmutableArray.Create(statement)
+            } else if !FailedStatements.Contains(statement) {
+                FailedStatements = FailedStatements.Add(statement)
             }
         }
     }

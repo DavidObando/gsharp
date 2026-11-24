@@ -24,6 +24,7 @@ open class Issue6205FailedOperandFormsTests {
     @InlineData("let k = if Use(x) == 1 { Use(x) } else { c }")
     @InlineData("let k = if Use(x) == 1 { Use(x) } else if Use(x) == 2 { Use(x, x) } else { Use(x) }")
     @InlineData("let k = if Use(x) == 1 { let a = Use(x); Use(x, x) } else { Use(x) }")
+    @InlineData("let k = if Use(x) == 1 { if flag { Use(x) }; Use(x, x) } else { Use(x) }")
     @InlineData("let k = if var y = Use(x); y == 1 { Use(x) } else { Use(x, x) }")
     @InlineData("let k = if let y = Opt(x) && Use(x) == 1 { Use(x) } else { Use(x, x) }")
     func IfExpressionFailures_RetainBoundOperands(statement string) {
@@ -83,6 +84,20 @@ open class Issue6205FailedOperandFormsTests {
             Assert.Equal("c", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(c).Symbol).Name)
             Assert.Equal("C", model.GetTypeInfo(c).Type?.Name)
         }
+    }
+
+    @Fact
+    func BlockPrefixUnusedLocalDeclaration_RetainsDeclaredSymbol() {
+        let (model, tree, compilation) = CreateModel("let k = if flag { let unused = 1; Use(x, x) } else { Use(x) }")
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let declaration = tree
+            .Root
+            .DescendantNodes()
+            .OfType[VariableDeclarationSyntax]()
+            .Single((v VariableDeclarationSyntax) -> v.Identifier.Text == "unused")
+        let local = Assert.IsAssignableFrom[LocalVariableSymbol](model.GetDeclaredSymbol(declaration))
+        Assert.Equal("unused", local.Name)
+        Assert.Same(TypeSymbol.Int32, local.Type)
     }
 
     @Fact
