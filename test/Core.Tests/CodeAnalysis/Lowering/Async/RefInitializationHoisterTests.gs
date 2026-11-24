@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Immutable
 import System.Linq
+import System.Threading.Tasks
 import Xunit
 
 open class RefInitializationHoisterTests {
@@ -400,5 +401,243 @@ open class RefInitializationHoisterTests {
         let addrOf = cast[BoundAddressOfExpression](expr)
         Assert.IsType[BoundVariableExpression](addrOf.Operand)
         Assert.Equal("x", (cast[BoundVariableExpression](addrOf.Operand)).Variable.Name)
+    }
+
+    @Fact
+    func ConditionalReseat_AcrossAwait_UsesHoistedSlotTagInsteadOfLexicalOverwrite() {
+        // Reproduces #6182 at the bound-tree level:
+        // var x = 1; var y = 77; var p = &x; if false { p = &y }; await ...; *p
+        let x = LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32)
+        let y = LocalVariableSymbol("y", isReadOnly: false, TypeSymbol.Int32)
+        let slot = LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int32))
+        let skip = BoundLabel("skip")
+        let taskType = TypeSymbol.FromClrType(typeof(Task))
+        let completedTask = typeof(Task).GetProperty("CompletedTask")!!
+        let awaitExpr = BoundAwaitExpression(
+            nil,
+            BoundClrPropertyAccessExpression(nil, receiver: nil, completedTask, taskType),
+            TypeSymbol.Void
+        )
+        let body = BoundBlockStatement(
+            nil,
+            ImmutableArray.Create[BoundStatement](
+                BoundVariableDeclaration(nil, x, BoundLiteralExpression(nil, 1)),
+                BoundVariableDeclaration(nil, y, BoundLiteralExpression(nil, 77)),
+                BoundVariableDeclaration(nil, slot, BoundAddressOfExpression(nil, BoundVariableExpression(nil, x))),
+                BoundConditionalGotoStatement(nil, skip, BoundLiteralExpression(nil, false), jumpIfTrue: false),
+                BoundExpressionStatement(
+                    nil,
+                    BoundAssignmentExpression(nil, slot, BoundAddressOfExpression(nil, BoundVariableExpression(nil, y)))
+                ),
+                BoundLabelStatement(nil, skip),
+                BoundExpressionStatement(nil, awaitExpr),
+                BoundExpressionStatement(nil, BoundDereferenceExpression(nil, BoundVariableExpression(nil, slot)))
+            )
+        )
+        let result = RefInitializationHoister.Rewrite(body)
+        // Declaration must initialize a slot tag to 0; the conditional branch
+        // sets it to 1, and the final dereference dispatches on that tag
+        // rather than unconditionally reading `y`.
+        let declBlock = Assert.IsType[BoundBlockStatement](result.Statements[2])
+        let tagDecl = Assert.IsType[BoundVariableDeclaration](Assert.Single(declBlock.Statements))
+        Assert.Equal(TypeSymbol.Int32, tagDecl.Variable.Type)
+        Assert.Equal(0, Assert.IsType[BoundLiteralExpression](tagDecl.Initializer).Value)
+        let branchAssignStmt = Assert.IsType[BoundExpressionStatement](result.Statements[4])
+        let branchAssign = Assert.IsType[BoundAssignmentExpression](branchAssignStmt.Expression)
+        Assert.Same(tagDecl.Variable, branchAssign.Variable)
+        Assert.Equal(1, Assert.IsType[BoundLiteralExpression](branchAssign.Expression).Value)
+        let useStmt = Assert.IsType[BoundExpressionStatement](result.Statements[7])
+        let deref = Assert.IsType[BoundDereferenceExpression](useStmt.Expression)
+        let condAddr = Assert.IsType[BoundConditionalAddressExpression](deref.Operand)
+        Assert.Same(y, Assert.IsType[BoundVariableExpression](condAddr.WhenTrueOperand).Variable)
+        Assert.Same(x, Assert.IsType[BoundVariableExpression](condAddr.WhenFalseOperand).Variable)
+    }
+
+    @Fact
+    func Reseat_NotCrossingAwait_RemainsMoveNextLocal() {
+        // When a re-seated ref local is never live across any suspension point,
+        // it can remain a plain MoveNext T& local instead of needing tag dispatch.
+        let x = LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32)
+        let y = LocalVariableSymbol("y", isReadOnly: false, TypeSymbol.Int32)
+        let slot = LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int32))
+        let skip = BoundLabel("skip")
+        let taskType = TypeSymbol.FromClrType(typeof(Task))
+        let completedTask = typeof(Task).GetProperty("CompletedTask")!!
+        let awaitExpr = BoundAwaitExpression(
+            nil,
+            BoundClrPropertyAccessExpression(nil, receiver: nil, completedTask, taskType),
+            TypeSymbol.Void
+        )
+        let body = BoundBlockStatement(
+            nil,
+            ImmutableArray.Create[BoundStatement](
+                BoundVariableDeclaration(nil, x, BoundLiteralExpression(nil, 1)),
+                BoundVariableDeclaration(nil, y, BoundLiteralExpression(nil, 77)),
+                BoundVariableDeclaration(nil, slot, BoundAddressOfExpression(nil, BoundVariableExpression(nil, x))),
+                BoundConditionalGotoStatement(nil, skip, BoundLiteralExpression(nil, false), jumpIfTrue: false),
+                BoundExpressionStatement(
+                    nil,
+                    BoundAssignmentExpression(nil, slot, BoundAddressOfExpression(nil, BoundVariableExpression(nil, y)))
+                ),
+                BoundLabelStatement(nil, skip),
+                BoundExpressionStatement(nil, BoundDereferenceExpression(nil, BoundVariableExpression(nil, slot))),
+                BoundExpressionStatement(nil, awaitExpr)
+            )
+        )
+        let result = RefInitializationHoister.Rewrite(body)
+        Assert.Same(body, result)
+    }
+
+    @Fact
+    func DefaultInitializedPointer_WithUntakenConditionalReseat_PreservesNullDispatch() {
+        let x = LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32)
+        let byRefInt = ByRefTypeSymbol.Get(TypeSymbol.Int32)
+        let slot = LocalVariableSymbol("slot", isReadOnly: false, byRefInt)
+        let skip = BoundLabel("skip")
+        let taskType = TypeSymbol.FromClrType(typeof(Task))
+        let completedTask = typeof(Task).GetProperty("CompletedTask")!!
+        let awaitExpr = BoundAwaitExpression(
+            nil,
+            BoundClrPropertyAccessExpression(nil, receiver: nil, completedTask, taskType),
+            TypeSymbol.Void
+        )
+        let body = BoundBlockStatement(
+            nil,
+            ImmutableArray.Create[BoundStatement](
+                BoundVariableDeclaration(nil, x, BoundLiteralExpression(nil, 42)),
+                BoundVariableDeclaration(nil, slot, BoundDefaultExpression(nil, byRefInt)),
+                BoundConditionalGotoStatement(nil, skip, BoundLiteralExpression(nil, false), jumpIfTrue: false),
+                BoundExpressionStatement(
+                    nil,
+                    BoundAssignmentExpression(nil, slot, BoundAddressOfExpression(nil, BoundVariableExpression(nil, x)))
+                ),
+                BoundLabelStatement(nil, skip),
+                BoundExpressionStatement(nil, awaitExpr),
+                BoundExpressionStatement(nil, BoundDereferenceExpression(nil, BoundVariableExpression(nil, slot)))
+            )
+        )
+        let result = RefInitializationHoister.Rewrite(body)
+        let declBlock = Assert.IsType[BoundBlockStatement](result.Statements[1])
+        let tagDecl = Assert.IsType[BoundVariableDeclaration](Assert.Single(declBlock.Statements))
+        Assert.Equal(0, Assert.IsType[BoundLiteralExpression](tagDecl.Initializer).Value)
+        let useStmt = Assert.IsType[BoundExpressionStatement](result.Statements[6])
+        let deref = Assert.IsType[BoundDereferenceExpression](useStmt.Expression)
+        let condAddr = Assert.IsType[BoundConditionalAddressExpression](deref.Operand)
+        Assert.Same(x, Assert.IsType[BoundVariableExpression](condAddr.WhenTrueOperand).Variable)
+        let defaultDeref = Assert.IsType[BoundDereferenceExpression](condAddr.WhenFalseOperand)
+        Assert.IsType[BoundDefaultExpression](defaultDeref.Operand)
+    }
+
+    @Fact
+    func DefaultAssignment_InReseatAndConditional_PreservesNullDispatchAndSubsequentReseat() {
+        let x = LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32)
+        let byRefInt = ByRefTypeSymbol.Get(TypeSymbol.Int32)
+        let slot = LocalVariableSymbol("slot", isReadOnly: false, byRefInt)
+        let ignored = LocalVariableSymbol("ignored", isReadOnly: false, byRefInt)
+        let copied = LocalVariableSymbol("copied", isReadOnly: false, byRefInt)
+        let skip = BoundLabel("skip")
+        let taskType = TypeSymbol.FromClrType(typeof(Task))
+        let completedTask = typeof(Task).GetProperty("CompletedTask")!!
+        let awaitExpr = BoundAwaitExpression(
+            nil,
+            BoundClrPropertyAccessExpression(nil, receiver: nil, completedTask, taskType),
+            TypeSymbol.Void
+        )
+        let body = BoundBlockStatement(
+            nil,
+            ImmutableArray.Create[BoundStatement](
+                BoundVariableDeclaration(nil, x, BoundLiteralExpression(nil, 42)),
+                BoundVariableDeclaration(nil, slot, BoundAddressOfExpression(nil, BoundVariableExpression(nil, x))),
+                BoundVariableDeclaration(
+                    nil,
+                    ignored,
+                    BoundAssignmentExpression(nil, slot, BoundDefaultExpression(nil, byRefInt))
+                ),
+                BoundVariableDeclaration(nil, copied, BoundVariableExpression(nil, slot)),
+                BoundConditionalGotoStatement(nil, skip, BoundLiteralExpression(nil, false), jumpIfTrue: false),
+                BoundExpressionStatement(
+                    nil,
+                    BoundAssignmentExpression(nil, slot, BoundAddressOfExpression(nil, BoundVariableExpression(nil, x)))
+                ),
+                BoundLabelStatement(nil, skip),
+                BoundExpressionStatement(nil, awaitExpr),
+                BoundExpressionStatement(nil, BoundDereferenceExpression(nil, BoundVariableExpression(nil, slot))),
+                BoundExpressionStatement(nil, BoundDereferenceExpression(nil, BoundVariableExpression(nil, copied)))
+            )
+        )
+        let result = RefInitializationHoister.Rewrite(body)
+        // Expression-valued `ignored = (slot = default)` and `copied = slot`
+        // materialize copyable BoundDefaultExpression values without throwing,
+        // and no ByRefTypeSymbol temp local is left behind.
+        let ignoredDecl = Assert.Single(
+            result.Statements,
+            (s BoundStatement) -> s is BoundVariableDeclaration vd && object.ReferenceEquals(vd.Variable, ignored)
+        ) as BoundVariableDeclaration
+        let ignoredBlock = Assert.IsType[BoundBlockExpression](ignoredDecl!!.Initializer)
+        Assert.IsType[BoundDefaultExpression](ignoredBlock.Expression)
+        Assert.DoesNotContain(
+            result.Statements,
+            (s BoundStatement) -> s is BoundVariableDeclaration vd &&
+                vd.Variable.Type is ByRefTypeSymbol &&
+                !object.ReferenceEquals(vd.Variable, ignored)
+        )
+        let derefUses = result
+            .Statements
+            .OfType[BoundExpressionStatement]()
+            .Where((es BoundExpressionStatement) -> es.Expression is BoundDereferenceExpression)
+            .ToArray()
+        Assert.Equal(2, derefUses.Length)
+        let condAddr = Assert.IsType[BoundConditionalAddressExpression](
+            (cast[BoundDereferenceExpression](derefUses[0].Expression)).Operand
+        )
+        Assert.Same(x, Assert.IsType[BoundVariableExpression](condAddr.WhenTrueOperand).Variable)
+        let innerDeref = Assert.IsType[BoundDereferenceExpression](condAddr.WhenFalseOperand)
+        let innerCond = Assert.IsType[BoundConditionalAddressExpression](innerDeref.Operand)
+        Assert.IsType[BoundDefaultExpression](
+            Assert.IsType[BoundDereferenceExpression](innerCond.WhenTrueOperand).Operand
+        )
+        Assert.Same(x, Assert.IsType[BoundVariableExpression](innerCond.WhenFalseOperand).Variable)
+    }
+
+    @Fact
+    func ConditionalDefaultInitializer_AndReseat_WrapDefaultArmInDereference() {
+        let x = LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32)
+        let flag = LocalVariableSymbol("flag", isReadOnly: false, TypeSymbol.Bool)
+        let byRefInt = ByRefTypeSymbol.Get(TypeSymbol.Int32)
+        let slot = LocalVariableSymbol("slot", isReadOnly: false, byRefInt)
+        let taskType = TypeSymbol.FromClrType(typeof(Task))
+        let completedTask = typeof(Task).GetProperty("CompletedTask")!!
+        let awaitExpr = BoundAwaitExpression(
+            nil,
+            BoundClrPropertyAccessExpression(nil, receiver: nil, completedTask, taskType),
+            TypeSymbol.Void
+        )
+        let condExpr = BoundConditionalExpression(
+            nil,
+            BoundVariableExpression(nil, flag),
+            BoundDefaultExpression(nil, byRefInt),
+            BoundAddressOfExpression(nil, BoundVariableExpression(nil, x)),
+            byRefInt
+        )
+        let body = BoundBlockStatement(
+            nil,
+            ImmutableArray.Create[BoundStatement](
+                BoundVariableDeclaration(nil, x, BoundLiteralExpression(nil, 42)),
+                BoundVariableDeclaration(nil, flag, BoundLiteralExpression(nil, false)),
+                BoundVariableDeclaration(nil, slot, condExpr),
+                BoundExpressionStatement(nil, awaitExpr),
+                BoundExpressionStatement(nil, BoundDereferenceExpression(nil, BoundVariableExpression(nil, slot)))
+            )
+        )
+        let result = RefInitializationHoister.Rewrite(body)
+        let derefUse = Assert.Single(
+            result.Statements,
+            (s BoundStatement) -> s is BoundExpressionStatement es && es.Expression is BoundDereferenceExpression
+        ) as BoundExpressionStatement
+        let outerDeref = Assert.IsType[BoundDereferenceExpression](derefUse!!.Expression)
+        let condAddr = Assert.IsType[BoundConditionalAddressExpression](outerDeref.Operand)
+        let defaultArmDeref = Assert.IsType[BoundDereferenceExpression](condAddr.WhenTrueOperand)
+        Assert.IsType[BoundDefaultExpression](defaultArmDeref.Operand)
+        Assert.Same(x, Assert.IsType[BoundVariableExpression](condAddr.WhenFalseOperand).Variable)
     }
 }

@@ -400,7 +400,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     node.Variable
                 ) {
                     let resolved = RefStructAsyncLivenessAnalyzer.PointsToExpressionUpdater(prePts, interesting)
-                        .ResolveTargets(initializer)
+                        .ResolveAssignmentTargets(node.Variable, initializer)
                     RefStructAsyncLivenessAnalyzer.SetPointsTo(node.Variable, resolved, pointsTo, exceptionalUnion: nil)
                 }
                 RecordOverwrite(node.Variable, allowNativeRefAlias: true)
@@ -414,7 +414,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             VisitExpression(node.Expression)
             if node.Variable.Type is ByRefTypeSymbol {
                 let resolved = RefStructAsyncLivenessAnalyzer.PointsToExpressionUpdater(prePts, interesting)
-                    .ResolveTargets(node.Expression)
+                    .ResolveAssignmentTargets(node.Variable, node.Expression)
                 RefStructAsyncLivenessAnalyzer.SetPointsTo(node.Variable, resolved, pointsTo, exceptionalUnion: nil)
             }
             if RefStructAsyncLivenessAnalyzer.IsIndirectRefAssignmentTarget(node.Variable) {
@@ -3258,6 +3258,17 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
         }
 
+        internal func ResolveAssignmentTargets(variable VariableSymbol, expression BoundExpression?) HashSet[
+            VariableSymbol
+        ] {
+            let targets = ResolveTargets(expression)
+            if expression != nil && variable.Type is ByRefTypeSymbol && interesting.Contains(variable) &&
+                RefInitializationHoister.ContainsOpaqueStorage(expression) {
+                targets.Add(variable)
+            }
+            return targets
+        }
+
         internal func ResolveTargets(expression BoundExpression?) HashSet[VariableSymbol] {
             if expression == nil {
                 return HashSet[VariableSymbol]()
@@ -3282,7 +3293,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     return ResolveTargets(conv.Expression)
                 }
                 case assign is BoundAssignmentExpression {
-                    let rhsTargets = ResolveTargets(assign.Expression)
+                    let rhsTargets = ResolveAssignmentTargets(assign.Variable, assign.Expression)
                     if assign.Variable.Type is ByRefTypeSymbol {
                         RefStructAsyncLivenessAnalyzer.SetPointsTo(assign.Variable, rhsTargets, state, exceptionalUnion)
                     }
@@ -3682,7 +3693,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 if node.Variable.Type is ByRefTypeSymbol || RefStructAsyncLivenessAnalyzer.IsNativeRefAlias(
                     node.Variable
                 ) {
-                    let targets = ResolveTargets(initializer)
+                    let targets = ResolveAssignmentTargets(node.Variable, initializer)
                     RefStructAsyncLivenessAnalyzer.SetPointsTo(node.Variable, targets, state, exceptionalUnion)
                 } else {
                     VisitExpression(initializer)
@@ -3694,7 +3705,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
 
         protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
             if node.Variable.Type is ByRefTypeSymbol {
-                let targets = ResolveTargets(node.Expression)
+                let targets = ResolveAssignmentTargets(node.Variable, node.Expression)
                 RefStructAsyncLivenessAnalyzer.SetPointsTo(node.Variable, targets, state, exceptionalUnion)
                 return
             }
@@ -4447,9 +4458,10 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         state Dictionary[VariableSymbol, HashSet[VariableSymbol]],
         exceptionalUnion Dictionary[VariableSymbol, HashSet[VariableSymbol]]? = nil
     ) {
+        let allowSelf = target.Type is ByRefTypeSymbol
         let filtered = HashSet[VariableSymbol]()
         for item in targets {
-            if !object.ReferenceEquals(item, target) {
+            if allowSelf || !object.ReferenceEquals(item, target) {
                 filtered.Add(item)
             }
         }

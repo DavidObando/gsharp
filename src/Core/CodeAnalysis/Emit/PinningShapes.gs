@@ -48,6 +48,9 @@ internal shared class PinningShapes {
     /// The display signature used when a target does not provide `AsPointer<T>`.
     const UnsafeAsPointerSignature string = UnsafeTypeFullName + ".AsPointer<T>(ref T)"
 
+    /// The display signature used when a target does not provide `NullRef<T>`.
+    const UnsafeNullRefSignature string = UnsafeTypeFullName + ".NullRef<T>()"
+
     /// The display signature used when a target does not provide `GetPinnableReference`.
     const StringGetPinnableReferenceSignature string = "System.String.GetPinnableReference()"
 
@@ -75,6 +78,27 @@ internal shared class PinningShapes {
                 .Length == 1 &&
                 candidate.GetParameters().Length == 1 {
                 asPointer = candidate
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Resolves the target framework's open `Unsafe.NullRef<T>()` definition.
+    func TryGetUnsafeNullRef(
+        references ReferenceResolver,
+        consumerAssemblyName string?,
+        @NotNullWhen(true) out nullRef MethodInfo?
+    ) bool {
+        nullRef = nil
+        if !references.TryResolveType(UnsafeTypeFullName, consumerAssemblyName, out var unsafeType) {
+            return false
+        }
+        for candidate in unsafeType.GetMethods(BindingFlags.Public | BindingFlags.Static) {
+            if candidate.Name == "NullRef" && candidate.IsGenericMethodDefinition && candidate.GetGenericArguments()
+                .Length == 1 &&
+                candidate.GetParameters().Length == 0 {
+                nullRef = candidate
                 return true
             }
         }
