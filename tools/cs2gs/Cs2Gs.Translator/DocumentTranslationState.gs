@@ -75,6 +75,7 @@ internal class DocumentTranslationState {
         StablePatternMemberReads = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         CollectionElementSlots = Dictionary[SyntaxNode, ITypeSymbol]()
         StoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
+        NonNullStoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         EmittedLocalGSharpNullability = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         EmittedLocalStorageAcceptsNil = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         LocalHoldsPromotedValueAnswers = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
@@ -448,6 +449,11 @@ internal class DocumentTranslationState {
     // the `!= nil` guard that narrowed the local, so every read BELOW the guard
     // — member tests and descendant bindings alike — goes through `local!!`.
     prop StoredPatternCaptures HashSet[GExpression] {
+        get;
+    }
+
+    // Issue #5643: delayed switch compound captures whose guard unconditionally assigns a non-null value.
+    prop NonNullStoredPatternCaptures HashSet[GExpression] {
         get;
     }
 

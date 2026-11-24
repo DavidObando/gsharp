@@ -1431,8 +1431,14 @@ partial class CSharpToGSharpTranslator {
                         return regions
                     }
                     case whenClause is WhenClauseSyntax {
-                        if whenTrue && includeWhenClauseRegion {
-                            if whenClause.Parent is CasePatternSwitchLabelSyntax{Parent: SwitchSectionSyntax section} {
+                        if whenTrue {
+                            if whenClause.Parent is CasePatternSwitchLabelSyntax{Parent: SwitchSectionSyntax section} &&
+                                section.Labels.Count == 1 &&
+                                !(
+                                section.Parent is SwitchStatementSyntax switchStmt && this.HasGotoIntoSwitchSection(
+                                    switchStmt
+                                )
+                            ) {
                                 regions.AddRange(section.Statements)
                             } else if whenClause.Parent is SwitchExpressionArmSyntax arm {
                                 regions.Add(arm.Expression)

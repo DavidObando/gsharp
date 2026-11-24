@@ -580,12 +580,12 @@ public static class C
     }
 
     @Fact
-    func SwitchWhenNullGuard_DoesNotNarrowSectionBody() {
+    func SwitchWhenNullGuard_NarrowsSectionBodyAndSwitchExpression() {
         let printed = Translate(`#nullable enable
 
 public static class C
 {
-    public static int Measure(int kind, string? value)
+    public static int MeasureStmt(int kind, string? value)
     {
         switch (kind)
         {
@@ -595,9 +595,46 @@ public static class C
                 return 0;
         }
     }
+
+    public static int MeasureExpr(int kind, string? value) =>
+        kind switch
+        {
+            1 when value != null => value.Length,
+            _ => 0,
+        };
+
+    public static int MeasureMultiLabel(int kind, string? value)
+    {
+        switch (kind)
+        {
+            case 1 when value is not null:
+            case 2:
+                return value!.Length;
+            default:
+                return 0;
+        }
+    }
+
+    public static int MeasureMutatedInGuard(int kind, string? value)
+    {
+        bool Clear()
+        {
+            value = null;
+            return true;
+        }
+
+        return kind switch
+        {
+            1 when value != null && Clear() => value!.Length,
+            _ => 0,
+        };
+    }
 }`)
         Assert.Contains("case 1 when value != nil", printed, StringComparison.Ordinal)
+        Assert.Contains("return value.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when value != nil: value.Length", printed, StringComparison.Ordinal)
         Assert.Contains("return value!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("&& Clear(): value!!.Length", printed, StringComparison.Ordinal)
     }
 
     shared {

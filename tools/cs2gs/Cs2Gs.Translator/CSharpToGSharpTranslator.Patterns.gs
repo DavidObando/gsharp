@@ -6935,6 +6935,7 @@ partial class CSharpToGSharpTranslator {
             // Keep the capture variable non-null-free here; gsc narrows it from the when-guard assignment (#5643).
             for delayedCapture in switchDelayedCompoundCaptures {
                 this.state.StoredPatternCaptures.Add(delayedCapture)
+                this.state.NonNullStoredPatternCaptures.Add(delayedCapture)
             }
             let result = combined ?? LiteralExpression.Bool(true)
             return if localCompoundDeclarations.Count == 0 {

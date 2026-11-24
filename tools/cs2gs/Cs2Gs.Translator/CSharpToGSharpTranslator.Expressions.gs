@@ -14361,7 +14361,7 @@ partial class CSharpToGSharpTranslator {
                                 localSymbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is {} decl &&
                                 arm.Pattern.Span.Contains(decl.Span) &&
                                 this.state.PatternBindings.TryGetValue(localSymbol, out var boundReplacement) &&
-                                this.state.StoredPatternCaptures.Contains(boundReplacement) {
+                                this.state.NonNullStoredPatternCaptures.Contains(boundReplacement) {
                                 guard_ = arm.Pattern
                                 governing = arm.Pattern
                             }
