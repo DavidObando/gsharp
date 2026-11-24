@@ -528,6 +528,9 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             Add(created.WithPrefixFinality(premise.Finality, premise.Reason))
         } else if callFrames is {Count: > 0} && ArgumentPremise(location) is {} argumentPremise {
             Add(created.WithPrefixFinality(argumentPremise.Finality, argumentPremise.Reason))
+        } else if PrefixBindingContext.ProvisionalPremise(location) is {} provisional {
+            // #6179: the report uses an expression whose type a later declaration can change.
+            Add(created.WithPrefixFinality(provisional.Finality, provisional.Reason))
         } else {
             Add(created)
         }

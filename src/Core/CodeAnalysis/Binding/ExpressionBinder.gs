@@ -1917,6 +1917,13 @@ internal partial class ExpressionBinder {
     }
 
     private func BindNameExpression(syntax NameExpressionSyntax) BoundExpression {
+        let bound = BindNameExpressionUnrecorded(syntax)
+        // #6179: a local whose type a later declaration can change gives its references that premise.
+        PrefixRetarget.NoteName(syntax, bound)
+        return bound
+    }
+
+    private func BindNameExpressionUnrecorded(syntax NameExpressionSyntax) BoundExpression {
         let name = syntax.IdentifierToken.ValueText
         if syntax.IdentifierToken.IsMissing {
             // This means the token was inserted by the parser. We already

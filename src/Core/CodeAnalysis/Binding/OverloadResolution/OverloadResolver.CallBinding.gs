@@ -740,6 +740,16 @@ internal partial class OverloadResolver {
             }
             binderCtx.CompleteCall(bound, syntax.Arguments, call: syntax)
             CallCandidateRecorder.Stamp(frame, bound)
+            // #6179: a later declaration can retarget the call and change the type of its result.
+            PrefixRetarget.NoteCall(
+                syntax,
+                if resolvedType == nil {
+                    PrefixCallKind.Name
+                } else {
+                    PrefixCallKind.Member
+                },
+                bound
+            )
             return bound
         } finally {
             CallCandidateRecorder.End(frame)

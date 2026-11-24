@@ -8,8 +8,10 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
+import System.Collections.Generic
 import System.Collections.Immutable
 import System.Threading
+import SystemObject = System.Object
 
 /// The kind of a failed lookup that a report states (ADR-0225).
 internal enum PrefixLookupKind {
@@ -118,6 +120,58 @@ internal sealed class PrefixCut {
 
     private var unfinishedTokenDiagnostics ImmutableArray[Diagnostic]
 
+    /// Gets or sets a value that tells whether a declaration after the cut can add a candidate to a call that
+    /// resolves before the cut: nothing follows the cut, or the bind could not keep the later declarations
+    /// (#6179).
+    internal prop LaterOverloadsPossible bool {
+        get;
+        set;
+    }
+
+    // #6179: the expressions whose type a later declaration can change. Bodies can bind in parallel, so
+    // the lock guards both collections.
+    private let provisionalGate object = SystemObject()
+    private let provisionalNodes HashSet[object] = HashSet[object](ReferenceEqualityComparer.Instance)
+    private let provisionalSpans List[(Text SourceText, Span TextSpan)] = List[(Text SourceText, Span TextSpan)]()
+
+    /// Records that a later declaration can change the type of [`node`](paramref) (#6179).
+    /// @param node An expression that binds before the cut.
+    internal func AddProvisional(node SyntaxNode) {
+        lock provisionalGate {
+            if provisionalNodes.Add(node) {
+                provisionalSpans.Add((node.SyntaxTree.Text, node.Span))
+            }
+        }
+    }
+
+    /// Returns a value that tells whether [`node`](paramref) is an expression whose type a later
+    /// declaration can change (#6179).
+    /// @param node A syntax node.
+    /// @returns `true` for a node that (cref:AddProvisional) recorded.
+    internal func IsProvisional(node SyntaxNode) bool {
+        lock provisionalGate {
+            return provisionalNodes.Contains(node)
+        }
+    }
+
+    /// Returns a value that tells whether [`location`](paramref) contains an expression whose type a
+    /// later declaration can change (#6179).
+    /// @param location A diagnostic location.
+    /// @returns `true` when a recorded expression is in the location.
+    internal func ContainsProvisional(location TextLocation) bool {
+        let span = location.Span
+        lock provisionalGate {
+            for entry in provisionalSpans {
+                if object.ReferenceEquals(entry.Text, location.Text) &&
+                    span.Start <= entry.Span.Start &&
+                    entry.Span.End <= span.End {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     /// Gets or sets the span of the last source token before the cut, or an empty span at 0.
     internal prop LastToken TextSpan {
         get;
@@ -155,6 +209,15 @@ internal sealed class PrefixCut {
         } else {
             OpenMemberStart
         }
+        return IsInDeferredBodyAfter(memberStart, location)
+    }
+
+    /// Returns a value that tells whether [`location`](paramref) is in a function literal or a lambda that
+    /// starts at or after [`memberStart`](paramref) and before the cut.
+    /// @param memberStart The first position to examine, or -1 for none.
+    /// @param location A diagnostic location.
+    /// @returns `true` when a later statement can declare a local that the location sees.
+    internal func IsInDeferredBodyAfter(memberStart int32, location TextLocation) bool {
         if memberStart < 0 || !object.ReferenceEquals(location.Text, Text) || Tree is not{} tree {
             return false
         }
@@ -210,6 +273,10 @@ internal sealed class PrefixPremise {
 
         /// Gets the premise of a failed member lookup: a later declaration can declare the member.
         internal let LaterMember PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "later-member")
+
+        /// Gets the premise of an expression whose type a later declaration can change: a call that a later
+        /// overload, member or receiver function can retarget, or a local whose type such a call infers (#6179).
+        internal let LaterOverload PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "later-overload")
 
         /// Gets the premise of a check at the end of an open body.
         internal let RestOfBody PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "rest-of-body")
@@ -339,6 +406,101 @@ internal shared class PrefixBindingContext {
         } else {
             ClassifyFailedLookup(location, PrefixLookupKind.Name)
         }
+    }
+
+    /// Returns a value that tells whether a later declaration can change the candidate of a call at
+    /// [`location`](paramref) that resolves before the cut (#6179).
+    /// @param location The location of the call.
+    /// @param kind The callee of the call. A member callee can get a later member or receiver function. A
+    /// simple name can also get a later local of a function literal's block that hides the callee.
+    /// @returns `true` when the result type of the call can change.
+    internal func CanRetarget(location TextLocation, kind PrefixCallKind) bool {
+        if current.Value is not{} cut {
+            return false
+        }
+        if cut.LaterOverloadsPossible {
+            return true
+        }
+        if kind == PrefixCallKind.Member {
+            return false
+        }
+        // A later local of the open member, or of the top-level statements, can hide the callee in a
+        // function literal before the cut.
+        return cut.IsInDeferredBodyOfOpenMember(location) ||
+            (cut.LaterDeclarationsPossible && cut.OpenMemberStart < 0 && cut.IsInDeferredBodyAfter(0, location))
+    }
+
+    /// Records that a later declaration can change the type of [`node`](paramref) (#6179).
+    /// @param node An expression that binds before the cut.
+    internal func AddProvisional(node SyntaxNode?) {
+        if node != nil && current.Value is {} cut {
+            cut.AddProvisional(node)
+        }
+    }
+
+    /// Returns the premise of a report at [`location`](paramref) that contains an expression whose type
+    /// a later declaration can change, or `null` (#6179).
+    /// @param location The location of the report.
+    /// @returns (cref:PrefixPremise.LaterOverload) or `null`.
+    internal func ProvisionalPremise(location TextLocation) PrefixPremise? {
+        return if current.Value is {} cut && cut.ContainsProvisional(location) {
+            PrefixPremise.LaterOverload
+        } else {
+            default(PrefixPremise?)
+        }
+    }
+
+    /// Returns a value that tells whether a later declaration can change the type of
+    /// [`variable`](paramref): the type is inferred from an expression whose type can change (#6179).
+    /// @param variable A local or a global that a name refers to.
+    /// @returns `true` when a reference to the variable has a type that can change.
+    internal func IsProvisionalVariable(variable VariableSymbol) bool {
+        if current.Value is not{} cut || variable is ParameterSymbol || variable.DeclaringSyntax is not{} declaration {
+            return false
+        }
+        if declaration is VariableDeclarationSyntax typed && typed.TypeClause != nil {
+            return false
+        }
+        let tree = declaration.SyntaxTree
+        var statement SyntaxNode = declaration
+        while statement is not StatementSyntax && tree.GetParent(statement) is {} parent {
+            statement = parent
+        }
+        // A global can be read in another body, which can bind first or come from the body cache. Any call
+        // in its declaration then counts.
+        let anyCall = variable is GlobalVariableSymbol && cut.LaterOverloadsPossible
+        return HeaderContainsProvisional(cut, statement, statement, false, anyCall)
+    }
+
+    // The declaration part of [`statement`](paramref): the nested statements of a compound statement (the
+    // body of a `for` or an `if`) do not type its variables, but every part of an expression can, except
+    // the body of a function literal.
+    private func HeaderContainsProvisional(
+        cut PrefixCut,
+        statement SyntaxNode,
+        node SyntaxNode,
+        inExpression bool,
+        anyCall bool
+    ) bool {
+        if cut.IsProvisional(node) || (anyCall && node is CallExpressionSyntax) {
+            return true
+        }
+        for child in node.GetChildren() {
+            if child is SyntaxToken {
+                continue
+            }
+            if !inExpression && child is StatementSyntax && !object.ReferenceEquals(child, statement) {
+                continue
+            }
+            // A function literal declares its return type, so its body does not change its type.
+            if child is FunctionLiteralExpressionSyntax {
+                continue
+            }
+            if HeaderContainsProvisional(cut, statement, child, inExpression || child is ExpressionSyntax, anyCall) {
+                return true
+            }
+        }
+        return false
     }
 
     /// Returns a value that tells whether the type of [`value`](paramref) comes from the parameter that

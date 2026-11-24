@@ -69,6 +69,7 @@ internal sealed class PrefixTokenStream {
             let textLength = prefixTree.Text.Length
             var sealFrom = 0
             var laterDeclarationsPossible = remainder == PrefixRemainder.Nothing
+            var laterOverloadsPossible = remainder == PrefixRemainder.Nothing
             var openMemberStart = -1
             let kept = List[TextSpan]()
             if remainder == PrefixRemainder.KeepDeclarations {
@@ -99,6 +100,7 @@ internal sealed class PrefixTokenStream {
                     // The source tree does not match the delimiters before the cut (an unbalanced
                     // source). Nothing is kept, so a later declaration stays possible.
                     laterDeclarationsPossible = true
+                    laterOverloadsPossible = true
                 }
             }
             let lastToken = if tokens.Count > 0 {
@@ -138,6 +140,7 @@ internal sealed class PrefixTokenStream {
                     IsWordCharacter(lastToken.Text[lastToken.Text.Length - 1])
             }
             facts.HasKeptText = kept.Count > 0
+            facts.LaterOverloadsPossible = laterOverloadsPossible
             facts.UnfinishedTokenDiagnostics = atCut.ToImmutableArray()
             return PrefixTokenStream(
                 tokens.ToImmutableArray(),
