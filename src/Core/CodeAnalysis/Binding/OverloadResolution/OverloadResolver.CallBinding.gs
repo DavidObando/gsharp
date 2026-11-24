@@ -748,7 +748,8 @@ internal partial class OverloadResolver {
                 } else {
                     PrefixCallKind.Member
                 },
-                bound
+                bound,
+                resolvedType
             )
             return bound
         } finally {
@@ -1766,7 +1767,8 @@ internal partial class OverloadResolver {
             let fixedDiagnostics = Diagnostics
             let fixedPushed = fixedDiagnostics.PushCallFrame(
                 syntax,
-                if variable is LocalVariableSymbol {
+                // #6179: a local whose type a call infers changes with that call.
+                if variable is LocalVariableSymbol && !PrefixBindingContext.IsProvisionalVariable(variable) {
                     PrefixCallKind.Fixed
                 } else {
                     PrefixCallKind.Name
@@ -1806,7 +1808,9 @@ internal partial class OverloadResolver {
             let fixedDiagnostics = Diagnostics
             let fixedPushed = fixedDiagnostics.PushCallFrame(
                 syntax,
-                if namedDelegateVar is LocalVariableSymbol {
+                if namedDelegateVar is LocalVariableSymbol && !PrefixBindingContext.IsProvisionalVariable(
+                    namedDelegateVar
+                ) {
                     PrefixCallKind.Fixed
                 } else {
                     PrefixCallKind.Name

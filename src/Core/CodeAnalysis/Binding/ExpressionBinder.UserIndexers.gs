@@ -378,6 +378,8 @@ internal partial class ExpressionBinder {
         if !CheckUserIndexerAccessibility(indexer, requireGetter: true, requireSetter: false, targetLocation) {
             return BoundErrorExpression(nil)
         }
+        // #6179: a later part of an incomplete type can add a better indexer.
+        PrefixRetarget.NoteIndexer(targetLocation, target.Type, indexer)
         return BoundUserInstanceCallExpression(
             nil,
             target,

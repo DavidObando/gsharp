@@ -10864,11 +10864,17 @@ internal partial class StatementBinder {
         initializer = binderCtx.InsertPlatformCheck(initializer, syntax.Initializer.Location, "a deconstruction source")
         if initializer.Type is TupleTypeSymbol rawTupleType {
             if syntax.Identifiers.Count != rawTupleType.Arity {
+                // #6179: the source of the deconstruction can change type, although the report is on its pattern.
+                let provisionalSource = Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.ProvisionalPremise(syntax.Initializer.Location) != nil,
+                    PrefixPremise.LaterOverload
+                )
                 Diagnostics.ReportDeconstructionFieldCountMismatch(
                     syntax.CloseParenToken.Location,
                     rawTupleType.Arity,
                     syntax.Identifiers.Count
                 )
+                Diagnostics.PopPremiseIf(provisionalSource)
                 return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
             }
             let tupleType = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(rawTupleType))
@@ -10906,11 +10912,17 @@ internal partial class StatementBinder {
                 ) {
                     return BoundBlockStatement(syntax, dataExtensionStatements)
                 }
+                // #6179: the source of the deconstruction can change type, although the report is on its pattern.
+                let provisionalSource = Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.ProvisionalPremise(syntax.Initializer.Location) != nil,
+                    PrefixPremise.LaterOverload
+                )
                 Diagnostics.ReportDeconstructionFieldCountMismatch(
                     syntax.CloseParenToken.Location,
                     members.Length,
                     syntax.Identifiers.Count
                 )
+                Diagnostics.PopPremiseIf(provisionalSource)
                 return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
             }
             let receiverType = initializer.Type
@@ -10961,7 +10973,13 @@ internal partial class StatementBinder {
         ) {
             return BoundBlockStatement(syntax, deconstructStatements)
         }
+        // #6179: the source of the deconstruction can change type, although the report is on its pattern.
+        let provisionalSource = Diagnostics.PushPremiseIf(
+            PrefixBindingContext.ProvisionalPremise(syntax.Initializer.Location) != nil,
+            PrefixPremise.LaterOverload
+        )
         Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenParenToken.Location, initializer.Type)
+        Diagnostics.PopPremiseIf(provisionalSource)
         return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
     }
 
@@ -11033,11 +11051,17 @@ internal partial class StatementBinder {
         let elementType = elementAccessBase.Type ?? elementVariable.Type
         if elementType is TupleTypeSymbol tupleType {
             if identifiers.Count != tupleType.Arity {
+                // #6179: the source of the deconstruction can change type, although the report is on its pattern.
+                let provisionalSource = Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.IsProvisionalVariable(elementVariable),
+                    PrefixPremise.LaterOverload
+                )
                 Diagnostics.ReportDeconstructionFieldCountMismatch(
                     closeParenLocation,
                     tupleType.Arity,
                     identifiers.Count
                 )
+                Diagnostics.PopPremiseIf(provisionalSource)
                 DeclareErrorTypedLocals(identifiers)
                 return ImmutableArray[BoundStatement].Empty
             }
@@ -11076,11 +11100,17 @@ internal partial class StatementBinder {
                 ) {
                     return dataExtensionStatements
                 }
+                // #6179: the source of the deconstruction can change type, although the report is on its pattern.
+                let provisionalSource = Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.IsProvisionalVariable(elementVariable),
+                    PrefixPremise.LaterOverload
+                )
                 Diagnostics.ReportDeconstructionFieldCountMismatch(
                     closeParenLocation,
                     members.Length,
                     identifiers.Count
                 )
+                Diagnostics.PopPremiseIf(provisionalSource)
                 DeclareErrorTypedLocals(identifiers)
                 return ImmutableArray[BoundStatement].Empty
             }
@@ -11120,7 +11150,13 @@ internal partial class StatementBinder {
             return deconstructStatements
         }
         if elementType != TypeSymbol.Error {
+            // #6179: the source of the deconstruction can change type, although the report is on its pattern.
+            let provisionalSource = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.IsProvisionalVariable(elementVariable),
+                PrefixPremise.LaterOverload
+            )
             Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(openParenLocation, elementType)
+            Diagnostics.PopPremiseIf(provisionalSource)
         }
         DeclareErrorTypedLocals(identifiers)
         return ImmutableArray[BoundStatement].Empty
@@ -11952,7 +11988,13 @@ internal partial class StatementBinder {
         // where `DPt` compiled.
         initializer = binderCtx.InsertPlatformCheck(initializer, syntax.Initializer.Location, "a deconstruction source")
         if !TryResolveDeconstructionAggregate(initializer.Type, out var structType) {
+            // #6179: the source of the deconstruction can change type, although the report is on its pattern.
+            let provisionalSource = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.ProvisionalPremise(syntax.Initializer.Location) != nil,
+                PrefixPremise.LaterOverload
+            )
             Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenBraceToken.Location, initializer.Type)
+            Diagnostics.PopPremiseIf(provisionalSource)
             return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
         }
         let aggregate = structType!!

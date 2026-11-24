@@ -128,18 +128,23 @@ internal sealed class PrefixCut {
         set;
     }
 
-    // #6179: the expressions whose type a later declaration can change. Bodies can bind in parallel, so
-    // the lock guards both collections.
+    // #6179: the spans of the expressions whose type a later declaration can change. Bodies can bind in
+    // parallel, so the lock guards both collections.
     private let provisionalGate object = SystemObject()
-    private let provisionalNodes HashSet[object] = HashSet[object](ReferenceEqualityComparer.Instance)
+    private let provisionalKeys HashSet[(Text SourceText, Span TextSpan)] = HashSet[(Text SourceText, Span TextSpan)]()
     private let provisionalSpans List[(Text SourceText, Span TextSpan)] = List[(Text SourceText, Span TextSpan)]()
 
-    /// Records that a later declaration can change the type of [`node`](paramref) (#6179).
-    /// @param node An expression that binds before the cut.
-    internal func AddProvisional(node SyntaxNode) {
+    /// Records that a later declaration can change the type of the expression at [`location`](paramref)
+    /// (#6179).
+    /// @param location The location of an expression that binds before the cut.
+    internal func AddProvisional(location TextLocation) {
+        if location.Text is not{} text {
+            return
+        }
+        let key = (text, location.Span)
         lock provisionalGate {
-            if provisionalNodes.Add(node) {
-                provisionalSpans.Add((node.SyntaxTree.Text, node.Span))
+            if provisionalKeys.Add(key) {
+                provisionalSpans.Add(key)
             }
         }
     }
@@ -147,10 +152,20 @@ internal sealed class PrefixCut {
     /// Returns a value that tells whether [`node`](paramref) is an expression whose type a later
     /// declaration can change (#6179).
     /// @param node A syntax node.
-    /// @returns `true` for a node that (cref:AddProvisional) recorded.
+    /// @returns `true` for a node at a location that (cref:AddProvisional) recorded.
     internal func IsProvisional(node SyntaxNode) bool {
+        let key = (node.SyntaxTree.Text, node.Span)
         lock provisionalGate {
-            return provisionalNodes.Contains(node)
+            return provisionalSpans.Count > 0 && provisionalKeys.Contains(key)
+        }
+    }
+
+    /// Gets a value that tells whether the bind recorded an expression whose type can change (#6179).
+    internal prop HasProvisional bool {
+        get {
+            lock provisionalGate {
+                return provisionalSpans.Count > 0
+            }
         }
     }
 
@@ -408,24 +423,15 @@ internal shared class PrefixBindingContext {
         }
     }
 
-    /// Returns a value that tells whether a later declaration can change the candidate of a call at
-    /// [`location`](paramref) that resolves before the cut (#6179).
-    /// @param location The location of the call.
-    /// @param kind The callee of the call. A member callee can get a later member or receiver function. A
-    /// simple name can also get a later local of a function literal's block that hides the callee.
-    /// @returns `true` when the result type of the call can change.
-    internal func CanRetarget(location TextLocation, kind PrefixCallKind) bool {
+    /// Returns a value that tells whether a later local can hide a simple name at [`location`](paramref):
+    /// the location is in a function literal before the cut, and a later statement of the open member, or
+    /// of the top-level statements, can declare a local that the literal sees (#6179).
+    /// @param location The location of the name.
+    /// @returns `true` when a later local can hide what the name resolved to.
+    internal func LaterLocalCanHide(location TextLocation) bool {
         if current.Value is not{} cut {
             return false
         }
-        if cut.LaterOverloadsPossible {
-            return true
-        }
-        if kind == PrefixCallKind.Member {
-            return false
-        }
-        // A later local of the open member, or of the top-level statements, can hide the callee in a
-        // function literal before the cut.
         return cut.IsInDeferredBodyOfOpenMember(location) ||
             (cut.LaterDeclarationsPossible && cut.OpenMemberStart < 0 && cut.IsInDeferredBodyAfter(0, location))
     }
@@ -434,7 +440,16 @@ internal shared class PrefixBindingContext {
     /// @param node An expression that binds before the cut.
     internal func AddProvisional(node SyntaxNode?) {
         if node != nil && current.Value is {} cut {
-            cut.AddProvisional(node)
+            cut.AddProvisional(node.Location)
+        }
+    }
+
+    /// Records that a later declaration can change the type of the expression at [`location`](paramref)
+    /// (#6179).
+    /// @param location The location of an expression that binds before the cut.
+    internal func AddProvisional(location TextLocation) {
+        if current.Value is {} cut {
+            cut.AddProvisional(location)
         }
     }
 
@@ -461,14 +476,17 @@ internal shared class PrefixBindingContext {
         if declaration is VariableDeclarationSyntax typed && typed.TypeClause != nil {
             return false
         }
+        let anyCall = variable is GlobalVariableSymbol && cut.LaterOverloadsPossible
+        if !anyCall && !cut.HasProvisional {
+            return false
+        }
         let tree = declaration.SyntaxTree
         var statement SyntaxNode = declaration
         while statement is not StatementSyntax && tree.GetParent(statement) is {} parent {
             statement = parent
         }
         // A global can be read in another body, which can bind first or come from the body cache. Any call
-        // in its declaration then counts.
-        let anyCall = variable is GlobalVariableSymbol && cut.LaterOverloadsPossible
+        // in its declaration then counts (anyCall).
         return HeaderContainsProvisional(cut, statement, statement, false, anyCall)
     }
 
