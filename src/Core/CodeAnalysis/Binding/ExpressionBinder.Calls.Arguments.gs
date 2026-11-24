@@ -318,6 +318,7 @@ internal partial class ExpressionBinder {
 
     private var activePreCallArgumentsNarrowing StatementBinder.NarrowingBindSnapshot?
     private var lastSelectedCallablePropertyLoad BoundExpression?
+    private var lastSelectedIndexedCalleeLoad BoundExpression?
 
     private func ApplyCallableMemberNarrowing(load BoundExpression) BoundExpression {
         if activePreCallArgumentsNarrowing is not{} saved {
@@ -807,27 +808,22 @@ internal partial class ExpressionBinder {
     ) bool {
         indexed = nil
         if ce.NullableQuestionToken != nil ||
-            !IsAmbiguousSingleIdentifierTypeArgument(ce.TypeArgumentList) ||
-            Invariant
-            .Required(
-            ce.TypeArgumentList,
-            "an ambiguous bracket has a type-argument list",
-            expression: "ce.TypeArgumentList"
-        )
-            .Arguments[0]
-            .Identifier is not{} indexIdentifier {
+            ce.TypeArgumentList is not{} typeArgumentList ||
+            !TryConvertSeparatedTypeArgumentsToIndices(typeArgumentList.Arguments, out var indices) {
             return false
         }
         let mark = Diagnostics.Count
-        let bound = BindIndexAgainstTarget(
-            memberLoad,
-            NameExpressionSyntax(ce.SyntaxTree, indexIdentifier),
-            ce.Identifier.Location
-        )
-        if bound is BoundErrorExpression || Diagnostics.Count != mark || bound.Type == nil {
+        let bound = if indices.Count > 1 || IsRectangularArrayType(memberLoad.Type) {
+            BindRectangularIndexAgainstTarget(memberLoad, indices, ce.Identifier.Location)
+        } else {
+            BindIndexAgainstTarget(memberLoad, indices[0], ce.Identifier.Location)
+        }
+        if bound is BoundErrorExpression || Diagnostics.HasErrorSince(mark) || bound.Type == nil {
             Diagnostics.TruncateTo(mark)
             return false
         }
+        AnchorReshapedCalleeIdentifiers(bound)
+        lastSelectedIndexedCalleeLoad = bound
         indexed = bound
         return true
     }
@@ -4871,6 +4867,56 @@ internal partial class ExpressionBinder {
         return true
     }
 
+    private class ReshapedTokenAnchorWalker : BoundTreeWalker {
+        private let visitedErrors HashSet[BoundErrorExpression] = HashSet[BoundErrorExpression](
+            ReferenceEqualityComparer.Instance
+        )
+
+        override func VisitExpression(node BoundExpression?) {
+            if node != nil && node.CalleeIdentifier == nil && node is not BoundConversionExpression {
+                if node is BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}, Operand: {} inner} &&
+                    object.ReferenceEquals(node.Syntax, inner.Syntax) {
+                    base.VisitExpression(node)
+                    return
+                }
+                if node.Syntax is NameExpressionSyntax ne && !ne.IdentifierToken.IsMissing && !object.ReferenceEquals(
+                    ne.IdentifierToken.Parent,
+                    ne
+                ) {
+                    node.CalleeIdentifier = ne.IdentifierToken
+                } else if node.Syntax is AccessorExpressionSyntax{RightPart: NameExpressionSyntax rhs} &&
+                    !rhs.IdentifierToken.IsMissing &&
+                    !object.ReferenceEquals(rhs.IdentifierToken.Parent, rhs) {
+                    node.CalleeIdentifier = rhs.IdentifierToken
+                }
+            }
+            if node is BoundErrorExpression error && visitedErrors.Add(error) {
+                if !error.FailedOperands.IsDefaultOrEmpty {
+                    for operand in error.FailedOperands {
+                        VisitExpression(operand)
+                    }
+                }
+                if error.FailedReceiver is {} failedReceiver {
+                    VisitExpression(failedReceiver)
+                }
+                if !error.FailedArguments.IsDefaultOrEmpty {
+                    for failedArg in error.FailedArguments {
+                        VisitExpression(failedArg)
+                    }
+                }
+                if error.FailedCallee is {} failedCallee {
+                    VisitExpression(failedCallee)
+                }
+                if !error.FailedChildren.IsDefaultOrEmpty {
+                    for failedChild in error.FailedChildren {
+                        VisitExpression(failedChild)
+                    }
+                }
+            }
+            base.VisitExpression(node)
+        }
+    }
+
     shared {
         /// Issue #2193: a delegate-reshaping implicit conversion (rank ≥
         /// (cref:ClrOverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate)
@@ -4914,26 +4960,101 @@ internal partial class ExpressionBinder {
             return worst
         }
 
-        /// Issue #3880: whether a bracketed list is the one shape where the
-        /// ADR-0020 generic-call-site commitment is genuinely ambiguous with an
-        /// indexer — a single bare identifier. Everything a type clause can spell
-        /// that an index expression cannot (`T?`, `[]T`, `List[T]`,
-        /// a qualified name, a tuple, a function type) stays unambiguously a type
-        /// argument.
-        /// @param typeArgumentList The bracketed list from the call site.
-        /// @returns `true` when the bracket could equally be an index.
-        private func IsAmbiguousSingleIdentifierTypeArgument(typeArgumentList TypeArgumentListSyntax?) bool {
-            if typeArgumentList is not{} bracketed || bracketed.Arguments.Count != 1 {
+        /// Issue #3880 / #6206: reshapes a bracketed type-argument list
+        /// into index expressions when every item has an expression-compatible
+        /// name/access/index shape (`i`, `a.b`, `jobs[i]`, `i, j`).
+        /// Everything a type clause can spell that an index expression cannot
+        /// (`T?`, `[]T`, `List[T?]`, a tuple, a function type) returns `false`.
+        internal func CanConvertTypeArgumentsToIndices(typeArgumentList TypeArgumentListSyntax?) bool {
+            return typeArgumentList is {} bracketed &&
+                TryConvertSeparatedTypeArgumentsToIndices(bracketed.Arguments, out _)
+        }
+
+        internal func TryConvertSeparatedTypeArgumentsToIndices(
+            typeArgs GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax],
+            out indices GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax]
+        ) bool {
+            indices = default(GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax])
+            if typeArgs.Count == 0 {
                 return false
             }
-            let item = bracketed.Arguments[0]
-            return item.Identifier != nil &&
-                !item.HasQualifier &&
-                !item.IsArray &&
-                !item.IsNullable &&
-                !item.IsTuple &&
-                item.FuncKeyword == nil &&
-                item.TypeArguments is not{Count: > 0}
+            let withSeparators = typeArgs.GetWithSeparators()
+            let nodesAndSeparators = ImmutableArray.CreateBuilder[SyntaxNode](withSeparators.Length)
+            for node in withSeparators {
+                if node is SyntaxToken separatorToken {
+                    nodesAndSeparators.Add(separatorToken)
+                } else if node is TypeClauseSyntax argClause &&
+                    TryConvertTypeClauseToIndexExpression(argClause, out var argExpr) {
+                    nodesAndSeparators.Add(argExpr)
+                } else {
+                    return false
+                }
+            }
+            indices = GSharp
+                .Core
+                .CodeAnalysis
+                .Syntax
+                .SeparatedSyntaxList[ExpressionSyntax](nodesAndSeparators.ToImmutable())
+            return true
+        }
+
+        private func TryConvertTypeClauseToIndexExpression(
+            clause TypeClauseSyntax,
+            @NotNullWhen(true) out expr ExpressionSyntax?
+        ) bool {
+            expr = nil
+            if clause.Identifier is not{} headIdentifier ||
+                headIdentifier.IsMissing ||
+                clause.ReadOnlySliceModifier != nil ||
+                clause.ReadOnlySpanModifier != nil ||
+                clause.ReadOnlyManagedModifier != nil ||
+                clause.IsArray ||
+                clause.IsNullable ||
+                clause.IsArrayNullable ||
+                clause.IsParenthesizedNullable ||
+                clause.TupleElementNameToken != nil ||
+                clause.IsTuple ||
+                clause.IsFunction ||
+                clause.IsFunctionPointer ||
+                clause.IsMap ||
+                clause.IsChannel ||
+                clause.IsSequence ||
+                clause.AsyncModifier != nil ||
+                clause.IsPointer {
+                return false
+            }
+            let tree = clause.SyntaxTree
+            var current ExpressionSyntax = NameExpressionSyntax(tree, headIdentifier)
+            for var segmentIndex = 0; segmentIndex < clause.SegmentCount; segmentIndex++ {
+                if segmentIndex > 0 {
+                    let dot = clause.QualifierDotTokens[segmentIndex - 1]
+                    let segIdentifier = clause.QualifierIdentifierTokens[segmentIndex - 1]
+                    if segIdentifier.IsMissing {
+                        return false
+                    }
+                    let segName = NameExpressionSyntax(tree, segIdentifier)
+                    current = AccessorExpressionSyntax(tree, current, dot, segName)
+                }
+                if clause.SegmentHasTypeArguments(segmentIndex) {
+                    if clause.GetSegmentTypeArguments(segmentIndex) is not{} segArgs ||
+                        segArgs.Count == 0 ||
+                        !clause.GetSegmentTypeArgumentBrackets(
+                        segmentIndex,
+                        out var openBracket,
+                        out var closeBracket
+                    ) ||
+                        !TryConvertSeparatedTypeArgumentsToIndices(segArgs, out var indexList) {
+                        return false
+                    }
+                    current = IndexExpressionSyntax(tree, current, openBracket!!, indexList, closeBracket!!)
+                }
+            }
+            expr = current
+            return true
+        }
+
+        internal func AnchorReshapedCalleeIdentifiers(bound BoundExpression) {
+            ReshapedTokenAnchorWalker().VisitExpression(bound)
         }
 
         /// Issue #3880: whether [`receiverType`](paramref) has a readable

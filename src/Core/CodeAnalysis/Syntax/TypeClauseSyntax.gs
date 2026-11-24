@@ -1229,6 +1229,30 @@ partial class TypeClauseSyntax : SyntaxNode {
         InvalidateCachedSpan()
     }
 
+    internal func GetSegmentTypeArgumentBrackets(
+        segmentIndex int32,
+        out openBracket SyntaxToken?,
+        out closeBracket SyntaxToken?
+    ) bool {
+        if segmentIndex == SegmentCount - 1 {
+            openBracket = TypeArgumentOpenBracketToken
+            closeBracket = TypeArgumentCloseBracketToken
+            return openBracket != nil && closeBracket != nil
+        }
+        if outerSegmentTypeArgumentOpenBracketTokens.IsDefaultOrEmpty ||
+            outerSegmentTypeArgumentCloseBracketTokens.IsDefaultOrEmpty ||
+            segmentIndex < 0 ||
+            segmentIndex >= outerSegmentTypeArgumentOpenBracketTokens.Length ||
+            segmentIndex >= outerSegmentTypeArgumentCloseBracketTokens.Length {
+            openBracket = nil
+            closeBracket = nil
+            return false
+        }
+        openBracket = outerSegmentTypeArgumentOpenBracketTokens[segmentIndex]
+        closeBracket = outerSegmentTypeArgumentCloseBracketTokens[segmentIndex]
+        return openBracket != nil && closeBracket != nil
+    }
+
     shared {
         /// Creates a pointer type clause `*T` (ADR-0039).
         /// @param syntaxTree The parent syntax tree.

@@ -2254,7 +2254,7 @@ internal partial class ExpressionBinder {
                 return read
             }
             if multiReported {
-                return BoundErrorExpression(nil)
+                return FailedMultiIndexError(target, multiArguments)
             }
             preBoundMultiArguments = multiArguments
         }
@@ -2333,7 +2333,7 @@ internal partial class ExpressionBinder {
                     multiClrIndexer.Name,
                     ClrTypeDisplayName(multiClrIndexer.DeclaringType ?? multiClrTarget)
                 )
-                return BoundErrorExpression(nil)
+                return FailedMultiIndexError(target, multiClrArguments)
             }
             if !allowProtectedMultiIndexer && this.memberLookup.TryResolveClrIndexer(
                 target.Type,
@@ -2352,15 +2352,16 @@ internal partial class ExpressionBinder {
                     protMultiClrIndexer.Name,
                     ClrTypeDisplayName(protMultiClrIndexer.DeclaringType ?? multiClrTarget)
                 )
-                return BoundErrorExpression(nil)
+                return FailedMultiIndexError(target, multiClrArguments)
             }
             if ReportClrIndexerResolutionFailure(multiOutcome, targetLocation) {
-                return BoundErrorExpression(nil)
+                return FailedMultiIndexError(target, multiClrArguments)
             }
+            preBoundMultiArguments = multiClrArguments
         }
         if rectangular == nil {
             Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type)
-            return BoundErrorExpression(nil)
+            return FailedMultiIndexError(target, preBoundMultiArguments)
         }
         if indexSyntaxes.Count != rectangular.Rank {
             Diagnostics.ReportRectangularArrayIndexRankMismatch(targetLocation, rectangular.Rank, indexSyntaxes.Count)
@@ -2548,7 +2549,7 @@ internal partial class ExpressionBinder {
             !(indexSyntax is InterpolatedStringExpressionSyntax) {
             boundIndex = BindIndexArgumentExpression(indexSyntax)
             if boundIndex is BoundErrorExpression && !IsDeferredBranchyArgumentPlaceholder(boundIndex, out _) {
-                return boundIndex
+                return BoundErrorExpression.WithFailedOperands(target, boundIndex)
             }
             if IsSystemRangeType(boundIndex.Type) {
                 return BindRangeValueSlice(target, boundIndex, targetLocation, indexSyntax)
@@ -2747,7 +2748,7 @@ internal partial class ExpressionBinder {
                 )
             }
             if readReported {
-                return BoundErrorExpression(nil)
+                return BoundErrorExpression.WithFailedOperands(target, cachedBoundIndexArg)
             }
         }
         let clrTarget Type? = target.Type.ClrType ??
@@ -2783,7 +2784,7 @@ internal partial class ExpressionBinder {
                     } else {
                         Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type)
                     }
-                    return BoundErrorExpression(nil)
+                    return BoundErrorExpression.WithFailedOperands(target, cachedBoundIndexArg)
                 }
                 let elementType = ResolveIndexerElementType(target.Type, idxProp!!)
                 let convertedIdxArgs = BindClrIndexerArguments(
@@ -2814,18 +2815,31 @@ internal partial class ExpressionBinder {
                     protIdxProp.Name,
                     ClrTypeDisplayName(protIdxProp.DeclaringType ?? clrTarget)
                 )
-                return BoundErrorExpression(nil)
+                return BoundErrorExpression.WithFailedOperands(target, cachedBoundIndexArg)
             }
             clrIndexerOutcome = outcome
         }
         if boundIndex != nil && ReportUnresolvedTargetlessValues(boundIndex, indexSyntax.Location) {
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(target, boundIndex)
         }
         if !ReportClrIndexerResolutionFailure(clrIndexerOutcome, indexSyntax.Location) &&
             target.Type != TypeSymbol.Error {
             Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type)
         }
-        return BoundErrorExpression(nil)
+        return BoundErrorExpression.WithFailedOperands(target, cachedBoundIndexArg)
+    }
+
+    private func FailedMultiIndexError(
+        target BoundExpression,
+        indices ImmutableArray[BoundExpression]
+    ) BoundErrorExpression {
+        let error = BoundErrorExpression.WithFailedOperands(target)
+        if !indices.IsDefaultOrEmpty {
+            for index in indices {
+                error.KeepOperands(index)
+            }
+        }
+        return error
     }
 
     private func FindDeclaredIndexer(

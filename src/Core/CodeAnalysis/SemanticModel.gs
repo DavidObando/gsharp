@@ -106,6 +106,17 @@ partial class SemanticModel {
             index.Value.BoundBySyntax.TryGetValue(baseCallSyntax.Call, out var baseCallBound) {
             return PublicCompletionView(baseCallBound)
         }
+        if node is TypeClauseSyntax{
+            HasQualifier: false,
+            HasTypeArguments: false,
+            IsArray: false,
+            IsNullable: false,
+            IsPointer: false,
+            Identifier: {} clauseIdentifier
+        } &&
+            index.Value.BoundBySyntax.TryGetValue(clauseIdentifier, out var reshapedIndex) {
+            return PublicCompletionView(reshapedIndex)
+        }
         return nil
     }
 

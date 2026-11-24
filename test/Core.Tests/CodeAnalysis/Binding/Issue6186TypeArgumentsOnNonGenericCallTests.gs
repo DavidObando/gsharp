@@ -48,7 +48,8 @@ open class Issue6186TypeArgumentsOnNonGenericCallTests {
     @InlineData("let k = Gen[int32, int32](x)", "GS0148 [int32, int32]") // a generic function, wrong arity
     @InlineData("let k = c.G[int32, int32](x)", "GS0148 [int32, int32]") // a generic method, wrong arity
     @InlineData("let k = c.M[Nope](x)", "GS0113 Nope|GS0159 M[Nope](x)") // GS0159 as for a generic method
-    @InlineData("let k = arr[x](x)", "GS0131 arr") // not callable: the GS0131 of main
+    @InlineData("let k = arr[int32?](x)", "GS0131 arr") // unambiguously type-shaped argument stays on GS0131
+    @InlineData("let k = ints[x](x)", "GS0131 ints[x]") // non-callable indexed element reports GS0131
     func TypeArgumentsThatDoNotMatchTheCallee_ReportTheArity(statement string, expected string) {
         let source = Source(statement)
         Assert.Equal(expected.Split('|'), Errors(source))
@@ -62,6 +63,7 @@ open class Issue6186TypeArgumentsOnNonGenericCallTests {
     @InlineData("let k = c.Mixed[int32](x)")
     @InlineData("let k = c.Mixed(x)")
     @InlineData("let k = Use(x)")
+    @InlineData("let k = arr[x](x)") // #6206: indexable callable slice indexed by local and invoked
     func TypeArgumentsThatMatchTheCallee_Bind(statement string) {
         Assert.Empty(Errors(Source(statement)))
     }
@@ -93,7 +95,7 @@ open class Issue6186TypeArgumentsOnNonGenericCallTests {
 
     shared {
         private func Source(statement string) string -> Declarations +
-            "\nfunc F(c C, i I, b Box[int32], f (int32) -> int32, arr [](int32) -> int32, n Named) {\n    let x = 1\n    " +
+            "\nfunc F(c C, i I, b Box[int32], f (int32) -> int32, arr [](int32) -> int32, ints []int32, n Named) {\n    let x = 1\n    " +
             statement +
             "\n}\n"
 
