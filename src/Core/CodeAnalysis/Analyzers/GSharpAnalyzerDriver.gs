@@ -49,6 +49,8 @@ class GSharpAnalyzerDriver {
     // more than once, so the origin belongs to the occurrence, not to the object.
     private var origin Symbol? = nil
     private let origins List[Symbol?] = List[Symbol?]()
+    // Issue #6183: the analyzers of the run, in the order that the host gave them.
+    private var initialized ImmutableArray[GSharpDiagnosticAnalyzer] = ImmutableArray[GSharpDiagnosticAnalyzer].Empty
 
     private init(compilation Compilation, options AnalyzerOptions, cancellationToken CancellationToken) {
         this.compilation = compilation
@@ -99,6 +101,7 @@ class GSharpAnalyzerDriver {
     }
 
     private func InitializeAnalyzers(analyzers ImmutableArray[GSharpDiagnosticAnalyzer]) {
+        initialized = analyzers
         for analyzer in analyzers {
             elapsed[analyzer] = Stopwatch()
             supportedIds[analyzer] = Guarded(
@@ -300,7 +303,12 @@ class GSharpAnalyzerDriver {
                 }
             )
         }
-        return AnalyzerRun(produced, sources.MoveToImmutable())
+        // Issue #6183: the time of each analyzer's callbacks, which the time budget limits.
+        let times = ImmutableArray.CreateBuilder[TimeSpan](initialized.Length)
+        for analyzer in initialized {
+            times.Add(elapsed[analyzer].Elapsed)
+        }
+        return AnalyzerRun(produced, sources.MoveToImmutable(), times.MoveToImmutable())
     }
 
     private func Guarded(owner GSharpDiagnosticAnalyzer, action() -> void) -> Guarded[object?](
@@ -474,7 +482,11 @@ class GSharpAnalyzerDriver {
             cancellationToken CancellationToken
         ) AnalyzerRun {
             if analyzers.IsDefaultOrEmpty {
-                return AnalyzerRun(ImmutableArray[Diagnostic].Empty, ImmutableArray[Symbol?].Empty)
+                return AnalyzerRun(
+                    ImmutableArray[Diagnostic].Empty,
+                    ImmutableArray[Symbol?].Empty,
+                    ImmutableArray[TimeSpan].Empty
+                )
             }
             using let measurement = CompilationMeasurements.BeginPhase("analyzers")
             let driver = GSharpAnalyzerDriver(compilation, options ?? AnalyzerOptions(), cancellationToken)
@@ -581,11 +593,12 @@ class GSharpAnalyzerDriver {
 }
 
 /// The diagnostics of an analyzer run, and for each one the function or field whose body's dispatch
-/// reported it, or `null` (issue #6165).
+/// reported it, or `null` (issue #6165). It also gives the time of each analyzer (issue #6183).
 internal class AnalyzerRun {
-    init(diagnostics ImmutableArray[Diagnostic], origins ImmutableArray[Symbol?]) {
+    init(diagnostics ImmutableArray[Diagnostic], origins ImmutableArray[Symbol?], elapsed ImmutableArray[TimeSpan]) {
         Diagnostics = diagnostics
         Origins = origins
+        Elapsed = elapsed
     }
 
     prop Diagnostics ImmutableArray[Diagnostic] {
@@ -593,6 +606,12 @@ internal class AnalyzerRun {
     }
 
     prop Origins ImmutableArray[Symbol?] {
+        get;
+    }
+
+    /// The time that each analyzer spent in its callbacks, in the order of the analyzers of the run.
+    /// The time budget of (cref:AnalyzerOptions.TimeBudgetMilliseconds) limits this time.
+    prop Elapsed ImmutableArray[TimeSpan] {
         get;
     }
 }

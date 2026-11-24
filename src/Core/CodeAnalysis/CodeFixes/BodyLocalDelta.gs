@@ -46,7 +46,9 @@ import System.Threading
 /// - a diagnostic outside the body touches a changed span;
 /// - an analyzer runs that is not body-local in scope (cref:AnalyzerScope.MemberBody), an analyzer
 ///   failed, ran out of time or reported an unsupported ID, or the analyzers report on the declared
-///   body, bound speculatively, other than they reported on it in the baseline (issue #6165).
+///   body, bound speculatively, other than they reported on it in the baseline (issue #6165);
+/// - the analyzers have a time budget, and an analyzer's time in the baseline plus its time on the new
+///   body is more than half the budget (issue #6183).
 ///
 /// The analyzers' diagnostics after the edit are the baseline's, without those that the dispatch on
 /// the edited member reported and with spans moved by the edit, and those that they report on the new
@@ -152,12 +154,13 @@ internal shared class BodyLocalDelta {
             if !GSharpAnalyzerDriver.AreBodyLocal(options.Analyzers, compilation) {
                 return BodyLocalResult("an analyzer is not body-local in scope")
             }
-            // A time budget covers an analyzer's whole run, and a run on one body starts its own clock.
-            if options.AnalyzerOptions?.TimeBudgetMilliseconds != nil {
-                return BodyLocalResult("the analyzers have a time budget, which covers the whole run")
-            }
             if run.Diagnostics.Any(IsAnalyzerHostDiagnostic) {
                 return BodyLocalResult("an analyzer failed, ran out of time or reported an unsupported ID")
+            }
+            // Issue #6183: the check after the run on the new body adds that run's time.
+            if options.AnalyzerOptions?.TimeBudgetMilliseconds is {} budget &&
+                !FitTimeBudget(run, nil, options.Analyzers.Length, budget) {
+                return BodyLocalResult(TimeBudgetReason)
             }
         }
         if function.IsPInvoke ||
@@ -370,6 +373,10 @@ internal shared class BodyLocalDelta {
         if after == nil || after.Diagnostics.Any(IsAnalyzerHostDiagnostic) {
             return "an analyzer failed on the new body"
         }
+        if options.AnalyzerOptions?.TimeBudgetMilliseconds is {} budget &&
+            !FitTimeBudget(run, after, options.Analyzers.Length, budget) {
+            return TimeBudgetReason
+        }
         for d in after.Diagnostics {
             if !TryRelocate(d, oldText, newText, spanMap, out var moved) {
                 return "an analyzer diagnostic of the new body touches the edit outside the new body"
@@ -380,6 +387,38 @@ internal shared class BodyLocalDelta {
         }
         return nil
     }
+
+    // Issue #6183: the time budget (AnalyzerOptions.TimeBudgetMilliseconds) limits the time of each
+    // analyzer over the whole run, and the full run reports GS9302 when an analyzer goes over it. The
+    // time of the full run after the edit is the baseline's time, less the declared body, plus the new
+    // body. The baseline's time plus the new body's time is more than that. The check keeps the
+    // body-local path only when that sum, multiplied by this factor, is not more than the budget.
+    // Times change from run to run, so the factor keeps the full run well under the budget.
+    internal const TimeBudgetMarginFactor int64 = 2
+
+    internal const TimeBudgetReason string = "an analyzer's time is not well under the time budget"
+
+    // Whether each analyzer's time in the baseline, plus its time on the new body when one is given, is
+    // well under the budget. It is false when a run gives no time for each analyzer.
+    internal func FitTimeBudget(baseline AnalyzerRun, newBody AnalyzerRun?, analyzerCount int32, budget int32) bool {
+        if baseline.Elapsed.Length != analyzerCount || (newBody != nil && newBody.Elapsed.Length != analyzerCount) {
+            return false
+        }
+        for var i = 0; i < analyzerCount; i++ {
+            var total = baseline.Elapsed[i]
+            if newBody != nil {
+                total += newBody.Elapsed[i]
+            }
+            if !FitsTimeBudget(total, budget) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // Whether a time, multiplied by the margin factor, is not more than the budget.
+    internal func FitsTimeBudget(time TimeSpan, budget int32) bool -> budget >= 0 &&
+        time.Ticks <= TimeSpan.FromMilliseconds(budget).Ticks / TimeBudgetMarginFactor
 
     // GS9300 (an analyzer threw), GS9302 (it ran out of time) and GS9304 (it reported an ID it does not
     // support, once per run): a run on one body would not report them as a run on the compilation does.
