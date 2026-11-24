@@ -4,7 +4,7 @@
 - **Date**: 2026-11-17
 - **Phase**: Tooling
 - **Issue**: [#6075](https://github.com/DavidObando/gsharp/issues/6075)
-- **Related**: ADR-0212 (semantic-query surface, `ReplaceSyntaxTree`, single-flight builds), ADR-0223 (compiler-as-library surface), ADR-0105 (bound-body cache), Oats `docs/notes/gsharp-incomplete-bind-design.md` and `docs/spikes/S1-oracle.md`
+- **Related**: ADR-0229 (speculative statements, #6176), ADR-0212 (semantic-query surface, `ReplaceSyntaxTree`, single-flight builds), ADR-0223 (compiler-as-library surface), ADR-0105 (bound-body cache), Oats `docs/notes/gsharp-incomplete-bind-design.md` and `docs/spikes/S1-oracle.md`
 
 ## Context
 
