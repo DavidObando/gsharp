@@ -915,6 +915,80 @@ namespace Demo
                 _ => 0,
             };
 
+        public int QualifiedNestedConditionalAccessExpr(int kind, Holder? holder) =>
+            kind switch
+            {
+                1 when holder?.Text?.Length != null => holder.Text.Length,
+                _ => 0,
+            };
+
+        public int QualifiedNestedConditionalAccessStmt(int kind, Holder? holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder?.Text?.Length != null:
+                    return holder.Text.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedNestedConditionalAccessMutated(int kind, Holder? holder, bool drop) =>
+            kind switch
+            {
+                1 when holder?.Text?.Substring((drop ? (holder = null) : null) == null ? 0 : 0) != null =>
+                    holder!.Text!.Length,
+                _ => 0,
+            };
+
+        public int QualifiedNestedDefaultLaterHeaderCallInvalidates(int kind, int inner, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    switch (inner)
+                    {
+                        default:
+                            return holder.Text!.Length;
+                        case 2 when TouchBool():
+                            return 0;
+                    }
+                default:
+                    return 0;
+            }
+        }
+
+        public int ReadonlyFieldStringIsNullOrEmptyGuardExpr(int kind) =>
+            kind switch
+            {
+                1 when !string.IsNullOrEmpty(field) => field.Length,
+                _ => 0,
+            };
+
+        public int ReadonlyFieldStringIsNullOrEmptyGuardStmt(int kind)
+        {
+            switch (kind)
+            {
+                case 1 when !string.IsNullOrEmpty(field):
+                    return field.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedStringIsNullOrEmptyGuardExpr(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when !string.IsNullOrEmpty(holder.Text) => holder.Text.Length,
+                _ => 0,
+            };
+
+        private static bool TouchBool()
+        {
+            Touch();
+            return false;
+        }
+
         public int MultiLabel(int kind)
         {
             switch (kind)
@@ -983,6 +1057,13 @@ namespace Demo
                 p.QualifiedStmtCallInvalidates(1, h) + "|" +
                 p.QualifiedExprCallInvalidates(1, h) + "|" +
                 p.QualifiedMutableKeepsAssertion(1, h) + "|" +
+                p.QualifiedNestedConditionalAccessExpr(1, h) + "|" +
+                p.QualifiedNestedConditionalAccessStmt(1, h) + "|" +
+                p.QualifiedNestedConditionalAccessMutated(1, h, false) + "|" +
+                p.QualifiedNestedDefaultLaterHeaderCallInvalidates(1, 1, h) + "|" +
+                p.ReadonlyFieldStringIsNullOrEmptyGuardExpr(1) + "|" +
+                p.ReadonlyFieldStringIsNullOrEmptyGuardStmt(1) + "|" +
+                p.QualifiedStringIsNullOrEmptyGuardExpr(1, h) + "|" +
                 p.MultiLabel(1) + "|" +
                 p.MultiLabel(2) + "|" +
                 p.StmtCallInvalidates(1) + "|" +
@@ -994,7 +1075,7 @@ namespace Demo
 }`
         let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
             source,
-            "4|4|4|4|4|4|5|5|5|5|5|5|2|4|4|4|4|2|5",
+            "4|4|4|4|4|4|5|5|5|5|5|5|2|5|5|5|5|4|4|5|4|4|4|4|2|5",
             rejectRedundantAssertions: true
         )
         Assert.Contains(
@@ -1022,6 +1103,33 @@ namespace Demo
         Assert.Contains("Touch()\n                return holder.Text!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("Touch0() + holder.Text!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("holder.Mutable != nil: holder.Mutable!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "case 1 when holder?.Text?.Length != nil: holder.Text.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "case 1 when holder?.Text?.Length != nil {\n                return holder.Text.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("holder!!.Text!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "default {\n                        return holder.Text!!.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("case 1 when !string.IsNullOrEmpty(field): field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "case 1 when !string.IsNullOrEmpty(field) {\n                return field.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "case 1 when !string.IsNullOrEmpty(holder.Text): holder.Text.Length",
+            printed,
+            StringComparison.Ordinal
+        )
         Assert.Contains("case 2 {\n                return field!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("Touch()\n                return field!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("Touch0() + field!!.Length", printed, StringComparison.Ordinal)
@@ -1039,10 +1147,16 @@ namespace Demo
     {
         private static int lastConsumed;
         private static int lastSafe;
+        private static int lastNestedDefault;
 
         private static void Consume(string x)
         {
             lastConsumed = x == null ? -1 : x.Length;
+        }
+
+        private static void ConsumeNestedDefault(string x)
+        {
+            lastNestedDefault = x == null ? -1 : x.Length;
         }
 
         private static bool Observe(string x)
@@ -1093,6 +1207,24 @@ namespace Demo
             }
         }
 
+        public static int TestNestedDefaultLaterHeaderWriteInvalidates(int kind, int inner, string s)
+        {
+            switch (kind)
+            {
+                case 1 when s != null:
+                    switch (inner)
+                    {
+                        default:
+                            ConsumeNestedDefault(s);
+                            break;
+                        case 2 when (s = null) != null:
+                            break;
+                    }
+                    break;
+            }
+            return lastNestedDefault;
+        }
+
         public static string Run()
         {
             int a = TestSectionWriteInvalidates(1, "hi");
@@ -1100,16 +1232,18 @@ namespace Demo
             int c = TestGuardOrderObserveBeforeNullCheck(1, null);
             int d = TestGuardOrderObserveBeforeNullCheck(1, "xy");
             int e = TestSectionConditionalWriteKeepsAssertion(1, "abcd", false);
-            return a + "|" + b + "|" + c + "|" + d + "|" + e;
+            int f = TestNestedDefaultLaterHeaderWriteInvalidates(1, 1, "hello");
+            return a + "|" + b + "|" + c + "|" + d + "|" + e + "|" + f;
         }
     }
 }`
         let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
             source,
-            "-1|2|-1|2|4",
+            "-1|2|-1|2|4|5",
             rejectRedundantAssertions: true
         )
         Assert.Contains("func Consume(x string?)", printed, StringComparison.Ordinal)
+        Assert.Contains("func ConsumeNestedDefault(x string?)", printed, StringComparison.Ordinal)
         Assert.Contains("func Observe(x string?) bool", printed, StringComparison.Ordinal)
         Assert.Contains("func SafeConsume(x string)", printed, StringComparison.Ordinal)
         Assert.Contains("SafeConsume(s)", printed, StringComparison.Ordinal)

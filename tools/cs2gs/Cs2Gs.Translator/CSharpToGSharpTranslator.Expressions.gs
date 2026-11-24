@@ -14830,6 +14830,29 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 default {
+                    if !wantNonNullWhenTrue &&
+                        StripParentheses(condition) is InvocationExpressionSyntax stringGuard &&
+                        ObliviousNullabilityAnalyzer.TryGetBuiltInStringNullGuardArgument(
+                        stringGuard,
+                        this.context.SemanticModel
+                    ) is {} guardedArgument &&
+                        this.TryDecomposeStableAccessPath(
+                        guardedArgument,
+                        out var guardIsThisRoot,
+                        out var guardRoot,
+                        out var guardMembers,
+                        out var guardCheckpoints
+                    ) {
+                        return StableAccessPathsMatch(
+                            targetIsThisRoot,
+                            targetRoot,
+                            targetMembers,
+                            guardIsThisRoot,
+                            guardRoot,
+                            guardMembers
+                        ) &&
+                            this.AllStableReceiverCheckpointsNonNull(guardCheckpoints)
+                    }
                     let matchedOperand = this.TryGetNullCheckedOperand(
                         condition,
                         nonNull: wantNonNullWhenTrue,
@@ -14996,22 +15019,7 @@ partial class CSharpToGSharpTranslator {
                     this.AllStableReceiverCheckpointsNonNull(exprCheckpoints) {
                     return true
                 }
-                if this.TryDecomposeConditionalBindingPath(
-                    step,
-                    out var bindIsThisRoot,
-                    out var bindRoot,
-                    out var bindMembers,
-                    out var bindCheckpoints
-                ) &&
-                    StableAccessPathsMatch(
-                    targetIsThisRoot,
-                    targetRoot,
-                    targetMembers,
-                    bindIsThisRoot,
-                    bindRoot,
-                    bindMembers
-                ) &&
-                    this.AllStableReceiverCheckpointsNonNull(bindCheckpoints) {
+                if this.TryMatchConditionalBindingTail(step, targetIsThisRoot, targetRoot, targetMembers) {
                     return true
                 }
                 current = StripParentheses(step.Expression) as ConditionalAccessExpressionSyntax
@@ -15019,54 +15027,84 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
-        private func TryDecomposeConditionalBindingPath(
+        private func TryMatchConditionalBindingTail(
             access ConditionalAccessExpressionSyntax,
-            out isThisRoot bool,
-            out rootSymbol ISymbol?,
-            out members List[ISymbol],
-            out receiverCheckpoints List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]
+            targetIsThisRoot bool,
+            targetRoot ISymbol?,
+            targetMembers List[ISymbol]
         ) bool {
-            isThisRoot = false
-            rootSymbol = nil
-            members = List[ISymbol]()
-            receiverCheckpoints = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
-            var current Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = StripParentheses(access.WhenNotNull)
-            let bindingMembers = List[ISymbol]()
-            while current is MemberAccessExpressionSyntax member && member.IsKind(
-                Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleMemberAccessExpression
-            ) {
-                let memberSymbol = this.context.GetSymbolInfo(member).Symbol
-                if !IsStableMemberSymbol(memberSymbol) {
-                    return false
-                }
-                bindingMembers.Insert(0, memberSymbol!!)
-                current = StripParentheses(member.Expression)
-            }
-            if current is not MemberBindingExpressionSyntax binding {
-                return false
-            }
-            let bindingSymbol = this.context.GetSymbolInfo(binding).Symbol
-            if !IsStableMemberSymbol(bindingSymbol) {
-                return false
-            }
-            bindingMembers.Insert(0, bindingSymbol!!)
             if !this.TryDecomposeStableAccessPath(
                 access.Expression,
-                out isThisRoot,
-                out rootSymbol,
-                out members,
-                out receiverCheckpoints
-            ) {
+                out var prefixIsThisRoot,
+                out var prefixRoot,
+                out var prefixMembers,
+                out var prefixCheckpoints
+            ) ||
+                prefixIsThisRoot != targetIsThisRoot ||
+                (!prefixIsThisRoot && !SymbolEqualityComparer.Default.Equals(prefixRoot, targetRoot)) ||
+                prefixMembers.Count >= targetMembers.Count {
                 return false
             }
+            for var i = 0; i < prefixMembers.Count; i++ {
+                if !SymbolEqualityComparer.Default.Equals(prefixMembers[i], targetMembers[i]) {
+                    return false
+                }
+            }
             let strippedReceiver = StripParentheses(access.Expression)
-            if receiverCheckpoints.Count > 0 && object.ReferenceEquals(receiverCheckpoints[0], strippedReceiver) {
-                receiverCheckpoints.RemoveAt(0)
+            if prefixCheckpoints.Count > 0 && object.ReferenceEquals(prefixCheckpoints[0], strippedReceiver) {
+                prefixCheckpoints.RemoveAt(0)
             }
-            for member in bindingMembers {
-                members.Add(member)
+            if !this.AllStableReceiverCheckpointsNonNull(prefixCheckpoints) {
+                return false
             }
-            return true
+            var index = prefixMembers.Count
+            var tail Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = StripParentheses(access.WhenNotNull)
+            while tail != nil {
+                let nested = tail as ConditionalAccessExpressionSyntax
+                let segment = if nested is {} nestedAccess {
+                    StripParentheses(nestedAccess.Expression)
+                } else {
+                    tail
+                }
+                let segmentMembers = List[ISymbol]()
+                var current = segment
+                while current is MemberAccessExpressionSyntax member && member.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleMemberAccessExpression
+                ) {
+                    let memberSymbol = this.context.GetSymbolInfo(member).Symbol
+                    if !IsStableMemberSymbol(memberSymbol) {
+                        return false
+                    }
+                    segmentMembers.Insert(0, memberSymbol!!)
+                    current = StripParentheses(member.Expression)
+                }
+                if current is not MemberBindingExpressionSyntax binding {
+                    return false
+                }
+                let bindingSymbol = this.context.GetSymbolInfo(binding).Symbol
+                if !IsStableMemberSymbol(bindingSymbol) {
+                    return false
+                }
+                segmentMembers.Insert(0, bindingSymbol!!)
+                if index + segmentMembers.Count > targetMembers.Count {
+                    return false
+                }
+                for member in segmentMembers {
+                    if !SymbolEqualityComparer.Default.Equals(member, targetMembers[index]) {
+                        return false
+                    }
+                    index++
+                }
+                if index == targetMembers.Count {
+                    return true
+                }
+                tail = if nested is {} nextAccess {
+                    StripParentheses(nextAccess.WhenNotNull)
+                } else {
+                    default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+                }
+            }
+            return false
         }
 
         private func TryGetPatternProvedNonNullOperand(
@@ -15163,6 +15201,43 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         return true
                     }
+                }
+            }
+            // ADR-0208 (#5629): a nested `default` section runs after the headers of later sections.
+            for var enclosing Microsoft.CodeAnalysis.SyntaxNode? = expression.Parent; enclosing != nil &&
+                !object.ReferenceEquals(enclosing, scope_); enclosing = enclosing!!.Parent {
+                if enclosing is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax section &&
+                    !object.ReferenceEquals(section, rightOperand) && rightOperand.Span.Contains(section.Span) &&
+                    section.Labels.Any(
+                    (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> label is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .DefaultSwitchLabelSyntax
+                ) &&
+                    section.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax switchStatement &&
+                    switchStatement.Sections.Any(
+                    (
+                        later Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax
+                    ) -> later.SpanStart > section.SpanStart &&
+                        later.Labels.Any(
+                        (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> label.DescendantNodes(
+                            OutsideNestedFunctions
+                        )
+                            .Any(
+                            (candidate Microsoft.CodeAnalysis.SyntaxNode) ->
+                            this.ConditionSubexpressionInvalidatesStablePathBeforeUse(
+                                candidate,
+                                targetIsThisRoot,
+                                targetRoot,
+                                rootIsByReference,
+                                rootIsClosureAssigned,
+                                rootType
+                            )
+                        )
+                    )
+                ) {
+                    return true
                 }
             }
             return false
@@ -22141,6 +22216,16 @@ partial class CSharpToGSharpTranslator {
                         this.ConditionalAccessEffectsLoseNarrowing(access, pattern.Pattern, field, scope_) {
                         return false
                     }
+                }
+                case invocation is InvocationExpressionSyntax {
+                    if !ObliviousNullabilityAnalyzer.IsBuiltInStringNullGuard(
+                        invocation,
+                        field,
+                        this.context.SemanticModel
+                    ) {
+                        return false
+                    }
+                    whenTrue = false
                 }
                 default {
                     return false

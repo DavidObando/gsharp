@@ -12791,6 +12791,17 @@ internal shared class ObliviousNullabilityAnalyzer {
             return false
         }
         for var node SyntaxNode? = use.Parent; node != nil; node = node!!.Parent {
+            if node is SwitchSectionSyntax section && !section.Span.Contains($guard.Span) && section.Labels.Any(
+                (label SwitchLabelSyntax) -> label is DefaultSwitchLabelSyntax
+            ) &&
+                section.Parent is SwitchStatementSyntax switchStatement &&
+                switchStatement.Sections.Any(
+                (later SwitchSectionSyntax) -> later.SpanStart > section.SpanStart && later.Labels.Any(
+                    (label SwitchLabelSyntax) -> label.DescendantNodes(Descend).Any(Writes)
+                )
+            ) {
+                return false
+            }
             if (
                 node is WhileStatementSyntax ||
                     node is DoStatementSyntax ||
@@ -12838,19 +12849,30 @@ internal shared class ObliviousNullabilityAnalyzer {
         return name == "IsNullOrEmpty" || name == "IsNullOrWhiteSpace"
     }
 
+    internal func TryGetBuiltInStringNullGuardArgument(
+        invocation InvocationExpressionSyntax,
+        model SemanticModel
+    ) ExpressionSyntax? {
+        if !IsPossibleStringNullGuard(invocation) || model.GetOperation(
+            invocation
+        ) is not IInvocationOperation operation ||
+            !operation.TargetMethod.IsStatic ||
+            operation.TargetMethod.ContainingType.SpecialType != SpecialType.System_String ||
+            operation.Arguments.Length != 1 ||
+            operation.Arguments[0].Value.Syntax is not ExpressionSyntax value ||
+            model.GetTypeInfo(value).Type?.SpecialType != SpecialType.System_String {
+            return nil
+        }
+        return value
+    }
+
     internal func IsBuiltInStringNullGuard(
         invocation InvocationExpressionSyntax,
         symbol ISymbol?,
         model SemanticModel
     ) bool ->
-    symbol != nil && IsPossibleStringNullGuard(invocation) && model.GetOperation(
-        invocation
-    ) is IInvocationOperation operation &&
-        operation.TargetMethod.IsStatic &&
-        operation.TargetMethod.ContainingType.SpecialType == SpecialType.System_String &&
-        operation.Arguments.Length == 1 &&
-        operation.Arguments[0].Value.Syntax is ExpressionSyntax value &&
-        model.GetTypeInfo(value).Type?.SpecialType == SpecialType.System_String &&
+    symbol != nil &&
+        TryGetBuiltInStringNullGuardArgument(invocation, model) is {} value &&
         (symbol is not IFieldSymbol || CSharpToGSharpTranslator.IsUnqualifiedOrThisQualifiedFieldRead(value)) &&
         SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(value).Symbol, symbol)
 
