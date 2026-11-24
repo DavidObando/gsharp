@@ -2181,6 +2181,9 @@ internal partial class ExpressionBinder {
         } finally {
             binderCtx.AllowedMovableFixedBufferSyntax = previousAllowedFixedBuffer
         }
+        // #6179: a later indexer of a type in the target's hierarchy can be better. The target is recorded
+        // before the index arguments convert, so their reports see it.
+        PrefixRetarget.NoteIndexTarget(syntax.Target, target.Type)
         if syntax.Indices.Count > 1 || IsRectangularArrayType(target.Type) {
             return BindRectangularIndexAgainstTarget(target, syntax.Indices, syntax.Target.Location)
         }
@@ -2383,6 +2386,8 @@ internal partial class ExpressionBinder {
     // pipeline (which already handles `?.`) covers the new form for free.
     private func BindNullConditionalIndexExpression(syntax IndexExpressionSyntax) BoundExpression {
         let receiver = BindExpression(syntax.Target)
+        // #6179: see BindIndexExpression.
+        PrefixRetarget.NoteIndexTarget(syntax.Target, receiver.Type)
         if receiver is BoundErrorExpression {
             return receiver
         }

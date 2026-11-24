@@ -133,6 +133,35 @@ internal sealed class PrefixCut {
     private let provisionalGate object = SystemObject()
     private let provisionalKeys HashSet[(Text SourceText, Span TextSpan)] = HashSet[(Text SourceText, Span TextSpan)]()
     private let provisionalSpans List[(Text SourceText, Span TextSpan)] = List[(Text SourceText, Span TextSpan)]()
+    private let provisionalTrees Dictionary[SourceText, SyntaxTree] = Dictionary[SourceText, SyntaxTree](
+        ReferenceEqualityComparer.Instance
+    )
+
+    /// Records that a later declaration can change the type of [`node`](paramref) (#6179).
+    /// @param node An expression that binds before the cut.
+    internal func AddProvisional(node SyntaxNode) {
+        let tree = node.SyntaxTree
+        lock provisionalGate {
+            provisionalTrees[tree.Text] = tree
+        }
+        AddProvisional(node.Location)
+    }
+
+    /// Returns the tree of [`text`](paramref) when the bind recorded an expression in it (#6179).
+    /// @param text A source text.
+    /// @returns The tree, or `null`.
+    internal func ProvisionalTree(text SourceText?) SyntaxTree? {
+        if text == nil {
+            return nil
+        }
+        lock provisionalGate {
+            return if provisionalTrees.TryGetValue(text, out var tree) {
+                tree
+            } else {
+                default(SyntaxTree?)
+            }
+        }
+    }
 
     /// Records that a later declaration can change the type of the expression at [`location`](paramref)
     /// (#6179).
@@ -440,7 +469,7 @@ internal shared class PrefixBindingContext {
     /// @param node An expression that binds before the cut.
     internal func AddProvisional(node SyntaxNode?) {
         if node != nil && current.Value is {} cut {
-            cut.AddProvisional(node.Location)
+            cut.AddProvisional(node)
         }
     }
 
@@ -458,11 +487,44 @@ internal shared class PrefixBindingContext {
     /// @param location The location of the report.
     /// @returns (cref:PrefixPremise.LaterOverload) or `null`.
     internal func ProvisionalPremise(location TextLocation) PrefixPremise? {
-        return if current.Value is {} cut && cut.ContainsProvisional(location) {
+        if current.Value is not{} cut || !cut.HasProvisional {
+            return nil
+        }
+        return if cut.ContainsProvisional(location) || StatementUsesProvisional(cut, location) {
             PrefixPremise.LaterOverload
         } else {
             default(PrefixPremise?)
         }
+    }
+
+    // A report can be located on a part of a statement that does not contain the expression it checks: the
+    // pattern of an `is`, the `!!` of an assertion, an index argument converted to the indexer's parameter.
+    // So a report counts as provisional when the innermost statement that contains it uses a provisional
+    // expression outside its nested statements (#6179).
+    private func StatementUsesProvisional(cut PrefixCut, location TextLocation) bool {
+        if cut.ProvisionalTree(location.Text) is not{} tree {
+            return false
+        }
+        let span = location.Span
+        var statement SyntaxNode? = nil
+        var node SyntaxNode = tree.Root
+        while true {
+            var next SyntaxNode? = nil
+            for child in node.GetChildren() {
+                if child.Span.Start <= span.Start && span.End <= child.Span.End && child.Span.Length > 0 {
+                    next = child
+                    break
+                }
+            }
+            if next == nil {
+                break
+            }
+            if next is StatementSyntax {
+                statement = next
+            }
+            node = next
+        }
+        return statement != nil && HeaderContainsProvisional(cut, statement, statement, false, false)
     }
 
     /// Returns a value that tells whether a later declaration can change the type of

@@ -979,6 +979,214 @@ func G(i int32) (int32, int32) {
     }
 
     @Fact
+    func IndexerInheritedFromAClosedBase_ALaterPartOfThePartialTypeCanBeBetter() {
+        const prefix = `package P
+
+open class Base[T] {
+    prop this[o object] T {
+        get {
+            return default(T)
+        }
+    }
+}
+
+partial class Box : Base[int32] {
+}
+
+func Main() {
+    let x string = Box()[0]
+    let done = 0
+`
+        const witness = `}
+
+partial class Box {
+    prop this[i int32] string {
+        get {
+            return ""
+        }
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
+    func ClrIndexerInheritedByAPartialType_ALaterPartCanBeBetter() {
+        const prefix = `package P
+
+import System.Collections.Generic
+
+partial class Box : Dictionary[object, int32] {
+}
+
+func Main() {
+    let x string = Box()[0]
+    let done = 0
+`
+        const witness = `}
+
+partial class Box {
+    prop this[i int32] string {
+        get {
+            return ""
+        }
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
+    func IndexArgumentConversion_CanBeALaterIndexer() {
+        const prefix = `package P
+
+partial class B {
+    prop this[s string] int32 {
+        get {
+            return 0
+        }
+    }
+}
+
+func Main() {
+    let b = B()
+    let x = b[1]
+    let done = 0
+`
+        const witness = `}
+
+partial class B {
+    prop this[i int32] int32 {
+        get {
+            return i
+        }
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0154")
+        // The argument check of an indexer has the premise of a call without a frame.
+        Assert.Equal(
+            DiagnosticFinality.FutureDependent,
+            result.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0154").Finality
+        )
+    }
+
+    @Fact
+    func ClrDelegateThatACallInfers_ChangesWithThatCall() {
+        const prefix = `package P
+
+import System
+
+func G(o object) Func[int32] {
+    return () -> 0
+}
+
+func Main() {
+    let f = G(1)
+    let x string = f()
+    let done = 0
+`
+        const witness = `}
+
+func G(i int32) Func[string] {
+    return () -> ""
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
+    func PackageFunctionInAPartialType_ALaterMemberCanHideIt() {
+        const prefix = `package P
+
+func F(i int32) int32 {
+    return i
+}
+
+partial class C {
+    func M() {
+        let x string = F(1)
+        let done = 0
+    }
+}
+`
+        const witness = `
+partial class C {
+    func F(i int32) string {
+        return ""
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
+    func MemberFoundThroughAPartialIntermediateType_ALaterMemberCanHideIt() {
+        const prefix = `package P
+
+open class Root {
+    func F(o object) int32 {
+        return 0
+    }
+}
+
+open partial class Middle : Root {
+}
+
+class Leaf : Middle {
+}
+
+func Main() {
+    let x string = Leaf().F(1)
+    let done = 0
+`
+        const witness = `}
+
+partial class Middle {
+    func F(i int32) string {
+        return ""
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
+    func PatternOfAResultThatCanChange_IsFutureDependent() {
+        const prefix = `package P
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    if G(1) is [1] {
+    }
+    let done = 0
+`
+        const witness = `}
+
+func G(i int32) []int32 {
+    return []int32{1}
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0175")
+        AssertFutureDependent(result, "GS0175", "later-overload")
+    }
+
+    @Fact
     func ResolvedCall_AnExactNonGenericMatchCannotBeBeaten() {
         const prefix = `package P
 

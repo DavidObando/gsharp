@@ -28,18 +28,13 @@ internal shared class PrefixRetarget {
         }
     }
 
-    /// Records the indexed expression at [`location`](paramref) when a later part of an incomplete type can
-    /// add a better indexer than [`indexer`](paramref). The location is the receiver's, which the index
-    /// expression contains.
-    /// @param location The location of the indexed receiver.
-    /// @param receiverType The type of the receiver.
-    /// @param indexer The indexer that the read selected.
-    func NoteIndexer(location TextLocation, receiverType TypeSymbol?, indexer PropertySymbol) {
-        if PrefixBindingContext.Current is not{} cut || !cut.LaterOverloadsPossible {
-            return
-        }
-        if TypeCanGetMembers(receiverType) || TypeCanGetMembers(indexer.ContainingType) {
-            PrefixBindingContext.AddProvisional(location)
+    /// Records the target of an index expression when a later part of an incomplete type in its hierarchy
+    /// can add a better indexer, a user indexer or a CLR one that the type inherits.
+    /// @param target The indexed expression.
+    /// @param targetType The type of the target.
+    func NoteIndexTarget(target SyntaxNode, targetType TypeSymbol?) {
+        if PrefixBindingContext.Current is {} cut && cut.LaterOverloadsPossible && HierarchyCanGrow(targetType, nil) {
+            PrefixBindingContext.AddProvisional(target)
         }
     }
 
@@ -77,10 +72,16 @@ internal shared class PrefixRetarget {
             // A failed call reports its own diagnostics, with the premise of the call.
             return false
         }
-        // A function value whose type a call infers (`let f = G(1)`, then `f()`) changes with that call.
-        if node is BoundIndirectCallExpression indirect &&
-            indirect.Target is BoundVariableExpression read &&
-            PrefixBindingContext.IsProvisionalVariable(read.Variable) {
+        // A function value whose type a call infers (`let f = G(1)`, then `f()`) changes with that call,
+        // also a CLR delegate that the call invokes through `Invoke`.
+        let calledValue BoundExpression? = if node is BoundIndirectCallExpression indirect {
+            indirect.Target
+        } else if node is BoundImportedInstanceCallExpression invoke {
+            invoke.Receiver
+        } else {
+            default(BoundExpression?)
+        }
+        if calledValue is BoundVariableExpression read && PrefixBindingContext.IsProvisionalVariable(read.Variable) {
             return true
         }
         // A later local of a function literal's block can hide a simple-name callee, also an exact one.
@@ -101,12 +102,14 @@ internal shared class PrefixRetarget {
             let function = call.Function
             if function.IsExtension {
                 // A later member of an incomplete receiver type beats a receiver function, also an exact one.
-                return TypeCanGetMembers(function.ExtensionReceiverType) ||
-                    TypeCanGetMembers(qualifierType) ||
+                return HierarchyCanGrow(function.ExtensionReceiverType, nil) ||
+                    HierarchyCanGrow(qualifierType, nil) ||
                     !IsExactMatch(function, call.Arguments, syntax)
             }
             if kind == PrefixCallKind.Name {
-                return !IsExactMatch(function, call.Arguments, syntax)
+                // A later member of an enclosing type that can get members hides a function of the package
+                // or of a base type, also an exact one.
+                return EnclosingTypeCanHide(syntax, function) || !IsExactMatch(function, call.Arguments, syntax)
             }
             return MemberCanChange(qualifierType, function, call.Arguments, syntax)
         }
@@ -114,16 +117,17 @@ internal shared class PrefixRetarget {
             return MemberCanChange(qualifierType ?? instance.Receiver.Type, instance.Method, instance.Arguments, syntax)
         }
         if node is BoundBaseClassCallExpression baseCall {
-            // A later member of the base class can be better; one of the derived class cannot.
+            // A later member of the base class, or of a type between it and the chosen member's owner, can be
+            // better; one of the derived class cannot.
             return if baseCall.Method is {} method {
-                OwnerCanGetMembers(method) && !IsExactMatch(method, baseCall.Arguments, syntax)
+                MemberCanChange(baseCall.BaseClass, method, baseCall.Arguments, syntax)
             } else {
-                TypeCanGetMembers(baseCall.BaseClass)
+                HierarchyCanGrow(baseCall.BaseClass, nil)
             }
         }
         if node is BoundImportedInstanceCallExpression importedInstance {
             // A later member of a source receiver type beats the member it inherits from an imported base.
-            return TypeCanGetMembers(qualifierType) || TypeCanGetMembers(importedInstance.Receiver.Type)
+            return HierarchyCanGrow(qualifierType ?? importedInstance.Receiver.Type, nil)
         }
         if node is BoundClrStaticCallExpression ||
             node is BoundClrConstructorCallExpression ||
@@ -132,7 +136,7 @@ internal shared class PrefixRetarget {
             // imported type gets no later overload. A later source type that hides the imported type is not
             // a premise here (#6215). A simple name of an imported static member can be hidden by a later
             // function of this package, so it is not fixed.
-            return TypeCanGetMembers(qualifierType)
+            return HierarchyCanGrow(qualifierType, nil)
         }
         // Each other call can change until it is shown to be fixed.
         return true
@@ -146,14 +150,62 @@ internal shared class PrefixRetarget {
         arguments ImmutableArray[BoundExpression],
         syntax SyntaxNode
     ) bool {
-        let qualifierCanGrow = TypeCanGetMembers(qualifierType)
-        if !qualifierCanGrow && !OwnerCanGetMembers(function) {
-            return false
-        }
-        if qualifierCanGrow && !object.ReferenceEquals(function.ContainingType, qualifierType) {
+        let owner = function.ContainingType ?? function.StaticOwnerType ?? function.ReceiverType
+        // A type between the qualifier and the owner can hide the member with a later one, also an exact one.
+        if HierarchyCanGrow(qualifierType, owner) {
             return true
         }
-        return !IsExactMatch(function, arguments, syntax)
+        return OwnerCanGetMembers(function) && !IsExactMatch(function, arguments, syntax)
+    }
+
+    // Whether a type of [`type`](paramref)'s hierarchy, before [`stop`](paramref), can get members: a later
+    // member of it overloads or hides what the lookup found further up. Without a stop, the whole hierarchy
+    // counts.
+    private func HierarchyCanGrow(type TypeSymbol?, stop TypeSymbol?) bool {
+        var current = type
+        while current is NullableTypeSymbol nullable {
+            current = nullable.UnderlyingType
+        }
+        if current is PlatformTypeSymbol platform {
+            current = platform.UnderlyingType
+        }
+        if current is StructSymbol aggregate {
+            for level in aggregate.GetHierarchy() {
+                if stop != nil && object.ReferenceEquals(level, stop) {
+                    return false
+                }
+                if TypeCanGetMembers(level) {
+                    return true
+                }
+            }
+            return false
+        }
+        return stop == nil && TypeCanGetMembers(current)
+    }
+
+    // Whether a type that encloses [`syntax`](paramref) can get a later member that hides
+    // [`function`](paramref), which a simple name resolved to: the function is not a member of that type.
+    private func EnclosingTypeCanHide(syntax SyntaxNode, function FunctionSymbol) bool {
+        let tree = syntax.SyntaxTree
+        var current SyntaxNode? = tree.GetParent(syntax)
+        while current != nil {
+            if current is StructDeclarationSyntax declaration && PrefixBindingContext.IsIncompleteType(declaration) {
+                let declaredHere = function.ContainingType is StructSymbol owner &&
+                    owner.Declaration is {} ownerDeclaration &&
+                    (
+                    object.ReferenceEquals(ownerDeclaration, declaration) ||
+                        (
+                        declaration.IsPartial &&
+                            ownerDeclaration.Identifier.ValueText == declaration.Identifier.ValueText
+                    )
+                )
+                if !declaredHere {
+                    return true
+                }
+            }
+            current = tree.GetParent(current)
+        }
+        return false
     }
 
     private func OwnerCanGetMembers(function FunctionSymbol) bool -> TypeCanGetMembers(
