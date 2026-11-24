@@ -349,17 +349,18 @@ partial class SemanticModel {
         }
     }
 
-    // #6217: the terminal right part of an inner accessor (`C` of `B.C` in `A.B.C`). G# nests a chain to the
-    // right, so an inner accessor has the value of the whole chain.
+    // #6217: the outermost accessor of the chain of an inner accessor (`A.B.C` for `B.C`). G# nests a chain
+    // to the right, so an inner accessor has the value of the whole chain, also when its terminal is an
+    // index expression that has no anchor of its own (`bag.D.Id[0]`).
     private func InnerAccessorTerminal(node SyntaxNode) ExpressionSyntax? {
         if node is not AccessorExpressionSyntax accessor || !IsInnerAccessor(accessor) {
             return nil
         }
-        var terminal ExpressionSyntax = accessor.RightPart
-        while terminal is AccessorExpressionSyntax segment {
-            terminal = segment.RightPart
+        var outer AccessorExpressionSyntax = accessor
+        while outer.Parent is AccessorExpressionSyntax parent && object.ReferenceEquals(parent.RightPart, outer) {
+            outer = parent
         }
-        return terminal
+        return outer
     }
 
     private func IsInnerAccessor(

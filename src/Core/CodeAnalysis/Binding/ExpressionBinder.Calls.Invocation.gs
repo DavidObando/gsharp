@@ -1525,6 +1525,21 @@ internal partial class ExpressionBinder {
             .IsDefaultOrEmpty {
             return
         }
+        // A default method of an implemented interface also wins (ADR-0085).
+        if receiver.Type is StructSymbol receiverClass {
+            for level in receiverClass.GetHierarchy() {
+                for iface in level.Interfaces {
+                    if iface != nil && !TypeMemberModel.GetMethods(
+                        iface,
+                        methodName,
+                        MemberQuery.Instance(MemberKinds.Method)
+                    )
+                        .IsDefaultOrEmpty {
+                        return
+                    }
+                }
+            }
+        }
         let mark = Diagnostics.Count
         let narrowing = CaptureNarrowingBindSnapshot()
         let selectedProperty = lastSelectedCallablePropertyLoad

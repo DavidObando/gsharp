@@ -130,6 +130,15 @@ open class Issue6199FunctionValueCalleeGapTests {
     }
 
     @Fact
+    func DefaultInterfaceMethodOfTheSameNameAsAField_IsNotAnsweredAsTheField() {
+        // A default method of an implemented interface wins over a callable field of the class (ADR-0085).
+        let source = "package P\n\ninterface I {\n    func G(v int32) string {\n        return \"\"\n    }\n}\n\nclass C : I {\n    var G (int32) -> int32 = (v int32) -> v\n}\n\nfunc F(c C) {\n    let x = 1\n    let k = c.G(v: x, v: x)\n}\n"
+        let (model, tree, compilation) = CreateModel(source)
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Id == "GS0245")
+        Assert.IsNotType[FieldSymbol](model.GetSymbolInfo(Callee(tree, "G")).Symbol)
+    }
+
+    @Fact
     func FieldDeclarationToken_AnswersAsBeforeWhenACallFails() {
         // A failed call of an implicit field keeps its callee load. The declaration's token answers what it
         // answers when the call binds.

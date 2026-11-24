@@ -54,12 +54,13 @@ open class Issue6217MemberAccessNameTests {
     @InlineData("bag.D.Id.Length", "Id.Length", "Length", "int32")
     @InlineData("sb.Append(1).Length", "Append(1).Length", "Length", "int32")
     @InlineData("bag.D.Name()", "D.Name()", "Name", "string") // a call terminal answered before
+    @InlineData("bag.D.Id[0]", "D.Id[0]", "Id", "char") // an index terminal with no anchor of its own
     func InnerAccessor_AnswersAsTheWholeChain(expression string, inner string, symbolName string, type string) {
         let (model, tree, _) = CreateModel(expression)
         let accessors = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().ToList()
         let node = accessors.Single((a AccessorExpressionSyntax) -> tree.Text.ToString(a.Span) == inner)
         let outer = accessors.Single((a AccessorExpressionSyntax) -> tree.Text.ToString(a.Span) == expression)
-        Assert.Equal(symbolName, model.GetSymbolInfo(node).Symbol?.Name)
+        Assert.Equal(symbolName, model.GetSymbolInfo(node).Symbol?.Name ?? "")
         // An imported member is a new symbol for each query, so the test compares what it displays.
         Assert.Equal(model.GetSymbolInfo(outer).Symbol?.ToString(), model.GetSymbolInfo(node).Symbol?.ToString())
         Assert.Equal(type, model.GetTypeInfo(node).Type?.ToString())
