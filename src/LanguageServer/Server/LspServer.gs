@@ -686,16 +686,16 @@ class LspServer {
             return nil
         }
         // The edit can name a document by another encoding of its path than the client opened it with,
-        // so the lookup matches the path (ADR-0227 D7). The gate orders it after an earlier didChange.
-        var content DocumentContent? = nil
+        // so the lookup matches the path (ADR-0227 D7). The lookup, the text check and the request are
+        // under one hold of the gate, so a later didChange or didClose comes after the request.
         await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false)
         try {
-            content = LspServer.FindOpenDocument(this.documentContentService, uri)
+            let content DocumentContent? = LspServer.FindOpenDocument(this.documentContentService, uri)
+            if content != nil && CodeActionComputer.HoldsPlaceholder(content, selection) {
+                this.SendShowDocument(ShowDocumentParams{Uri: uri, TakeFocus: true, Selection: selection.Range})
+            }
         } finally {
             this.gate.Release()
-        }
-        if content != nil && CodeActionComputer.HoldsPlaceholder(content, selection) {
-            this.SendShowDocument(ShowDocumentParams{Uri: uri, TakeFocus: true, Selection: selection.Range})
         }
         return nil
     }
