@@ -81,19 +81,39 @@ open class Issue6199FunctionValueCalleeGapTests {
     }
 
     @Theory
-    @InlineData("c.P(v: x, v: x)", "P")
-    @InlineData("c.G(v: x, v: x)", "G")
-    func MemberCalleeOfACallWhoseArgumentsDoNotAnalyse_AnswersAndKeepsTheMemberGroup(statement string, name string) {
-        // The member is resolved for the semantic model only: the call keeps the member group and the
-        // diagnostics that it has without the resolution.
-        let (model, tree, compilation) = CreateModel(MemberSource.Replace("@@CALL", statement))
+    @InlineData("c.P(v: x, v: x)", "c.P(x)", "P")
+    @InlineData("c.G(v: x, v: x)", "c.G(x)", "G")
+    func MemberCalleeOfACallWhoseArgumentsDoNotAnalyse_AnswersAsTheCallThatBinds(
+        statement string,
+        bound string,
+        name string
+    ) {
+        // The member is resolved for the semantic model only: the call keeps the diagnostics that it has
+        // without the resolution, and its member group is the group of the call that binds (a field or a
+        // property answers itself alone).
+        let (model, tree, compilation) = CreateModel(
+            MemberSource.Replace("@@CALL", statement),
+            recordMemberGroups: true
+        )
         AssertDiagnostic(compilation, "GS0245")
+        let (boundModel, boundTree, boundCompilation) = CreateModel(
+            MemberSource.Replace("@@CALL", bound),
+            recordMemberGroups: true
+        )
+        AssertDiagnostic(boundCompilation, "")
         let callee = Callee(tree, name)
         Assert.Equal(name, model.GetSymbolInfo(callee).Symbol?.Name)
         Assert.Equal("(int32) -> int32", model.GetTypeInfo(callee).Type?.ToString())
         let call = tree.Root.DescendantNodes().OfType[CallExpressionSyntax]().Single()
-        Assert.Empty(model.GetMemberGroup(call))
-        Assert.Empty(model.GetMemberGroup(Assert.IsType[AccessorExpressionSyntax](call.Parent)))
+        let boundCall = boundTree.Root.DescendantNodes().OfType[CallExpressionSyntax]().Single()
+        Assert.Equal(
+            boundModel.GetMemberGroup(boundCall).Select((m Symbol) -> m.ToString()).ToArray(),
+            model.GetMemberGroup(call).Select((m Symbol) -> m.ToString()).ToArray()
+        )
+        Assert.Equal(
+            boundModel.GetMemberGroup(Callee(boundTree, name)).Select((m Symbol) -> m.ToString()).ToArray(),
+            model.GetMemberGroup(callee).Select((m Symbol) -> m.ToString()).ToArray()
+        )
     }
 
     @Fact
@@ -151,9 +171,14 @@ open class Issue6199FunctionValueCalleeGapTests {
             }
         }
 
-        private func CreateModel(source string)(SemanticModel, SyntaxTree, Compilation) {
+        private func CreateModel(source string, recordMemberGroups bool = false)(
+            SemanticModel,
+            SyntaxTree,
+            Compilation
+        ) {
             let tree = SyntaxTree.Parse(SourceText.From(source, "issue6199.gs"))
             let compilation = Compilation(tree)
+            compilation.RecordMemberGroups = recordMemberGroups
             return (compilation.GetSemanticModel(tree), tree, compilation)
         }
 
