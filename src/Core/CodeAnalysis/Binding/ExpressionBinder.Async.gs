@@ -1313,15 +1313,15 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         let (condition, whenTrue, whenFalse) = BindConditionalRefParts(conditionSyntax, whenTrueSyntax, whenFalseSyntax)
         if whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression {
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         if !IsLvalueIgnoringConditionalTypeMatch(whenTrue) {
             Diagnostics.ReportCannotTakeAddressOfNonLvalue(whenTrueSyntax.Location, whenTrueSyntax.ToString())
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         if !IsLvalueIgnoringConditionalTypeMatch(whenFalse) {
             Diagnostics.ReportCannotTakeAddressOfNonLvalue(whenFalseSyntax.Location, whenFalseSyntax.ToString())
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         // Branch storage types must match — no implicit widening, since the
         // resulting byref selects between slots whose physical type must agree.
@@ -1342,7 +1342,7 @@ internal partial class ExpressionBinder {
             useEffectiveNullability,
             out var falseStorageType
         ) {
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         if !ConditionalStorageTypesMatch(
             trueStorageType,
@@ -1354,7 +1354,7 @@ internal partial class ExpressionBinder {
                 trueStorageType?.Name ?? "?",
                 falseStorageType?.Name ?? "?"
             )
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         let requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&"
         if requiresWritable {
@@ -1364,14 +1364,14 @@ internal partial class ExpressionBinder {
                 ownReceiver
             ) {
                 Diagnostics.ReportCannotTakeAddressOfConstant(whenTrueSyntax.Location, whenTrueSyntax.ToString())
-                return BoundErrorExpression(nil)
+                return FailedConditional(condition, whenTrue, whenFalse)
             }
             if RefCapabilities.IsReadOnlyStorage(whenFalse) || RefCapabilities.IsCapturedValueTypeReceiverStorage(
                 whenFalse,
                 ownReceiver
             ) {
                 Diagnostics.ReportCannotTakeAddressOfConstant(whenFalseSyntax.Location, whenFalseSyntax.ToString())
-                return BoundErrorExpression(nil)
+                return FailedConditional(condition, whenTrue, whenFalse)
             }
         }
         let mergedStorageType = MergeConditionalStorageType(trueStorageType, falseStorageType)

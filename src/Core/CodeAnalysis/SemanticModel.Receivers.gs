@@ -573,7 +573,10 @@ partial class SemanticModel {
         }
     }
 
-    private func CapturedIndexArgument(anchored BoundExpression) BoundExpression? {
+    private func CapturedIndexArgument(
+        anchored BoundExpression,
+        expectedBlockSyntax SyntaxNode? = nil
+    ) BoundExpression? {
         var read = Unwrap(anchored)
         if read is BoundDereferenceExpression dereference &&
             dereference.Operand.Type is ByRefTypeSymbol &&
@@ -585,8 +588,13 @@ partial class SemanticModel {
         if read is not BoundBlockExpression block ||
             block.Statements.Length != 1 ||
             CapturedIndexTarget(block) == nil ||
-            block.Statements[0] is not BoundVariableDeclaration capture {
+            block.Statements[0] is not BoundVariableDeclaration capture ||
+            (expectedBlockSyntax != nil && !object.ReferenceEquals(block.Syntax, expectedBlockSyntax)) {
             return nil
+        }
+        if block.CapturedIndexExpression is {} capturedIndex &&
+            (expectedBlockSyntax != nil || object.ReferenceEquals(capturedIndex.Syntax, block.Syntax)) {
+            return capturedIndex
         }
         let argument BoundExpression? = switch block.Expression {
             case BoundClrIndexExpression{Target: BoundVariableExpression receiver} idx when object.ReferenceEquals(
@@ -600,8 +608,15 @@ partial class SemanticModel {
                 call.Arguments.Length == 1: call.Arguments[0]
             default: default(BoundExpression?)
         }
-        return if argument != nil && object.ReferenceEquals(argument.Syntax, block.Syntax) {
+        return if argument == nil {
+            default(BoundExpression?)
+        } else if object.ReferenceEquals(argument.Syntax, block.Syntax) {
             argument
+        } else if argument.Syntax == nil && Unwrap(argument) is {} unwrapped && object.ReferenceEquals(
+            unwrapped.Syntax,
+            block.Syntax
+        ) {
+            unwrapped
         } else {
             default(BoundExpression?)
         }

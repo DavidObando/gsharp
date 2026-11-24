@@ -1645,7 +1645,9 @@ abstract class BoundTreeRewriter {
         if statementBuilder == nil && expression == node.Expression {
             return node
         }
-        return BoundBlockExpression(node.Syntax, statementBuilder?.ToImmutable() ?? node.Statements, expression)
+        return BoundBlockExpression(node.Syntax, statementBuilder?.ToImmutable() ?? node.Statements, expression){
+            CapturedIndexExpression = node.CapturedIndexExpression
+        }
     }
 
     /// Rewrites a class primary-constructor call.

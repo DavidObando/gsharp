@@ -1613,7 +1613,7 @@ internal class ConversionClassifier {
             return if expression is BoundErrorExpression {
                 expression
             } else {
-                BoundErrorExpression(nil)
+                BoundErrorExpression.WithFailedOperands(expression)
             }
         }
         if !allowExplicit && conversion.IsExplicit {

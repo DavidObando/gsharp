@@ -302,7 +302,8 @@ internal partial class ExpressionBinder {
             arguments = ImmutableArray.Create[BoundExpression](fromEndOperand, BoundLiteralExpression(nil, true))
             indexer = clrType.GetProperties().Single((p PropertyInfo) -> p.GetIndexParameters().Length == 2)
         } else {
-            var index = boundIndex ?? BindExpression(syntax)
+            let originalIndex = boundIndex ?? BindExpression(syntax)
+            var index = originalIndex
             if ClrTypeUtilities.AreSame(index.Type.ClrType, typeof(Range)) {
                 ApplySubExpressionNarrowingEffects(syntax, index)
                 let method = clrType.GetMethods().Single(
@@ -318,7 +319,7 @@ internal partial class ExpressionBinder {
                         target.Type,
                         ImmutableArray.Create(index)
                     )
-                )
+                ){CapturedIndexExpression = originalIndex}
             }
             let isIndex = ClrTypeUtilities.AreSame(index.Type.ClrType, typeof(Index))
             if !isIndex {
@@ -335,6 +336,19 @@ internal partial class ExpressionBinder {
                         typeof(int32)
                     }
                 )
+            )
+            let pointerWithIndex = BoundClrIndexExpression(
+                syntax,
+                receiver,
+                indexer,
+                arguments,
+                ByRefTypeSymbol.Get(elementType)
+            )
+            return BoundDereferenceExpression(
+                syntax,
+                BoundBlockExpression(syntax, statements.ToImmutable(), pointerWithIndex){
+                    CapturedIndexExpression = originalIndex
+                }
             )
         }
         let pointer = BoundClrIndexExpression(syntax, receiver, indexer, arguments, ByRefTypeSymbol.Get(elementType))
@@ -355,24 +369,29 @@ internal partial class ExpressionBinder {
             expression: "element"
         )
         if readOnly {
-            let _ = bindValue(elementType)
+            let value = bindValue(elementType)
             Diagnostics.ReportNativeSliceReadOnlyElement(location)
-            return BoundErrorExpression(indexSyntax)
+            let error = BoundErrorExpression.WithFailedOperands(target, value)
+            if boundIndex is {} keptIndex {
+                error.KeepOperands(keptIndex)
+            }
+            return error
         }
         let indexed = BindNativeSliceIndex(target, indexSyntax, boundIndex)
         let value = bindValue(elementType)
         if AsyncBoundTreeQueries.HasAwait(value) {
             Diagnostics.ReportNativeSliceSuspendingWrite(location)
-            return BoundErrorExpression(indexSyntax)
+            return BoundErrorExpression.WithFailedOperands(indexed, value)
         }
         if indexed is not BoundDereferenceExpression access {
             Diagnostics.ReportNativeSliceType(location, "a range is a view, not an assignable element")
-            return BoundErrorExpression(indexSyntax)
+            return BoundErrorExpression.WithFailedOperands(indexed, value)
         }
-        return BoundIndirectAssignmentExpression(indexSyntax, access.Operand, value)
+        return BoundIndirectAssignmentExpression(nil, access.Operand, value)
     }
 
     private func BindNativeSliceCompoundAssignment(
+        outerSyntax SyntaxNode,
         target BoundExpression,
         indexSyntax ExpressionSyntax,
         operation SyntaxToken,
@@ -383,17 +402,17 @@ internal partial class ExpressionBinder {
         NativeSliceTypes.TryGetElement(target.Type, out _, out var readOnly)
         if readOnly {
             Diagnostics.ReportNativeSliceReadOnlyElement(operation.Location)
-            return BoundErrorExpression(indexSyntax)
+            return BoundErrorExpression.WithFailedOperands(target)
         }
         let indexed = BindNativeSliceIndex(target, indexSyntax)
         let value = BindExpression(valueSyntax)
         if AsyncBoundTreeQueries.HasAwait(value) {
             Diagnostics.ReportNativeSliceSuspendingWrite(valueSyntax.Location)
-            return BoundErrorExpression(indexSyntax)
+            return BoundErrorExpression.WithFailedOperands(indexed, value)
         }
         if indexed is not BoundDereferenceExpression access {
             Diagnostics.ReportNativeSliceType(operation.Location, "a range is not an assignable element")
-            return BoundErrorExpression(indexSyntax)
+            return BoundErrorExpression.WithFailedOperands(indexed, value)
         }
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         let address = DeclareRangeTemp("address", access.Operand.Type, access.Operand, statements)
@@ -403,7 +422,7 @@ internal partial class ExpressionBinder {
         let compoundTarget = read
         let previousValue = CapturePostfixCompoundValue(
             returnsPreviousValue,
-            indexSyntax,
+            outerSyntax,
             &read,
             out var previousDeclaration
         )
@@ -415,7 +434,7 @@ internal partial class ExpressionBinder {
         )
         if userCompound != nil {
             return FinishUserCompoundIncrement(
-                indexSyntax,
+                outerSyntax,
                 returnsPreviousValue,
                 isIncrementDecrement,
                 compoundTarget,
@@ -428,14 +447,12 @@ internal partial class ExpressionBinder {
         var result BoundExpression? = TryBindCompoundBinaryOperation(binaryKind, read, value, valueSyntax.Location)
         if result == nil {
             Diagnostics.ReportUndefinedBinaryOperator(operation.Location, operation.Text, access.Type, value.Type)
-            // The element access and the value keep their answers in the semantic model (#6187).
-            let failedCompound = BoundErrorExpression(indexSyntax)
-            failedCompound.KeepOperands(indexed, value)
-            return failedCompound
+            // The element access and the value keep their answers in the semantic model (#6187, #6204).
+            return BoundErrorExpression.WithFailedOperands(indexed, value)
         }
         result = conversions.BindConversion(valueSyntax.Location, result, access.Type)
-        let assignment = BoundIndirectAssignmentExpression(indexSyntax, addressRef, result)
-        return FinishPostfixCompoundAssignment(indexSyntax, statements, previousDeclaration, previousValue, assignment)
+        let assignment = BoundIndirectAssignmentExpression(outerSyntax, addressRef, result)
+        return FinishPostfixCompoundAssignment(outerSyntax, statements, previousDeclaration, previousValue, assignment)
     }
 
     private func RejectNativeSpanAllocation(syntax ExpressionSyntax) BoundExpression {

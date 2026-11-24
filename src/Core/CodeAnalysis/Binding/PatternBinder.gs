@@ -349,7 +349,9 @@ internal class PatternBinder {
         expressionResolved = !(expression is BoundErrorExpression) && expression.Type != TypeSymbol.Error
         if ByteStringTypes.IsDefinition(expression.Type.ClrType) {
             Diagnostics.ReportSwitchCaseValueNotConstant(syntax.Expression.Location)
-            return BoundConstantPattern(syntax, discriminantType, BoundErrorExpression(syntax))
+            let error = BoundErrorExpression(syntax)
+            error.KeepOperands(expression)
+            return BoundConstantPattern(syntax, discriminantType, error)
         }
         // Issue #1157: adapt a constant integer LITERAL case label that fits the
         // discriminant's integer type to that type, mirroring the constant
@@ -381,7 +383,9 @@ internal class PatternBinder {
             if expression.Type != TypeSymbol.Error && discriminantType != TypeSymbol.Error {
                 Diagnostics.ReportSwitchCaseTypeMismatch(syntax.Expression.Location, expression.Type, discriminantType)
             }
-            return BoundConstantPattern(syntax, discriminantType, BoundErrorExpression(syntax))
+            let error = BoundErrorExpression(syntax)
+            error.KeepOperands(expression)
+            return BoundConstantPattern(syntax, discriminantType, error)
         }
         // Issue #2072: route the nil-arm conversion through the same
         // classifier entry point used everywhere else (`ConversionClassifier.
