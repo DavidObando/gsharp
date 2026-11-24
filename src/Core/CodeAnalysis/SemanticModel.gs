@@ -216,6 +216,9 @@ partial class SemanticModel {
             target = parenthesized.Expression
         }
         var bound BoundNode? = GetBoundNode(target, cancellationToken)
+        if bound is BoundExpression candidate && CapturedIndexArgument(candidate) is {} capturedArgument {
+            bound = capturedArgument
+        }
         for var depth = 0; depth < 16; depth++ {
             if bound is not{} current {
                 break
@@ -292,7 +295,7 @@ partial class SemanticModel {
     /// @returns The resolution result; (cref:TypeInfo.Type) is null for non-expressions.
     func GetTypeInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) TypeInfo {
         return if GetBoundNode(node, cancellationToken) is BoundExpression expression {
-            TypeInfo(expression.Type)
+            TypeInfo((CapturedIndexArgument(expression) ?? expression).Type)
         } else {
             TypeInfo.None
         }
@@ -590,6 +593,11 @@ partial class SemanticModel {
             if !error.FailedOperands.IsDefaultOrEmpty {
                 for operand in error.FailedOperands {
                     VisitExpression(operand)
+                }
+            }
+            if !error.FailedPatterns.IsDefaultOrEmpty {
+                for pattern in error.FailedPatterns {
+                    VisitPattern(pattern)
                 }
             }
             if error.FailedReceiver is {} receiver {

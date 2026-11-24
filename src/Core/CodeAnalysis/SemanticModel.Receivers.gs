@@ -600,8 +600,15 @@ partial class SemanticModel {
                 call.Arguments.Length == 1: call.Arguments[0]
             default: default(BoundExpression?)
         }
-        return if argument != nil && object.ReferenceEquals(argument.Syntax, block.Syntax) {
+        return if argument == nil {
+            default(BoundExpression?)
+        } else if object.ReferenceEquals(argument.Syntax, block.Syntax) {
             argument
+        } else if argument.Syntax == nil && Unwrap(argument) is {} unwrapped && object.ReferenceEquals(
+            unwrapped.Syntax,
+            block.Syntax
+        ) {
+            unwrapped
         } else {
             default(BoundExpression?)
         }

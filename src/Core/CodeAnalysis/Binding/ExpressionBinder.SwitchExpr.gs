@@ -69,7 +69,9 @@ internal partial class ExpressionBinder {
                 syntax.Location,
                 "native protocol switch patterns require an explicit is/as intermediate view"
             )
-            return BoundErrorExpression(syntax)
+            let error = BoundErrorExpression(syntax)
+            error.KeepOperands(discriminant)
+            return error
         }
         ApplyConditionEffectsAndHeaderAliases(syntax.Expression, discriminant)
         let materializedSwitchType = TypeSymbol.MaterializeNeverFunctionReturns(discriminant.Type)
@@ -79,11 +81,11 @@ internal partial class ExpressionBinder {
         let switchType = discriminant.Type
         if switchType == TypeSymbol.Error {
             let _ = ReportUnresolvedTargetlessValues(discriminant)
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(discriminant)
         }
         if TypeSymbol.ContainsNeverType(switchType) {
             Diagnostics.ReportExpressionMustHaveValue(syntax.Expression.Location)
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(discriminant)
         }
         if syntax.Arms.Length == 0 {
             // ADR-0225: a switch expression that is open at the cut can still get its arms.
@@ -103,7 +105,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location)
             }
             Diagnostics.PopPremiseIf(emptyPushed)
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(discriminant)
         }
         var hasDefault = false
         var hasCatchAll = false
@@ -342,7 +344,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 return BoundErrorExpression(syntax)
             }
-            return BoundErrorExpression(nil)
+            return FailedSwitch(discriminant, boundArmBuilders)
         }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(
@@ -389,7 +391,11 @@ internal partial class ExpressionBinder {
                     )
                     anyArmFailed = true
                 }
-                result = BoundErrorExpression(nil)
+                result = if result is BoundErrorExpression {
+                    result
+                } else {
+                    BoundErrorExpression.WithFailedOperands(result)
+                }
             } else if !conversion.IsIdentity {
                 // Issue #1151: route the materialised conversion through
                 // BindConversion so value-type `nil → T?` arms are lowered to a
@@ -430,6 +436,23 @@ internal partial class ExpressionBinder {
         )
         Diagnostics.PopPremiseIf(exhaustivenessPushed)
         return BoundSwitchExpression(nil, discriminant, boundArms, resultType)
+    }
+
+    private func FailedSwitch(
+        discriminant BoundExpression,
+        armBuilders IReadOnlyList[
+            (Syntax SwitchExpressionArmSyntax, Pattern BoundPattern?, Guard BoundExpression?, Result BoundExpression)
+        ]
+    ) BoundErrorExpression {
+        let error = BoundErrorExpression.WithFailedOperands(discriminant)
+        for arm in armBuilders {
+            error.KeepPattern(arm.Pattern)
+            if arm.Guard is {} armGuard {
+                error.KeepOperands(armGuard)
+            }
+            error.KeepOperands(arm.Result)
+        }
+        return error
     }
 
     private func JoinSwitchArmExpressionNarrowingFrames(

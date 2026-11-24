@@ -3054,6 +3054,7 @@ internal partial class ExpressionBinder {
             compoundRhsSyntax != nil {
             ApplySubExpressionNarrowingEffects(remainingChain, boundReceiver)
             return BindNativeSliceCompoundAssignment(
+                outerSyntax,
                 boundReceiver,
                 indexSyntax,
                 compoundOperatorToken,
@@ -3572,9 +3573,9 @@ internal partial class ExpressionBinder {
             elementType TypeSymbol
         ) BoundExpression {
             return if hasNarrowedTarget {
-                BoundIndexAssignmentExpression.WithExpressionTarget(indexSyntax, target, index, value, elementType)
+                BoundIndexAssignmentExpression.WithExpressionTarget(nil, target, index, value, elementType)
             } else {
-                BoundIndexAssignmentExpression(indexSyntax, variable, index, value, elementType)
+                BoundIndexAssignmentExpression(nil, variable, index, value, elementType)
             }
         }
         let MakeClrIndexAssignment = func (
@@ -3587,7 +3588,11 @@ internal partial class ExpressionBinder {
         ) BoundExpression {
             if indexer.SetMethod != nil && isReadOnlyReceiver {
                 Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
-                return BoundErrorExpression(indexSyntax)
+                let error = BoundErrorExpression.WithFailedOperands(target, value)
+                for argument in arguments {
+                    error.KeepOperands(argument)
+                }
+                return error
             }
             for argument in arguments {
                 if RequiresSuspensionFreeAddressCapture(argument) && AsyncBoundTreeQueries.HasAwait(value) {
@@ -3595,12 +3600,16 @@ internal partial class ExpressionBinder {
                         diagnosticLocation,
                         "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
                     )
-                    return BoundErrorExpression(indexSyntax)
+                    let error = BoundErrorExpression.WithFailedOperands(target, value)
+                    for item in arguments {
+                        error.KeepOperands(item)
+                    }
+                    return error
                 }
             }
             return if hasNarrowedTarget {
                 BoundClrIndexAssignmentExpression.WithExpressionTarget(
-                    indexSyntax,
+                    nil,
                     target,
                     indexer,
                     arguments,
@@ -3611,7 +3620,7 @@ internal partial class ExpressionBinder {
                 )
             } else {
                 BoundClrIndexAssignmentExpression(
-                    indexSyntax,
+                    nil,
                     variable,
                     indexer,
                     arguments,
@@ -4830,13 +4839,14 @@ internal partial class ExpressionBinder {
         targetLocation TextLocation
     ) BoundExpression {
         if target is BoundErrorExpression || target.Type == TypeSymbol.Error || target.Type == nil {
+            let error = BoundErrorExpression.WithFailedOperands(target)
             if $range.LowerBound != nil {
-                let _ = BindExpression($range.LowerBound)
+                error.KeepOperands(BindExpression($range.LowerBound))
             }
             if $range.UpperBound != nil {
-                let _ = BindExpression($range.UpperBound)
+                error.KeepOperands(BindExpression($range.UpperBound))
             }
-            return BoundErrorExpression(nil)
+            return error
         }
         if NativeSliceTypes.TryGetElement(target.Type, out _, out _) {
             return BindNativeSliceRange(target, $range)
@@ -4888,7 +4898,7 @@ internal partial class ExpressionBinder {
             }
         }
         Diagnostics.ReportTypeNotSliceable($range.Location, target.Type)
-        return BoundErrorExpression(nil)
+        return BoundErrorExpression.WithFailedOperands(target)
     }
 
     private func DeclareRangeTemp(
