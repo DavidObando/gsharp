@@ -116,6 +116,40 @@ func F(impl Impl) {
         Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(arg).Type)
     }
 
+    @Fact
+    func ImportedDelegatePropertyHidingInheritedMethod_UnresolvedTypeArgument_KeepsGS0113AndGS0148() {
+        using let fixture = GSharp.Core.Tests.CSharpFixture(`namespace PropHidesMethod6200;
+using System;
+public class Base {
+    public void P() {}
+}
+public class Derived : Base {
+    public new Func<int, int> P => v => v;
+}`)
+        using let resolver = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let source = `package P
+import PropHidesMethod6200
+
+func F(d Derived) {
+    let x = 1
+    let _ = d.P[Nope](x)
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6200_prop_hides_method.gs"))
+        let compilation = Compilation(resolver, tree)
+        let model = compilation.GetSemanticModel(tree)
+        Assert.Equal([]string{"GS0113 Nope", "GS0148 [Nope]"}, Errors(source, compilation))
+        let fBody = tree.Root.DescendantNodes().OfType[FunctionDeclarationSyntax]().Last()
+        let arg = Assert.Single(
+            fBody
+                .DescendantNodes()
+                .OfType[NameExpressionSyntax]()
+                .Where((n NameExpressionSyntax) -> n.IdentifierToken.Text == "x")
+        )
+        Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(arg).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(arg).Type)
+    }
+
     shared {
         private func Template(statement string) string -> `package P
 import System

@@ -1946,6 +1946,9 @@ internal partial class ExpressionBinder {
                         }
                         RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                         ApplySubExpressionNarrowingEffects(ce.Identifier, selectedCalleeEffectsLoad)
+                        if hasUnresolvedTypeArguments && ce.TypeArgumentList is {} failedTypeArguments {
+                            let _ = TryResolveExplicitMethodTypeArgs(failedTypeArguments, out _, out _)
+                        }
                         return bindArgumentsAndDispatch()
                     }
                 )
