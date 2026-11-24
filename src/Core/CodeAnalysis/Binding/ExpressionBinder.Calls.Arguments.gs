@@ -288,8 +288,10 @@ internal partial class ExpressionBinder {
         arguments ImmutableArray[BoundExpression],
         ce CallExpressionSyntax,
         argumentNames ImmutableArray[string],
+        out hasCandidates bool,
         typeArgumentsAlreadyBound bool = false
     ) FunctionSymbol? {
+        hasCandidates = false
         for current in receiverClass.GetHierarchy() {
             for iface in current.Interfaces {
                 if iface == nil {
@@ -305,6 +307,7 @@ internal partial class ExpressionBinder {
                 if defaultsOnly.Count == 0 {
                     continue
                 }
+                hasCandidates = true
                 let selected FunctionSymbol? = this.overloads.SelectInstanceOverloadOrReport(
                     defaultsOnly.ToImmutable(),
                     arguments,
@@ -316,6 +319,7 @@ internal partial class ExpressionBinder {
                 if selected != nil {
                     return selected
                 }
+                return nil
             }
         }
         return nil

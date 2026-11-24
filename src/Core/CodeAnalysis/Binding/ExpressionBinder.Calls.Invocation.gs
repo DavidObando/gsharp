@@ -2550,9 +2550,13 @@ internal partial class ExpressionBinder {
                     arguments,
                     ce,
                     argumentNames,
+                    out var hasDefaultIfaceCandidates,
                     typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
                 )
-                if defaultIfaceMethod != nil {
+                if hasDefaultIfaceCandidates {
+                    if defaultIfaceMethod == nil {
+                        return BoundErrorExpression(nil)
+                    }
                     return overloads.BindUserInstanceCall(
                         receiver,
                         defaultIfaceMethod,
@@ -2882,9 +2886,13 @@ internal partial class ExpressionBinder {
                 arguments,
                 ce,
                 argumentNames,
+                out var hasDefaultIfacePriorityCandidates,
                 typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
             )
-            if defaultIfaceMethodPriority != nil {
+            if hasDefaultIfacePriorityCandidates {
+                if defaultIfaceMethodPriority == nil {
+                    return BoundErrorExpression(nil)
+                }
                 return overloads.BindUserInstanceCall(
                     receiver,
                     defaultIfaceMethodPriority,
@@ -4135,7 +4143,9 @@ internal partial class ExpressionBinder {
                     arguments,
                     ce,
                     argumentNames,
-                    out var constrainedCall
+                    out var constrainedCall,
+                    explicitTypeArgs: explicitTypeArgs,
+                    typeArgSymbols: typeArgSymbols
                 ) {
                     return Succeeded(constrainedCall)
                 }
@@ -4160,7 +4170,8 @@ internal partial class ExpressionBinder {
                     methodName,
                     arguments,
                     ce,
-                    argumentNames
+                    argumentNames,
+                    out _
                 )
                 if defaultInterfaceMethod != nil {
                     return Succeeded(

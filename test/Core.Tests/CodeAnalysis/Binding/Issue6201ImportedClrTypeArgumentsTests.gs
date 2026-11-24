@@ -167,6 +167,56 @@ func F4[T IWeirdToString](w T) string -> w.ToString[Nope, int32]()
         )
     }
 
+    @Fact
+    func NullableConstrainedGenericMethodCall_ReportsNilableReceiverNotMissingFunction() {
+        using let fixture = GSharp.Core.Tests.CSharpFixture(`namespace NullableConstrained6201;
+public interface IApi {
+    U Echo<U>(U value);
+}`)
+        using let resolver = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let source = `package P
+import NullableConstrained6201
+
+func F[T IApi class](v T?) {
+    let _ = v.Echo[int32](1)
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6201_nullable_tp.gs"))
+        let compilation = Compilation(resolver, tree)
+        let error = Assert.Single(
+            compilation.GetDiagnostics().Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        )
+        Assert.Equal("GS0159", error.Id)
+        Assert.Contains("may be nil", error.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func NestedGenericClrConstructorWithMatchingArityFailure_DoesNotSuppressDiagnostics() {
+        using let fixture = GSharp.Core.Tests.CSharpFixture(`namespace NestedGeneric6201;
+public class Outer {
+    public class Inner<T> {
+        private Inner() {}
+    }
+}`)
+        using let resolver = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let source = `package P
+import NestedGeneric6201
+
+func F() {
+    let _ = Outer.Inner[int32]()
+    let _ = Outer.Inner[int32, string]()
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6201_nested_generic.gs"))
+        let compilation = Compilation(resolver, tree)
+        let errorIds = compilation
+            .GetDiagnostics()
+            .Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            .Select((d Diagnostic) -> d.Id)
+            .ToArray()
+        Assert.Equal([]string{"GS0267", "GS0148"}, errorIds)
+    }
+
     shared {
         private func Template(statement string) string -> `package P
 import System

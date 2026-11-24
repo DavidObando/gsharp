@@ -2952,15 +2952,14 @@ internal partial class ExpressionBinder {
                 syntax.Identifier.ValueText,
                 unexpectedTypeArguments.Arguments.Count,
                 out var expectedArity
-            ) {
-                if expectedArity != unexpectedTypeArguments.Arguments.Count {
-                    Diagnostics.ReportWrongTypeArgumentCount(
-                        unexpectedTypeArguments.Location,
-                        syntax.Identifier.ValueText,
-                        expectedArity,
-                        unexpectedTypeArguments.Arguments.Count
-                    )
-                }
+            ) &&
+                expectedArity != unexpectedTypeArguments.Arguments.Count {
+                Diagnostics.ReportWrongTypeArgumentCount(
+                    unexpectedTypeArguments.Location,
+                    syntax.Identifier.ValueText,
+                    expectedArity,
+                    unexpectedTypeArguments.Arguments.Count
+                )
                 result = BoundErrorExpression(syntax)
                 return true
             }

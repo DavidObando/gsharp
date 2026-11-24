@@ -85,6 +85,37 @@ open class Issue6200MemberUnresolvedTypeArgumentTests {
         Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(captured).Type)
     }
 
+    @Fact
+    func InheritedDefaultInterfaceMethodsWithUnresolvedTypeArgument_DoNotCascadeGS0159() {
+        let source = `package P
+
+interface IDefault {
+    func DM(x int32) int32 { return x }
+    func DM[T](x T) T { return x }
+}
+
+class Impl : IDefault {
+}
+
+func F(impl Impl) {
+    let x = 1
+    let a = impl.DM[Nope](x)
+}
+`
+        let (model, tree, compilation) = CreateModel(source)
+        let errors = Errors(source, compilation)
+        Assert.Equal([]string{"GS0113 Nope"}, errors)
+        let fBody = tree.Root.DescendantNodes().OfType[FunctionDeclarationSyntax]().Last()
+        let arg = Assert.Single(
+            fBody
+                .DescendantNodes()
+                .OfType[NameExpressionSyntax]()
+                .Where((n NameExpressionSyntax) -> n.IdentifierToken.Text == "x")
+        )
+        Assert.Equal("x", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(arg).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(arg).Type)
+    }
+
     shared {
         private func Template(statement string) string -> `package P
 import System
