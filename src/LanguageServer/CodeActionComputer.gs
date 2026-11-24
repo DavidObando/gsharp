@@ -217,6 +217,23 @@ shared class CodeActionComputer {
         return action
     }
 
+    /// Returns the action that a resolve gives when it finds no edit for it: without the command that
+    /// selects the placeholder of the edit (issue #6185).
+    /// @param action The action from the client. It is not changed.
+    /// @returns The action when it has an edit; otherwise a copy without its command.
+    func Unresolved(action CodeAction) CodeAction {
+        if action.Edit != nil || action.Command == nil {
+            return action
+        }
+        return CodeAction{
+            Title: action.Title,
+            Kind: action.Kind,
+            Diagnostics: action.Diagnostics,
+            IsPreferred: action.IsPreferred,
+            Data: action.Data
+        }
+    }
+
     // The gated edits that a lazy client resolves later, by an opaque ID (ADR-0227 D7). The cache
     // keeps the newest entries only.
     private let ResolveCache ConcurrentDictionary[string, ResolveEntry] = ConcurrentDictionary[string, ResolveEntry](
@@ -365,7 +382,10 @@ shared class CodeActionComputer {
             let changed = document.GetChangedText()
             // A provider gives the spans. An empty or out-of-range span gives no selection, and the
             // fix keeps its edit.
-            if placeholder.Start < 0 || placeholder.Length <= 0 || placeholder.End > changed.Length {
+            if placeholder.Start < 0 ||
+                placeholder.Start > changed.Length ||
+                placeholder.Length <= 0 ||
+                placeholder.Length > changed.Length - placeholder.Start {
                 return nil
             }
             return Command{

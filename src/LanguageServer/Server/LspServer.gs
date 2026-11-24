@@ -648,7 +648,7 @@ class LspServer {
     ) Task[CodeAction] {
         let uri DocumentUri? = DocumentUri.From(request.Data?.Uri)
         if uri == nil {
-            return Task.FromResult(request)
+            return Task.FromResult(CodeActionComputer.Unresolved(request))
         }
         return this.ReadDocumentAsync(
             TextDocumentIdentifier{Uri: uri},
@@ -658,7 +658,7 @@ class LspServer {
                 this.codeActionClientOptions,
                 ct
             ),
-            request,
+            CodeActionComputer.Unresolved(request),
             cancellationToken,
             caller: "CodeActionResolveAsync"
         )

@@ -466,11 +466,30 @@ open class Adr0227SnippetEditTests {
     }
 
     @Fact
+    async func Resolve_OfAnActionWhoseDocumentIsNotOpen_GivesNoCommand() {
+        // The server has no document for the action (it was closed), so the action gets no edit and no
+        // command, and the action that the client sent is not changed.
+        let client = CodeActionClientOptions{SupportsShowDocument: true, SupportsResolveEdit: true}
+        let listed = FixAction(client, LanguageServerTestHelpers.Content(Source).WithVersion(1), "value", 0, 5)
+        Assert.NotNull(listed.Command)
+        let server = LspServer(DocumentContentService(), WorkspaceState())
+        let resolved = await server.CodeActionResolveAsync(listed)
+        Assert.Null(resolved.Edit)
+        Assert.Null(resolved.Command)
+        Assert.NotNull(listed.Command)
+    }
+
+    @Fact
     func SelectPlaceholder_GivesNoCommand_ForAnEmptyOrOutOfRangeSpan() {
         let content = LanguageServerTestHelpers.Content(Source)
         let uri = DocumentUri.From("file:///a.gs")!!
         let at = Source.IndexOf("null", StringComparison.Ordinal)
-        for span in[]TextSpan{TextSpan(-1, 1), TextSpan(at, 0), TextSpan(Source.Length, 3)} {
+        for span in[]TextSpan{
+            TextSpan(-1, 1),
+            TextSpan(at, 0),
+            TextSpan(Source.Length, 3),
+            TextSpan(1, int32.MaxValue)
+        } {
             let changes = FixChanges(
                 ImmutableArray.Create(
                     DocumentChanges(
