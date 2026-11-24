@@ -12495,7 +12495,11 @@ internal shared class ObliviousNullabilityAnalyzer {
     internal func IsNullGuardDominatedRead(value ExpressionSyntax?, model SemanticModel) bool ->
     NullGuardDominatingRead(value, model) != nil
 
-    internal func NullGuardDominatingRead(value ExpressionSyntax?, model SemanticModel) ExpressionSyntax? {
+    internal func NullGuardDominatingRead(
+        value ExpressionSyntax?,
+        model SemanticModel,
+        activeSwitchLabel((SwitchSectionSyntax) -> SwitchLabelSyntax?)? = nil
+    ) ExpressionSyntax? {
         var stripped ExpressionSyntax? = value
         while stripped is ParenthesizedExpressionSyntax paren {
             stripped = paren.Expression
@@ -12564,6 +12568,28 @@ internal shared class ObliviousNullabilityAnalyzer {
                     NullTestOf(forCondition, symbol, model, whenTrueIsNull: false) is {} guardTest &&
                     GuardValueRemainsUnchanged(forCondition, node, stripped, symbol, model) {
                     return guardTest
+                }
+                case arm is SwitchExpressionArmSyntax when node == arm.Expression &&
+                    arm.WhenClause is {} whenClause &&
+                    NullTestOf(whenClause.Condition, symbol, model, whenTrueIsNull: false) is {} guardTest &&
+                    GuardValueRemainsUnchanged(whenClause.Condition, node, stripped, symbol, model) {
+                    return guardTest
+                }
+                case section is SwitchSectionSyntax when !(
+                    section.Parent is SwitchStatementSyntax switchStmt && HasGotoIntoSwitchSection(switchStmt)
+                ) {
+                    let activeLabel = if activeSwitchLabel != nil {
+                        activeSwitchLabel(section)
+                    } else if section.Labels.Count == 1 {
+                        section.Labels[0]
+                    } else {
+                        default(SwitchLabelSyntax?)
+                    }
+                    if activeLabel is CasePatternSwitchLabelSyntax{WhenClause: {} whenClause} &&
+                        NullTestOf(whenClause.Condition, symbol, model, whenTrueIsNull: false) is {} guardTest &&
+                        GuardValueRemainsUnchanged(whenClause.Condition, node, stripped, symbol, model) {
+                        return guardTest
+                    }
                 }
             }
             // A preceding sibling `if (x == null) <always-exits>` in an
@@ -12829,6 +12855,16 @@ internal shared class ObliviousNullabilityAnalyzer {
         (symbol is not IFieldSymbol || CSharpToGSharpTranslator.IsUnqualifiedOrThisQualifiedFieldRead(value)) &&
         SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(value).Symbol, symbol)
 
+    private func HasGotoIntoSwitchSection(switchStatement SwitchStatementSyntax) bool -> switchStatement
+        .DescendantNodes()
+        .OfType[GotoStatementSyntax]()
+        .Any(
+        (jump GotoStatementSyntax) -> (
+            jump.IsKind(SyntaxKind.GotoCaseStatement) || jump.IsKind(SyntaxKind.GotoDefaultStatement)
+        ) &&
+            jump.Ancestors().OfType[SwitchStatementSyntax]().First() == switchStatement
+    )
+
     // The opposite branch proves non-null; a rejecting branch can also include empty strings.
     private func NullTestOf(
         condition ExpressionSyntax,
@@ -12855,10 +12891,53 @@ internal shared class ObliviousNullabilityAnalyzer {
                 StringComparison.Ordinal
             )
         }
+        let IsSymbolConditionalAccess = func (expression ExpressionSyntax, symbol ISymbol?) bool {
+            var expression = expression
+            while expression is ParenthesizedExpressionSyntax inner {
+                expression = inner.Expression
+            }
+            if expression is not ConditionalAccessExpressionSyntax access {
+                return false
+            }
+            var root ExpressionSyntax = access.Expression
+            while true {
+                while root is ParenthesizedExpressionSyntax inner {
+                    root = inner.Expression
+                }
+                if root is ConditionalAccessExpressionSyntax nested {
+                    root = nested.Expression
+                    continue
+                }
+                break
+            }
+            return IsSymbolIdentifier(root, symbol)
+        }
         let IsNullLiteral = func (expression ExpressionSyntax) bool {
             return expression is LiteralExpressionSyntax literal && literal.IsKind(SyntaxKind.NullLiteralExpression)
         }
+        let IsBooleanLiteral = func (expression ExpressionSyntax) bool {
+            var expression = expression
+            while expression is ParenthesizedExpressionSyntax inner {
+                expression = inner.Expression
+            }
+            return expression is LiteralExpressionSyntax literal &&
+                (literal.IsKind(SyntaxKind.TrueLiteralExpression) || literal.IsKind(SyntaxKind.FalseLiteralExpression))
+        }
+        let IsBooleanConditionalAccess = func (expression ExpressionSyntax, symbol ISymbol?) bool {
+            if !IsSymbolConditionalAccess(expression, symbol) {
+                return false
+            }
+            var accessType = model.GetTypeInfo(expression).Type
+            if accessType is INamedTypeSymbol nullable &&
+                nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T {
+                accessType = nullable.TypeArguments[0]
+            }
+            return accessType?.SpecialType == SpecialType.System_Boolean
+        }
         switch condition {
+            case unary is PrefixUnaryExpressionSyntax when unary.IsKind(SyntaxKind.LogicalNotExpression) {
+                return NullTestOf(unary.Operand, symbol, model, !whenTrueIsNull)
+            }
             case conjunction is BinaryExpressionSyntax when conjunction.IsKind(
                 if whenTrueIsNull {
                     SyntaxKind.LogicalOrExpression
@@ -12884,14 +12963,47 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if !IsBuiltInBooleanOperation(binary, model) {
                     return nil
                 }
-                return if (IsSymbolIdentifier(binary.Left, symbol) && IsNullLiteral(binary.Right)) ||
+                if (IsSymbolIdentifier(binary.Left, symbol) && IsNullLiteral(binary.Right)) ||
                     (IsSymbolIdentifier(binary.Right, symbol) && IsNullLiteral(binary.Left)) {
-                    condition
-                } else {
-                    nil
+                    return condition
                 }
+                if symbol is IFieldSymbol &&
+                    (
+                    (IsSymbolConditionalAccess(binary.Left, symbol) && IsNullLiteral(binary.Right)) ||
+                        (IsSymbolConditionalAccess(binary.Right, symbol) && IsNullLiteral(binary.Left))
+                ) {
+                    return condition
+                }
+                return nil
             }
-            case isPattern is IsPatternExpressionSyntax when IsSymbolIdentifier(isPattern.Expression, symbol) {
+            case binary is BinaryExpressionSyntax when binary.IsKind(
+                if whenTrueIsNull {
+                    SyntaxKind.NotEqualsExpression
+                } else {
+                    SyntaxKind.EqualsExpression
+                }
+            ) {
+                if symbol is IFieldSymbol &&
+                    IsBuiltInBooleanOperation(binary, model) &&
+                    (
+                    (IsBooleanConditionalAccess(binary.Left, symbol) && IsBooleanLiteral(binary.Right)) ||
+                        (IsBooleanConditionalAccess(binary.Right, symbol) && IsBooleanLiteral(binary.Left))
+                ) {
+                    return condition
+                }
+                return nil
+            }
+            case isExpr is BinaryExpressionSyntax when !whenTrueIsNull && isExpr.IsKind(SyntaxKind.IsExpression) &&
+                (
+                IsSymbolIdentifier(isExpr.Left, symbol) ||
+                    (symbol is IFieldSymbol && IsSymbolConditionalAccess(isExpr.Left, symbol))
+            ) &&
+                model.GetSymbolInfo(isExpr.Right).Symbol is ITypeSymbol testedType &&
+                testedType.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T {
+                return condition
+            }
+            case isPattern is IsPatternExpressionSyntax when IsSymbolIdentifier(isPattern.Expression, symbol) ||
+                (symbol is IFieldSymbol && IsSymbolConditionalAccess(isPattern.Expression, symbol)) {
                 if whenTrueIsNull {
                     return if isPattern.Pattern is ConstantPatternSyntax{
                         Expression: LiteralExpressionSyntax nullPattern
@@ -12902,10 +13014,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                         nil
                     }
                 }
-                return if isPattern.Pattern is UnaryPatternSyntax{
-                    Pattern: ConstantPatternSyntax{Expression: LiteralExpressionSyntax notNullPattern}
-                } &&
-                    notNullPattern.IsKind(SyntaxKind.NullLiteralExpression) {
+                return if (
+                    isPattern.Pattern is UnaryPatternSyntax{
+                        Pattern: ConstantPatternSyntax{Expression: LiteralExpressionSyntax notNullPattern}
+                    } &&
+                        notNullPattern.IsKind(SyntaxKind.NullLiteralExpression)
+                ) ||
+                    isPattern.Pattern is TypePatternSyntax or
+                    DeclarationPatternSyntax {
                     condition
                 } else {
                     nil

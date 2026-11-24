@@ -14060,7 +14060,7 @@ partial class CSharpToGSharpTranslator {
                         PatternUsesNativeVariableSyntax(isPattern.Pattern) &&
                         !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern))
                 ) ||
-                    !this.ComputePatternFlowRegions(isPattern, whenTrue, includeWhenClauseRegion: false).Any(
+                    !this.ComputePatternFlowRegions(isPattern, whenTrue, includeLoopExitRegions: true).Any(
                     (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(effectiveTarget.Span)
                 ) ||
                     this.ClosureAssignedLocalLosesNarrowing(symbol, isPattern, expression, $scope) ||
@@ -14093,7 +14093,7 @@ partial class CSharpToGSharpTranslator {
                 )
                 if nullCheck.SpanStart >= effectiveTarget.SpanStart ||
                     (!directMatch && !conditionalMatch) ||
-                    !this.ComputeBooleanFlowRegions(nullCheck, whenTrue, includeWhenClauseRegion: false).Any(
+                    !this.ComputeBooleanFlowRegions(nullCheck, whenTrue, includeLoopExitRegions: true).Any(
                     (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(effectiveTarget.Span)
                 ) ||
                     this.ClosureAssignedLocalLosesNarrowing(symbol, nullCheck, expression, $scope) ||
@@ -14128,7 +14128,7 @@ partial class CSharpToGSharpTranslator {
                         symbol,
                         this.context.SemanticModel
                     ) ||
-                        !this.ComputeBooleanFlowRegions(guardCall, whenTrue: false, includeWhenClauseRegion: false).Any(
+                        !this.ComputeBooleanFlowRegions(guardCall, whenTrue: false, includeLoopExitRegions: true).Any(
                         (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(effectiveTarget.Span)
                     ) ||
                         this.ClosureAssignedLocalLosesNarrowing(symbol, guardCall, expression, $scope) ||
@@ -17738,7 +17738,7 @@ partial class CSharpToGSharpTranslator {
             regionScope Microsoft.CodeAnalysis.SyntaxNode,
             scanRoot Microsoft.CodeAnalysis.SyntaxNode
         ) bool {
-            if !this.ComputeBooleanFlowRegions(testNode, whenTrue, includeWhenClauseRegion: false).Any(
+            if !this.ComputeBooleanFlowRegions(testNode, whenTrue, includeLoopExitRegions: true).Any(
                 (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(regionScope.Span)
             ) ||
                 this.SymbolIsWrittenBetween(symbol, testNode, regionScope, scanRoot) {
@@ -21774,6 +21774,19 @@ partial class CSharpToGSharpTranslator {
                 Implements("System.Collections.IDictionary")
         }
 
+        private func ActiveSwitchSectionLabel(section SwitchSectionSyntax) SwitchLabelSyntax? {
+            for entry in this.state.SwitchSectionActiveLabels {
+                if object.ReferenceEquals(entry.Section, section) {
+                    return entry.Label
+                }
+            }
+            return if section.Labels.Count == 1 {
+                section.Labels[0]
+            } else {
+                default(SwitchLabelSyntax?)
+            }
+        }
+
         // A semantic readonly guard can survive calls that invalidate G# member narrowing.
         private func IsGSharpFlowNarrowedReadonlyFieldRead(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
@@ -21786,28 +21799,54 @@ partial class CSharpToGSharpTranslator {
                 this.context.GetSymbolInfo(expression).Symbol is not IFieldSymbol field ||
                 ObliviousNullabilityAnalyzer.NullGuardDominatingRead(
                 expression,
-                this.context.SemanticModel
+                this.context.SemanticModel,
+                this.ActiveSwitchSectionLabel
             ) is not{} guardTest {
                 return false
             }
-            var whenTrue = false
-            if !(
-                (
-                    guardTest is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax comparison &&
-                        this.TryGetNullComparisonNonNullPolarity(comparison, field, out whenTrue)
-                ) ||
-                    (
-                    guardTest is IsPatternExpressionSyntax pattern &&
-                        TryGetPatternNonNullPolarity(pattern.Pattern, out whenTrue)
-                )
-            ) {
+            let scope_ = NearestFunctionBoundary(expression!!)
+            if scope_ == nil {
                 return false
             }
-            let regions = this.ComputeBooleanFlowRegions(guardTest, whenTrue, includeWhenClauseRegion: false)
-            let scope_ = NearestFunctionBoundary(expression!!)
-            return scope_ != nil && regions.Any(
-                (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression!!.Span)
-            ) &&
+            var whenTrue = false
+            switch guardTest {
+                case comparison is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax {
+                    let isTypeTest = comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression) &&
+                        this.IsTypeReferencePattern(comparison.Right) && this.TypeTestNarrowing(
+                        this.context.GetTypeInfo(comparison.Right).Type,
+                        this.GetPatternScrutineeUnderlyingType(comparison.Left)
+                    ) != nil &&
+                        (
+                        this.BindsToGuardSymbol(comparison.Left, field) ||
+                            (
+                            StripParentheses(comparison.Left) is ConditionalAccessExpressionSyntax access &&
+                                this.ConditionalAccessRootBindsToGuardSymbol(access, field) &&
+                                !this.ConditionalAccessEffectsLoseNarrowing(access, nil, field, scope_)
+                        )
+                    )
+                    if isTypeTest {
+                        whenTrue = true
+                    } else if !this.TryGetNullComparisonNonNullPolarity(comparison, field, out whenTrue) &&
+                        !this.TryGetNullConditionalComparisonNonNullPolarity(comparison, field, scope_, out whenTrue) {
+                        return false
+                    }
+                }
+                case pattern is IsPatternExpressionSyntax {
+                    if !TryGetPatternNonNullPolarity(pattern.Pattern, out whenTrue) ||
+                        !this.GSharpPatternPreservesNonNullNarrowing(pattern, whenTrue) {
+                        return false
+                    }
+                    if StripParentheses(pattern.Expression) is ConditionalAccessExpressionSyntax access &&
+                        this.ConditionalAccessEffectsLoseNarrowing(access, pattern.Pattern, field, scope_) {
+                        return false
+                    }
+                }
+                default {
+                    return false
+                }
+            }
+            let regions = this.ComputeBooleanFlowRegions(guardTest, whenTrue, includeLoopExitRegions: true)
+            return regions.Any((region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression!!.Span)) &&
                 !this.ClosureAssignedLocalLosesNarrowing(field, guardTest, expression!!, scope_, regions, readPosition)
         }
 

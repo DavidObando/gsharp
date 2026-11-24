@@ -741,6 +741,162 @@ public static class P
         Assert.Contains("value!!.Length > 10", printed, StringComparison.Ordinal)
     }
 
+    @Fact
+    func SwitchWhenNullGuard_ReadonlyFieldsAndStringGuards() {
+        let source = `#nullable enable
+using System;
+
+namespace Demo
+{
+    public sealed class P
+    {
+        private readonly string? field;
+        private string? mutableField;
+        private static void Touch() { }
+
+        public P(string? value, string? mutable)
+        {
+            field = value;
+            mutableField = mutable;
+        }
+
+        public int Stmt(int kind)
+        {
+            switch (kind)
+            {
+                case 1 when field != null:
+                    return field.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int Expr(int kind) =>
+            kind switch
+            {
+                1 when field != null => field.Length,
+                _ => 0,
+            };
+
+        public int ExprThisIsNotNull(int kind) =>
+            kind switch
+            {
+                1 when this.field is not null => this.field.Length,
+                _ => 0,
+            };
+
+        public int ExprNegatedEqualsNull(int kind) =>
+            kind switch
+            {
+                1 when !(field == null) => field.Length,
+                _ => 0,
+            };
+
+        public int ExprTypePattern(int kind) =>
+            kind switch
+            {
+                1 when field is string => field.Length,
+                _ => 0,
+            };
+
+        public int ExprConditionalAccess(int kind) =>
+            kind switch
+            {
+                1 when field?.Length != null => field.Length,
+                _ => 0,
+            };
+
+        public int MultiLabel(int kind)
+        {
+            switch (kind)
+            {
+                case 1 when field is not null:
+                case 2:
+                    return field!.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int StmtCallInvalidates(int kind)
+        {
+            switch (kind)
+            {
+                case 1 when field != null:
+                    Touch();
+                    return field!.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int ExprCallBeforeReadInvalidates(int kind) =>
+            kind switch
+            {
+                1 when field != null => (Touch0() + field!.Length),
+                _ => 0,
+            };
+
+        private static int Touch0()
+        {
+            Touch();
+            return 0;
+        }
+
+        public int MutableFieldKeepsAssertion(int kind) =>
+            kind switch
+            {
+                1 when mutableField != null => mutableField!.Length,
+                _ => 0,
+            };
+
+        public static int StringIsNullOrEmptyGuard(int kind, string? s) =>
+            kind switch
+            {
+                1 when !string.IsNullOrEmpty(s) => s.Length,
+                _ => 0,
+            };
+
+        public static string Run()
+        {
+            var p = new P("abcd", "xy");
+            return p.Stmt(1) + "|" +
+                p.Expr(1) + "|" +
+                p.ExprThisIsNotNull(1) + "|" +
+                p.ExprNegatedEqualsNull(1) + "|" +
+                p.ExprTypePattern(1) + "|" +
+                p.ExprConditionalAccess(1) + "|" +
+                p.MultiLabel(1) + "|" +
+                p.MultiLabel(2) + "|" +
+                p.StmtCallInvalidates(1) + "|" +
+                p.ExprCallBeforeReadInvalidates(1) + "|" +
+                p.MutableFieldKeepsAssertion(1) + "|" +
+                StringIsNullOrEmptyGuard(1, "hello");
+        }
+    }
+}`
+        let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
+            source,
+            "4|4|4|4|4|4|4|4|4|4|2|5",
+            rejectRedundantAssertions: true
+        )
+        Assert.Contains(
+            "case 1 when field != nil {\n                return field.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("case 1 when field != nil: field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when this.field != nil: this.field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when !(field == nil): field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when field is string: field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when field?.Length != nil: field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 2 {\n                return field!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("Touch()\n                return field!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("Touch0() + field!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("mutableField != nil: mutableField!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("!string.IsNullOrEmpty(s): s.Length", printed, StringComparison.Ordinal)
+    }
+
     shared {
         private func Translate(source string) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", `using System;

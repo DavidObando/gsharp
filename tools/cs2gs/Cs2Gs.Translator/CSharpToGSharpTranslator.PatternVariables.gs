@@ -1337,13 +1337,13 @@ partial class CSharpToGSharpTranslator {
         private func ComputePatternFlowRegions(
             isPattern IsPatternExpressionSyntax,
             whenTrue bool,
-            includeWhenClauseRegion bool = true
-        ) List[SyntaxNode] -> this.ComputeBooleanFlowRegions(isPattern, whenTrue, includeWhenClauseRegion)
+            includeLoopExitRegions bool = false
+        ) List[SyntaxNode] -> this.ComputeBooleanFlowRegions(isPattern, whenTrue, includeLoopExitRegions)
 
         private func ComputeBooleanFlowRegions(
             condition ExpressionSyntax,
             whenTrue bool,
-            includeWhenClauseRegion bool = true
+            includeLoopExitRegions bool = false
         ) List[SyntaxNode] {
             var whenTrue = whenTrue
             let regions = List[SyntaxNode]()
@@ -1411,7 +1411,7 @@ partial class CSharpToGSharpTranslator {
                     case whileStatement is WhileStatementSyntax when whileStatement.Condition == node {
                         if whenTrue {
                             regions.Add(whileStatement.Statement)
-                        } else if !includeWhenClauseRegion && this.CanNarrowAfterLoopExit(whileStatement) {
+                        } else if includeLoopExitRegions && this.CanNarrowAfterLoopExit(whileStatement) {
                             AddFollowingStatements(whileStatement, regions)
                         }
                         return regions
@@ -1419,13 +1419,13 @@ partial class CSharpToGSharpTranslator {
                     case forStatement is ForStatementSyntax when forStatement.Condition == node {
                         if whenTrue {
                             regions.Add(forStatement.Statement)
-                        } else if !includeWhenClauseRegion && this.CanNarrowAfterLoopExit(forStatement) {
+                        } else if includeLoopExitRegions && this.CanNarrowAfterLoopExit(forStatement) {
                             AddFollowingStatements(forStatement, regions)
                         }
                         return regions
                     }
                     case doStatement is DoStatementSyntax when doStatement.Condition == node {
-                        if !whenTrue && !includeWhenClauseRegion && this.CanNarrowAfterLoopExit(doStatement) {
+                        if !whenTrue && includeLoopExitRegions && this.CanNarrowAfterLoopExit(doStatement) {
                             AddFollowingStatements(doStatement, regions)
                         }
                         return regions
@@ -1438,22 +1438,9 @@ partial class CSharpToGSharpTranslator {
                                 section.Parent is SwitchStatementSyntax switchStmt && this.HasGotoIntoSwitchSection(
                                     switchStmt
                                 )
-                            ) {
-                                var activeLabelForSection SwitchLabelSyntax? = nil
-                                for entry in this.state.SwitchSectionActiveLabels {
-                                    if object.ReferenceEquals(entry.Section, section) {
-                                        activeLabelForSection = entry.Label
-                                        break
-                                    }
-                                }
-                                let matchesActiveLabel = if activeLabelForSection != nil {
-                                    object.ReferenceEquals(activeLabelForSection, label)
-                                } else {
-                                    section.Labels.Count == 1
-                                }
-                                if matchesActiveLabel {
-                                    regions.AddRange(section.Statements)
-                                }
+                            ) &&
+                                object.ReferenceEquals(this.ActiveSwitchSectionLabel(section), label) {
+                                regions.AddRange(section.Statements)
                             } else if whenClause.Parent is SwitchExpressionArmSyntax arm {
                                 regions.Add(arm.Expression)
                             }
