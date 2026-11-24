@@ -372,6 +372,16 @@ class SemanticModel {
   through `SymbolDisplay` and `AssemblyDocumentationProvider.Resolve`. The
   server's `MemberInfo`-returning `GetImportedMember` goes; the residual
   `ClrType` reads in the server go with ADR-0209 stage 6.
+- `GetSymbolInfo` of the call of an imported constructor (`StringBuilder(16)`)
+  returns an `ImportedConstructorSymbol` (`SymbolKind.ImportedConstructor`,
+  named `.ctor`) that holds the chosen `ConstructorInfo` and the constructed
+  type, as the call of a source `init` returns the chosen constructor's
+  function (#6177).
+- The name node of a member access answers as its identifier token does: the
+  member, and the type of the access up to that name, also for a middle name
+  of a chain (`B` in `A.B.C`, which G# nests to the right as `A.(B.C)`). An
+  inner accessor (`B.C`) answers as its terminal, the value of the whole
+  chain (#6217).
 - `GetTypeInfo(node).Type` is the bound expression's type, narrowed; the
   declared type of a variable is `GetDeclaredSymbol(declaration)` as a
   `VariableSymbol`'s `.Type`. `TypeInfo` gains no field.

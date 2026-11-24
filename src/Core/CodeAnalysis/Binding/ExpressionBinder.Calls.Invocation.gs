@@ -1507,6 +1507,33 @@ internal partial class ExpressionBinder {
         }
     }
 
+    // #6199: a call through a member function value whose arguments do not analyse keeps its callee for
+    // the semantic model. The member is resolved as a call with no arguments would resolve it, and the
+    // diagnostics of that resolution are dropped: the layout report is the call's only diagnostic.
+    private func RecordCallableMemberOfFailedLayout(
+        receiver BoundExpression?,
+        classSymbol ImportedClassSymbol?,
+        methodName string,
+        ce CallExpressionSyntax
+    ) {
+        if classSymbol != nil || receiver == nil || !(receiver.Type is StructSymbol or InterfaceSymbol) {
+            return
+        }
+        let mark = Diagnostics.Count
+        let narrowing = CaptureNarrowingBindSnapshot()
+        let _ = TryBindUserCallableMemberInvocation(
+            receiver,
+            receiver.Type,
+            methodName,
+            ImmutableArray[BoundExpression].Empty,
+            ce,
+            isStatic: false,
+            out _
+        )
+        RestoreNarrowingBindSnapshot(narrowing)
+        Diagnostics.TruncateTo(mark)
+    }
+
     internal func BindAccessorCall(
         receiver BoundExpression?,
         classSymbol ImportedClassSymbol?,
@@ -1669,6 +1696,7 @@ internal partial class ExpressionBinder {
         // no duplicate names). Errors are reported by the helper so the call
         // short-circuits to a bound error here.
         if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
+            RecordCallableMemberOfFailedLayout(receiver, classSymbol, methodName, ce)
             return BoundErrorExpression(nil)
         }
         // Issue #311: resolve an explicit `[T1, T2]` type-argument list (e.g.
