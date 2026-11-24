@@ -1487,6 +1487,57 @@ internal shared class ClrOverloadResolution {
         return false
     }
 
+    internal func CanAcceptExtensionReceiverForTypeArgumentDiagnostic(
+        method MethodInfo,
+        receiver TypeSymbol,
+        explicitTypeArgs[]?Type,
+        hasDirectInstanceCandidates bool
+    ) bool {
+        if !MayAcceptExtensionReceiver(method, receiver, argumentCount: nil, argumentNames: nil) {
+            return false
+        }
+        let receiverClr = GetEffectiveExtensionReceiverClrType(receiver)
+        if receiverClr == nil || receiverClr.ContainsGenericParameters || TypeSymbol.ContainsSameCompilationUserType(
+            receiver
+        ) {
+            return true
+        }
+        let parameters = method.GetParameters()
+        if parameters.Length == 0 {
+            return false
+        }
+        if explicitTypeArgs != nil && method.IsGenericMethodDefinition && method.GetGenericArguments()
+            .Length == explicitTypeArgs
+            .Length {
+            var closed MethodInfo
+            try {
+                closed = method.MakeGenericMethod(explicitTypeArgs)
+            } catch (ex Exception) when ex is ArgumentException ||
+                ex is InvalidOperationException ||
+                IsMetadataLoadFailure(ex) {
+                return false
+            }
+            let closedParam = closed.GetParameters()[0]
+            var closedParamType = closedParam.ParameterType
+            if closedParamType.IsByRef {
+                closedParamType = closedParamType.GetElementType() ?? closedParamType
+            }
+            return ClassifyImplicit(closedParamType, receiverClr) != ImplicitConversionKind.None ||
+                Conversion.ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(closedParam))
+                .IsImplicit
+        }
+        if hasDirectInstanceCandidates && method.IsGenericMethodDefinition {
+            var paramType = parameters[0].ParameterType
+            if paramType.IsByRef {
+                paramType = paramType.GetElementType() ?? paramType
+            }
+            if paramType.ContainsGenericParameters {
+                return OpenExtensionReceiverStandardShapeMayApply(receiverClr, paramType)
+            }
+        }
+        return true
+    }
+
     internal func AllExtensionTypeParametersMayBeInferred(
         method MethodInfo,
         parameterType Type,
@@ -6827,7 +6878,7 @@ internal shared class ClrOverloadResolution {
         return true
     }
 
-    private func IsOptionalParameter(parameter ParameterInfo) bool {
+    internal func IsOptionalParameter(parameter ParameterInfo) bool {
         if parameter.IsOptional || parameter.HasDefaultValue {
             return true
         }

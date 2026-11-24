@@ -184,7 +184,8 @@ internal partial class ExpressionBinder {
         arguments ImmutableArray[BoundExpression],
         ce CallExpressionSyntax,
         argumentNames ImmutableArray[string],
-        @NotNullWhen(true) out result BoundExpression?
+        @NotNullWhen(true) out result BoundExpression?,
+        typeArgumentsAlreadyBound bool = false
     ) bool {
         result = nil
         if receiver == nil {
@@ -212,7 +213,8 @@ internal partial class ExpressionBinder {
                 allArguments.ToImmutable(),
                 ce,
                 methodName,
-                allNames
+                allNames,
+                typeArgumentsAlreadyBound: typeArgumentsAlreadyBound
             )
             if selected == nil {
                 result = BoundErrorExpression(nil)
@@ -228,7 +230,8 @@ internal partial class ExpressionBinder {
             ),
             arguments,
             ce,
-            argumentNames
+            argumentNames,
+            typeArgumentsAlreadyBound: typeArgumentsAlreadyBound
         )
         CallCandidateRecorder.RecordExtensionFunctions(candidates)
         return true
@@ -284,7 +287,8 @@ internal partial class ExpressionBinder {
         methodName string,
         arguments ImmutableArray[BoundExpression],
         ce CallExpressionSyntax,
-        argumentNames ImmutableArray[string]
+        argumentNames ImmutableArray[string],
+        typeArgumentsAlreadyBound bool = false
     ) FunctionSymbol? {
         for current in receiverClass.GetHierarchy() {
             for iface in current.Interfaces {
@@ -306,7 +310,8 @@ internal partial class ExpressionBinder {
                     arguments,
                     ce,
                     methodName,
-                    argumentNames
+                    argumentNames,
+                    typeArgumentsAlreadyBound: typeArgumentsAlreadyBound
                 )
                 if selected != nil {
                     return selected
@@ -463,7 +468,8 @@ internal partial class ExpressionBinder {
         arguments ImmutableArray[BoundExpression],
         ce CallExpressionSyntax,
         isStatic bool,
-        @NotNullWhen(true) out result BoundExpression?
+        @NotNullWhen(true) out result BoundExpression?,
+        typeArgumentsAlreadyBound bool = false
     ) bool {
         result = nil
         let receiverStruct StructSymbol? = receiverType as StructSymbol
@@ -614,18 +620,10 @@ internal partial class ExpressionBinder {
         }
         memberLoad = ApplyCallableMemberNarrowing(memberLoad)
         // The member's identifier answers its load, and a call that fails keeps the load for the
-        // semantic model, prepared as a call that binds prepares it (#6189). Both are dropped if the
-        // member is not invoked after all.
+        // semantic model (#6189). Both are dropped if the member is not invoked after all.
         let calleeLoad = memberLoad
         calleeLoad.CalleeIdentifier = ce.Identifier
-        binderCtx.RecordCallCallee(
-            ce,
-            () -> if ce.NullableQuestionToken == nil {
-                PlatformCoercion.CheckDelegateInvocationTarget(calleeLoad, ce.Identifier.Location)
-            } else {
-                calleeLoad
-            }
-        )
+        binderCtx.RecordCallCallee(ce, () -> calleeLoad)
         if matchedProperty != nil {
             lastSelectedCallablePropertyLoad = memberLoad
         }
@@ -656,7 +654,9 @@ internal partial class ExpressionBinder {
         ) {
             Diagnostics.ReportMemberInaccessible(ce.Identifier.Location, methodName, declaringOwner.Name, accessibility)
         }
-        if ce.TypeArgumentList == nil && callableType is FunctionPointerTypeSymbol functionPointerType {
+        if ce.TypeArgumentList == nil && PlatformTypeSymbol.StripTopLevel(
+            callableType
+        ) is FunctionPointerTypeSymbol functionPointerType {
             if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
                 result = BoundErrorExpression(nil)
                 return true
@@ -740,17 +740,24 @@ internal partial class ExpressionBinder {
         }
         // A callable member has no type parameters (#6186).
         if !bracketIsIndex && ce.TypeArgumentList is {} unexpectedTypeArguments {
-            overloads.ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, methodName)
+            overloads.ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                methodName,
+                typeArgumentsBound: typeArgumentsAlreadyBound
+            )
             result = BoundErrorExpression(nil)
             return true
         }
-        if !(callableType is FunctionTypeSymbol) &&
-            callableType.ClrType is {} importedDelegateClr &&
+        // Strip PlatformTypeSymbol before branching so an @Oblivious member function value
+        // routes to the function-type path instead of CLR delegate Invoke (#6198).
+        let unwrappedCallable = PlatformTypeSymbol.StripTopLevel(callableType)
+        if !(unwrappedCallable is FunctionTypeSymbol) &&
+            unwrappedCallable.ClrType is {} importedDelegateClr &&
             ClrTypeUtilities.IsDelegateType(importedDelegateClr) {
-            result = BuildDelegateMemberInvocation(ce, memberLoad, callableType, functionType, arguments)
+            result = BuildDelegateMemberInvocation(ce, memberLoad, unwrappedCallable, functionType, arguments)
             return true
         }
-        if callableType is DelegateTypeSymbol namedDelegate {
+        if unwrappedCallable is DelegateTypeSymbol namedDelegate {
             if !overloads.TryBindNamedDelegateArguments(
                 methodName,
                 namedDelegate,
@@ -766,7 +773,7 @@ internal partial class ExpressionBinder {
             result = BuildDelegateMemberInvocation(
                 ce,
                 memberLoad,
-                callableType,
+                unwrappedCallable,
                 functionType,
                 namedArguments,
                 namedRefKinds
@@ -784,7 +791,7 @@ internal partial class ExpressionBinder {
             result = BoundErrorExpression(nil)
             return true
         }
-        result = BuildDelegateMemberInvocation(ce, memberLoad, callableType, functionType, convertedArgs)
+        result = BuildDelegateMemberInvocation(ce, memberLoad, unwrappedCallable, functionType, convertedArgs)
         return true
     }
 
@@ -932,7 +939,8 @@ internal partial class ExpressionBinder {
         arguments ImmutableArray[BoundExpression],
         ce CallExpressionSyntax,
         argumentNames ImmutableArray[string],
-        @NotNullWhen(true) out result BoundExpression?
+        @NotNullWhen(true) out result BoundExpression?,
+        typeArgumentsAlreadyBound bool = false
     ) bool {
         result = nil
         if clrType == nil {
@@ -1062,7 +1070,11 @@ internal partial class ExpressionBinder {
         }
         // A delegate member has no type parameters (#6186).
         if !bracketIsIndex && ce.TypeArgumentList is {} unexpectedTypeArguments {
-            overloads.ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, methodName)
+            overloads.ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                methodName,
+                typeArgumentsBound: typeArgumentsAlreadyBound
+            )
             result = BoundErrorExpression(nil)
             return true
         }
@@ -1153,7 +1165,8 @@ internal partial class ExpressionBinder {
         arguments ImmutableArray[BoundExpression],
         ce CallExpressionSyntax,
         argumentNames ImmutableArray[string],
-        @NotNullWhen(true) out result BoundExpression?
+        @NotNullWhen(true) out result BoundExpression?,
+        typeArgumentsAlreadyBound bool = false
     ) bool {
         result = nil
         if !classSymbol.TryLookupMember(methodName, ne: nil, out var member) {
@@ -1260,7 +1273,11 @@ internal partial class ExpressionBinder {
         }
         // A delegate member has no type parameters (#6186).
         if !bracketIsIndex && ce.TypeArgumentList is {} unexpectedTypeArguments {
-            overloads.ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, methodName)
+            overloads.ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                methodName,
+                typeArgumentsBound: typeArgumentsAlreadyBound
+            )
             result = BoundErrorExpression(nil)
             return true
         }
@@ -4291,10 +4308,16 @@ internal partial class ExpressionBinder {
         arguments ImmutableArray[BoundExpression],
         ce CallExpressionSyntax,
         argumentNames ImmutableArray[string],
-        @NotNullWhen(true) out result BoundExpression?
+        @NotNullWhen(true) out result BoundExpression?,
+        explicitTypeArgs[]?Type = nil,
+        typeArgSymbols ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+        hasUnresolvedTypeArguments bool = false
     ) bool {
         var arguments = arguments
         result = nil
+        if hasUnresolvedTypeArguments || (ce.TypeArgumentList != nil && explicitTypeArgs == nil) {
+            return false
+        }
         let constraintType TypeSymbol? = tp.ClrInterfaceConstraint ?? tp.ClassConstraint
         let clrType Type? = constraintType?.ClrType
         if constraintType == nil || clrType == nil {
@@ -4354,7 +4377,7 @@ internal partial class ExpressionBinder {
             )
             let recovered = MemberLookup.BuildSymbolicMethodTypeArgs(
                 closed,
-                default(ImmutableArray[TypeSymbol]),
+                typeArgSymbols,
                 refinedArgs,
                 isExpanded,
                 if argumentNames.IsDefault {
@@ -4369,7 +4392,7 @@ internal partial class ExpressionBinder {
         let resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
-            nil,
+            explicitTypeArgs,
             $scope.References!!.MapClrTypeToReferences,
             interpolatedStringArgs,
             if argumentNames.IsDefault {
@@ -4387,11 +4410,14 @@ internal partial class ExpressionBinder {
             delegateArgumentCheck: MakeDelegateArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+            explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
+            explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
             symbolicArgTypes: symbolicArgTypes,
             symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                 arguments,
                 nativeConversions: conversions,
-                receiverType: constraintType
+                receiverType: constraintType,
+                explicitMethodTypeArguments: typeArgSymbols
             )
         )
         if resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous {
@@ -4664,6 +4690,15 @@ internal partial class ExpressionBinder {
         if candidates.Count == 0 {
             return false
         }
+        if ce.TypeArgumentList is {} unexpectedTypeArguments {
+            overloads.ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                methodName,
+                typeArgumentsBound: true
+            )
+            result = BoundErrorExpression(nil)
+            return true
+        }
         let argTypes = [arguments.Length]Type?
         for var i = 0; i < arguments.Length; i++ {
             let t Type? = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type)
@@ -4798,6 +4833,15 @@ internal partial class ExpressionBinder {
         )
         if candidates.Count == 0 {
             return false
+        }
+        if ce.TypeArgumentList is {} unexpectedTypeArguments {
+            overloads.ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                methodName,
+                typeArgumentsBound: true
+            )
+            result = BoundErrorExpression(nil)
+            return true
         }
         let argTypes = [arguments.Length]Type?
         for var i = 0; i < arguments.Length; i++ {

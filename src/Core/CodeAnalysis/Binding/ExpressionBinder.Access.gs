@@ -232,11 +232,42 @@ internal partial class ExpressionBinder {
             out var clrType,
             out var openGenericDef,
             out var symbolicArgs,
-            out var constraintFailed
+            out var constraintFailed,
+            out var typeArgumentsFailed
         ) {
             if constraintFailed {
                 result = BoundErrorExpression(syntax)
                 return true
+            }
+            if terminalCall.TypeArgumentList is {} terminalTypeArguments {
+                if typeArgumentsFailed {
+                    BindCallArgumentsForErrorRecovery(terminalCall.Arguments)
+                    let error = BoundErrorExpression(syntax)
+                    binderCtx.CompleteCall(error, terminalCall.Arguments)
+                    result = error
+                    return true
+                }
+                if TryFindQualifiedClrTypeExpectedArity(
+                    namespacePrefix,
+                    typeSimpleName,
+                    terminalTypeArguments.Arguments.Count,
+                    out var expectedArity
+                ) {
+                    for arg in terminalTypeArguments.Arguments {
+                        let _ = bindTypeClause(arg)
+                    }
+                    BindCallArgumentsForErrorRecovery(terminalCall.Arguments)
+                    Diagnostics.ReportWrongTypeArgumentCount(
+                        terminalTypeArguments.Location,
+                        typeSimpleName,
+                        expectedArity,
+                        terminalTypeArguments.Arguments.Count
+                    )
+                    let error = BoundErrorExpression(syntax)
+                    binderCtx.CompleteCall(error, terminalCall.Arguments)
+                    result = error
+                    return true
+                }
             }
             return false
         }
@@ -706,49 +737,37 @@ internal partial class ExpressionBinder {
         out openGenericDefinition Type?,
         out symbolicTypeArgs ImmutableArray[TypeSymbol],
         out constraintFailed bool
+    ) bool -> TryResolveQualifiedClrType(
+        namespacePrefix,
+        typeSimpleName,
+        typeArgumentList,
+        out clrType,
+        out openGenericDefinition,
+        out symbolicTypeArgs,
+        out constraintFailed,
+        out _
+    )
+
+    private func TryResolveQualifiedClrType(
+        namespacePrefix string,
+        typeSimpleName string,
+        typeArgumentList TypeArgumentListSyntax?,
+        @NotNullWhen(true) out clrType Type?,
+        out openGenericDefinition Type?,
+        out symbolicTypeArgs ImmutableArray[TypeSymbol],
+        out constraintFailed bool,
+        out typeArgumentsFailed bool
     ) bool {
         clrType = nil
         openGenericDefinition = nil
         symbolicTypeArgs = default(ImmutableArray[TypeSymbol])
         constraintFailed = false
+        typeArgumentsFailed = false
         let arity = typeArgumentList?.Arguments.Count ?? 0
         // Build the candidate dotted prefixes (everything before the simple
         // type name), most specific first.
-        let prefixCandidates = List[string]()
+        let prefixCandidates = BuildQualifiedClrPrefixCandidates(namespacePrefix)
         let seenPrefixes = HashSet[string](StringComparer.Ordinal)
-        if !string.IsNullOrEmpty(namespacePrefix) {
-            prefixCandidates.Add(namespacePrefix)
-        }
-        // If the leading segment is an import alias/path, expand it to the
-        // import target (`import t = System.Text` then `t.StringBuilder()`).
-        let firstSegment = if namespacePrefix.Contains('.', StringComparison.Ordinal) {
-            namespacePrefix.Substring(0, namespacePrefix.IndexOf('.', StringComparison.Ordinal))
-        } else {
-            namespacePrefix
-        }
-        if !string.IsNullOrEmpty(firstSegment) && $scope.TryLookupImport(firstSegment, out var matchedImport) {
-            let rest = if namespacePrefix.Length > firstSegment.Length {
-                namespacePrefix.Substring(firstSegment.Length + 1)
-            } else {
-                string.Empty
-            }
-            let expanded = if string.IsNullOrEmpty(rest) {
-                matchedImport.Target
-            } else {
-                matchedImport.Target + "." + rest
-            }
-            prefixCandidates.Insert(0, expanded)
-        }
-        // Also try the name relative to each active import target, mirroring the
-        // simple-name lookup in BoundScope.TryLookupImportedClass.
-        for import_ in $scope.GetDeclaredImports() {
-            let prefixed = if string.IsNullOrEmpty(namespacePrefix) {
-                import_.Target
-            } else {
-                import_.Target + "." + namespacePrefix
-            }
-            prefixCandidates.Add(prefixed)
-        }
         for prefix in prefixCandidates {
             // Issue #854: the candidate list frequently contains duplicate
             // prefixes (e.g. the raw namespacePrefix also surfaces as an
@@ -771,7 +790,8 @@ internal partial class ExpressionBinder {
                         out var symbolic,
                         out var hasSymbolicArg
                     ) {
-                        continue
+                        typeArgumentsFailed = true
+                        return false
                     }
                     // Issue #4032 (review finding 1): a static member reached
                     // through a closed imported generic — `Handler[string].Describe()`
@@ -827,6 +847,67 @@ internal partial class ExpressionBinder {
         ) {
             return true
         }
+        return false
+    }
+
+    private func BuildQualifiedClrPrefixCandidates(namespacePrefix string) List[string] {
+        let prefixCandidates = List[string]()
+        if !string.IsNullOrEmpty(namespacePrefix) {
+            prefixCandidates.Add(namespacePrefix)
+        }
+        let firstSegment = if namespacePrefix.Contains('.', StringComparison.Ordinal) {
+            namespacePrefix.Substring(0, namespacePrefix.IndexOf('.', StringComparison.Ordinal))
+        } else {
+            namespacePrefix
+        }
+        if !string.IsNullOrEmpty(firstSegment) && $scope.TryLookupImport(firstSegment, out var matchedImport) {
+            let rest = if namespacePrefix.Length > firstSegment.Length {
+                namespacePrefix.Substring(firstSegment.Length + 1)
+            } else {
+                string.Empty
+            }
+            let expanded = if string.IsNullOrEmpty(rest) {
+                matchedImport.Target
+            } else {
+                matchedImport.Target + "." + rest
+            }
+            prefixCandidates.Insert(0, expanded)
+        }
+        for import_ in $scope.GetDeclaredImports() {
+            let prefixed = if string.IsNullOrEmpty(namespacePrefix) {
+                import_.Target
+            } else {
+                import_.Target + "." + namespacePrefix
+            }
+            prefixCandidates.Add(prefixed)
+        }
+        return prefixCandidates
+    }
+
+    private func TryFindQualifiedClrTypeExpectedArity(
+        namespacePrefix string,
+        typeSimpleName string,
+        excludedArity int32,
+        out expectedArity int32
+    ) bool {
+        let seenPrefixes = HashSet[string](StringComparer.Ordinal)
+        for prefix in BuildQualifiedClrPrefixCandidates(namespacePrefix) {
+            if !seenPrefixes.Add(prefix) {
+                continue
+            }
+            let fullName = prefix + "." + typeSimpleName
+            if $scope.TryResolveType(fullName, out var resolved) && !resolved.IsGenericTypeDefinition {
+                expectedArity = 0
+                return true
+            }
+            for var arity = 1; arity <= 16; arity++ {
+                if arity != excludedArity && $scope.TryResolveType(fullName + "`" + arity.ToString(), out _) {
+                    expectedArity = arity
+                    return true
+                }
+            }
+        }
+        expectedArity = 0
         return false
     }
 

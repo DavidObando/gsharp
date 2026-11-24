@@ -1460,11 +1460,16 @@ internal partial class OverloadResolver {
         extension FunctionSymbol,
         arguments ImmutableArray[BoundExpression],
         ce CallExpressionSyntax,
-        argumentNames ImmutableArray[string] = default(ImmutableArray[string])
+        argumentNames ImmutableArray[string] = default(ImmutableArray[string]),
+        typeArgumentsAlreadyBound bool = false
     ) BoundExpression {
         // The type arguments are checked before the value arguments, as C# reports CS0308 (#6186).
         if !extension.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
-            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, extension.Name)
+            ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                extension.Name,
+                typeArgumentsBound: typeArgumentsAlreadyBound
+            )
             return BoundErrorExpression(nil)
         }
         // The extension's first parameter is the receiver; user arguments line
@@ -1579,12 +1584,20 @@ internal partial class OverloadResolver {
             if ce.TypeArgumentList is {} typeArgumentList {
                 let explicitArgs = typeArgumentList.Arguments
                 if explicitArgs.Count != extension.TypeParameters.Length {
+                    if !typeArgumentsAlreadyBound {
+                        for explicitArg in explicitArgs {
+                            let _ = bindTypeClause(explicitArg)
+                        }
+                    }
                     Diagnostics.ReportWrongTypeArgumentCount(
                         typeArgumentList.Location,
                         extension.Name,
                         extension.TypeParameters.Length,
                         explicitArgs.Count
                     )
+                    return BoundErrorExpression(nil)
+                }
+                if typeArgumentsAlreadyBound {
                     return BoundErrorExpression(nil)
                 }
                 for var i = 0; i < explicitArgs.Count; i++ {
@@ -1901,7 +1914,8 @@ internal partial class OverloadResolver {
         ce CallExpressionSyntax,
         argumentNames ImmutableArray[string] = default(ImmutableArray[string]),
         constrainedReceiverTypeParameter TypeParameterSymbol? = nil,
-        explicitOwnerType TypeSymbol? = nil
+        explicitOwnerType TypeSymbol? = nil,
+        typeArgumentsAlreadyBound bool = false
     ) BoundExpression {
         // Issue #950 / #2044 / #2058: enforce `protected`/`private` method
         // access — a `protected` method is only callable from the declaring
@@ -1923,7 +1937,11 @@ internal partial class OverloadResolver {
         }
         // The type arguments are checked before the value arguments, as C# reports CS0308 (#6186).
         if !method.IsGeneric && ce.TypeArgumentList is {} unexpectedTypeArguments {
-            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, method.Name)
+            ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                method.Name,
+                typeArgumentsBound: typeArgumentsAlreadyBound
+            )
             return BoundErrorExpression(nil)
         }
         let parameterOffset = if method.ExplicitReceiverParameter == nil {
@@ -2059,12 +2077,20 @@ internal partial class OverloadResolver {
             if ce.TypeArgumentList is {} typeArgumentList {
                 let explicitArgs = typeArgumentList.Arguments
                 if explicitArgs.Count != method.TypeParameters.Length {
+                    if !typeArgumentsAlreadyBound {
+                        for explicitArg in explicitArgs {
+                            let _ = bindTypeClause(explicitArg)
+                        }
+                    }
                     Diagnostics.ReportWrongTypeArgumentCount(
                         typeArgumentList.Location,
                         method.Name,
                         method.TypeParameters.Length,
                         explicitArgs.Count
                     )
+                    return BoundErrorExpression(nil)
+                }
+                if typeArgumentsAlreadyBound {
                     return BoundErrorExpression(nil)
                 }
                 for var i = 0; i < explicitArgs.Count; i++ {
