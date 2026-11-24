@@ -19,6 +19,7 @@ import System.Collections.Immutable
 import System.IO
 import System.Linq
 import System.Threading
+import System.Threading.Tasks
 import Xunit
 
 /// ADR-0227 D4 (issue #6128): the body-local check of the diagnostic-delta gate gives the delta of the
@@ -679,6 +680,44 @@ open class Adr0227BodyLocalDeltaTests {
 
     private func Ms(n float64) TimeSpan -> TimeSpan.FromMilliseconds(n)
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func BodyLocalAnalyzerThatQueriesTheSemanticModelOfAnotherTree_OnTheNewBody_DoesNotDeadlock(budgeted bool) {
+        // The analyzer builds a semantic-model index of another tree only for the new body. Building an
+        // index takes the compilation's build gate, so the check must not hold that gate while it runs
+        // the analyzers.
+        let sources = ImmutableArray.Create(
+            "package P\n\nfunc F() int32 {\n    return 1\n}\n",
+            "package P\n\nfunc G() int32 -> 2\n"
+        )
+        let trees = Parse(sources)
+        let compilation = Compilation(trees.ToArray())
+        let changes = Changes(trees[0], "return 1", "return G()")
+        let service = CodeFixService(CodeFixRegistry())
+        let set = ImmutableArray.Create[GSharpDiagnosticAnalyzer](ModelQueryReporter())
+        let budget = if budgeted {
+            AnalyzerOptions{TimeBudgetMilliseconds: 60000}
+        } else {
+            default(AnalyzerOptions?)
+        }
+        let full = service.ComputeDelta(
+            DeltaBaseline.Create(
+                compilation,
+                DeltaOptions{BodyLocalBind: false, Analyzers: set, AnalyzerOptions: budget}
+            ),
+            changes,
+            ImmutableArray[Diagnostic].Empty
+        )
+        let baseline = DeltaBaseline.Create(compilation, DeltaOptions{Analyzers: set, AnalyzerOptions: budget})
+        let work = Task.Run(() -> service.ComputeDelta(baseline, changes, ImmutableArray[Diagnostic].Empty))
+        Assert.True(work.Wait(TimeSpan.FromSeconds(120)), "the body-local check did not finish")
+        let local = work.Result
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+        Assert.Contains(local.Added, (d Diagnostic) -> d.Id == "TA0009" && d.Message.Contains("G"))
+        AssertSameDelta(full, local, "semantic-model query")
+    }
+
     @Fact
     func BodyLocalAnalyzerThatThrowsOnTheNewBody_FallsBack() {
         const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n"
@@ -743,6 +782,15 @@ open class Adr0227BodyLocalDeltaTests {
             isEnabledByDefault: true
         )
 
+        let QueryRule DiagnosticDescriptor = DiagnosticDescriptor(
+            "TA0009",
+            "Model query",
+            "Call; f1.gs declares {0}.",
+            "Testing",
+            DiagnosticSeverity.Warning,
+            isEnabledByDefault: true
+        )
+
         let BodyRule DiagnosticDescriptor = DiagnosticDescriptor(
             "TA0002",
             "Body",
@@ -770,6 +818,35 @@ open class Adr0227BodyLocalDeltaTests {
                     }
                 },
                 Enum.GetValues[BoundNodeKind]()
+            )
+        }
+    }
+
+    // Reports each call with the function that the semantic model of the file `f1.gs` declares first.
+    private class ModelQueryReporter : GSharpDiagnosticAnalyzer {
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray.Create(
+            Adr0227BodyLocalDeltaTests.QueryRule
+        )
+
+        override func Initialize(context AnalysisContext) {
+            context.ConfigureScope(AnalyzerScope.MemberBody)
+            context.RegisterBoundNodeAction(
+                (ctx BoundNodeAnalysisContext) -> {
+                    if ctx.BoundNode.Syntax is not{} syntax {
+                        return
+                    }
+                    let tree = ctx.Compilation.SyntaxTrees.First((t SyntaxTree) -> t.Text.FileName == "f1.gs")
+                    let declaration = tree.Root.DescendantNodes().OfType[FunctionDeclarationSyntax]().First()
+                    let declared = ctx.Compilation.GetSemanticModel(tree).GetDeclaredSymbol(declaration)
+                    ctx.ReportDiagnostic(
+                        Diagnostic.Create(
+                            Adr0227BodyLocalDeltaTests.QueryRule,
+                            syntax.Location,
+                            declared?.Name ?? "none"
+                        )
+                    )
+                },
+                BoundNodeKind.CallExpression
             )
         }
     }
