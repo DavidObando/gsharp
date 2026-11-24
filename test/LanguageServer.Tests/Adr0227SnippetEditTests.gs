@@ -480,6 +480,16 @@ open class Adr0227SnippetEditTests {
     }
 
     @Fact
+    func HoldsPlaceholder_AcceptsTheRangeOfAPlaceholderThatEndsWithACarriageReturn() {
+        // At the end of the text, the range of `nil\r` ends after the CR on the same line.
+        let text = "nil\r"
+        let $range = SemanticLookup.ToRange(SourceText.From(text), TextSpan(0, 4))
+        let arguments = SelectPlaceholderArguments{Uri: "file:///a.gs", Range: $range, Text: text}
+        Assert.True(CodeActionComputer.HoldsPlaceholder(LanguageServerTestHelpers.Content(text), arguments))
+        Assert.False(CodeActionComputer.HoldsPlaceholder(LanguageServerTestHelpers.Content("nul\r"), arguments))
+    }
+
+    @Fact
     func SelectPlaceholder_GivesNoCommand_ForAnEmptyOrOutOfRangeSpan() {
         let content = LanguageServerTestHelpers.Content(Source)
         let uri = DocumentUri.From("file:///a.gs")!!

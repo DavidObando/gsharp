@@ -417,7 +417,9 @@ shared class CodeActionComputer {
             return -1
         }
         let line = text.Lines[position.Line]
-        if position.Character > line.Length {
+        // SemanticLookup.ToRange can end a range after the line break of the last line (a span that ends
+        // with a CR at the end of the text), so the range of a placeholder can name that position.
+        if position.Character > line.LengthIncludingLineBreak {
             return -1
         }
         return line.Start + position.Character
