@@ -120,6 +120,23 @@ partial class SemanticModel {
         return nil
     }
 
+    private func MatchesCapturedIndexAnchor(capturedArgument BoundExpression, target SyntaxNode) bool {
+        if object.ReferenceEquals(capturedArgument.Syntax, target) {
+            return true
+        }
+        if target is AccessorExpressionSyntax qualifiedSyntax {
+            var terminal ExpressionSyntax = qualifiedSyntax.RightPart
+            while terminal is AccessorExpressionSyntax segment {
+                terminal = segment.RightPart
+            }
+            return terminal is CallExpressionSyntax && object.ReferenceEquals(capturedArgument.Syntax, terminal)
+        }
+        return target is BaseClassCallExpressionSyntax baseCall && object.ReferenceEquals(
+            capturedArgument.Syntax,
+            baseCall.Call
+        )
+    }
+
     private func PublicCompletionView(bound BoundNode) BoundNode {
         var current = bound
         while current is BoundExpression operand &&
@@ -218,7 +235,7 @@ partial class SemanticModel {
         var bound BoundNode? = GetBoundNode(target, cancellationToken)
         if bound is BoundExpression candidate &&
             CapturedIndexArgument(candidate, expectedBlockSyntax: target) is {} capturedArgument {
-            if !object.ReferenceEquals(capturedArgument.Syntax, target) {
+            if !MatchesCapturedIndexAnchor(capturedArgument, target) {
                 return SymbolInfo.None
             }
             bound = capturedArgument

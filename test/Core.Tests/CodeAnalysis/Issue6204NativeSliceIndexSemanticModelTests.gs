@@ -186,6 +186,41 @@ func F(c C) {
     }
 
     @Fact
+    func QualifiedSharedMethodIndexCall_AnswersOnBothAccessorAndNestedCall() {
+        let source = `package P
+
+class C { }
+
+class Holder {
+    shared {
+        func Index() int32 -> 0
+    }
+}
+
+func F(c C) {
+    let s = slice[int32]{1, 2}
+    let k = s[Holder.Index()] + c
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6204_qualified_index.gs"))
+        let compilation = Compilation(tree)
+        Assert.Contains(compilation.GetDiagnostics(), (d Diagnostic) -> d.Id == "GS0129")
+        let model = compilation.GetSemanticModel(tree)
+        let accessor = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().Single()
+        let nestedCall = Assert.IsType[CallExpressionSyntax](accessor.RightPart)
+        let expectedMethod = compilation
+            .GlobalScope
+            .Structs
+            .Single((s StructSymbol) -> s.Name == "Holder")
+            .StaticMethods
+            .Single((m FunctionSymbol) -> m.Name == "Index")
+        Assert.Same(expectedMethod, model.GetSymbolInfo(accessor).Symbol)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(accessor).Type)
+        Assert.Same(expectedMethod, model.GetSymbolInfo(nestedCall).Symbol)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(nestedCall).Type)
+    }
+
+    @Fact
     func InferredSuspendingNativeSliceIndex_PreservesCapturedTypeAndSymbol() {
         let source = `package P
 
