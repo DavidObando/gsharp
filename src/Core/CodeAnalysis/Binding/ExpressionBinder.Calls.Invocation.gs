@@ -4427,7 +4427,10 @@ internal partial class ExpressionBinder {
         if receiverType == nil {
             return result
         }
-        for method in this.memberLookup.CollectImportedExtensionMethods(methodName) {
+        for method in MemberLookup.ExcludeErasureOnlyEnumCandidates(
+            this.memberLookup.CollectImportedExtensionMethods(methodName),
+            ImmutableArray.Create(receiverType)
+        ) {
             try {
                 if ClrOverloadResolution.CanAcceptExtensionReceiverForTypeArgumentDiagnostic(
                     method,

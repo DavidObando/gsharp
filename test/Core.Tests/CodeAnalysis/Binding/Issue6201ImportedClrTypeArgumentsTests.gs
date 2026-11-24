@@ -219,6 +219,57 @@ func F() {
         Assert.Equal([]string{"GS0267", "GS0148"}, errorIds)
     }
 
+    @Fact
+    func SourceEnumReceiver_ExcludesErasureOnlyIntExtensionMethods_ForTypeArgumentDiagnostics() {
+        using let fixture = GSharp.Core.Tests.CSharpFixture(`namespace EnumExt6201;
+public static class IntExtensions {
+    public static int IntOnly<T>(this int value) => value;
+    public static int GenericExt<T>(this T value) => 0;
+}`)
+        using let resolver = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let source = `package P
+import EnumExt6201
+
+enum E {
+    A = 1
+}
+
+func F1(e E) {
+    let _ = e.IntOnly[Nope]()
+}
+func F2(e E) {
+    let _ = e.IntOnly[int32, int32]()
+}
+func F3(n int32) {
+    let _ = n.IntOnly[int32, int32]()
+}
+func F4(e E) {
+    let _ = e.GenericExt[int32, int32]()
+}
+func F5(e E) {
+    let _ = e.GenericExt[Nope]()
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6201_enum_ext.gs"))
+        let compilation = Compilation(resolver, tree)
+        let errors = compilation
+            .GetDiagnostics()
+            .Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            .Select((d Diagnostic) -> d.Id + " " + d.Message)
+            .ToArray()
+        Assert.Equal(
+            []string{
+                "GS0113 Type 'Nope' doesn't exist.",
+                "GS0159 Cannot find function IntOnly.",
+                "GS0159 Cannot find function IntOnly.",
+                "GS0148 Generic function 'IntOnly' requires 1 type arguments but was given 2.",
+                "GS0148 Generic function 'GenericExt' requires 1 type arguments but was given 2.",
+                "GS0113 Type 'Nope' doesn't exist."
+            },
+            errors
+        )
+    }
+
     shared {
         private func Template(statement string) string -> `package P
 import System
