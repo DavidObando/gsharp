@@ -120,7 +120,7 @@ partial class SemanticModel {
             let result = snapshot.BindPrefix(
                 insertedTree,
                 prefix.Cut + inserted.Length,
-                PrefixBindOptions(prefix.Remainder, includeScope: true),
+                PrefixBindOptions(prefix.Remainder, includeScope: false),
                 cancellationToken
             )
             for d in result.Diagnostics {
@@ -128,7 +128,11 @@ partial class SemanticModel {
                     diagnostics.Add(d)
                 }
             }
-            visible = result.Scope
+            // The scope right after the statement: the cut can be after blocks that close before it.
+            visible = result
+                .Compilation
+                .GetSemanticModel(result.SyntaxTree)
+                .LookupSymbols(statementSpan.End + 1, cancellationToken: cancellationToken)
             boundTree = result.SyntaxTree
         } else {
             for d in snapshot.GetDiagnostics(cancellationToken) {

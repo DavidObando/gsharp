@@ -103,6 +103,25 @@ open class Issue6176SpeculativeStatementTests {
     }
 
     @Fact
+    func StatementInAnInnerBlockBeforeTheCut_AnswersItsLocals() {
+        // The cut is after the block that the statement is inserted in, so the locals of the statement are
+        // out of scope at the cut, and in scope right after the statement.
+        const source = "package P\n\nfunc Main() {\n    if true {\n        let a = 1\n@@POS\n    }\n    let z = 0\n/*CUT*/\n}\n"
+        let cut = source.Replace("@@POS", string.Empty).IndexOf("/*CUT*/", StringComparison.Ordinal)
+        let position = source.IndexOf("@@POS", StringComparison.Ordinal)
+        let text = source.Replace("@@POS", string.Empty).Replace("/*CUT*/", string.Empty)
+        let tree = SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))
+        let prefix = Compilation(tree).BindPrefix(tree, cut, PrefixBindOptions(PrefixRemainder.Nothing))
+        let model = prefix.Compilation.GetSemanticModel(prefix.SyntaxTree)
+        let result = model.GetSpeculativeStatementDiagnostics(
+            position - 1,
+            SyntaxTree.ParseStatement("let b = a + 1")!!
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("b", Assert.Single(result.DeclaredSymbols).Name)
+    }
+
+    @Fact
     func SpeculativeStatement_SeesTheFlowStateAtThePosition() {
         // GetSpeculativeTypeInfo starts with empty narrowing. A statement is bound in its body, so a
         // null check before it narrows `p`.
