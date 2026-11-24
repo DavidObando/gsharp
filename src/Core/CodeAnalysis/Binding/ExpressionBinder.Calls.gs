@@ -1125,6 +1125,20 @@ internal partial class ExpressionBinder {
                 out var openType,
                 out var openAmbiguity
             ) {
+                if TryFindImportedClassExpectedArity(name, typeArgumentList.Arguments.Count, out var expectedArity) {
+                    for arg in typeArgumentList.Arguments {
+                        let _ = bindTypeClause(arg)
+                    }
+                    BindCallArgumentsForErrorRecovery(syntax.Arguments)
+                    Diagnostics.ReportWrongTypeArgumentCount(
+                        typeArgumentList.Location,
+                        name,
+                        expectedArity,
+                        typeArgumentList.Arguments.Count
+                    )
+                    result = BoundErrorExpression(syntax)
+                    return true
+                }
                 return false
             }
             // Issue #3734: constructing a bare homonym is the same coin flip as
@@ -1138,7 +1152,9 @@ internal partial class ExpressionBinder {
                 out symbolicTypeArgs,
                 out var hasSymbolicArg
             ) {
-                return false
+                BindCallArgumentsForErrorRecovery(syntax.Arguments)
+                result = BoundErrorExpression(syntax)
+                return true
             }
             // Issue #4032 (review finding 1): the constraint check added for
             // type CLAUSES did not cover the direct-construction expression
@@ -1545,11 +1561,12 @@ internal partial class ExpressionBinder {
         clrArgs = [typeArgumentList.Arguments.Count]Type
         let symbolic = ImmutableArray.CreateBuilder[TypeSymbol](typeArgumentList.Arguments.Count)
         hasSymbolicArg = false
+        var allResolved = true
         for var i = 0; i < typeArgumentList.Arguments.Count; i++ {
             let ta TypeSymbol? = bindTypeClause(typeArgumentList.Arguments[i])
             if ta == nil {
-                symbolicArgs = default(ImmutableArray[TypeSymbol])
-                return false
+                allResolved = false
+                continue
             }
             symbolic.Add(ta)
             if ta.ClrType == nil {
@@ -1594,8 +1611,41 @@ internal partial class ExpressionBinder {
             // resolves to `Nullable<int>` (not bare `int`).
             clrArgs[i] = (resolveClrTypeForGenericArg(ta) ?? $scope.References!!.MapClrTypeToReferences(ta.ClrType))!!
         }
+        if !allResolved {
+            symbolicArgs = default(ImmutableArray[TypeSymbol])
+            return false
+        }
         symbolicArgs = symbolic.MoveToImmutable()
         return true
+    }
+
+    private func TryFindImportedClassExpectedArity(name string, excludedArity int32, out expectedArity int32) bool {
+        if $scope.TryLookupImportedClass(name, declaration: nil, out _, out _) {
+            expectedArity = 0
+            return true
+        }
+        for var arity = 1; arity <= 16; arity++ {
+            if arity != excludedArity && $scope.TryLookupImportedGenericClass(name, arity, out _, out _) {
+                expectedArity = arity
+                return true
+            }
+        }
+        expectedArity = 0
+        return false
+    }
+
+    private func BindCallArgumentsForErrorRecovery(
+        arguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax]
+    ) {
+        binderCtx.ExpectCallArguments(arguments)
+        for argument in arguments {
+            let inner = OverloadResolver.UnwrapNamedArgumentValue(argument)
+            if inner is RefArgumentExpressionSyntax refArgument {
+                let _ = BindRefArgumentExpression(refArgument, parameter: nil)
+            } else {
+                let _ = BindExpression(inner)
+            }
+        }
     }
 
     /// Binds a constructor invocation against an already-resolved CLR
@@ -2858,9 +2908,30 @@ internal partial class ExpressionBinder {
     private func TryBindNestedTypeConstructorCall(
         classSymbol ImportedClassSymbol,
         syntax CallExpressionSyntax,
-        @NotNullWhen(true) out result BoundExpression?
+        @NotNullWhen(true) out result BoundExpression?,
+        typeArgumentsAlreadyBound bool = false
     ) bool {
         result = nil
+        if typeArgumentsAlreadyBound && syntax.TypeArgumentList is {} failedTypeArguments {
+            if TryFindNestedClrTypeExpectedArity(
+                classSymbol,
+                syntax.Identifier.ValueText,
+                failedTypeArguments.Arguments.Count,
+                out var expectedArity
+            ) {
+                if expectedArity != failedTypeArguments.Arguments.Count {
+                    Diagnostics.ReportWrongTypeArgumentCount(
+                        failedTypeArguments.Location,
+                        syntax.Identifier.ValueText,
+                        expectedArity,
+                        failedTypeArguments.Arguments.Count
+                    )
+                }
+                result = BoundErrorExpression(syntax)
+                return true
+            }
+            return false
+        }
         if !TryResolveClosedNestedClrType(
             classSymbol,
             syntax.Identifier.ValueText,
@@ -2872,6 +2943,23 @@ internal partial class ExpressionBinder {
             out var constraintFailed
         ) {
             if constraintFailed {
+                result = BoundErrorExpression(syntax)
+                return true
+            }
+            if syntax.TypeArgumentList is {} unexpectedTypeArguments &&
+                TryFindNestedClrTypeExpectedArity(
+                classSymbol,
+                syntax.Identifier.ValueText,
+                unexpectedTypeArguments.Arguments.Count,
+                out var expectedArity
+            ) &&
+                expectedArity != unexpectedTypeArguments.Arguments.Count {
+                Diagnostics.ReportWrongTypeArgumentCount(
+                    unexpectedTypeArguments.Location,
+                    syntax.Identifier.ValueText,
+                    expectedArity,
+                    unexpectedTypeArguments.Arguments.Count
+                )
                 result = BoundErrorExpression(syntax)
                 return true
             }
@@ -2900,6 +2988,60 @@ internal partial class ExpressionBinder {
             &result,
             constructedTarget
         )
+    }
+
+    private func TryFindNestedClrTypeExpectedArity(
+        classSymbol ImportedClassSymbol,
+        nestedName string,
+        explicitArity int32,
+        out expectedArity int32
+    ) bool {
+        let containingType = classSymbol.ClassType
+        let outerArity = if containingType.IsConstructedGenericType {
+            containingType.GetGenericArguments().Length
+        } else {
+            0
+        }
+        if explicitArity > 0 && $scope.References!!.TryResolveNestedType(
+            containingType,
+            nestedName + "`" + explicitArity.ToString(),
+            out var matchingNested
+        ) &&
+            matchingNested != nil {
+            let ownArity = matchingNested.GetGenericArguments().Length - outerArity
+            if ownArity >= 0 {
+                expectedArity = ownArity
+                return true
+            }
+        }
+        if $scope.References!!.TryResolveNestedType(containingType, nestedName, out var plainNested) &&
+            plainNested != nil {
+            let ownArity = if plainNested.IsGenericTypeDefinition {
+                plainNested.GetGenericArguments().Length - outerArity
+            } else {
+                0
+            }
+            if ownArity >= 0 {
+                expectedArity = ownArity
+                return true
+            }
+        }
+        for var arity = 1; arity <= 16; arity++ {
+            if arity != explicitArity && $scope.References!!.TryResolveNestedType(
+                containingType,
+                nestedName + "`" + arity.ToString(),
+                out var otherNested
+            ) &&
+                otherNested != nil {
+                let ownArity = otherNested.GetGenericArguments().Length - outerArity
+                if ownArity >= 0 {
+                    expectedArity = ownArity
+                    return true
+                }
+            }
+        }
+        expectedArity = 0
+        return false
     }
 
     /// Resolves a nested CLR type under [`classSymbol`](paramref) and closes it

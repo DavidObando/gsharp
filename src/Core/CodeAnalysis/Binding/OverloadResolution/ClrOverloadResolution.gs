@@ -1346,6 +1346,16 @@ internal shared class ClrOverloadResolution {
         ) {
             return true
         }
+        return MayAcceptExtensionReceiverForClrType(method, receiver, receiverClr, argumentCount, argumentNames)
+    }
+
+    private func MayAcceptExtensionReceiverForClrType(
+        method MethodInfo,
+        receiver TypeSymbol,
+        receiverClr Type,
+        argumentCount int32?,
+        argumentNames IReadOnlyList[string?]?
+    ) bool {
         let parameters = method.GetParameters()
         if parameters.Length == 0 {
             return false
@@ -1406,22 +1416,8 @@ internal shared class ClrOverloadResolution {
             "op_Implicit",
             operators
         )
-        if !OpenExtensionReceiverStandardShapeMayApply(receiverClr, parameterType) && !operators.Any(
-            (conversion MethodInfo) -> {
-                let inputs = conversion.GetParameters()
-                return inputs.Length == 1 &&
-                    (
-                    if inputs[0].ParameterType.ContainsGenericParameters {
-                        OpenExtensionReceiverStandardShapeMayApply(receiverClr, inputs[0].ParameterType)
-                    } else {
-                        IsInferenceBoundPromotion(inputs[0].ParameterType, receiverClr) ||
-                            Conversion.ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(inputs[0]))
-                            .IsImplicit
-                    }
-                ) &&
-                    OpenExtensionReceiverStandardShapeMayApply(conversion.ReturnType, parameterType)
-            }
-        ) {
+        if !OpenExtensionReceiverStandardShapeMayApply(receiverClr, parameterType) &&
+            !ImplicitOperatorShapeMayApplyForExtensionReceiver(receiver, receiverClr, parameterType, operators) {
             return false
         }
         for conversion in operators {
@@ -1485,6 +1481,177 @@ internal shared class ClrOverloadResolution {
             }
         }
         return false
+    }
+
+    private func ImplicitOperatorShapeMayApplyForExtensionReceiver(
+        receiver TypeSymbol,
+        receiverClr Type,
+        parameterType Type,
+        operators List[MethodInfo]
+    ) bool -> operators
+        .Any(
+        (conversion MethodInfo) -> {
+            let inputs = conversion.GetParameters()
+            return inputs.Length == 1 &&
+                (
+                if inputs[0].ParameterType.ContainsGenericParameters {
+                    OpenExtensionReceiverStandardShapeMayApply(receiverClr, inputs[0].ParameterType)
+                } else {
+                    IsInferenceBoundPromotion(inputs[0].ParameterType, receiverClr) || Conversion.ClassifyNonStructural(
+                        receiver,
+                        ClrNullability.GetParameterTypeSymbol(inputs[0])
+                    )
+                        .IsImplicit
+                }
+            ) &&
+                OpenExtensionReceiverStandardShapeMayApply(conversion.ReturnType, parameterType)
+        }
+    )
+
+    internal func CanAcceptExtensionReceiverForTypeArgumentDiagnostic(
+        method MethodInfo,
+        receiver TypeSymbol,
+        explicitTypeArgs[]?Type,
+        hasDirectInstanceCandidates bool
+    ) bool {
+        let parameters = method.GetParameters()
+        if parameters.Length == 0 {
+            return false
+        }
+        let receiverRefKind = RefCapabilities.GetParameterRefKind(parameters[0])
+        let requiresIdentity = receiverRefKind is RefKind.Ref or RefKind.Out
+        var parameterType = parameters[0].ParameterType
+        if parameterType.IsByRef {
+            parameterType = parameterType.GetElementType() ?? parameterType
+        }
+        let candidateClrTypes = CollectExtensionReceiverCandidateClrTypes(receiver)
+        if candidateClrTypes.Count == 0 {
+            return false
+        }
+        let acceptsClosedParameter = func (closedParam ParameterInfo, closedParamType Type, receiverClr Type) bool {
+            if requiresIdentity {
+                return ClrTypeUtilities.AreSame(closedParamType, receiverClr)
+            }
+            return ClassifyImplicit(closedParamType, receiverClr) != ImplicitConversionKind.None ||
+                Conversion.ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(closedParam))
+                .IsImplicit
+        }
+        for receiverClr in candidateClrTypes {
+            if !parameterType.ContainsGenericParameters {
+                if acceptsClosedParameter(parameters[0], parameterType, receiverClr) {
+                    return true
+                }
+                continue
+            }
+            if explicitTypeArgs != nil && method.IsGenericMethodDefinition && method.GetGenericArguments()
+                .Length == explicitTypeArgs
+                .Length {
+                var closed MethodInfo
+                try {
+                    closed = method.MakeGenericMethod(explicitTypeArgs)
+                } catch (ex Exception) when ex is ArgumentException ||
+                    ex is InvalidOperationException ||
+                    IsMetadataLoadFailure(ex) {
+                    continue
+                }
+                let closedParam = closed.GetParameters()[0]
+                var closedParamType = closedParam.ParameterType
+                if closedParamType.IsByRef {
+                    closedParamType = closedParamType.GetElementType() ?? closedParamType
+                }
+                if acceptsClosedParameter(closedParam, closedParamType, receiverClr) {
+                    return true
+                }
+                continue
+            }
+            if requiresIdentity {
+                let exact = Dictionary[Type, Type]()
+                if InferExactExtensionReceiverTypeArguments(parameterType, receiverClr, exact) {
+                    return true
+                }
+                continue
+            }
+            if OpenExtensionReceiverStandardShapeMayApply(receiverClr, parameterType) {
+                return true
+            }
+            if !hasDirectInstanceCandidates {
+                let operators = List[MethodInfo]()
+                ClrOperatorResolution.CollectOperators(receiverClr, "op_Implicit", operators)
+                ClrOperatorResolution.CollectOperators(
+                    NullableLifting.GetValueTypeNullableUnderlyingClr(parameterType) ?? parameterType,
+                    "op_Implicit",
+                    operators
+                )
+                if ImplicitOperatorShapeMayApplyForExtensionReceiver(receiver, receiverClr, parameterType, operators) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func CollectExtensionReceiverCandidateClrTypes(receiver TypeSymbol) List[Type] {
+        let candidates = List[Type]()
+        let AddCandidate = func (clr Type?) {
+            if clr != nil && !clr.ContainsGenericParameters && !candidates.Contains(clr) {
+                candidates.Add(clr)
+            }
+        }
+        let CollectFromUserInterface = func (userInterface InterfaceSymbol?) {
+            if userInterface == nil {
+                return
+            }
+            for candidate in userInterface.SelfAndAllBaseInterfaces() {
+                for importedBase in candidate.BaseClrInterfaces {
+                    AddCandidate(importedBase?.ClrType)
+                }
+            }
+        }
+        let CollectFromStruct = func (aggregate StructSymbol) {
+            for current in aggregate.GetHierarchy() {
+                for implemented in current.ImplementedClrInterfaces {
+                    AddCandidate(implemented?.ClrType)
+                }
+                for iface in current.Interfaces {
+                    CollectFromUserInterface(iface)
+                }
+            }
+            if MemberLookup.TryProjectErasedClrType(aggregate, out var erasedAggregate) {
+                AddCandidate(erasedAggregate)
+            } else {
+                AddCandidate(typeof(object))
+            }
+        }
+        let baseReceiver = PlatformTypeSymbol.StripTopLevel(receiver)
+        if baseReceiver is StructSymbol aggregate {
+            CollectFromStruct(aggregate)
+        } else if baseReceiver is InterfaceSymbol userInterface {
+            CollectFromUserInterface(userInterface)
+            AddCandidate(typeof(object))
+        } else if baseReceiver is TypeParameterSymbol tp {
+            AddCandidate(tp.ClrInterfaceConstraint?.ClrType)
+            CollectFromUserInterface(tp.InterfaceConstraint)
+            if tp.ClassConstraint is StructSymbol classStruct {
+                CollectFromStruct(classStruct)
+            } else if tp.ClassConstraint?.ClrType is {} classClr {
+                AddCandidate(classClr)
+            } else if tp.HasValueTypeConstraint {
+                AddCandidate(typeof(ValueType))
+            } else {
+                AddCandidate(typeof(object))
+            }
+        } else if baseReceiver is EnumSymbol {
+            AddCandidate(typeof(Enum))
+            AddCandidate(typeof(int32))
+        } else if baseReceiver is DelegateTypeSymbol {
+            AddCandidate(typeof(MulticastDelegate))
+        } else {
+            AddCandidate(GetEffectiveExtensionReceiverClrType(receiver))
+            if candidates.Count == 0 && MemberLookup.TryProjectErasedClrType(baseReceiver, out var erased) {
+                AddCandidate(erased)
+            }
+        }
+        return candidates
     }
 
     internal func AllExtensionTypeParametersMayBeInferred(
@@ -6827,7 +6994,7 @@ internal shared class ClrOverloadResolution {
         return true
     }
 
-    private func IsOptionalParameter(parameter ParameterInfo) bool {
+    internal func IsOptionalParameter(parameter ParameterInfo) bool {
         if parameter.IsOptional || parameter.HasDefaultValue {
             return true
         }

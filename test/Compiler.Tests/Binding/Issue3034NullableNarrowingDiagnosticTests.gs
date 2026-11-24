@@ -353,12 +353,23 @@ func Run() {
 
     @Fact
     func InvalidExplicitTypeArgument_KeepsLookupMessage() {
-        let diagnostic = GetGs0159AllowingOtherDiagnostics(`import System
+        // Issue #6200: `Array.Empty[Missing]()` finds `Empty[T]` and reports only
+        // GS0113 (no cascading GS0159). Missing lookup with an invalid explicit
+        // type argument still keeps the lookup GS0159 message.
+        let existingDiagnostics = GetDiagnostics(`import System
 
 func Run() {
     Array.Empty[Missing]()
 }`)
-        Assert.Equal("Cannot find function Empty.", diagnostic.Message)
+        let existingDiagnostic = Assert.Single(existingDiagnostics)
+        Assert.Equal("GS0113", existingDiagnostic.Id)
+
+        let diagnostic = GetGs0159AllowingOtherDiagnostics(`import System
+
+func Run() {
+    Array.MissingMethod[Missing]()
+}`)
+        Assert.Equal("Cannot find function MissingMethod.", diagnostic.Message)
     }
 
     @Fact

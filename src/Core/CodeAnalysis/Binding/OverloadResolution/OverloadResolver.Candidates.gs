@@ -26,7 +26,8 @@ internal partial class OverloadResolver {
         ce CallExpressionSyntax,
         methodName string,
         argumentNames ImmutableArray[string],
-        receiverType TypeSymbol? = nil
+        receiverType TypeSymbol? = nil,
+        typeArgumentsAlreadyBound bool = false
     ) FunctionSymbol? {
         var overloads = overloads
         CallCandidateRecorder.RecordFunctions(overloads, receiverType)
@@ -35,7 +36,11 @@ internal partial class OverloadResolver {
         if ce.TypeArgumentList is {} unexpectedTypeArguments &&
             !overloads.IsDefaultOrEmpty &&
             !HasGenericCandidate(overloads) {
-            ReportTypeArgumentsOnNonGenericFunction(unexpectedTypeArguments, methodName)
+            ReportTypeArgumentsOnNonGenericFunction(
+                unexpectedTypeArguments,
+                methodName,
+                typeArgumentsBound: typeArgumentsAlreadyBound
+            )
             return nil
         }
         if overloads.Length <= 1 {
@@ -51,51 +56,18 @@ internal partial class OverloadResolver {
         // either the explicit type arguments or, in their absence, type inference.
         let explicitTypeArgCount = ce.TypeArgumentList?.Arguments.Count ?? 0
         var boundTypeArguments = default(ImmutableArray[TypeSymbol])
-        if explicitTypeArgCount > 0 {
-            let explicitTypeArguments = ImmutableArray.CreateBuilder[TypeSymbol](explicitTypeArgCount)
-            for explicitArgument in Invariant.Required(
-                ce.TypeArgumentList,
-                "an explicit type-argument count has a type-argument list",
-                expression: "ce.TypeArgumentList"
-            )
-                .Arguments {
-                let typeArgument TypeSymbol? = bindTypeClause(explicitArgument)
-                if typeArgument == nil {
-                    return nil
-                }
-                explicitTypeArguments.Add(typeArgument)
-            }
-            boundTypeArguments = explicitTypeArguments.MoveToImmutable()
-            let constraintMatches = ImmutableArray.CreateBuilder[FunctionSymbol]()
-            for candidate in overloads {
-                if candidate.TypeParameters.Length != boundTypeArguments.Length {
-                    continue
-                }
-                // Issue #4043: a DEPENDENT bound is answered on the whole
-                // vector, so build the positional map before asking.
-                let explicitVector = BuildTypeArgumentVector(
-                    candidate.TypeParameters,
-                    boundTypeArguments,
-                    (candidate.ContainingType as InterfaceSymbol) ??
-                        receiverType ??
-                        candidate.StaticOwnerType ??
-                        candidate.ReceiverType
-                )
-                var constraintsSatisfied = true
-                for var i = 0; i < candidate.TypeParameters.Length; i++ {
-                    constraintsSatisfied &= satisfiesConstraint(
-                        boundTypeArguments[i],
-                        candidate.TypeParameters[i],
-                        explicitVector
-                    )
-                }
-                if constraintsSatisfied {
-                    constraintMatches.Add(candidate)
-                }
-            }
-            if constraintMatches.Count > 0 {
-                overloads = constraintMatches.ToImmutable()
-            }
+        if ce.TypeArgumentList is {} explicitTypeArgumentList &&
+            !TrySelectCandidatesByExplicitTypeArguments(
+            overloads,
+            explicitTypeArgumentList,
+            methodName,
+            arguments.Length,
+            receiverType,
+            typeArgumentsAlreadyBound,
+            out overloads,
+            out boundTypeArguments
+        ) {
+            return nil
         }
         let selected FunctionSymbol? = SelectBestInstanceOverload(
             overloads,
@@ -198,6 +170,103 @@ internal partial class OverloadResolver {
             return nil
         }
         return SelectInstanceOverloadOrReport(unified, arguments, ce, methodName, argumentNames, structSym)
+    }
+
+    /// Filters [`candidates`](paramref) by an explicit type-argument list (#6186, #6202).
+    /// Reports GS0148 against the generic candidates when no candidate matches the type-argument
+    /// count.
+    private func TrySelectCandidatesByExplicitTypeArguments(
+        candidates ImmutableArray[FunctionSymbol],
+        typeArgumentList TypeArgumentListSyntax,
+        methodName string,
+        argumentCount int32,
+        receiverType TypeSymbol?,
+        typeArgumentsAlreadyBound bool,
+        out filteredCandidates ImmutableArray[FunctionSymbol],
+        out boundTypeArguments ImmutableArray[TypeSymbol]
+    ) bool {
+        filteredCandidates = default(ImmutableArray[FunctionSymbol])
+        boundTypeArguments = default(ImmutableArray[TypeSymbol])
+        let explicitTypeArgCount = typeArgumentList.Arguments.Count
+        let arityMatches = ImmutableArray.CreateBuilder[FunctionSymbol]()
+        for candidate in candidates {
+            if candidate.TypeParameters.Length == explicitTypeArgCount {
+                arityMatches.Add(candidate)
+            }
+        }
+        if arityMatches.Count == 0 {
+            if !typeArgumentsAlreadyBound {
+                for explicitArgument in typeArgumentList.Arguments {
+                    let _ = bindTypeClause(explicitArgument)
+                }
+            }
+            var expectedTypeArgCount = 0
+            for candidate in candidates {
+                if candidate.IsGeneric {
+                    if expectedTypeArgCount == 0 {
+                        expectedTypeArgCount = candidate.TypeParameters.Length
+                    }
+                    if IsApplicableUserCallable(candidate, argumentCount, default(ImmutableArray[string])) {
+                        expectedTypeArgCount = candidate.TypeParameters.Length
+                        break
+                    }
+                }
+            }
+            Diagnostics.ReportWrongTypeArgumentCount(
+                typeArgumentList.Location,
+                methodName,
+                expectedTypeArgCount,
+                explicitTypeArgCount
+            )
+            return false
+        }
+        if typeArgumentsAlreadyBound {
+            return false
+        }
+        let explicitTypeArguments = ImmutableArray.CreateBuilder[TypeSymbol](explicitTypeArgCount)
+        var allBound = true
+        for explicitArgument in typeArgumentList.Arguments {
+            let typeArgument TypeSymbol? = bindTypeClause(explicitArgument)
+            if typeArgument == nil {
+                allBound = false
+            } else {
+                explicitTypeArguments.Add(typeArgument)
+            }
+        }
+        if !allBound {
+            return false
+        }
+        boundTypeArguments = explicitTypeArguments.MoveToImmutable()
+        let constraintMatches = ImmutableArray.CreateBuilder[FunctionSymbol]()
+        for candidate in arityMatches {
+            // Issue #4043: a DEPENDENT bound is answered on the whole
+            // vector, so build the positional map before asking.
+            let explicitVector = BuildTypeArgumentVector(
+                candidate.TypeParameters,
+                boundTypeArguments,
+                (candidate.ContainingType as InterfaceSymbol) ??
+                    receiverType ??
+                    candidate.StaticOwnerType ??
+                    candidate.ReceiverType
+            )
+            var constraintsSatisfied = true
+            for var i = 0; i < candidate.TypeParameters.Length; i++ {
+                constraintsSatisfied &= satisfiesConstraint(
+                    boundTypeArguments[i],
+                    candidate.TypeParameters[i],
+                    explicitVector
+                )
+            }
+            if constraintsSatisfied {
+                constraintMatches.Add(candidate)
+            }
+        }
+        filteredCandidates = if constraintMatches.Count > 0 {
+            constraintMatches.ToImmutable()
+        } else {
+            arityMatches.ToImmutable()
+        }
+        return true
     }
 
     private func SelectBestUserOverload(

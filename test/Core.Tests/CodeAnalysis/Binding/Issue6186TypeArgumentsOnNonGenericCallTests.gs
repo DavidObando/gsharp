@@ -32,7 +32,7 @@ open class Issue6186TypeArgumentsOnNonGenericCallTests {
     @InlineData("let k = c.Ext[int32]()", "GS0148 [int32]")
     @InlineData("let k = c.EO[int32]()", "GS0148 [int32]")
     @InlineData("let k = n.Invoke[int32](x)", "GS0148 [int32]") // the Invoke of a named delegate
-    @InlineData("let k = n.Invoke[Nope](x)", "GS0113 Nope|GS0159 Invoke[Nope](x)") // as for c.M[Nope](x)
+    @InlineData("let k = n.Invoke[Nope](x)", "GS0113 Nope|GS0148 [Nope]") // #6200: no cascading GS0159
     @InlineData("let k = Over[int32](x)", "GS0148 [int32]") // an overload set without a generic candidate
     @InlineData("let k = c.M[int32](x)", "GS0148 [int32]") // an instance method
     @InlineData("let k = C.S[int32](x)", "GS0148 [int32]") // a static method
@@ -47,7 +47,7 @@ open class Issue6186TypeArgumentsOnNonGenericCallTests {
     @InlineData("let k = b.Get[int32](x)", "GS0148 [int32]") // a method of a constructed generic class
     @InlineData("let k = Gen[int32, int32](x)", "GS0148 [int32, int32]") // a generic function, wrong arity
     @InlineData("let k = c.G[int32, int32](x)", "GS0148 [int32, int32]") // a generic method, wrong arity
-    @InlineData("let k = c.M[Nope](x)", "GS0113 Nope|GS0159 M[Nope](x)") // GS0159 as for a generic method
+    @InlineData("let k = c.M[Nope](x)", "GS0113 Nope|GS0148 [Nope]") // #6200: no cascading GS0159
     @InlineData("let k = arr[int32?](x)", "GS0131 arr") // unambiguously type-shaped argument stays on GS0131
     @InlineData("let k = ints[x](x)", "GS0131 ints[x]") // non-callable indexed element reports GS0131
     func TypeArgumentsThatDoNotMatchTheCallee_ReportTheArity(statement string, expected string) {

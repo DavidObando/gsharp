@@ -74,10 +74,12 @@ internal partial class ExpressionBinder {
         }
         let resolved = [typeArgumentList.Arguments.Count]Type
         let symbols = ImmutableArray.CreateBuilder[TypeSymbol](typeArgumentList.Arguments.Count)
+        var allResolved = true
         for var i = 0; i < typeArgumentList.Arguments.Count; i++ {
             let ta TypeSymbol? = bindTypeClause(typeArgumentList.Arguments[i])
             if ta == nil {
-                return false
+                allResolved = false
+                continue
             }
             symbols.Add(ta)
             if ta.ClrType != nil {
@@ -149,6 +151,9 @@ internal partial class ExpressionBinder {
                     $scope.References!!.GetCoreType("System.Object")
                 }
             }
+        }
+        if !allResolved {
+            return false
         }
         explicitTypeArgs = resolved
         typeArgSymbols = symbols.MoveToImmutable()
@@ -1667,6 +1672,7 @@ internal partial class ExpressionBinder {
         // Issue #311: resolve an explicit `[T1, T2]` type-argument list (e.g.
         // `Array.Empty[string]()`) into mapped CLR types up front so every
         // generic-method dispatch path below can close the candidate.
+        var hasUnresolvedTypeArguments = false
         let typeArgMark = Diagnostics.Count
         if !TryResolveExplicitMethodTypeArgs(ce.TypeArgumentList, out var explicitTypeArgs, out var typeArgSymbols) {
             // Issue #3880: `receiver.Member[i](args)` is committed to a generic
@@ -1686,15 +1692,20 @@ internal partial class ExpressionBinder {
                     TypeSymbol.FromClrTypeWithoutNullability(classSymbol.ClassType, NullabilityFreeReason.TypeStructure)
                 }
             )
-            if !CanConvertTypeArgumentsToIndices(ce.TypeArgumentList) ||
-                indexableOwner is not{} receiverType ||
-                !HasCallableIndexableValueMember(receiverType, methodName) {
-                Diagnostics.ReportUnableToFindFunction(ce.Location, methodName)
-                return BoundErrorExpression(nil)
+            if CanConvertTypeArgumentsToIndices(ce.TypeArgumentList) &&
+                indexableOwner is {} receiverType &&
+                HasCallableIndexableValueMember(receiverType, methodName) {
+                Diagnostics.TruncateTo(typeArgMark)
+                explicitTypeArgs = nil
+                typeArgSymbols = default(ImmutableArray[TypeSymbol])
+            } else {
+                // Issue #6200: bind the arguments and resolve the member before reporting
+                // GS0159 so an existing method keeps argument answers and avoids a false
+                // missing-function cascade after GS0113.
+                hasUnresolvedTypeArguments = true
+                explicitTypeArgs = nil
+                typeArgSymbols = default(ImmutableArray[TypeSymbol])
             }
-            Diagnostics.TruncateTo(typeArgMark)
-            explicitTypeArgs = nil
-            typeArgSymbols = default(ImmutableArray[TypeSymbol])
         }
         if receiver != nil {
             ApplySubExpressionNarrowingEffects(receiverSyntax ?? receiver.Syntax, receiver)
@@ -1840,23 +1851,25 @@ internal partial class ExpressionBinder {
             }
             if deferredArrowLambdaIndices.Count > 0 {
                 let mutableArgs = boundArguments.ToArray()
-                ResolveDeferredArrowLambdaArguments(
-                    receiver,
-                    classSymbol,
-                    methodName,
-                    ce,
-                    explicitTypeArgs,
-                    typeArgSymbols,
-                    deferredArrowLambdaIndices,
-                    mutableArgs
-                )
-                ResolveDeferredArrowLambdaArgumentsFromUserMethods(
-                    receiver,
-                    methodName,
-                    ce,
-                    deferredArrowLambdaIndices,
-                    mutableArgs
-                )
+                if !hasUnresolvedTypeArguments {
+                    ResolveDeferredArrowLambdaArguments(
+                        receiver,
+                        classSymbol,
+                        methodName,
+                        ce,
+                        explicitTypeArgs,
+                        typeArgSymbols,
+                        deferredArrowLambdaIndices,
+                        mutableArgs
+                    )
+                    ResolveDeferredArrowLambdaArgumentsFromUserMethods(
+                        receiver,
+                        methodName,
+                        ce,
+                        deferredArrowLambdaIndices,
+                        mutableArgs
+                    )
+                }
                 for idx in deferredArrowLambdaIndices {
                     let placeholder = mutableArgs[idx] as BoundErrorExpression
                     let pendingLambda LambdaExpressionSyntax? = placeholder?.Syntax as LambdaExpressionSyntax
@@ -1882,9 +1895,13 @@ internal partial class ExpressionBinder {
                     argumentNames,
                     initialArguments,
                     receiverSyntax,
-                    receiverStart
+                    receiverStart,
+                    hasUnresolvedTypeArguments
                 )
-                if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+                if !hasUnresolvedTypeArguments && conversions.TryRefreshReboundArguments(
+                    initialArguments,
+                    out var refreshedArguments
+                ) {
                     Diagnostics.TruncateNonReboundSince(overloadDiagMark)
                     bound = BindAccessorCallCore(
                         receiver,
@@ -1896,7 +1913,8 @@ internal partial class ExpressionBinder {
                         argumentNames,
                         refreshedArguments,
                         receiverSyntax,
-                        receiverStart
+                        receiverStart,
+                        hasUnresolvedTypeArguments
                     )
                 }
                 return bound
@@ -1928,6 +1946,9 @@ internal partial class ExpressionBinder {
                         }
                         RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                         ApplySubExpressionNarrowingEffects(ce.Identifier, selectedCalleeEffectsLoad)
+                        if hasUnresolvedTypeArguments && ce.TypeArgumentList is {} failedTypeArguments {
+                            let _ = TryResolveExplicitMethodTypeArgs(failedTypeArguments, out _, out _)
+                        }
                         return bindArgumentsAndDispatch()
                     }
                 )
@@ -1949,7 +1970,8 @@ internal partial class ExpressionBinder {
         argumentNames ImmutableArray[string],
         arguments ImmutableArray[BoundExpression],
         receiverSyntax ExpressionSyntax?,
-        receiverStart int32?
+        receiverStart int32?,
+        hasUnresolvedTypeArguments bool = false
     ) BoundExpression {
         var receiver = receiver
         var arguments = arguments
@@ -1957,7 +1979,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(ce)
         }
         if classSymbol != nil {
-            if classSymbol.TryLookupNativeFunction(
+            if !hasUnresolvedTypeArguments && classSymbol.TryLookupNativeFunction(
                 methodName,
                 ce,
                 arguments,
@@ -2191,18 +2213,6 @@ internal partial class ExpressionBinder {
                 )
                 return BoundErrorExpression(nil)
             }
-            // Issue #343: a named-argument call that resolves to no candidate
-            // is most actionably explained by the first unknown name (if any),
-            // since the missing parameter is the prevailing cause.
-            if !argumentNames.IsDefault && overloads.TryReportUnknownNamedArgumentForClr(
-                classSymbol.ClassType,
-                methodName,
-                BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public,
-                ce,
-                argumentNames
-            ) {
-                return BoundErrorExpression(nil)
-            }
             // Issue #3970: a public static field or property whose type is a
             // CLR delegate (e.g. `static let Cb Func[string] = ...`) is
             // invokable through the same call syntax used on a variable —
@@ -2217,7 +2227,8 @@ internal partial class ExpressionBinder {
                 arguments,
                 ce,
                 argumentNames,
-                out var staticDelegateMemberCall
+                out var staticDelegateMemberCall,
+                typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
             ) {
                 return staticDelegateMemberCall
             }
@@ -2225,7 +2236,12 @@ internal partial class ExpressionBinder {
             // the call identifier names a nested type of the outer class. If so,
             // bind as a constructor invocation — this unifies the call-expression
             // path with the type-clause path that #526 already fixed.
-            if TryBindNestedTypeConstructorCall(classSymbol, ce, out var nestedCtorResult) {
+            if TryBindNestedTypeConstructorCall(
+                classSymbol,
+                ce,
+                out var nestedCtorResult,
+                typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
+            ) {
                 return nestedCtorResult
             }
             // Issue #1833: a value-type-erased type argument (a concrete
@@ -2245,6 +2261,29 @@ internal partial class ExpressionBinder {
                 explicitTypeArgs,
                 typeArgSymbols,
                 ce.Location
+            ) {
+                return BoundErrorExpression(nil)
+            }
+            if ce.TypeArgumentList is {} staticTypeArgumentList &&
+                TryHandleFailedClrMethodTypeArguments(
+                classSymbol.GetVisibleStaticCandidateMethods(methodName),
+                default(IReadOnlyList[MethodInfo]?),
+                staticTypeArgumentList,
+                methodName,
+                arguments.Length,
+                hasUnresolvedTypeArguments
+            ) {
+                return BoundErrorExpression(nil)
+            }
+            // Issue #343: a named-argument call that resolves to no candidate
+            // is most actionably explained by the first unknown name (if any),
+            // since the missing parameter is the prevailing cause.
+            if !argumentNames.IsDefault && overloads.TryReportUnknownNamedArgumentForClr(
+                classSymbol.ClassType,
+                methodName,
+                BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public,
+                ce,
+                argumentNames
             ) {
                 return BoundErrorExpression(nil)
             }
@@ -2361,12 +2400,20 @@ internal partial class ExpressionBinder {
                         arguments,
                         ce,
                         methodName,
-                        argumentNames
+                        argumentNames,
+                        typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
                     )
                     if ifaceMethod == nil {
                         return BoundErrorExpression(nil)
                     }
-                    return overloads.BindUserInstanceCall(receiver, ifaceMethod, arguments, ce, argumentNames)
+                    return overloads.BindUserInstanceCall(
+                        receiver,
+                        ifaceMethod,
+                        arguments,
+                        ce,
+                        argumentNames,
+                        typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
+                    )
                 }
             }
             // Issue #1052 (was Phase 4.2b / ADR-0020 sealed-only): dispatch
@@ -2386,7 +2433,8 @@ internal partial class ExpressionBinder {
                         arguments,
                         ce,
                         methodName,
-                        argumentNames
+                        argumentNames,
+                        typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
                     )
                     if tpIfaceMethod == nil {
                         return BoundErrorExpression(nil)
@@ -2397,7 +2445,8 @@ internal partial class ExpressionBinder {
                         arguments,
                         ce,
                         argumentNames,
-                        constrainedReceiverTypeParameter: tpRecv
+                        constrainedReceiverTypeParameter: tpRecv,
+                        typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
                     )
                 }
             }
@@ -2426,7 +2475,8 @@ internal partial class ExpressionBinder {
                             ce,
                             methodName,
                             argumentNames,
-                            receiver.Type
+                            receiver.Type,
+                            typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
                         )
                         if tpClassMethod == nil {
                             return BoundErrorExpression(nil)
@@ -2437,7 +2487,8 @@ internal partial class ExpressionBinder {
                             arguments,
                             ce,
                             argumentNames,
-                            constrainedReceiverTypeParameter: tpClassRecv
+                            constrainedReceiverTypeParameter: tpClassRecv,
+                            typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
                         )
                     }
                 }
@@ -2456,7 +2507,10 @@ internal partial class ExpressionBinder {
                 arguments,
                 ce,
                 argumentNames,
-                out var constrainedCall
+                out var constrainedCall,
+                explicitTypeArgs: explicitTypeArgs,
+                typeArgSymbols: typeArgSymbols,
+                hasUnresolvedTypeArguments: hasUnresolvedTypeArguments
             ) {
                 return constrainedCall
             }
@@ -2471,12 +2525,20 @@ internal partial class ExpressionBinder {
                         ce,
                         methodName,
                         argumentNames,
-                        receiver.Type
+                        receiver.Type,
+                        typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
                     )
                     if userMethod == nil {
                         return BoundErrorExpression(nil)
                     }
-                    return overloads.BindUserInstanceCall(receiver, userMethod, arguments, ce, argumentNames)
+                    return overloads.BindUserInstanceCall(
+                        receiver,
+                        userMethod,
+                        arguments,
+                        ce,
+                        argumentNames,
+                        typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
+                    )
                 }
                 // ADR-0085 / issue #726: a class that does not override an
                 // inherited default interface method can still be called by
@@ -2490,10 +2552,22 @@ internal partial class ExpressionBinder {
                     methodName,
                     arguments,
                     ce,
-                    argumentNames
+                    argumentNames,
+                    out var hasDefaultIfaceCandidates,
+                    typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
                 )
-                if defaultIfaceMethod != nil {
-                    return overloads.BindUserInstanceCall(receiver, defaultIfaceMethod, arguments, ce, argumentNames)
+                if hasDefaultIfaceCandidates {
+                    if defaultIfaceMethod == nil {
+                        return BoundErrorExpression(nil)
+                    }
+                    return overloads.BindUserInstanceCall(
+                        receiver,
+                        defaultIfaceMethod,
+                        arguments,
+                        ce,
+                        argumentNames,
+                        typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
+                    )
                 }
             }
             // Issues #527, #2925, and #3523: source struct/class and interface
@@ -2507,7 +2581,8 @@ internal partial class ExpressionBinder {
                 arguments,
                 ce,
                 isStatic: false,
-                out var userDelegateFieldCall
+                out var userDelegateFieldCall,
+                typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
             ) {
                 return userDelegateFieldCall
             }
@@ -2535,7 +2610,8 @@ internal partial class ExpressionBinder {
                 arguments,
                 ce,
                 argumentNames,
-                out var userExtResult
+                out var userExtResult,
+                typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
             ) {
                 return userExtResult
             }
@@ -2568,7 +2644,8 @@ internal partial class ExpressionBinder {
                 let inheritedBaseClr = GetInheritedClrBaseType(inheritedDerived) ?? typeof(object)
                 let allowProtectedInherited = IsCurrentThisReceiver(receiver) ||
                     IsFamilyAccessibleClrMember(inheritedBaseClr, receiver)
-                if TryBindInheritedClrInstanceCall(
+                if !hasUnresolvedTypeArguments &&
+                    TryBindInheritedClrInstanceCall(
                     receiver!!,
                     inheritedBaseClr,
                     methodName,
@@ -2589,7 +2666,8 @@ internal partial class ExpressionBinder {
                     arguments,
                     ce,
                     argumentNames,
-                    out var inheritedDelegateCall
+                    out var inheritedDelegateCall,
+                    typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
                 ) {
                     return inheritedDelegateCall
                 }
@@ -2602,7 +2680,8 @@ internal partial class ExpressionBinder {
             // types so all inherited members are found, and the helper returns
             // false for any name Enum/Object does not define (still GS0159).
             // Enum members are all public, so protected admission stays off here.
-            if receiver != nil &&
+            if !hasUnresolvedTypeArguments &&
+                receiver != nil &&
                 receiver.Type is EnumSymbol &&
                 TryBindInheritedClrInstanceCall(
                 receiver,
@@ -2621,7 +2700,8 @@ internal partial class ExpressionBinder {
             // Issue #294: imported [Extension] method dispatched with instance
             // (receiver) syntax, when the receiver carries a CLR type even
             // though its symbol is a user/interface shape.
-            if receiver != nil &&
+            if !hasUnresolvedTypeArguments &&
+                receiver != nil &&
                 TryBindImportedExtensionCall(
                 receiver,
                 methodName,
@@ -2640,7 +2720,8 @@ internal partial class ExpressionBinder {
             // extension lookups fail, resolve the call against the transitive
             // imported base interfaces so `b.Dispose()` (b : IBox) binds and
             // emits a verifiable `callvirt IDisposable::Dispose`.
-            if receiver != nil &&
+            if !hasUnresolvedTypeArguments &&
+                receiver != nil &&
                 receiver.Type is InterfaceSymbol importedBaseIfaceRecv &&
                 TryBindInterfaceImportedBaseInstanceCall(
                 receiver,
@@ -2699,6 +2780,24 @@ internal partial class ExpressionBinder {
                 out var ifaceObjectCall
             ) {
                 return ifaceObjectCall
+            }
+            if ce.TypeArgumentList is {} userTypeArgumentList &&
+                receiver != nil &&
+                CollectSymbolicPathClrCandidates(receiver.Type, methodName) is {} symbolicClrCandidates &&
+                TryHandleFailedClrMethodTypeArguments(
+                symbolicClrCandidates,
+                CollectApplicableExtensionTypeArgumentCandidates(
+                    receiver.Type,
+                    methodName,
+                    explicitTypeArgs,
+                    hasDirectInstanceCandidates: symbolicClrCandidates.Count > 0
+                ),
+                userTypeArgumentList,
+                methodName,
+                arguments.Length,
+                hasUnresolvedTypeArguments
+            ) {
+                return BoundErrorExpression(nil)
             }
             let effectiveReceiverSyntax SyntaxNode? = receiverSyntax ?? receiver?.Syntax
             if (
@@ -2767,12 +2866,20 @@ internal partial class ExpressionBinder {
                     ce,
                     methodName,
                     argumentNames,
-                    receiver.Type
+                    receiver.Type,
+                    typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
                 )
                 if userMethodPriority == nil {
                     return BoundErrorExpression(nil)
                 }
-                return overloads.BindUserInstanceCall(receiver, userMethodPriority, arguments, ce, argumentNames)
+                return overloads.BindUserInstanceCall(
+                    receiver,
+                    userMethodPriority,
+                    arguments,
+                    ce,
+                    argumentNames,
+                    typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
+                )
             }
             // ADR-0085 / issue #726: default-interface-method fallback —
             // same as the primary branch above.
@@ -2781,15 +2888,21 @@ internal partial class ExpressionBinder {
                 methodName,
                 arguments,
                 ce,
-                argumentNames
+                argumentNames,
+                out var hasDefaultIfacePriorityCandidates,
+                typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
             )
-            if defaultIfaceMethodPriority != nil {
+            if hasDefaultIfacePriorityCandidates {
+                if defaultIfaceMethodPriority == nil {
+                    return BoundErrorExpression(nil)
+                }
                 return overloads.BindUserInstanceCall(
                     receiver,
                     defaultIfaceMethodPriority,
                     arguments,
                     ce,
-                    argumentNames
+                    argumentNames,
+                    typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
                 )
             }
         }
@@ -2803,7 +2916,8 @@ internal partial class ExpressionBinder {
             arguments,
             ce,
             isStatic: false,
-            out var userDelegateCall
+            out var userDelegateCall,
+            typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
         ) {
             return userDelegateCall
         }
@@ -3028,7 +3142,7 @@ internal partial class ExpressionBinder {
                 }
                 argTypes[i] = t
             }
-            if argsAllTyped {
+            if !hasUnresolvedTypeArguments && argsAllTyped {
                 let CheckUserClassInterface = func (source Type, target Type) bool {
                     return IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
                 }
@@ -3420,7 +3534,8 @@ internal partial class ExpressionBinder {
             arguments,
             ce,
             argumentNames,
-            out var delegateMemberCall
+            out var delegateMemberCall,
+            typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
         ) {
             // Issue #4287: loading the delegate member dereferences the
             // receiver, and this fallback runs after the instance-method gate,
@@ -3444,14 +3559,23 @@ internal partial class ExpressionBinder {
         // instance/static lookups fail, try matching by (receiverType, name).
         // Issue #1188: extension functions overload, so select the best
         // matching overload across all (receiver, name) candidates.
-        if TryBindExtensionFunctionOverload(receiver, methodName, arguments, ce, argumentNames, out var extResult) {
+        if TryBindExtensionFunctionOverload(
+            receiver,
+            methodName,
+            arguments,
+            ce,
+            argumentNames,
+            out var extResult,
+            typeArgumentsAlreadyBound: hasUnresolvedTypeArguments
+        ) {
             return extResult
         }
         // Issue #294: BCL/library [Extension] method dispatched with instance
         // (receiver) syntax. After instance members and user extension
         // functions fail, fall back to imported static [Extension] methods
         // whose first parameter is compatible with the receiver type.
-        if receiver != nil &&
+        if !hasUnresolvedTypeArguments &&
+            receiver != nil &&
             TryBindImportedExtensionCall(
             receiver,
             methodName,
@@ -3463,6 +3587,45 @@ internal partial class ExpressionBinder {
             argumentNames
         ) {
             return importedExt
+        }
+        if clrType != nil &&
+            clrType.IsInterface == true &&
+            TryBindInterfaceObjectMemberCall(
+            receiver,
+            methodName,
+            arguments,
+            ce,
+            argumentNames,
+            out var importedIfaceObjectCall
+        ) {
+            // Issue #4287: this fallback selects a System.Object member for an
+            // imported interface receiver AFTER the instance-method gate above,
+            // so it applies the same gate itself: `d.ToString()` on an
+            // `IDisposable?` is a call on a stated `T?` receiver like any other.
+            // (receiver: non-null here, per the note above.)
+            return if receiver != nil &&
+                TryReportStatedNullableReceiverCall(receiver, receiverSyntax, receiverStart, ce) {
+                cast[BoundExpression](BoundErrorExpression(nil))
+            } else {
+                importedIfaceObjectCall
+            }
+        }
+        if ce.TypeArgumentList is {} instanceTypeArgumentList &&
+            WithInterfaceObjectFallbackCandidates(clrType, candidates, methodName) is {} instanceTypeArgCandidates &&
+            TryHandleFailedClrMethodTypeArguments(
+            instanceTypeArgCandidates,
+            CollectApplicableExtensionTypeArgumentCandidates(
+                effectiveReceiverType,
+                methodName,
+                explicitTypeArgs,
+                hasDirectInstanceCandidates: instanceTypeArgCandidates.Count > 0
+            ),
+            instanceTypeArgumentList,
+            methodName,
+            arguments.Length,
+            hasUnresolvedTypeArguments
+        ) {
+            return BoundErrorExpression(nil)
         }
         if TryReportValueNullableByRefArgument(
             ce,
@@ -3498,28 +3661,7 @@ internal partial class ExpressionBinder {
         // wins.
         // receiver: non-null per the reassignment above (see comment there);
         // the switch above re-widens it for the compiler for the rest of the method.
-        if clrType != nil &&
-            clrType.IsInterface == true &&
-            TryBindInterfaceObjectMemberCall(
-            receiver,
-            methodName,
-            arguments,
-            ce,
-            argumentNames,
-            out var importedIfaceObjectCall
-        ) {
-            // Issue #4287: this fallback selects a System.Object member for an
-            // imported interface receiver AFTER the instance-method gate above,
-            // so it applies the same gate itself: `d.ToString()` on an
-            // `IDisposable?` is a call on a stated `T?` receiver like any other.
-            // (receiver: non-null here, per the note above.)
-            return if receiver != nil &&
-                TryReportStatedNullableReceiverCall(receiver, receiverSyntax, receiverStart, ce) {
-                cast[BoundExpression](BoundErrorExpression(nil))
-            } else {
-                importedIfaceObjectCall
-            }
-        }
+        // (Interface Object member fallback ran above so type-arg errors on ToString report GS0148.)
         // Issue #4013: before falling back to the generic "Cannot find
         // function" text, say so when the member DOES exist but only as an
         // explicit interface implementation. Since #4013 such a member is no
@@ -3943,6 +4085,9 @@ internal partial class ExpressionBinder {
         explicitTypeArgs[]?Type,
         typeArgSymbols ImmutableArray[TypeSymbol]
     ) bool {
+        if ce.TypeArgumentList != nil && explicitTypeArgs == nil {
+            return false
+        }
         let narrowedReceiver = BoundConversionExpression(receiver.Syntax, underlyingType, receiver)
         let diagnosticMark = Diagnostics.Count
         // Reuse normal call binding as an applicability probe, then discard its
@@ -4001,7 +4146,9 @@ internal partial class ExpressionBinder {
                     arguments,
                     ce,
                     argumentNames,
-                    out var constrainedCall
+                    out var constrainedCall,
+                    explicitTypeArgs: explicitTypeArgs,
+                    typeArgSymbols: typeArgSymbols
                 ) {
                     return Succeeded(constrainedCall)
                 }
@@ -4026,7 +4173,8 @@ internal partial class ExpressionBinder {
                     methodName,
                     arguments,
                     ce,
-                    argumentNames
+                    argumentNames,
+                    out _
                 )
                 if defaultInterfaceMethod != nil {
                     return Succeeded(
@@ -4145,6 +4293,160 @@ internal partial class ExpressionBinder {
         } finally {
             Diagnostics.TruncateTo(diagnosticMark)
         }
+    }
+
+    /// Reports GS0148 when explicit type arguments match no CLR candidate, or suppresses GS0159
+    /// when a matching-arity generic candidate exists after GS0113 (#6200, #6201).
+    private func TryHandleFailedClrMethodTypeArguments(
+        directCandidates IReadOnlyList[MethodInfo]?,
+        extensionCandidates IReadOnlyList[MethodInfo]?,
+        typeArgumentList TypeArgumentListSyntax,
+        methodName string,
+        argumentCount int32,
+        hasUnresolvedTypeArguments bool
+    ) bool {
+        let hasDirect = directCandidates != nil && directCandidates.Count > 0
+        let hasExtensions = extensionCandidates != nil && extensionCandidates.Count > 0
+        if !hasDirect && !hasExtensions {
+            return false
+        }
+        let explicitArity = typeArgumentList.Arguments.Count
+        var hasMatchingArity = false
+        var hasAnyGeneric = false
+        var firstGenericArity = 0
+        var matchingValueArityGenericArity = 0
+        let InspectCandidates = func (candidates IReadOnlyList[MethodInfo]?, offset int32) {
+            if candidates == nil {
+                return
+            }
+            for candidate in candidates {
+                if candidate == nil || !candidate.IsGenericMethodDefinition {
+                    continue
+                }
+                let genericArity = candidate.GetGenericArguments().Length
+                if !hasAnyGeneric {
+                    hasAnyGeneric = true
+                    firstGenericArity = genericArity
+                }
+                if genericArity == explicitArity {
+                    hasMatchingArity = true
+                    return
+                }
+                if matchingValueArityGenericArity == 0 {
+                    let parameters = candidate.GetParameters()
+                    let expectedParamCount = argumentCount + offset
+                    let paramsIndex = ClrOverloadResolution.GetParamsParameterIndex(candidate)
+                    if parameters.Length == expectedParamCount ||
+                        (
+                        expectedParamCount < parameters.Length && ClrOverloadResolution.IsOptionalParameter(
+                            parameters[expectedParamCount]
+                        )
+                    ) ||
+                        (paramsIndex >= 0 && paramsIndex <= expectedParamCount) {
+                        matchingValueArityGenericArity = genericArity
+                    }
+                }
+            }
+        }
+        InspectCandidates(directCandidates, 0)
+        if !hasMatchingArity {
+            InspectCandidates(extensionCandidates, 1)
+        }
+        if !hasMatchingArity {
+            let expectedArity = if !hasAnyGeneric {
+                0
+            } else if matchingValueArityGenericArity > 0 {
+                matchingValueArityGenericArity
+            } else {
+                firstGenericArity
+            }
+            Diagnostics.ReportWrongTypeArgumentCount(
+                typeArgumentList.Location,
+                methodName,
+                expectedArity,
+                explicitArity
+            )
+            return true
+        }
+        return hasUnresolvedTypeArguments
+    }
+
+    private func WithInterfaceObjectFallbackCandidates(
+        clrType Type?,
+        candidates List[MethodInfo],
+        methodName string
+    ) List[MethodInfo] {
+        if clrType?.IsInterface != true {
+            return candidates
+        }
+        let combined = List[MethodInfo](candidates)
+        combined.AddRange(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(typeof(object), methodName))
+        return combined
+    }
+
+    private func CollectSymbolicPathClrCandidates(receiverType TypeSymbol?, methodName string) List[MethodInfo] {
+        let candidates = List[MethodInfo]()
+        if receiverType == nil {
+            return candidates
+        }
+        if receiverType is TypeParameterSymbol tp {
+            if (tp.ClrInterfaceConstraint ?? tp.ClassConstraint)?.ClrType is {} constraintClr {
+                candidates.AddRange(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(constraintClr, methodName))
+            }
+            candidates.AddRange(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(typeof(object), methodName))
+            return candidates
+        }
+        if receiverType is StructSymbol derived {
+            let baseClr = GetInheritedClrBaseType(derived) ?? typeof(object)
+            candidates.AddRange(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(baseClr, methodName))
+            for protectedCandidate in CollectBaseClrMethodCandidates(baseClr, methodName) {
+                if !MemberLookup.HasSameSignature(candidates, protectedCandidate) {
+                    candidates.Add(protectedCandidate)
+                }
+            }
+            return candidates
+        }
+        if receiverType is EnumSymbol {
+            candidates.AddRange(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(typeof(Enum), methodName))
+            return candidates
+        }
+        if receiverType is InterfaceSymbol iface {
+            candidates.AddRange(MemberLookup.GetInterfaceImportedBaseInstanceMethods(iface, methodName, out _))
+            candidates.AddRange(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(typeof(object), methodName))
+        }
+        return candidates
+    }
+
+    private func CollectApplicableExtensionTypeArgumentCandidates(
+        receiverType TypeSymbol?,
+        methodName string,
+        explicitTypeArgs[]?Type = nil,
+        hasDirectInstanceCandidates bool = false
+    ) List[MethodInfo] {
+        let result = List[MethodInfo]()
+        if receiverType == nil {
+            return result
+        }
+        for method in MemberLookup.ExcludeErasureOnlyEnumCandidates(
+            this.memberLookup.CollectImportedExtensionMethods(methodName),
+            ImmutableArray.Create(receiverType)
+        ) {
+            try {
+                if ClrOverloadResolution.CanAcceptExtensionReceiverForTypeArgumentDiagnostic(
+                    method,
+                    receiverType,
+                    explicitTypeArgs,
+                    hasDirectInstanceCandidates
+                ) {
+                    result.Add(method)
+                }
+            } catch (ex Exception) when ex is ArgumentException ||
+                ex is InvalidOperationException ||
+                ClrTypeUtilities.IsMetadataLoadFailure(ex) {
+                continue
+            }
+        }
+        return result
     }
 
     private func TryBindSymbolicNullableInstanceCall(
