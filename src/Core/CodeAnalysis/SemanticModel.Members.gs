@@ -697,6 +697,30 @@ partial class SemanticModel {
     /// Adds the extension functions and extension methods in scope at [`position`](paramref) whose receiver
     /// can take [`receiver`](paramref). The applicability rules are the binder's (see
     /// `Binder.CollectExtensionMembers`); only the order is set here.
+    private let extensionMembers ConcurrentDictionary[
+        (Receiver TypeSymbol, Name string, All bool, Package string),
+        (Source ImmutableArray[FunctionSymbol], Imported ImmutableArray[MethodInfo])
+    ] = ConcurrentDictionary[
+        (Receiver TypeSymbol, Name string, All bool, Package string),
+        (Source ImmutableArray[FunctionSymbol], Imported ImmutableArray[MethodInfo])
+    ]()
+
+    private func CollectExtensionMembers(receiver TypeSymbol, name string?, function FunctionSymbol?)(
+        Source ImmutableArray[FunctionSymbol],
+        Imported ImmutableArray[MethodInfo]
+    ) {
+        using let nullabilityScope = NullabilityOptions.Enter(compilation.Nullability, compilation.PlatformNilChecks)
+        return Binder.CollectExtensionMembers(
+            compilation.GlobalScope,
+            compilation.References ?? ReferenceResolver.Default(),
+            function,
+            receiver,
+            name,
+            syntaxTree,
+            compilation.Submission?.DefaultPackageName ?? "Default"
+        )
+    }
+
     private func AddExtensionMembers(
         position int32,
         receiver TypeSymbol,
@@ -712,16 +736,16 @@ partial class SemanticModel {
             case property is PropertySymbol: property.GetterSymbol ?? property.SetterSymbol
             default: default(FunctionSymbol?)
         }
-        using let nullabilityScope = NullabilityOptions.Enter(compilation.Nullability, compilation.PlatformNilChecks)
-        let found = Binder.CollectExtensionMembers(
-            compilation.GlobalScope,
-            compilation.References ?? ReferenceResolver.Default(),
-            function,
-            receiver,
-            name,
-            syntaxTree,
-            compilation.Submission?.DefaultPackageName ?? "Default"
-        )
+        // #6177: the scan of the imported extension methods dominates the cost of a query. Its result
+        // depends on the receiver type, the name, the package that declares the enclosing function and this
+        // model's tree (the file's imports). A model belongs to one compilation and one tree, and a
+        // successor compilation has models of its own, so the cache needs no invalidation.
+        let key = (receiver, name ?? string.Empty, name == nil, function?.Package?.Name ?? string.Empty)
+        var found(Source ImmutableArray[FunctionSymbol], Imported ImmutableArray[MethodInfo])
+        if !extensionMembers.TryGetValue(key, out found) {
+            found = CollectExtensionMembers(receiver, name, function)
+            extensionMembers[key] = found
+        }
         // Declared extensions by file path (ordinal), then start, so the order does not depend on the order
         // files were bound in. Imported ones keep holder order, then metadata order.
         let declared = found

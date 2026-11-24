@@ -89,6 +89,10 @@ Result (#6068, #6070): `Compilation` passes its consumer assembly name explicitl
 
 `gsc` and library hosts must report each problem once. Parse-error cascade suppression and the GS0640 property-initializer diagnostic are separate changes. `EmitResult.Diagnostics` repeats the `GetDiagnostics()` results; the package documentation states this so that a host uses one list.
 
+### D7. Each diagnostic names its pipeline (#6177)
+
+`Diagnostic.Phase` (`DiagnosticPhase`: `Unknown`, `Parse`, `Declaration`, `Body`, `Emit`) names the pipeline that reported a diagnostic, so that a host can tell a parse error from a bind error without an ID list. Each pipeline stamps the diagnostics that it returns, at the point where it publishes them: the parse result of a tree (`Parse`), the bound global scope (`Declaration`, with the missing entry point and the documentation checks), the bound program (`Body`), and the emit result (`Emit`, for what no earlier pipeline stamped: lowering and emit). The stamp is set once on the diagnostic itself, not on a copy, because the diagnostic bags and the prefix classifier of ADR-0225 track diagnostics by reference. A diagnostic that two pipelines return keeps the first phase, and a copy (`WithSeverity`, the prefix-finality and relocation copies) keeps it. A diagnostic that a host or an analyzer creates is `Unknown`.
+
 ## Consequences
 
 - A host can report GS0634 and GS9998 the same way as `gsc` with no reflection.
