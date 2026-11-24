@@ -182,6 +182,10 @@ shared class CodeActionComputer {
         if data == nil || action.Edit != nil {
             return action
         }
+        // Issue #6185: the command selects the placeholder of the edit. An action that gets no edit
+        // gets no command.
+        let command Command? = action.Command
+        action.Command = nil
         // ADR-0227 D7: resolve returns the edit that the list request computed and gated, never a
         // recomputed one. It returns no edit when a snapshot that the edit depends on changed.
         if !ResolveCache.TryGetValue(data.Key, out var entry) {
@@ -209,6 +213,7 @@ shared class CodeActionComputer {
             }
         }
         action.Edit = entry.Edit
+        action.Command = command
         return action
     }
 
@@ -358,7 +363,9 @@ shared class CodeActionComputer {
             }
             let placeholder = document.Placeholders.OrderBy((p TextSpan) -> p.Start).First()
             let changed = document.GetChangedText()
-            if placeholder.End > changed.Length {
+            // A provider gives the spans. An empty or out-of-range span gives no selection, and the
+            // fix keeps its edit.
+            if placeholder.Start < 0 || placeholder.Length <= 0 || placeholder.End > changed.Length {
                 return nil
             }
             return Command{

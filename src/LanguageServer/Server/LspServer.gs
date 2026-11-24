@@ -685,15 +685,16 @@ class LspServer {
         if uri == nil {
             return nil
         }
-        let holds = await this.ReadDocumentAsync(
-            TextDocumentIdentifier{Uri: uri},
-            (content DocumentContent, ct CancellationToken) -> CodeActionComputer.HoldsPlaceholder(content, selection),
-            false,
-            cancellationToken,
-            caller: "ExecuteCommandAsync"
-        )
-            .ConfigureAwait(false)
-        if holds {
+        // The edit can name a document by another encoding of its path than the client opened it with,
+        // so the lookup matches the path (ADR-0227 D7). The gate orders it after an earlier didChange.
+        var content DocumentContent? = nil
+        await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false)
+        try {
+            content = LspServer.FindOpenDocument(this.documentContentService, uri)
+        } finally {
+            this.gate.Release()
+        }
+        if content != nil && CodeActionComputer.HoldsPlaceholder(content, selection) {
             this.SendShowDocument(ShowDocumentParams{Uri: uri, TakeFocus: true, Selection: selection.Range})
         }
         return nil

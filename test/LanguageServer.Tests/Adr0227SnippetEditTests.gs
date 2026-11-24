@@ -381,8 +381,11 @@ open class Adr0227SnippetEditTests {
 
     // Over JSON-RPC: the client runs the command after it applies the edit, and the server asks it to
     // show the document with the placeholder selected.
-    @Fact
-    async func ExecuteCommand_OverRpc_SendsShowDocumentWithThePlaceholderSelected() {
+    // The client can open the document under another encoding of its path than the edit names.
+    @Theory
+    @InlineData("file:///a.gs")
+    @InlineData("file:///%61.gs")
+    async func ExecuteCommand_OverRpc_SendsShowDocumentWithThePlaceholderSelected(opened string) {
         let uri = DocumentUri.From("file:///a.gs")!!
         let client = CodeActionClientOptions{SupportsDocumentChanges: true, SupportsShowDocument: true}
         let action = FixAction(client, LanguageServerTestHelpers.Content(Source).WithVersion(1), "value", 0, 5)
@@ -415,7 +418,12 @@ open class Adr0227SnippetEditTests {
         await clientRpc.NotifyWithParameterObjectAsync(
             "textDocument/didOpen",
             DidOpenTextDocumentParams{
-                TextDocument: TextDocumentItem{Uri: uri, LanguageId: "gsharp", Version: 2, Text: edited}
+                TextDocument: TextDocumentItem{
+                    Uri: DocumentUri.From(opened)!!,
+                    LanguageId: "gsharp",
+                    Version: 2,
+                    Text: edited
+                }
             }
         )
         // The command as the client got it, over JSON.
@@ -438,6 +446,52 @@ open class Adr0227SnippetEditTests {
         Assert.Equal(3, shown.Selection!!.Start.Line)
         Assert.Equal(11, shown.Selection!!.Start.Character)
         Assert.Equal(36, shown.Selection!!.End.Character)
+    }
+
+    @Fact
+    func LazyClient_ThatResolvesAStaleAction_GetsNoCommand() {
+        // The command selects the placeholder of the edit, so an action without its edit has no command.
+        let client = CodeActionClientOptions{SupportsShowDocument: true, SupportsResolveEdit: true}
+        let content = LanguageServerTestHelpers.Content(Source).WithVersion(1)
+        let listed = FixAction(client, content, "value", 0, 5)
+        Assert.NotNull(listed.Command)
+        let json = JsonSerializer.Serialize(listed, LspJson.Options)
+        let stale = CodeActionComputer.ResolveCodeAction(
+            JsonSerializer.Deserialize[CodeAction](json, LspJson.Options),
+            content.WithVersion(2),
+            client
+        )
+        Assert.Null(stale.Edit)
+        Assert.Null(stale.Command)
+    }
+
+    @Fact
+    func SelectPlaceholder_GivesNoCommand_ForAnEmptyOrOutOfRangeSpan() {
+        let content = LanguageServerTestHelpers.Content(Source)
+        let uri = DocumentUri.From("file:///a.gs")!!
+        let at = Source.IndexOf("null", StringComparison.Ordinal)
+        for span in[]TextSpan{TextSpan(-1, 1), TextSpan(at, 0), TextSpan(Source.Length, 3)} {
+            let changes = FixChanges(
+                ImmutableArray.Create(
+                    DocumentChanges(
+                        content.SyntaxTree,
+                        ImmutableArray.Create(TextChange(TextSpan(at, 4), "nil")),
+                        ImmutableArray.Create(span)
+                    )
+                )
+            )
+            Assert.Null(CodeActionComputer.SelectPlaceholder(uri, content, changes))
+        }
+        let valid = FixChanges(
+            ImmutableArray.Create(
+                DocumentChanges(
+                    content.SyntaxTree,
+                    ImmutableArray.Create(TextChange(TextSpan(at, 4), "nil")),
+                    ImmutableArray.Create(TextSpan(at, 3))
+                )
+            )
+        )
+        Assert.NotNull(CodeActionComputer.SelectPlaceholder(uri, content, valid))
     }
 
     // The client side of `window/showDocument`.
