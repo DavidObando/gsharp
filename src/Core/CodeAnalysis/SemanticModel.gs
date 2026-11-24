@@ -120,6 +120,23 @@ partial class SemanticModel {
         return nil
     }
 
+    private func MatchesCapturedIndexAnchor(capturedArgument BoundExpression, target SyntaxNode) bool {
+        if object.ReferenceEquals(capturedArgument.Syntax, target) {
+            return true
+        }
+        if target is AccessorExpressionSyntax qualifiedSyntax {
+            var terminal ExpressionSyntax = qualifiedSyntax.RightPart
+            while terminal is AccessorExpressionSyntax segment {
+                terminal = segment.RightPart
+            }
+            return terminal is CallExpressionSyntax && object.ReferenceEquals(capturedArgument.Syntax, terminal)
+        }
+        return target is BaseClassCallExpressionSyntax baseCall && object.ReferenceEquals(
+            capturedArgument.Syntax,
+            baseCall.Call
+        )
+    }
+
     private func PublicCompletionView(bound BoundNode) BoundNode {
         var current = bound
         while current is BoundExpression operand &&
@@ -216,6 +233,13 @@ partial class SemanticModel {
             target = parenthesized.Expression
         }
         var bound BoundNode? = GetBoundNode(target, cancellationToken)
+        if bound is BoundExpression candidate &&
+            CapturedIndexArgument(candidate, expectedBlockSyntax: target) is {} capturedArgument {
+            if !MatchesCapturedIndexAnchor(capturedArgument, target) {
+                return SymbolInfo.None
+            }
+            bound = capturedArgument
+        }
         for var depth = 0; depth < 16; depth++ {
             if bound is not{} current {
                 break
@@ -292,7 +316,7 @@ partial class SemanticModel {
     /// @returns The resolution result; (cref:TypeInfo.Type) is null for non-expressions.
     func GetTypeInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) TypeInfo {
         return if GetBoundNode(node, cancellationToken) is BoundExpression expression {
-            TypeInfo(expression.Type)
+            TypeInfo((CapturedIndexArgument(expression, expectedBlockSyntax: node) ?? expression).Type)
         } else {
             TypeInfo.None
         }
@@ -590,6 +614,16 @@ partial class SemanticModel {
             if !error.FailedOperands.IsDefaultOrEmpty {
                 for operand in error.FailedOperands {
                     VisitExpression(operand)
+                }
+            }
+            if !error.FailedPatterns.IsDefaultOrEmpty {
+                for pattern in error.FailedPatterns {
+                    VisitPattern(pattern)
+                }
+            }
+            if !error.FailedStatements.IsDefaultOrEmpty {
+                for statement in error.FailedStatements {
+                    VisitStatement(statement)
                 }
             }
             if error.FailedReceiver is {} receiver {

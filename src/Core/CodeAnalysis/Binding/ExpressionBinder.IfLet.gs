@@ -189,7 +189,7 @@ internal partial class ExpressionBinder {
             guard_ is BoundErrorExpression ||
             whenTrue is BoundErrorExpression ||
             whenFalse is BoundErrorExpression {
-            return BoundErrorExpression(nil)
+            return FailedIfLet(clauses, guard_, whenTrue, whenFalse)
         }
         let condition = IfLetBindingSupport.BuildShortCircuitCondition(clauses, 0, guard_)
         if IsVoidInDiscardedPosition(canBeVoid, []BoundExpression{whenTrue, whenFalse}) {
@@ -218,7 +218,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 return BoundErrorExpression(syntax)
             }
-            return BoundErrorExpression(nil)
+            return FailedIfLet(clauses, guard_, whenTrue, whenFalse)
         }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
@@ -234,7 +234,7 @@ internal partial class ExpressionBinder {
                 whenTrue.Type?.Name ?? "?",
                 whenFalse.Type?.Name ?? "?"
             )
-            return BoundErrorExpression(nil)
+            return FailedIfLet(clauses, guard_, whenTrue, whenFalse)
         }
         RestoreExpressionNarrowingFrames(thenExit)
         let convertedTrue = ConvertConditionalBranchWithNarrowing(
@@ -259,9 +259,31 @@ internal partial class ExpressionBinder {
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 return BoundErrorExpression(syntax)
             }
-            return BoundErrorExpression(nil)
+            return FailedIfLet(clauses, guard_, whenTrue, whenFalse)
         }
         return BoundConditionalExpression(nil, condition, convertedTrue, convertedFalse, resultType)
+    }
+
+    private func FailedIfLet(
+        clauses System.Collections.Immutable.ImmutableArray[IfLetBindingSupport.BoundIfLetClause],
+        guard_ BoundExpression?,
+        whenTrue BoundExpression,
+        whenFalse BoundExpression
+    ) BoundErrorExpression {
+        let error = BoundErrorExpression.WithFailedOperands(whenTrue, whenFalse)
+        if !clauses.IsDefaultOrEmpty {
+            let declarations = System.Collections.Immutable.ImmutableArray.CreateBuilder[BoundStatement](clauses.Length)
+            for clause in clauses {
+                declarations.Add(
+                    BoundVariableDeclaration(clause.Syntax, clause.Binding.Variable, clause.Binding.Initializer)
+                )
+            }
+            error.KeepStatements(declarations.MoveToImmutable())
+        }
+        if guard_ != nil {
+            error.KeepOperands(guard_)
+        }
+        return error
     }
 
     private func DeclareIfLetLocal(identifier SyntaxToken, isReadOnly bool, type TypeSymbol) VariableSymbol {

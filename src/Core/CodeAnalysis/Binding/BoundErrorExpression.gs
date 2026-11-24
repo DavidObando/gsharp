@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import System.Collections.Generic
 import System.Collections.Immutable
 
 /// Bound error expression.
@@ -90,6 +91,22 @@ class BoundErrorExpression : BoundExpression {
         set;
     }
 
+    /// Gets or sets the bound patterns of a switch expression that did not bind, so the semantic
+    /// model still answers their symbols and types (#6205). The patterns are not children of this
+    /// node: walkers and rewriters do not visit them.
+    internal prop FailedPatterns ImmutableArray[BoundPattern] {
+        get;
+        set;
+    }
+
+    /// Gets or sets the bound prefix statements of a block or if-initializer expression whose tail
+    /// failed to bind, so the semantic model still visits nested statements and declarations (#6205).
+    /// The statements are not children of this node: walkers and rewriters do not visit them.
+    internal prop FailedStatements ImmutableArray[BoundStatement] {
+        get;
+        set;
+    }
+
     /// Gets or sets the bound callee of a call through a function value that did not bind (`f(x, 2)`
     /// with `f` a local, a parameter, a field or a property of function or delegate type), anchored
     /// at the callee's identifier, so the semantic model answers the callee as in a call that binds
@@ -100,13 +117,16 @@ class BoundErrorExpression : BoundExpression {
     }
 
     /// Gets whether this error keeps a record the semantic model reads: a candidate group, an
-    /// inner failed call, a failed receiver, failed arguments, a failed callee or failed operands.
+    /// inner failed call, a failed receiver, failed arguments, a failed callee, failed operands,
+    /// failed patterns, or failed prefix statements.
     internal prop HasFailedRecords bool -> !MemberGroup.IsDefaultOrEmpty ||
         !FailedChildren.IsDefaultOrEmpty ||
         FailedReceiver != nil ||
         !FailedArguments.IsDefaultOrEmpty ||
         FailedCallee != nil ||
-        !FailedOperands.IsDefaultOrEmpty
+        !FailedOperands.IsDefaultOrEmpty ||
+        !FailedPatterns.IsDefaultOrEmpty ||
+        !FailedStatements.IsDefaultOrEmpty
 
     /// Keeps the operands of the operator expression that this error replaces, for the semantic
     /// model only (#6187). An operand that is an error gives its failed-call records. Any other
@@ -118,6 +138,47 @@ class BoundErrorExpression : BoundExpression {
         if right != nil {
             KeepOperand(right)
         }
+    }
+
+    /// Keeps a bound pattern on a failed switch expression for the semantic model only (#6205).
+    /// @param pattern The bound pattern, or null.
+    internal func KeepPattern(pattern BoundPattern?) {
+        if pattern == nil {
+            return
+        }
+        if FailedPatterns.IsDefault {
+            FailedPatterns = ImmutableArray.Create(pattern)
+        } else if !FailedPatterns.Contains(pattern) {
+            FailedPatterns = FailedPatterns.Add(pattern)
+        }
+    }
+
+    /// Keeps prefix statements when the enclosing block or initializer expression fails (#6205).
+    /// @param statements The bound prefix statements.
+    internal func KeepStatements(statements ImmutableArray[BoundStatement]) {
+        if statements.IsDefaultOrEmpty {
+            return
+        }
+        let existingCount = if FailedStatements.IsDefault {
+            0
+        } else {
+            FailedStatements.Length
+        }
+        let builder = ImmutableArray.CreateBuilder[BoundStatement](existingCount + statements.Length)
+        let seen = HashSet[BoundStatement](ReferenceEqualityComparer.Instance)
+        if !FailedStatements.IsDefaultOrEmpty {
+            for existing in FailedStatements {
+                if seen.Add(existing) {
+                    builder.Add(existing)
+                }
+            }
+        }
+        for statement in statements {
+            if seen.Add(statement) {
+                builder.Add(statement)
+            }
+        }
+        FailedStatements = builder.ToImmutable()
     }
 
     private func KeepOperand(operand BoundExpression) {

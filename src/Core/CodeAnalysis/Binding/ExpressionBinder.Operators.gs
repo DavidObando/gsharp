@@ -241,14 +241,14 @@ internal partial class ExpressionBinder {
                     syntax.OperatorToken.Location,
                     "taking the address of a method as a function pointer requires an 'unsafe' context"
                 )
-                return BoundErrorExpression(nil)
+                return BoundErrorExpression.WithFailedOperands(methodGroup)
             }
             if methodGroup.Candidates.Length != 1 || methodGroup.Function == nil {
                 Diagnostics.ReportFunctionPointerAddressOfMismatch(
                     syntax.OperatorToken.Location,
                     "the method is overloaded; '&Method' requires a single, unambiguous method"
                 )
-                return BoundErrorExpression(nil)
+                return BoundErrorExpression.WithFailedOperands(methodGroup)
             }
             let target = methodGroup.Function
             if methodGroup.Receiver != nil || target.IsInstanceMethod {
@@ -256,14 +256,14 @@ internal partial class ExpressionBinder {
                     syntax.OperatorToken.Location,
                     "only a static or free function can be taken as a function pointer (instance methods are not supported)"
                 )
-                return BoundErrorExpression(nil)
+                return BoundErrorExpression.WithFailedOperands(methodGroup)
             }
             if target.IsGeneric {
                 Diagnostics.ReportFunctionPointerAddressOfMismatch(
                     syntax.OperatorToken.Location,
                     "a generic method cannot be taken as a function pointer"
                 )
-                return BoundErrorExpression(nil)
+                return BoundErrorExpression.WithFailedOperands(methodGroup)
             }
             // Issue #2067: `&Foo.Private` (method-group-to-delegate /
             // function-pointer conversion) must enforce the declaring
@@ -304,7 +304,7 @@ internal partial class ExpressionBinder {
             } else {
                 Diagnostics.ReportCannotTakeAddressOfConstant(syntax.OperatorToken.Location, readOnlyVariable.Name)
             }
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(operand)
         }
         // Lvalue check.
         if RefCapabilities.IsReadOnlyStorage(operand) || RefCapabilities.IsCapturedValueTypeReceiverStorage(
@@ -312,12 +312,12 @@ internal partial class ExpressionBinder {
             ownReceiver
         ) {
             Diagnostics.ReportCannotTakeAddressOfConstant(syntax.OperatorToken.Location, syntax.Operand.ToString())
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(operand)
         }
         if !IsLvalue(operand) {
             let exprText = syntax.Operand.ToString()
             Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.OperatorToken.Location, exprText)
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(operand)
         }
         return BoundAddressOfExpression(nil, operand, unmanaged: binderCtx.InUnsafeContext)
     }
@@ -423,8 +423,11 @@ internal partial class ExpressionBinder {
             }
         }
         let operand = BindExpression(syntax.Operand)
-        if operand is BoundErrorExpression || ReportUnresolvedTargetlessValues(operand) {
-            return BoundErrorExpression(nil)
+        if operand is BoundErrorExpression {
+            return operand
+        }
+        if ReportUnresolvedTargetlessValues(operand) {
+            return BoundErrorExpression.WithFailedOperands(operand)
         }
         // ADR-0122 / issue #1014: inside an unsafe context, `*<type>(expr)`
         // (e.g. `*uint8(p)`, the form cs2gs emits for a C# `(byte*)p` cast)
@@ -456,7 +459,7 @@ internal partial class ExpressionBinder {
         // typed pointer `*T` (e.g. `*int32(p)`).
         if TypeSymbol.IsVoidPointer(operand.Type) {
             Diagnostics.ReportVoidPointerOperationNotAllowed(syntax.OperatorToken.Location, "dereference")
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(operand)
         }
         if ManagedReferenceTypes.TryGetElement(operand.Type, out _, out _) {
             let borrow = BorrowManagedReference(operand, syntax)
@@ -472,7 +475,7 @@ internal partial class ExpressionBinder {
                 syntax.OperatorToken.Text,
                 operand.Type
             )
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(operand)
         }
         return BoundDereferenceExpression(nil, operand)
     }
@@ -1036,8 +1039,11 @@ internal partial class ExpressionBinder {
                         syntax,
                         () -> BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
                     )
-                    if value is BoundErrorExpression {
-                        return value
+                    if value is BoundErrorExpression error {
+                        if !IsDeferredBranchyArgumentPlaceholder(error, out _) {
+                            error.KeepStatements(statements)
+                        }
+                        return error
                     }
                     return BoundBlockExpression(nil, statements, value)
                 }
@@ -1117,7 +1123,7 @@ internal partial class ExpressionBinder {
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             let _ = ReportUnresolvedTargetlessValues(whenTrue)
             let _ = ReportUnresolvedTargetlessValues(whenFalse)
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         if elseSyntax == nil || IsVoidInDiscardedPosition(canBeVoid, []BoundExpression{whenTrue, whenFalse}) {
             // The void `if` (see above and IsVoidInDiscardedPosition): branch
@@ -1146,7 +1152,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 return BoundErrorExpression(syntax)
             }
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         if targetType == nil {
             resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
@@ -1162,7 +1168,7 @@ internal partial class ExpressionBinder {
                 whenTrue.Type?.Name ?? "?",
                 whenFalse.Type?.Name ?? "?"
             )
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         RestoreExpressionNarrowingFrames(thenExit)
         let convertedTrue = ConvertConditionalBranchWithNarrowing(
@@ -1189,7 +1195,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 return BoundErrorExpression(syntax)
             }
-            return BoundErrorExpression(nil)
+            return FailedConditional(condition, whenTrue, whenFalse)
         }
         return BoundConditionalExpression(nil, condition, convertedTrue, convertedFalse, resultType)
     }
@@ -1450,7 +1456,9 @@ internal partial class ExpressionBinder {
             // Cleanup replaces a tail with a result-local read. Diagnose an
             // unresolved value before that replacement hides its defaults.
             if value.Type == TypeSymbol.Error && ReportUnresolvedTargetlessValues(value) {
-                value = BoundErrorExpression(nil)
+                if value is not BoundErrorExpression {
+                    value = BoundErrorExpression.WithFailedOperands(value)
+                }
             }
             if value.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(
                 TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
@@ -1458,7 +1466,11 @@ internal partial class ExpressionBinder {
                 if (valueSyntax ?? value.Syntax) is {} syntax {
                     Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
                 }
-                value = BoundErrorExpression(nil)
+                value = if value is BoundErrorExpression {
+                    value
+                } else {
+                    BoundErrorExpression.WithFailedOperands(value)
+                }
             }
             boundExpression = value
             // Issue #4965 (ADR-0202): a `never` tail (every path exits) has no
@@ -1536,8 +1548,9 @@ internal partial class ExpressionBinder {
         if IsDeferredBranchyArgumentPlaceholder(boundExpression, out _) {
             return BoundErrorExpression(syntax)
         }
-        if boundExpression is BoundErrorExpression {
-            return boundExpression
+        if boundExpression is BoundErrorExpression error {
+            error.KeepStatements(boundStatements)
+            return error
         }
         if boundStatements.IsDefaultOrEmpty && !preserveEmptyBlock {
             return boundExpression
@@ -2076,7 +2089,7 @@ internal partial class ExpressionBinder {
                 location,
                 "reference the matching Gsharp.Runtime.Values runtime; the managed-reference ABI is incompatible"
             )
-            return BoundErrorExpression(syntax)
+            return BoundErrorExpression.WithFailedOperands(boundLeft, boundRight)
         }
         if (operatorKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) &&
             ManagedReferenceTypes.TryGetElement(nativeEqualityLeftType, out _, out var leftReadOnlyManaged) &&
@@ -2089,7 +2102,7 @@ internal partial class ExpressionBinder {
                     operatorLocation,
                     "location equality requires identical referent permissions and type; use SameLocation to compare permissions"
                 )
-                return BoundErrorExpression(syntax)
+                return BoundErrorExpression.WithFailedOperands(boundLeft, boundRight)
             }
             let name = if operatorKind == SyntaxKind.EqualsEqualsToken {
                 "op_Equality"
@@ -2128,7 +2141,7 @@ internal partial class ExpressionBinder {
                     boundLeft.Type,
                     boundRight.Type
                 )
-                return BoundErrorExpression(syntax)
+                return BoundErrorExpression.WithFailedOperands(boundLeft, boundRight)
             }
             let methodName = if operatorKind == SyntaxKind.EqualsEqualsToken {
                 "op_Equality"
@@ -2188,7 +2201,7 @@ internal partial class ExpressionBinder {
                 (boundLeft.Type == TypeSymbol.Null && IsExplicitlyNonNullImportedResult(boundRight))
         ) {
             Diagnostics.ReportUndefinedBinaryOperator(operatorLocation, operatorText, boundLeft.Type, boundRight.Type)
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(boundLeft, boundRight)
         }
         // Issue #3501 / ADR-0171: tuple `==` / `!=` desugars to element-wise
         // comparison. Tuples never match the built-in table or a user
@@ -2207,7 +2220,7 @@ internal partial class ExpressionBinder {
             operatorLocation,
             []TypeSymbol{boundLeft.Type, boundRight.Type}
         ) {
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(boundLeft, boundRight)
         }
         var boundOperator BoundBinaryOperator? = BindBinaryOperatorWithNumericAdaptation(
             operatorKind,
@@ -2383,7 +2396,7 @@ internal partial class ExpressionBinder {
             }
             if ambiguous {
                 Diagnostics.ReportAmbiguousOverload(operatorLocation, operatorText, candidateCount: 2)
-                return BoundErrorExpression(nil)
+                return BoundErrorExpression.WithFailedOperands(boundLeft, boundRight)
             }
             // Issue #1480: a `??` whose operands share no natural common type and
             // has no contextual target is deferred (rather than reported as
@@ -2417,7 +2430,7 @@ internal partial class ExpressionBinder {
                 return BoundBinaryExpression(nil, boundLeft, referenceOperator, boundRight, binderCtx.IsCheckedContext)
             }
             Diagnostics.ReportUndefinedBinaryOperator(operatorLocation, operatorText, boundLeft.Type, boundRight.Type)
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(boundLeft, boundRight)
         }
         // Issue #1239 / C# §12.15: when `??` computes a best common type that
         // differs from the right operand's type (a reference upcast / interface
