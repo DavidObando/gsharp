@@ -185,9 +185,9 @@
       "area": "editor",
       "title": "Quick fixes and refactorings",
       "vsPath": "standard-lsp",
-      "implementationIds": ["server:textDocument/codeAction"],
+      "implementationIds": ["server:textDocument/codeAction", "server:workspace/executeCommand"],
       "acceptanceCoverageIds": ["VS26-LSP-CODE-ACTIONS"],
-      "serverCapabilities": ["CodeActionProvider"],
+      "serverCapabilities": ["CodeActionProvider", "ExecuteCommandProvider"],
       "vscodeContributions": [],
       "vscodeCommands": []
     },
