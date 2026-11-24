@@ -270,6 +270,81 @@ func F5(e E) {
         )
     }
 
+    @Fact
+    func StaticImportGenericMethodShadowingSameNamedClrClass_ResolvesAndDiagnosesCorrectly() {
+        using let fixture = GSharp.Core.Tests.CSharpFixture(`namespace StaticImportHomonym6201;
+public class Build { }
+public static class Api {
+    public static T Build<T>() => default(T)!;
+}`)
+        using let resolver = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let source = `package P
+import StaticImportHomonym6201
+import StaticImportHomonym6201.Api
+
+func F1() int32 -> Build[int32]()
+func F2() {
+    let _ = Build[int32, int32]()
+}
+func F3() {
+    let _ = Build[Nope]()
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6201_static_homonym.gs"))
+        let compilation = Compilation(resolver, tree)
+        let errors = compilation
+            .GetDiagnostics()
+            .Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            .Select((d Diagnostic) -> d.Id + " " + d.Message)
+            .ToArray()
+        Assert.Equal(
+            []string{
+                "GS0148 Generic function 'Build' requires 1 type arguments but was given 2.",
+                "GS0113 Type 'Nope' doesn't exist."
+            },
+            errors
+        )
+    }
+
+    @Fact
+    func BoxingCompatibleClassConstrainedExtension_AcceptsValueTypeReceiverForTypeArgumentDiagnostics() {
+        using let fixture = GSharp.Core.Tests.CSharpFixture(`namespace BoxingExt6201;
+public static class ObjectExtensions {
+    public static T Ext<T>(this T value) where T : class => value;
+}`)
+        using let resolver = ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        let source = `package P
+import System
+import BoxingExt6201
+
+func F1(x int32) object -> x.Ext[object]()
+func F2(x int32) {
+    let _ = x.Ext[Nope]()
+}
+func F3(x int32) {
+    let _ = x.Ext[int32, int32]()
+}
+func F4(x int32) {
+    let _ = x.Ext[string]()
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6201_boxing_ext.gs"))
+        let compilation = Compilation(resolver, tree)
+        let errors = compilation
+            .GetDiagnostics()
+            .Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            .Select((d Diagnostic) -> d.Id + " " + d.Message)
+            .ToArray()
+        Assert.Equal(
+            []string{
+                "GS0113 Type 'Nope' doesn't exist.",
+                "GS0148 Generic function 'Ext' requires 1 type arguments but was given 2.",
+                "GS0159 Cannot find function Ext."
+            },
+            errors
+        )
+    }
+
     shared {
         private func Template(statement string) string -> `package P
 import System

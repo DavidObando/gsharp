@@ -1569,12 +1569,58 @@ internal class BinderContext {
             )
         }
 
+        func ClrTypeExposesStaticCallable(type Type?, name string) bool {
+            if type == nil {
+                return false
+            }
+            const flags = BindingFlags.Static | BindingFlags.Public
+            return ClrTypeUtilities.SafeGetMethods(type, flags).Any(
+                (member MethodInfo) -> ClrTypeUtilities.EmittedMemberNameMatches(member, name)
+            ) ||
+                ClrTypeUtilities.SafeGetProperties(type, flags).Any(
+                (member PropertyInfo) -> ClrTypeUtilities.EmittedMemberNameMatches(member, name) &&
+                    (member.PropertyType.IsFunctionPointer || ClrTypeUtilities.IsDelegateType(member.PropertyType))
+            ) ||
+                ClrTypeUtilities.SafeGetFields(type, flags).Any(
+                (member FieldInfo) -> ClrTypeUtilities.EmittedMemberNameMatches(member, name) &&
+                    (member.FieldType.IsFunctionPointer || ClrTypeUtilities.IsDelegateType(member.FieldType))
+            )
+        }
+
         func ImportedTypeExposesStaticMember(
             type StructSymbol,
             name string
         ) bool -> TypeMemberModel.TryGetStaticFieldIncludingInherited(type, name, out _, out _) ||
             TypeMemberModel.TryGetStaticPropertyIncludingInherited(type, name, out _, out _) ||
             !TypeMemberModel.GetMethods(type, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty
+
+        func ImportedTypeExposesStaticCallable(type StructSymbol, name string) bool {
+            if !TypeMemberModel.GetMethods(type, name, MemberQuery.InheritedStatic(MemberKinds.Method))
+                .IsDefaultOrEmpty {
+                return true
+            }
+            if TypeMemberModel.TryGetStaticFieldIncludingInherited(type, name, out var field, out _) &&
+                field != nil &&
+                (
+                field.Type is FunctionPointerTypeSymbol || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                    field.Type,
+                    out _
+                )
+            ) {
+                return true
+            }
+            if TypeMemberModel.TryGetStaticPropertyIncludingInherited(type, name, out var propSym, out _) &&
+                propSym != nil &&
+                (
+                propSym.Type is FunctionPointerTypeSymbol || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                    propSym.Type,
+                    out _
+                )
+            ) {
+                return true
+            }
+            return false
+        }
 
         func NarrowedReadChangesRuntimeType(declaredType TypeSymbol, narrowedType TypeSymbol?) bool {
             if narrowedType == nil || declaredType == narrowedType {

@@ -585,6 +585,16 @@ internal partial class OverloadResolver {
                 return true
             }
         }
+        for importedType in binderCtx.GetStaticImportTypes() {
+            if BinderContext.ImportedTypeExposesStaticCallable(importedType, name) {
+                return true
+            }
+        }
+        for clrType in Scope.EnumerateStaticImportClrTypes() {
+            if BinderContext.ClrTypeExposesStaticCallable(clrType, name) {
+                return true
+            }
+        }
         return false
     }
 
