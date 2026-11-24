@@ -1084,6 +1084,8 @@ internal partial class OverloadResolver {
                 owner.Name,
                 memberAccessibility
             )
+            // #6199: the callee answers the member that the name resolves to, as a receiver call does.
+            binderCtx.RecordCallCallee(syntax, () -> BuildFailedCalleeLoad(callTarget, syntax, nil))
             return BoundErrorExpression(nil)
         }
         // Issue #2066: a smart-cast null-guard (`if x != nil { x(...) }`)

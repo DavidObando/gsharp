@@ -1521,6 +1521,7 @@ internal partial class ExpressionBinder {
         }
         let mark = Diagnostics.Count
         let narrowing = CaptureNarrowingBindSnapshot()
+        let selectedProperty = lastSelectedCallablePropertyLoad
         let _ = TryBindUserCallableMemberInvocation(
             receiver,
             receiver.Type,
@@ -1530,6 +1531,7 @@ internal partial class ExpressionBinder {
             isStatic: false,
             out _
         )
+        lastSelectedCallablePropertyLoad = selectedProperty
         RestoreNarrowingBindSnapshot(narrowing)
         Diagnostics.TruncateTo(mark)
     }
