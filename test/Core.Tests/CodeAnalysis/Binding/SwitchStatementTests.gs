@@ -243,6 +243,33 @@ func F(a Animal) {
     }
 
     @Fact
+    func Switch_WhenGuardNilCheck_NarrowsArmBody() {
+        let positive = Bind(`
+func F(n int32) int32 {
+    var s string? = "a"
+    switch n {
+        case 1 when s != nil { return s.Length }
+        default { return 0 }
+    }
+}
+`)
+        Assert.Empty(positive)
+
+        let negative = Bind(`
+func F(n int32) int32 {
+    var s string? = "a"
+    switch n {
+        case 1 when s != nil { return s.Length }
+        case 2 { return s.Length }
+        default { return 0 }
+    }
+}
+`)
+        let diag = Assert.Single(negative)
+        Assert.Equal("GS0158", diag.Id)
+    }
+
+    @Fact
     func Issue4998_NestedSwitchHeadersContainingSwitchStatements_BindInLinearTime() {
         var stmt = "switch 0 { default { } }"
         for var i = 0; i < 28; i++ {

@@ -14352,11 +14352,19 @@ partial class CSharpToGSharpTranslator {
                     }
                     case arm is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax {
                         if arm.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression &&
-                            IsSwitchedLocal(switchExpression.GoverningExpression) &&
-                            !arm.Pattern.Span.Contains(effectiveTarget.Span) &&
-                            NarrowedType(arm.Pattern) != nil {
-                            guard_ = arm.Pattern
-                            governing = switchExpression.GoverningExpression
+                            !arm.Pattern.Span.Contains(effectiveTarget.Span) {
+                            if IsSwitchedLocal(switchExpression.GoverningExpression) &&
+                                NarrowedType(arm.Pattern) != nil {
+                                guard_ = arm.Pattern
+                                governing = switchExpression.GoverningExpression
+                            } else if symbol is ILocalSymbol localSymbol &&
+                                localSymbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is {} decl &&
+                                arm.Pattern.Span.Contains(decl.Span) &&
+                                this.state.PatternBindings.TryGetValue(localSymbol, out var boundReplacement) &&
+                                this.state.StoredPatternCaptures.Contains(boundReplacement) {
+                                guard_ = arm.Pattern
+                                governing = arm.Pattern
+                            }
                         }
                     }
                 }
