@@ -4,6 +4,7 @@
 
 package Cs2Gs.Translator
 
+import CompilationMeasurements = GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import Microsoft.CodeAnalysis.CSharp.Syntax
@@ -780,6 +781,9 @@ internal shared class ObliviousNullabilityAnalyzer {
     private let ReturnContracts ScopedCompilationCache[ReturnContractGraph] = ScopedCompilationCache[
         ReturnContractGraph
     ]()
+    private let OwnerReturnSummaries ScopedCompilationCache[ReturnContractGraph] = ScopedCompilationCache[
+        ReturnContractGraph
+    ]()
 
     private class ReturnContractGraph {
         let Owners HashSet[Compilation] = HashSet[Compilation]()
@@ -792,6 +796,10 @@ internal shared class ObliviousNullabilityAnalyzer {
             TupleElementKey,
             ReturnContractNode
         ](TupleContractKeyComparer.Instance)
+        let OrderedNodes List[ReturnContractNode] = List[ReturnContractNode]()
+        let ContractEdges List[(Owner CSharpCompilation, Target ISymbol, Source ISymbol)] = List[
+            (Owner CSharpCompilation, Target ISymbol, Source ISymbol)
+        ]()
     }
 
     private class ReturnContractNode {
@@ -1493,7 +1501,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func HasProjectedReturnResult(method IMethodSymbol) bool ->
     !SymbolEqualityComparer.Default.Equals(method.ReturnType, SymbolValueType(method))
 
-    private func ComputeReturnContracts(compilation Compilation) ReturnContractGraph {
+    private func CollectSourceOwnerClosure(compilation Compilation) List[CSharpCompilation] {
         let owners = List[CSharpCompilation]()
         let pending = Queue[Compilation]()
         let visited = HashSet[Compilation]()
@@ -1515,165 +1523,254 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
-        let graph = ReturnContractGraph()
-        graph.Owners.UnionWith(owners)
-        let nodes = graph.Nodes
-        for owner in owners {
-            let tupleEdges = List[(Target TupleElementKey, Source TupleElementKey)]()
-            for root in TranslationContext.GetEffectiveSyntaxRoots(owner) {
-                for candidate in TranslationContext.GetEffectiveNodes(root, owner) {
-                    let syntax = TranslationContext.GetEffectiveDeclaration(candidate, owner, out var model)
-                    if syntax is RefExpressionSyntax reference && RefStorageDestination(reference, model) is {} target {
-                        CollectRefValueContractEdges(target, reference.Expression, model, tupleEdges)
-                    }
-                    for (parameter, value) in EnumerateArgumentValueFlows(syntax, model, includeGuarded: true) {
-                        if parameter.RefKind == RefKind.Out {
-                            CollectRefValueContractEdges(parameter, value, model, tupleEdges)
-                        } else {
-                            AddValueContractFlows(
-                                owner,
-                                parameter,
-                                value,
-                                model,
-                                graph,
-                                tupleEdges,
-                                isCallBoundary: true
-                            )
-                        }
-                    }
-                    for (receiver, parameter) in EnumerateRefOutputFlows(syntax, model) {
-                        if GetValueContractNode(owner, receiver, graph) is {} receiverNode {
-                            receiverNode.Sources.Add((owner, parameter, false, 0, false))
-                        }
-                    }
-                    let methodDeclaration = syntax is MethodDeclarationSyntax or
-                        LocalFunctionStatementSyntax or
-                        AnonymousFunctionExpressionSyntax or
-                        DelegateDeclarationSyntax
-                    let propertyDeclaration = syntax is PropertyDeclarationSyntax or IndexerDeclarationSyntax
-                    let assignment = syntax as AssignmentExpressionSyntax
-                    if assignment != nil && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
-                        TryResolveTupleElementSource(assignment.Left, model, out var tupleTarget) &&
-                        GetValueContractNode(
-                        owner,
-                        tupleTarget.ContractSymbol,
-                        graph,
-                        tupleTarget.ContractPath
-                    ) is {} tupleStorage {
-                        AddValueContractFlow(tupleStorage, assignment.Right, model)
-                    }
-                    if assignment != nil && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
-                        assignment.Left is TupleExpressionSyntax or
-                        DeclarationExpressionSyntax {
-                        let tupleReads = List[(Target ISymbol?, Source TupleElementKey)]()
-                        CollectDeconstructionFlow(
-                            assignment.Left,
-                            assignment.Right,
-                            model,
-                            HashSet[ISymbol](SymbolEqualityComparer.Default),
-                            List[(Target ISymbol, Source ISymbol)](),
-                            tupleReads,
-                            valueFlow: (target ISymbol?, value ExpressionSyntax?) -> {
-                                if value != nil && GetValueContractNode(owner, target, graph) is {} storage {
-                                    AddValueContractFlow(storage, value, model)
-                                }
-                            }
-                        )
-                        for (target, source) in tupleReads {
-                            GetValueContractNode(owner, target, graph)?.TupleSources.Add((source, false))
-                        }
-                    }
-                    if !methodDeclaration &&
-                        !propertyDeclaration &&
-                        syntax is not VariableDeclaratorSyntax and
-                        not ParameterSyntax &&
-                        (assignment == nil || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)) {
-                        continue
-                    }
-                    let declared = switch syntax {
-                        case lambda is AnonymousFunctionExpressionSyntax: model.GetSymbolInfo(lambda).Symbol
-                        case declaration is DelegateDeclarationSyntax: (
-                            model.GetDeclaredSymbol(declaration) as INamedTypeSymbol
-                        )?.DelegateInvokeMethod
-                        case write is AssignmentExpressionSyntax: model.GetSymbolInfo(write.Left).Symbol
-                        default: TranslationContext.GetEffectiveDeclaredSymbol(model, syntax)
-                    }
-                    GetValueContractNode(owner, declared, graph)
-                    let expressions = List[ExpressionSyntax]()
-                    switch syntax {
-                        case declaration is MethodDeclarationSyntax {
-                            expressions.AddRange(
-                                EnumerateReturnValues(declaration.ExpressionBody?.Expression, declaration.Body)
-                            )
-                        }
-                        case local is LocalFunctionStatementSyntax {
-                            expressions.AddRange(EnumerateReturnValues(local.ExpressionBody?.Expression, local.Body))
-                        }
-                        case lambda is AnonymousFunctionExpressionSyntax {
-                            expressions.AddRange(
-                                EnumerateReturnValues(lambda.Body as ExpressionSyntax, lambda.Body as BlockSyntax)
-                            )
-                        }
-                        case property is PropertyDeclarationSyntax {
-                            expressions.AddRange(
-                                EnumeratePropertyReturnValues(
-                                    property.ExpressionBody?.Expression,
-                                    property.AccessorList
-                                )
-                            )
-                            if property.Initializer is {} initializer {
-                                expressions.Add(initializer.Value)
-                            }
-                        }
-                        case indexer is IndexerDeclarationSyntax {
-                            expressions.AddRange(
-                                EnumeratePropertyReturnValues(indexer.ExpressionBody?.Expression, indexer.AccessorList)
-                            )
-                        }
-                        case variable is VariableDeclaratorSyntax {
-                            if variable.Initializer is {} initializer {
-                                expressions.Add(initializer.Value)
-                            }
-                        }
-                        case write is AssignmentExpressionSyntax {
-                            expressions.Add(write.Right)
-                        }
-                    }
-                    for expression in expressions {
-                        AddValueContractFlows(owner, declared, expression, model, graph, tupleEdges)
-                    }
-                }
-            }
-            for (target, source) in tupleEdges {
-                GetValueContractNode(owner, target.ContractSymbol, graph, target.ContractPath)?.TupleSources.Add(
-                    (source, false)
-                )
-                GetValueContractNode(owner, source.ContractSymbol, graph, source.ContractPath)
-            }
+        return owners
+    }
+
+    private func CollectOwnerReturnSummary(compilation Compilation) ReturnContractGraph {
+        CompilationMeasurements.Count("translation.return_contract_owner_scans")
+        let summary = ReturnContractGraph()
+        if compilation is not CSharpCompilation owner {
+            return summary
         }
-        let sourceContractEdges = List[(Target ISymbol, Source ISymbol)]()
-        for owner in owners {
-            let contractEdges = List[(Target ISymbol, Source ISymbol)]()
-            CollectInterfaceImplementationEdges(owner, contractEdges, ScalarFlowPosition.Value)
-            CollectOverrideContractEdges(owner, contractEdges, ScalarFlowPosition.Value)
-            for root in TranslationContext.GetEffectiveSyntaxRoots(owner) {
-                let model = TranslationContext.GetEffectiveSemanticModel(owner, root.SyntaxTree)
-                for (delegateType, invoke, source) in EnumerateDelegateReturnFlows(root, model) {
-                    if IsSourceDelegateType(owner, delegateType) &&
-                        GetValueContractNode(owner, invoke, graph) != nil &&
-                        GetValueContractNode(owner, source, graph) != nil {
-                        AddReturnContractEdges(invoke, source, contractEdges, ScalarFlowPosition.Value)
+        summary.Owners.UnionWith(CollectSourceOwnerClosure(owner))
+        let tupleEdges = List[(Target TupleElementKey, Source TupleElementKey)]()
+        for root in TranslationContext.GetEffectiveSyntaxRoots(owner) {
+            for candidate in TranslationContext.GetEffectiveNodes(root, owner) {
+                CompilationMeasurements.Count("translation.return_contract_syntax_node_visits")
+                let syntax = TranslationContext.GetEffectiveDeclaration(candidate, owner, out var model)
+                if syntax is RefExpressionSyntax reference && RefStorageDestination(reference, model) is {} target {
+                    CollectRefValueContractEdges(target, reference.Expression, model, tupleEdges)
+                }
+                for (parameter, value) in EnumerateArgumentValueFlows(syntax, model, includeGuarded: true) {
+                    if parameter.RefKind == RefKind.Out {
+                        CollectRefValueContractEdges(parameter, value, model, tupleEdges)
+                    } else {
+                        AddValueContractFlows(owner, parameter, value, model, summary, tupleEdges, isCallBoundary: true)
                     }
                 }
-            }
-            for (target, source) in contractEdges {
-                if target is not IMethodSymbol and not IPropertySymbol and not IParameterSymbol {
+                for (receiver, parameter) in EnumerateRefOutputFlows(syntax, model) {
+                    if GetValueContractNode(owner, receiver, summary) is {} receiverNode {
+                        receiverNode.Sources.Add((owner, parameter, false, 0, false))
+                    }
+                }
+                let methodDeclaration = syntax is MethodDeclarationSyntax or
+                    LocalFunctionStatementSyntax or
+                    AnonymousFunctionExpressionSyntax or
+                    DelegateDeclarationSyntax
+                let propertyDeclaration = syntax is PropertyDeclarationSyntax or IndexerDeclarationSyntax
+                let assignment = syntax as AssignmentExpressionSyntax
+                if assignment != nil && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                    TryResolveTupleElementSource(assignment.Left, model, out var tupleTarget) &&
+                    GetValueContractNode(
+                    owner,
+                    tupleTarget.ContractSymbol,
+                    summary,
+                    tupleTarget.ContractPath
+                ) is {} tupleStorage {
+                    AddValueContractFlow(tupleStorage, assignment.Right, model)
+                }
+                if assignment != nil && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                    assignment.Left is TupleExpressionSyntax or
+                    DeclarationExpressionSyntax {
+                    let tupleReads = List[(Target ISymbol?, Source TupleElementKey)]()
+                    CollectDeconstructionFlow(
+                        assignment.Left,
+                        assignment.Right,
+                        model,
+                        HashSet[ISymbol](SymbolEqualityComparer.Default),
+                        List[(Target ISymbol, Source ISymbol)](),
+                        tupleReads,
+                        valueFlow: (target ISymbol?, value ExpressionSyntax?) -> {
+                            if value != nil && GetValueContractNode(owner, target, summary) is {} storage {
+                                AddValueContractFlow(storage, value, model)
+                            }
+                        }
+                    )
+                    for (target, source) in tupleReads {
+                        GetValueContractNode(owner, target, summary)?.TupleSources.Add((source, false))
+                    }
+                }
+                if !methodDeclaration &&
+                    !propertyDeclaration &&
+                    syntax is not VariableDeclaratorSyntax and
+                    not ParameterSyntax &&
+                    (assignment == nil || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)) {
                     continue
                 }
-                if TryGetSourceMember(owner, target, out _, out var targetDeclaration) &&
-                    TryGetSourceMember(owner, source, out _, out var sourceDeclaration) &&
-                    nodes.TryGetValue(targetDeclaration!!, out var targetNode) && nodes.TryGetValue(
-                    sourceDeclaration!!,
+                let declared = switch syntax {
+                    case lambda is AnonymousFunctionExpressionSyntax: model.GetSymbolInfo(lambda).Symbol
+                    case declaration is DelegateDeclarationSyntax: (
+                        model.GetDeclaredSymbol(declaration) as INamedTypeSymbol
+                    )?.DelegateInvokeMethod
+                    case write is AssignmentExpressionSyntax: model.GetSymbolInfo(write.Left).Symbol
+                    default: TranslationContext.GetEffectiveDeclaredSymbol(model, syntax)
+                }
+                GetValueContractNode(owner, declared, summary)
+                let expressions = List[ExpressionSyntax]()
+                switch syntax {
+                    case declaration is MethodDeclarationSyntax {
+                        expressions.AddRange(
+                            EnumerateReturnValues(declaration.ExpressionBody?.Expression, declaration.Body)
+                        )
+                    }
+                    case local is LocalFunctionStatementSyntax {
+                        expressions.AddRange(EnumerateReturnValues(local.ExpressionBody?.Expression, local.Body))
+                    }
+                    case lambda is AnonymousFunctionExpressionSyntax {
+                        expressions.AddRange(
+                            EnumerateReturnValues(lambda.Body as ExpressionSyntax, lambda.Body as BlockSyntax)
+                        )
+                    }
+                    case property is PropertyDeclarationSyntax {
+                        expressions.AddRange(
+                            EnumeratePropertyReturnValues(property.ExpressionBody?.Expression, property.AccessorList)
+                        )
+                        if property.Initializer is {} initializer {
+                            expressions.Add(initializer.Value)
+                        }
+                    }
+                    case indexer is IndexerDeclarationSyntax {
+                        expressions.AddRange(
+                            EnumeratePropertyReturnValues(indexer.ExpressionBody?.Expression, indexer.AccessorList)
+                        )
+                    }
+                    case variable is VariableDeclaratorSyntax {
+                        if variable.Initializer is {} initializer {
+                            expressions.Add(initializer.Value)
+                        }
+                    }
+                    case write is AssignmentExpressionSyntax {
+                        expressions.Add(write.Right)
+                    }
+                }
+                for expression in expressions {
+                    AddValueContractFlows(owner, declared, expression, model, summary, tupleEdges)
+                }
+            }
+        }
+        for (target, source) in tupleEdges {
+            GetValueContractNode(owner, target.ContractSymbol, summary, target.ContractPath)?.TupleSources.Add(
+                (source, false)
+            )
+            GetValueContractNode(owner, source.ContractSymbol, summary, source.ContractPath)
+        }
+        let contractEdges = List[(Target ISymbol, Source ISymbol)]()
+        CollectInterfaceImplementationEdges(owner, contractEdges, ScalarFlowPosition.Value)
+        CollectOverrideContractEdges(owner, contractEdges, ScalarFlowPosition.Value)
+        for root in TranslationContext.GetEffectiveSyntaxRoots(owner) {
+            let model = TranslationContext.GetEffectiveSemanticModel(owner, root.SyntaxTree)
+            for (delegateType, invoke, source) in EnumerateDelegateReturnFlows(root, model) {
+                if IsSourceDelegateType(owner, delegateType) &&
+                    GetValueContractNode(owner, invoke, summary) != nil &&
+                    GetValueContractNode(owner, source, summary) != nil {
+                    AddReturnContractEdges(invoke, source, contractEdges, ScalarFlowPosition.Value)
+                }
+            }
+        }
+        for (target, source) in contractEdges {
+            if target is not IMethodSymbol and not IPropertySymbol and not IParameterSymbol {
+                continue
+            }
+            if TryGetSourceMember(owner, target, out var targetOwner, out var targetDeclaration) &&
+                TryGetSourceMember(owner, source, out var sourceOwner, out var sourceDeclaration) &&
+                object.ReferenceEquals(targetOwner, sourceOwner) {
+                summary.ContractEdges.Add((targetOwner!!, targetDeclaration!!, sourceDeclaration!!))
+            }
+        }
+        return summary
+    }
+
+    private func ComputeReturnContracts(compilation Compilation) ReturnContractGraph {
+        CompilationMeasurements.Count("translation.return_contract_graph_builds")
+        let owners = CollectSourceOwnerClosure(compilation)
+        let summaries = List[ReturnContractGraph](owners.Count)
+        let dirtyOwners = HashSet[Compilation]()
+        if compilation is CSharpCompilation rootOwner {
+            dirtyOwners.Add(rootOwner)
+        }
+        for owner in owners {
+            let summary = OwnerReturnSummaries.GetValue(owner, CollectOwnerReturnSummary)
+            summaries.Add(summary)
+            for template in summary.OrderedNodes {
+                if !object.ReferenceEquals(template.Owner, owner) &&
+                    (
+                    template.Seed ||
+                        template.ResultSeed ||
+                        template.Sources.Count != 0 ||
+                        template.TupleSources.Count != 0
+                ) {
+                    dirtyOwners.Add(template.Owner)
+                }
+            }
+            for (edgeOwner, _, _) in summary.ContractEdges {
+                if !object.ReferenceEquals(edgeOwner, owner) {
+                    dirtyOwners.Add(edgeOwner)
+                }
+            }
+        }
+        let activeOwners = List[CSharpCompilation]()
+        let activeSummaries = List[ReturnContractGraph]()
+        for var i = 0; i < owners.Count; i++ {
+            let owner = owners[i]
+            let summary = summaries[i]
+            if dirtyOwners.Contains(owner) || summary.Owners.Overlaps(dirtyOwners) {
+                activeOwners.Add(owner)
+                activeSummaries.Add(summary)
+            }
+        }
+        let graph = ReturnContractGraph()
+        graph.Owners.UnionWith(activeOwners)
+        let nodes = graph.Nodes
+        let valueNodes = graph.OrderedNodes
+        let sourceContractEdges = List[(Target ISymbol, Source ISymbol)]()
+        for summary in activeSummaries {
+            for template in summary.OrderedNodes {
+                var targetNode ReturnContractNode
+                if template.TuplePath.Length == 0 {
+                    if nodes.TryGetValue(template.Symbol, out var existing) {
+                        targetNode = existing
+                        targetNode.Seed |= template.Seed
+                        targetNode.ResultSeed |= template.ResultSeed
+                    } else {
+                        targetNode = ReturnContractNode(
+                            template.Owner,
+                            template.Symbol,
+                            template.Seed,
+                            template.CanBeNullable
+                        )
+                        targetNode.ResultSeed = template.ResultSeed
+                        nodes.Add(template.Symbol, targetNode)
+                        valueNodes.Add(targetNode)
+                    }
+                } else {
+                    let tupleKey = TupleElementKey(template.Symbol, template.TuplePath)
+                    if graph.TupleNodes.TryGetValue(tupleKey, out var existingTuple) {
+                        targetNode = existingTuple
+                        targetNode.Seed |= template.Seed
+                        targetNode.ResultSeed |= template.ResultSeed
+                    } else {
+                        targetNode = ReturnContractNode(
+                            template.Owner,
+                            template.Symbol,
+                            template.Seed,
+                            template.CanBeNullable
+                        )
+                        targetNode.ResultSeed = template.ResultSeed
+                        targetNode.TuplePath = template.TuplePath
+                        graph.TupleNodes.Add(tupleKey, targetNode)
+                        valueNodes.Add(targetNode)
+                    }
+                }
+                if template.Sources.Count != 0 {
+                    targetNode.Sources.AddRange(template.Sources)
+                }
+                if template.TupleSources.Count != 0 {
+                    targetNode.TupleSources.AddRange(template.TupleSources)
+                }
+            }
+            for (_, targetDeclaration, sourceDeclaration) in summary.ContractEdges {
+                if nodes.TryGetValue(targetDeclaration, out var targetNode) && nodes.TryGetValue(
+                    sourceDeclaration,
                     out var sourceNode
                 ) &&
                     object.ReferenceEquals(targetNode.Owner, sourceNode.Owner) {
@@ -1682,96 +1779,317 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
-        let valueNodes = nodes.Values.Concat(graph.TupleNodes.Values).ToList()
         let fixedReturns = HashSet[ReturnContractNode]()
+        let fixedQueue = Queue[ReturnContractNode]()
         for node in valueNodes {
             if node.TuplePath.Length != 0 {
                 if !IsDeclaredNullablePosition(TuplePositionType(node.Symbol, node.TuplePath)) &&
                     !CanPromoteTuplePosition(node.Owner, node.Symbol, node.TuplePath) {
-                    fixedReturns.Add(node)
+                    if fixedReturns.Add(node) {
+                        fixedQueue.Enqueue(node)
+                    }
                 }
                 continue
             }
-            if TupleContractDeclarations(node.Owner, node.Symbol).Any(
-                (contract ISymbol?) -> contract != nil &&
-                    !TupleContractPositionAcceptsNil(node.Owner, contract, node.TuplePath, declaredReturn: true) &&
-                    !(SourceContractCanPromote(node.Owner, contract, graph))
-            ) {
-                fixedReturns.Add(node)
+            if HasFixedReturnContract(node, graph) && fixedReturns.Add(node) {
+                fixedQueue.Enqueue(node)
             }
         }
-        var fixedChanged bool
-        do {
-            fixedChanged = false
-            for (target, source) in sourceContractEdges {
-                if fixedReturns.Contains(nodes[source]) {
-                    fixedChanged |= fixedReturns.Add(nodes[target])
+        let fixedDependents = Dictionary[ReturnContractNode, List[ReturnContractNode]]()
+        for (target, source) in sourceContractEdges {
+            if nodes.TryGetValue(source, out var sourceNode) && nodes.TryGetValue(target, out var targetNode) {
+                if !fixedDependents.TryGetValue(sourceNode, out var targets) {
+                    targets = List[ReturnContractNode]()
+                    fixedDependents.Add(sourceNode, targets)
+                }
+                targets.Add(targetNode)
+            }
+        }
+        CompilationMeasurements.Count("translation.return_contract_fixed_iterations")
+        while fixedQueue.Count != 0 {
+            let sourceNode = fixedQueue.Dequeue()
+            if fixedDependents.TryGetValue(sourceNode, out var targets) {
+                for targetNode in targets {
+                    CompilationMeasurements.Count("translation.return_contract_fixed_edge_visits")
+                    if fixedReturns.Add(targetNode) {
+                        fixedQueue.Enqueue(targetNode)
+                    }
                 }
             }
-        } while fixedChanged
-        let nullableReturns = graph.Nullable
-        var changed bool
-        do {
-            changed = false
-            for node in valueNodes {
-                if !node.CanBeNullable || fixedReturns.Contains(node) {
+        }
+        let dependents = Dictionary[ReturnContractNode, List[(Target ReturnContractNode, RequiresPromotion bool)]]()
+        for node in valueNodes {
+            if !node.CanBeNullable || fixedReturns.Contains(node) {
+                continue
+            }
+            var seenProjected HashSet[(Symbol ISymbol, Path string, Depth int32, RequirePromotion bool)]? = nil
+            for item in node.Sources {
+                if item.Guarded {
                     continue
                 }
-                let nullableSource = node.Sources.Any(
-                    (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)) ->
-                    !item.Guarded &&
-                        ReturnSourceIsNullable(item.Owner, item.Symbol, graph, item.Narrowed, item.AwaitDepth)
-                ) ||
-                    node.TupleSources.Any(
-                    (item(Source TupleElementKey, Guarded bool)) ->
-                    !item.Guarded && ReturnTupleSourceIsNullable(node.Owner, item.Source, graph)
-                )
-                if !node.Seed && !nullableSource {
-                    continue
-                }
-                if !node.Nullable {
-                    node.Nullable = true
-                    changed = true
-                }
-                if node.TuplePath.Length == 0 {
-                    nullableReturns.Add(node.Symbol)
-                }
-                if (
-                    node.Symbol is IMethodSymbol &&
-                        !IsDeclaredNullablePosition(
-                        if node.TuplePath.Length == 0 {
-                            SymbolDeclaredType(node.Symbol)
-                        } else {
-                            TuplePositionType(node.Symbol, node.TuplePath)
-                        }
-                    )
-                ) ||
-                    node.Sources.Any(
-                    (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)) ->
-                    !item.Guarded &&
-                        ReturnSourceIsNullable(
+                if item.AwaitDepth == 0 {
+                    if TryGetSourceMember(item.Owner, item.Symbol, out var srcOwner, out var srcSymbol) &&
+                        graph.Owners.Contains(srcOwner!!) && nodes.TryGetValue(srcSymbol!!, out var depNode) {
+                        AddReturnContractDependency(dependents, depNode, node, item.Narrowed)
+                    }
+                } else {
+                    seenProjected = seenProjected ??
+                        HashSet[(Symbol ISymbol, Path string, Depth int32, RequirePromotion bool)]()
+                    CollectProjectedDependencies(
                         item.Owner,
                         item.Symbol,
                         graph,
-                        requirePromotion: true,
-                        awaitDepth: item.AwaitDepth
+                        item.AwaitDepth,
+                        string.Empty,
+                        node,
+                        item.Narrowed,
+                        dependents,
+                        seenProjected
                     )
-                ) ||
-                    node.TupleSources.Any(
-                    (item(Source TupleElementKey, Guarded bool)) -> !item.Guarded &&
-                        ReturnTupleSourceIsNullable(node.Owner, item.Source, graph, requirePromotion: true)
-                ) {
-                    if !node.Promoted {
-                        node.Promoted = true
-                        changed = true
+                }
+            }
+            for item in node.TupleSources {
+                if item.Guarded {
+                    continue
+                }
+                if TryGetSourceMember(node.Owner, item.Source.ContractSymbol, out var srcOwner, out var srcSymbol) &&
+                    graph.Owners.Contains(srcOwner!!) {
+                    var depNode ReturnContractNode?
+                    if item.Source.ContractPath.Length == 0 {
+                        let _ = nodes.TryGetValue(srcSymbol!!, out depNode)
+                    } else {
+                        let _ = graph.TupleNodes.TryGetValue(
+                            TupleElementKey(srcSymbol, item.Source.ContractPath),
+                            out depNode
+                        )
                     }
+                    if depNode != nil {
+                        AddReturnContractDependency(dependents, depNode, node, false)
+                    }
+                }
+            }
+        }
+        let nullableReturns = graph.Nullable
+        let worklist = Queue[ReturnContractNode]()
+        let inQueue = HashSet[ReturnContractNode]()
+        for node in valueNodes {
+            if node.CanBeNullable && !fixedReturns.Contains(node) &&
+                (node.Seed || node.Sources.Count != 0 || node.TupleSources.Count != 0) {
+                worklist.Enqueue(node)
+                inQueue.Add(node)
+            }
+        }
+        CompilationMeasurements.Count("translation.return_contract_propagation_iterations")
+        while worklist.Count != 0 {
+            let node = worklist.Dequeue()
+            inQueue.Remove(node)
+            CompilationMeasurements.Count("translation.return_contract_node_visits")
+            if node.Promoted {
+                continue
+            }
+            var nullableChanged = false
+            var promotedChanged = false
+            if !node.Nullable {
+                var nullableSource = node.Seed
+                if !nullableSource {
+                    for item in node.Sources {
+                        if !item.Guarded &&
+                            ReturnSourceIsNullable(item.Owner, item.Symbol, graph, item.Narrowed, item.AwaitDepth) {
+                            nullableSource = true
+                            break
+                        }
+                    }
+                }
+                if !nullableSource {
+                    for item in node.TupleSources {
+                        if !item.Guarded && ReturnTupleSourceIsNullable(node.Owner, item.Source, graph) {
+                            nullableSource = true
+                            break
+                        }
+                    }
+                }
+                if !nullableSource {
+                    continue
+                }
+                node.Nullable = true
+                nullableChanged = true
+                if node.TuplePath.Length == 0 {
+                    nullableReturns.Add(node.Symbol)
+                }
+            }
+            if !node.Promoted {
+                var shouldPromote = node.Symbol is IMethodSymbol &&
+                    !IsDeclaredNullablePosition(
+                    if node.TuplePath.Length == 0 {
+                        SymbolDeclaredType(node.Symbol)
+                    } else {
+                        TuplePositionType(node.Symbol, node.TuplePath)
+                    }
+                )
+                if !shouldPromote {
+                    for item in node.Sources {
+                        if !item.Guarded &&
+                            ReturnSourceIsNullable(
+                            item.Owner,
+                            item.Symbol,
+                            graph,
+                            requirePromotion: true,
+                            awaitDepth: item.AwaitDepth
+                        ) {
+                            shouldPromote = true
+                            break
+                        }
+                    }
+                }
+                if !shouldPromote {
+                    for item in node.TupleSources {
+                        if !item.Guarded &&
+                            ReturnTupleSourceIsNullable(node.Owner, item.Source, graph, requirePromotion: true) {
+                            shouldPromote = true
+                            break
+                        }
+                    }
+                }
+                if shouldPromote {
+                    node.Promoted = true
+                    promotedChanged = true
                     if node.TuplePath.Length == 0 {
                         graph.PromotedFlow.Add(node.Symbol)
                     }
                 }
             }
-        } while changed
+            if (nullableChanged || promotedChanged) && dependents.TryGetValue(node, out var targets) {
+                for (target, requiresPromotion) in targets {
+                    let shouldWake = (promotedChanged && !target.Promoted) ||
+                        (nullableChanged && !requiresPromotion && !target.Nullable)
+                    if shouldWake && inQueue.Add(target) {
+                        worklist.Enqueue(target)
+                    }
+                }
+            }
+        }
         return graph
+    }
+
+    private func HasFixedReturnContract(node ReturnContractNode, graph ReturnContractGraph) bool {
+        for contract in TupleContractDeclarations(node.Owner, node.Symbol) {
+            if contract != nil &&
+                !TupleContractPositionAcceptsNil(node.Owner, contract, node.TuplePath, declaredReturn: true) &&
+                !SourceContractCanPromote(node.Owner, contract, graph) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func AddReturnContractDependency(
+        dependents Dictionary[ReturnContractNode, List[(Target ReturnContractNode, RequiresPromotion bool)]],
+        dependency ReturnContractNode,
+        target ReturnContractNode,
+        requiresPromotion bool
+    ) {
+        if object.ReferenceEquals(dependency, target) {
+            return
+        }
+        if !dependents.TryGetValue(dependency, out var targets) {
+            targets = List[(Target ReturnContractNode, RequiresPromotion bool)]()
+            dependents.Add(dependency, targets)
+        }
+        if targets.Count != 0 {
+            let lastIndex = targets.Count - 1
+            let last = targets[lastIndex]
+            if object.ReferenceEquals(last.Target, target) {
+                if last.RequiresPromotion && !requiresPromotion {
+                    targets[lastIndex] = (target, false)
+                }
+                return
+            }
+        }
+        targets.Add((target, requiresPromotion))
+    }
+
+    private func CollectProjectedDependencies(
+        compilation Compilation,
+        symbol ISymbol,
+        graph ReturnContractGraph,
+        awaitDepth int32,
+        tuplePath string,
+        target ReturnContractNode,
+        requiresPromotion bool,
+        dependents Dictionary[ReturnContractNode, List[(Target ReturnContractNode, RequiresPromotion bool)]],
+        seen HashSet[(Symbol ISymbol, Path string, Depth int32, RequirePromotion bool)]
+    ) {
+        if awaitDepth == 0 {
+            if TryGetSourceMember(compilation, symbol, out var owner, out var source) && graph.Owners.Contains(
+                owner!!
+            ) {
+                var depNode ReturnContractNode?
+                if tuplePath.Length == 0 {
+                    let _ = graph.Nodes.TryGetValue(source!!, out depNode)
+                } else {
+                    let _ = graph.TupleNodes.TryGetValue(TupleElementKey(source, tuplePath), out depNode)
+                }
+                if depNode != nil {
+                    AddReturnContractDependency(dependents, depNode, target, requiresPromotion)
+                }
+            }
+            return
+        }
+        if ProjectedSourceType(symbol, awaitDepth, tuplePath) == nil {
+            return
+        }
+        if !seen.Add((symbol, tuplePath, awaitDepth, requiresPromotion)) {
+            return
+        }
+        if !TryGetSourceMember(compilation, symbol, out var projectedOwner, out var projectedSource) ||
+            !graph.Owners.Contains(projectedOwner!!) {
+            return
+        }
+        var projectedNode ReturnContractNode?
+        if tuplePath.Length == 0 {
+            let _ = graph.Nodes.TryGetValue(projectedSource!!, out projectedNode)
+        } else {
+            let _ = graph.TupleNodes.TryGetValue(TupleElementKey(projectedSource, tuplePath), out projectedNode)
+        }
+        if projectedNode is not{} node {
+            return
+        }
+        let atValueRoot = node.TuplePath.Length == 0 && node.Symbol is IMethodSymbol{IsAsync: true} && awaitDepth == 1
+        if atValueRoot && !IsEligibleTupleLeaf(SymbolValueType(node.Symbol)) {
+            return
+        }
+        for item in node.Sources {
+            if atValueRoot && item.Guarded {
+                continue
+            }
+            CollectProjectedDependencies(
+                item.Owner,
+                item.Symbol,
+                graph,
+                awaitDepth + item.AwaitDepth,
+                string.Empty,
+                target,
+                requiresPromotion || (atValueRoot && item.Narrowed),
+                dependents,
+                seen
+            )
+        }
+        for item in node.TupleSources {
+            if atValueRoot && item.Guarded {
+                continue
+            }
+            CollectProjectedDependencies(
+                node.Owner,
+                item.Source.ContractSymbol!!,
+                graph,
+                awaitDepth,
+                item.Source.ContractPath,
+                target,
+                requiresPromotion,
+                dependents,
+                seen
+            )
+        }
     }
 
     private func CollectRefValueContractEdges(
@@ -1928,6 +2246,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         } else {
             graph.TupleNodes.Add(tupleKey, node)
         }
+        graph.OrderedNodes.Add(node)
         return node
     }
 
@@ -2002,6 +2321,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         visited HashSet[(Symbol ISymbol, Path string, Depth int32, RequirePromotion bool)]? = nil,
         tuplePath string = ""
     ) bool {
+        CompilationMeasurements.Count("translation.return_contract_edge_visits")
         if awaitDepth != 0 {
             if ProjectedSourceType(symbol, awaitDepth, tuplePath) == nil {
                 return false
