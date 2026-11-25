@@ -2437,6 +2437,155 @@ func Main(cb ClosedBox, s S) {
         )
     }
 
+    // #6229 review follow-ups: fallback lookup shadowing premise (GS0472), fixed outer call excluding
+    // its own lambda body's provisional calls, nested interpolation shielding, handler-targeted
+    // interpolation hole dependencies (GS0221), and inline out var inside an interpolation hole.
+    @Fact
+    func ReviewFollowUps_ShadowedFallbackLambdaExclusionNestedAndHandlerInterpolationAndInlineOut() {
+        // 1. Type-imported private static read in a package function is shadowed by a later top-level global.
+        const privateStaticSource = `package P
+
+import P.Holder
+
+class Holder {
+    shared {
+        private let Secret int32 = 42
+    }
+}
+
+func Use() int32 {
+    return Secret
+}
+
+let before = 0
+/*CUT*/
+let Secret int32 = 1
+`
+        AssertWitness(privateStaticSource.Replace("/*CUT*/", string.Empty), "GS0472")
+        AssertFutureDependent(BindKeep(privateStaticSource), "GS0472", "later-overload")
+
+        // 2. A fixed call passing a lambda whose own body contains a provisional call keeps unrelated errors Final.
+        const fixedLambdaControl = `package P
+
+class Closed {
+    func Run(f () -> void) {
+    }
+}
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    Closed().Run(() -> {
+        let a = G(1)
+        let bad int32 = "s"
+    })
+/*CUT*/
+    let G = func (i int32) string {
+        return ""
+    }
+}
+`
+        let fixedLambdaKeep = BindKeep(fixedLambdaControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            fixedLambdaKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        // 3. A nested interpolation inside an outer interpolation still shields its own conversion to int32.
+        const nestedInterpPrefix = `package P
+
+func G(o object) int32 {
+    return 0
+}
+
+func TakeInt(i int32) int32 {
+    return i
+}
+
+func Main() {
+    let f = func (i int32) int32 {
+        return i
+    }
+    let s = "outer=${f("inner=${G(1)}")}"
+    let done = 0
+`
+        let nestedResult = BindNothing(nestedInterpPrefix, []string{"}\n"})
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            nestedResult.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        // 4. Handler-targeted interpolation depends on its holes (GS0221 becomes FutureDependent when a hole changes).
+        const csharpHandler = `
+using System.Runtime.CompilerServices;
+namespace Handler6229 {
+    [InterpolatedStringHandler]
+    public struct StrOnlyHandler {
+        public StrOnlyHandler(int literalLength, int formattedCount) {}
+        public void AppendLiteral(string s) {}
+        public void AppendFormatted(string s) {}
+    }
+    public static class Logger {
+        public static void Log(StrOnlyHandler handler) {}
+    }
+}
+`
+        using let fixture = GSharp.Core.Tests.CSharpFixture(csharpHandler)
+        using let references = fixture.RuntimeReferences()
+        const handlerSource = `package P
+
+import Handler6229
+
+func Use() {
+    Logger.Log("${int32(1)}")
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let completeHandlerTree = SyntaxTree.Parse(
+            SourceText.From(handlerSource.Replace("/*CUT*/", string.Empty), "handler.gs")
+        )
+        let completeHandlerDiags = Compilation(references, completeHandlerTree).GetDiagnostics()
+        Assert.DoesNotContain("GS0221", completeHandlerDiags.Select((d Diagnostic) -> d.Id))
+        let handlerCut = handlerSource.IndexOf("/*CUT*/", StringComparison.Ordinal)
+        let handlerKeep = Compilation(references, completeHandlerTree).BindPrefix(
+            completeHandlerTree,
+            handlerCut,
+            PrefixBindOptions(PrefixRemainder.KeepDeclarations, includeScope: false)
+        )
+        AssertFutureDependent(handlerKeep, "GS0221", "later-overload")
+
+        // 5. Inline `out var` inside an interpolation hole propagates its provisional call type to later reads.
+        const inlineOutPrefix = `package P
+
+func F(o object, out v int32) bool {
+    v = 0
+    return true
+}
+
+func Main() {
+    let text = "${F(1, out var x)}"
+    let s string = x
+    let done = 0
+`
+        const inlineOutWitness = `}
+
+func F(i int32, out v string) bool {
+    v = ""
+    return true
+}
+`
+        let inlineOutResult = BindNothing(inlineOutPrefix, []string{"}\n", inlineOutWitness})
+        AssertWitness(inlineOutPrefix + inlineOutWitness, "GS0155")
+        AssertFutureDependent(inlineOutResult, "GS0155", "later-overload")
+    }
+
     @Fact
     func AwaitOfAValueThatIsNotATask_IsFinal() {
         const prefix = `package P

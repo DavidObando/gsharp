@@ -241,8 +241,9 @@ internal sealed class PrefixCut {
     /// Returns a value that tells whether [`location`](paramref) contains an expression whose type a
     /// later declaration can change (#6179).
     /// @param location A diagnostic location.
+    /// @param skipSpan Optional span whose provisional entries should be ignored (e.g. a lambda body).
     /// @returns `true` when a recorded expression is in the location.
-    internal func ContainsProvisional(location TextLocation) bool {
+    internal func ContainsProvisional(location TextLocation, skipSpan TextSpan? = nil) bool {
         let span = location.Span
         lock provisionalGate {
             if provisionalSpans.Count == 0 {
@@ -253,6 +254,9 @@ internal sealed class PrefixCut {
                 provisionalTrees.TryGetValue(text, out tree)
             }
             for entry in provisionalSpans {
+                if skipSpan is {} excluded && excluded.Start <= entry.Span.Start && entry.Span.End <= excluded.End {
+                    continue
+                }
                 if object.ReferenceEquals(entry.Text, location.Text) &&
                     span.Start <= entry.Span.Start &&
                     entry.Span.End <= span.End &&
@@ -272,7 +276,10 @@ internal sealed class PrefixCut {
         while true {
             var next SyntaxNode? = nil
             for child in node.GetChildren() {
-                if child.Span.Start <= inner.Start && inner.End <= child.Span.End && child.Span.Length > 0 {
+                if child is not SyntaxToken &&
+                    child.Span.Start <= inner.Start &&
+                    inner.End <= child.Span.End &&
+                    child.Span.Length > 0 {
                     next = child
                     break
                 }
@@ -347,7 +354,7 @@ internal sealed class PrefixCut {
         while true {
             var next SyntaxNode? = nil
             for child in node.GetChildren() {
-                if child.Span.Start <= position && position < child.Span.End {
+                if child is not SyntaxToken && child.Span.Start <= position && position < child.Span.End {
                     next = child
                     break
                 }
@@ -661,15 +668,57 @@ internal shared class PrefixBindingContext {
         }
     }
 
+    /// Returns a value that tells whether a fallback simple-name lookup on [`syntax`](paramref) can be
+    /// shadowed by a later local or top-level global (#6229).
+    /// @param syntax The name expression.
+    /// @returns `true` when a later local or top-level global can hide the fallback lookup.
+    internal func CanSimpleNameBeShadowed(syntax NameExpressionSyntax) bool {
+        if current.Value is not{} cut {
+            return false
+        }
+        if LaterLocalCanHide(syntax.Location) {
+            return true
+        }
+        let name = syntax.IdentifierToken.ValueText
+        if cut.LaterOverloadsPossible {
+            return cut.LaterDeclarationsPossible && !HasTopLevelFunction(cut, name)
+        }
+        return LaterGlobalCanHide(syntax) && !HasTopLevelFunction(cut, name)
+    }
+
+    /// Returns a value that tells whether any hole inside [`syntax`](paramref) uses a provisional
+    /// expression or name, for handler-targeted interpolations whose hole types determine validity (#6229).
+    /// @param syntax The interpolated string syntax node, or `null`.
+    /// @returns `true` when any interpolation hole depends on a provisional expression.
+    internal func InterpolationHolesAreProvisional(syntax SyntaxNode?) bool {
+        if current.Value is not{} cut ||
+            (!cut.HasProvisional && !cut.LaterOverloadsPossible) ||
+            syntax is not InterpolatedStringExpressionSyntax {
+            return false
+        }
+        for child in syntax.GetChildren() {
+            if child is not SyntaxToken &&
+                (
+                cut.ContainsProvisional(child.Location) ||
+                    StatementUsesProvisionalCore(cut, syntax.SyntaxTree, child.Span, skipSubtree: nil)
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Returns the premise of a report at [`location`](paramref) that contains an expression whose type
     /// a later declaration can change, or `null` (#6179).
     /// @param location The location of the report.
+    /// @param skipSubtree Optional argument subtree whose provisional expressions should be ignored.
     /// @returns (cref:PrefixPremise.LaterOverload) or `null`.
-    internal func ProvisionalPremise(location TextLocation) PrefixPremise? {
+    internal func ProvisionalPremise(location TextLocation, skipSubtree SyntaxNode? = nil) PrefixPremise? {
         if current.Value is not{} cut || (!cut.HasProvisional && !cut.LaterOverloadsPossible) {
             return nil
         }
-        return if cut.ContainsProvisional(location) || StatementUsesProvisional(cut, location) {
+        return if cut.ContainsProvisional(location, skipSubtree?.Span) ||
+            StatementUsesProvisional(cut, location, skipSubtree) {
             PrefixPremise.LaterOverload
         } else {
             default(PrefixPremise?)
@@ -680,11 +729,11 @@ internal shared class PrefixBindingContext {
     // pattern of an `is`, the `!!` of an assertion, an index argument converted to the indexer's parameter,
     // or a statement inside a lambda/function literal whose signature comes from an enclosing call (#6179,
     // #6229).
-    private func StatementUsesProvisional(cut PrefixCut, location TextLocation) bool {
+    private func StatementUsesProvisional(cut PrefixCut, location TextLocation, skipSubtree SyntaxNode? = nil) bool {
         if cut.ProvisionalTree(location.Text) is not{} tree {
             return false
         }
-        return StatementUsesProvisionalCore(cut, tree, location.Span, skipSubtree: nil)
+        return StatementUsesProvisionalCore(cut, tree, location.Span, skipSubtree: skipSubtree)
     }
 
     private func StatementUsesProvisionalCore(
@@ -699,7 +748,10 @@ internal shared class PrefixBindingContext {
         while true {
             var next SyntaxNode? = nil
             for child in node.GetChildren() {
-                if child.Span.Start <= span.Start && span.End <= child.Span.End && child.Span.Length > 0 {
+                if child is not SyntaxToken &&
+                    child.Span.Start <= span.Start &&
+                    span.End <= child.Span.End &&
+                    child.Span.Length > 0 {
                     next = child
                     break
                 }
@@ -752,7 +804,7 @@ internal shared class PrefixBindingContext {
                 continue
             }
             if EnclosingCallOfArgument(tree, lambda) is {} enclosingCall {
-                if cut.ContainsProvisional(enclosingCall.Location) ||
+                if cut.ContainsProvisional(enclosingCall.Location, lambda.Span) ||
                     StatementUsesProvisionalCore(cut, tree, enclosingCall.Span, skipSubtree: lambda) {
                     return true
                 }
@@ -849,12 +901,29 @@ internal shared class PrefixBindingContext {
                 candidate = labeled.Statement
             }
             let declared = HashSet[string](StringComparer.Ordinal)
-            CollectHeaderNames(candidate, candidate, false, declared, declared: true, skipSubtree: nil)
+            let declaredSpans = Dictionary[string, TextSpan](StringComparer.Ordinal)
+            CollectHeaderNames(
+                candidate,
+                candidate,
+                false,
+                declared,
+                declared: true,
+                skipSubtree: nil,
+                report: nil,
+                declaredSpans: declaredSpans
+            )
             if !declared.Overlaps(names) {
                 continue
             }
-            if HeaderContainsProvisional(cut, candidate, candidate, false, false, nil, nil) ||
-                HeaderUsesProvisionalName(cut, tree, candidate, depth - 1, visited) {
+            var candidateUsesProvisional = false
+            for matchedName in names {
+                if declaredSpans.TryGetValue(matchedName, out var declSpan) &&
+                    HeaderContainsProvisional(cut, candidate, candidate, false, false, declSpan, nil) {
+                    candidateUsesProvisional = true
+                    break
+                }
+            }
+            if candidateUsesProvisional || HeaderUsesProvisionalName(cut, tree, candidate, depth - 1, visited) {
                 return true
             }
         }
@@ -934,7 +1003,8 @@ internal shared class PrefixBindingContext {
         names HashSet[string],
         declared bool,
         skipSubtree SyntaxNode? = nil,
-        report TextSpan? = nil
+        report TextSpan? = nil,
+        declaredSpans Dictionary[string, TextSpan]? = nil
     ) {
         if skipSubtree != nil && object.ReferenceEquals(node, skipSubtree) {
             return
@@ -948,7 +1018,7 @@ internal shared class PrefixBindingContext {
                     if child is not SyntaxToken &&
                         child.Span.Start <= reportSpan.Start &&
                         reportSpan.End <= child.Span.End {
-                        CollectHeaderNames(statement, child, true, names, declared, skipSubtree, report)
+                        CollectHeaderNames(statement, child, true, names, declared, skipSubtree, report, declaredSpans)
                     }
                 }
             }
@@ -958,6 +1028,9 @@ internal shared class PrefixBindingContext {
             if child is SyntaxToken token {
                 if token.Kind == SyntaxKind.IdentifierToken && !token.IsMissing && IsNameOfKind(node, token, declared) {
                     names.Add(token.ValueText)
+                    if declared && declaredSpans != nil {
+                        declaredSpans[token.ValueText] = token.Span
+                    }
                 }
                 continue
             }
@@ -974,7 +1047,8 @@ internal shared class PrefixBindingContext {
                 names,
                 declared,
                 skipSubtree,
-                report
+                report,
+                declaredSpans
             )
         }
     }
@@ -1038,7 +1112,7 @@ internal shared class PrefixBindingContext {
         }
         // A global can be read in another body, which can bind first or come from the body cache. Any call
         // in its declaration then counts (anyCall).
-        return HeaderContainsProvisional(cut, statement, statement, false, anyCall, nil, nil)
+        return HeaderContainsProvisional(cut, statement, statement, false, anyCall, declaration.Span, nil)
     }
 
     // The declaration part of [`statement`](paramref): the nested statements of a compound statement (the

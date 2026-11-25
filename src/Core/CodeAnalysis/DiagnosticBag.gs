@@ -561,6 +561,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             }
             var dependsOnCandidate = false
             var found = false
+            var skipSubtree SyntaxNode? = nil
             for argument in arguments {
                 let argumentSpan = argument.Span
                 if argumentSpan.Start <= span.Start && span.End <= argumentSpan.End {
@@ -579,6 +580,9 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                             break
                         }
                     }
+                    if value is LambdaExpressionSyntax || value is FunctionLiteralExpressionSyntax {
+                        skipSubtree = value
+                    }
                     dependsOnCandidate = (argumentSpan.Start == span.Start && argumentSpan.End == span.End) ||
                         (value.Span.Start == span.Start && value.Span.End == span.End) ||
                         PrefixBindingContext.IsTypedByCandidate(value)
@@ -591,7 +595,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             if PrefixBindingContext.ClassifyCallResolution(location, frame.Kind) is {} premise {
                 return premise
             }
-            if PrefixBindingContext.ProvisionalPremise(frame.Syntax.Location) is {} framePremise {
+            if PrefixBindingContext.ProvisionalPremise(frame.Syntax.Location, skipSubtree) is {} framePremise {
                 return framePremise
             }
             // A fixed callee does not change, but the call itself can be a typed argument of an outer call.
