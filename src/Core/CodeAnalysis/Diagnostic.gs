@@ -73,6 +73,7 @@ class Diagnostic {
         Suggestions = source.Suggestions
         PrefixFinality = prefixFinality
         this.prefixReason = prefixReason
+        phase = source.phase
     }
 
     // ADR-0227 D4: a copy at other locations, for the body-local delta.
@@ -93,6 +94,7 @@ class Diagnostic {
         Suggestions = suggestions
         PrefixFinality = source.PrefixFinality
         this.prefixReason = source.prefixReason
+        phase = source.phase
     }
 
     /// Gets the stable diagnostic identifier (e.g. `GS0001`).
@@ -158,6 +160,23 @@ class Diagnostic {
 
     private var prefixReason string?
 
+    /// Gets the pipeline that reported this diagnostic (#6177): the parse, the declaration bind, the bind of
+    /// the bodies, or lowering and emit. It is (cref:DiagnosticPhase.Unknown) for a diagnostic that no
+    /// pipeline of a compilation reported.
+    prop Phase DiagnosticPhase -> phase
+
+    private var phase DiagnosticPhase
+
+    /// Records the pipeline that reported this diagnostic, once (#6177). The pipeline stamps the
+    /// diagnostic itself, not a copy, because the bags and the prefix classifier track diagnostics by
+    /// reference. A diagnostic that two pipelines return keeps the first phase.
+    /// @param value The pipeline.
+    internal func StampPhase(value DiagnosticPhase) {
+        if phase == DiagnosticPhase.Unknown {
+            phase = value
+        }
+    }
+
     /// Gets a value indicating whether this diagnostic is an error.
     prop IsError bool -> Severity == DiagnosticSeverity.Error
 
@@ -203,6 +222,18 @@ class Diagnostic {
     override func ToString() string -> Message
 
     shared {
+        /// Records [`phase`](paramref) on each diagnostic that has no phase yet (#6177).
+        /// @param diagnostics The diagnostics that a pipeline returns.
+        /// @param phase The pipeline.
+        internal func StampPhase(diagnostics ImmutableArray[Diagnostic], phase DiagnosticPhase) {
+            if diagnostics.IsDefault {
+                return
+            }
+            for diagnostic in diagnostics {
+                diagnostic.StampPhase(phase)
+            }
+        }
+
         /// Creates a diagnostic from a descriptor, formatting the descriptor's
         /// message template with [`messageArguments`](paramref) and using the
         /// descriptor's default severity.

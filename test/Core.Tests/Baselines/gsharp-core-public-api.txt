@@ -807,6 +807,12 @@ type enum GSharp.Core.CodeAnalysis.DiagnosticFinality : Int32
   field public const GSharp.Core.CodeAnalysis.DiagnosticFinality Artifact = 2
   field public const GSharp.Core.CodeAnalysis.DiagnosticFinality Final = 0
   field public const GSharp.Core.CodeAnalysis.DiagnosticFinality FutureDependent = 1
+type enum GSharp.Core.CodeAnalysis.DiagnosticPhase : Int32
+  field public const GSharp.Core.CodeAnalysis.DiagnosticPhase Body = 3
+  field public const GSharp.Core.CodeAnalysis.DiagnosticPhase Declaration = 2
+  field public const GSharp.Core.CodeAnalysis.DiagnosticPhase Emit = 4
+  field public const GSharp.Core.CodeAnalysis.DiagnosticPhase Parse = 1
+  field public const GSharp.Core.CodeAnalysis.DiagnosticPhase Unknown = 0
 type enum GSharp.Core.CodeAnalysis.DiagnosticSeverity : Int32
   field public const GSharp.Core.CodeAnalysis.DiagnosticSeverity Error = 3
   field public const GSharp.Core.CodeAnalysis.DiagnosticSeverity Hidden = 0
@@ -3529,6 +3535,7 @@ type sealed class GSharp.Core.CodeAnalysis.Diagnostic : System.Object
   method public Boolean get_IsError()
   method public GSharp.Core.CodeAnalysis.Diagnostic WithSeverity(GSharp.Core.CodeAnalysis.DiagnosticSeverity severity)
   method public GSharp.Core.CodeAnalysis.DiagnosticDescriptor get_Descriptor()
+  method public GSharp.Core.CodeAnalysis.DiagnosticPhase get_Phase()
   method public GSharp.Core.CodeAnalysis.DiagnosticSeverity get_Severity()
   method public GSharp.Core.CodeAnalysis.Text.TextLocation get_Location()
   method public String get_Id()
@@ -3544,6 +3551,7 @@ type sealed class GSharp.Core.CodeAnalysis.Diagnostic : System.Object
   method public virtual override String ToString()
   property public Boolean IsError { get; }
   property public GSharp.Core.CodeAnalysis.DiagnosticDescriptor Descriptor { get; }
+  property public GSharp.Core.CodeAnalysis.DiagnosticPhase Phase { get; }
   property public GSharp.Core.CodeAnalysis.DiagnosticSeverity Severity { get; }
   property public GSharp.Core.CodeAnalysis.Text.TextLocation Location { get; }
   property public String Id { get; }
