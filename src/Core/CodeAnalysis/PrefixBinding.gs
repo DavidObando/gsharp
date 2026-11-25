@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Immutable
 
@@ -113,6 +114,45 @@ class OpenConstruct {
 }
 
 /// The result of (cref:Compilation.Compilation.BindPrefix) (ADR-0225).
+/// The result of (cref:SemanticModel.GetSpeculativeStatementDiagnostics) (ADR-0229, #6176).
+class SpeculativeStatementResult {
+    internal init(
+        diagnostics ImmutableArray[ClassifiedDiagnostic],
+        declaredSymbols ImmutableArray[Symbol],
+        syntaxTree SyntaxTree,
+        statementSpan TextSpan
+    ) {
+        Diagnostics = diagnostics
+        DeclaredSymbols = declaredSymbols
+        SyntaxTree = syntaxTree
+        StatementSpan = statementSpan
+    }
+
+    /// Gets the classified diagnostics located in the inserted statement, in the order of
+    /// (cref:Compilation.Compilation.GetDiagnostics). Their positions are in the text of (cref:SyntaxTree).
+    prop Diagnostics ImmutableArray[ClassifiedDiagnostic] {
+        get;
+    }
+
+    /// Gets the symbols that the statement declares and that are in scope after it: its locals and local
+    /// functions.
+    prop DeclaredSymbols ImmutableArray[Symbol] {
+        get;
+    }
+
+    /// Gets the tree that was bound: the model's text with the statement inserted. For a prefix tree it is
+    /// the prefix tree of that text.
+    prop SyntaxTree SyntaxTree {
+        get;
+    }
+
+    /// Gets the span of the inserted statement in the text of (cref:SyntaxTree). The text has a line break
+    /// before and after it.
+    prop StatementSpan TextSpan {
+        get;
+    }
+}
+
 class PrefixBindResult {
     internal init(
         diagnostics ImmutableArray[ClassifiedDiagnostic],
