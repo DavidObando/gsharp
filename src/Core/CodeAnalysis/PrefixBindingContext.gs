@@ -170,6 +170,23 @@ internal sealed class PrefixCut {
         }
     }
 
+    /// Returns the trees in which the bind recorded an expression or a name (#6179).
+    /// @returns The trees.
+    internal func ProvisionalTreeList() List[SyntaxTree] {
+        lock provisionalGate {
+            return List[SyntaxTree](provisionalTrees.Values)
+        }
+    }
+
+    /// Records that the bind binds names in [`tree`](paramref), so that a report in it can follow a global
+    /// of another tree (#6179).
+    /// @param tree A tree of the compilation.
+    internal func AddTree(tree SyntaxTree) {
+        lock provisionalGate {
+            provisionalTrees[tree.Text] = tree
+        }
+    }
+
     /// Returns the tree of [`text`](paramref) when the bind recorded an expression in it (#6179).
     /// @param text A source text.
     /// @returns The tree, or `null`.
@@ -504,6 +521,14 @@ internal shared class PrefixBindingContext {
         }
     }
 
+    /// Records that the bind binds names in [`tree`](paramref) (#6179).
+    /// @param tree A tree of the compilation.
+    internal func AddTree(tree SyntaxTree) {
+        if current.Value is {} cut {
+            cut.AddTree(tree)
+        }
+    }
+
     /// Records that a later declaration can change the type of the expression at [`location`](paramref)
     /// (#6179).
     /// @param location The location of an expression that binds before the cut.
@@ -550,7 +575,8 @@ internal shared class PrefixBindingContext {
             if next == nil {
                 break
             }
-            if next is StatementSyntax {
+            // A field or a property initializer has no statement; its declaration is the context.
+            if next is StatementSyntax || next is FieldDeclarationSyntax || next is PropertyDeclarationSyntax {
                 statement = next
             }
             node = next
@@ -601,10 +627,19 @@ internal shared class PrefixBindingContext {
             }
             current = parent
         }
-        // A global is visible in every member, wherever its statement is.
+        // A global is visible in every member, wherever its statement is, also in another tree.
         for member in tree.Root.Members {
             if member is GlobalStatementSyntax global && !(global.Span.End <= statement.Span.Start) {
                 earlier.Add(global)
+            }
+        }
+        for other in cut.ProvisionalTreeList() {
+            if !object.ReferenceEquals(other, tree) {
+                for member in other.Root.Members {
+                    if member is GlobalStatementSyntax global {
+                        earlier.Add(global)
+                    }
+                }
             }
         }
         for entry in earlier {

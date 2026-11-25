@@ -110,9 +110,12 @@ internal shared class PrefixRetarget {
     /// @param syntax The name.
     /// @param bound The bound name.
     func NoteName(syntax SyntaxNode, bound BoundExpression) {
-        if PrefixBindingContext.Current != nil &&
-            bound is BoundVariableExpression variable &&
-            PrefixBindingContext.IsProvisionalVariable(variable.Variable) {
+        if PrefixBindingContext.Current == nil {
+            return
+        }
+        // A report in this tree can read a global of another tree by name.
+        PrefixBindingContext.AddTree(syntax.SyntaxTree)
+        if bound is BoundVariableExpression variable && PrefixBindingContext.IsProvisionalVariable(variable.Variable) {
             PrefixBindingContext.AddProvisional(syntax)
         }
     }
@@ -153,6 +156,13 @@ internal shared class PrefixRetarget {
         }
         // A later local of a function literal's block can hide a simple-name callee, also an exact one.
         if kind == PrefixCallKind.Name && PrefixBindingContext.LaterLocalCanHide(syntax.Location) {
+            return true
+        }
+        // With the cut in the top-level statements, a later top-level global can hide a static member that a
+        // simple name resolved to through a type import (`Abs` with `import System.Math`).
+        if kind == PrefixCallKind.Name &&
+            cut.LaterDeclarationsPossible &&
+            (node is BoundImportedCallExpression || node is BoundClrStaticCallExpression) {
             return true
         }
         if !cut.LaterOverloadsPossible {

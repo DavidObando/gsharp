@@ -1417,6 +1417,105 @@ partial class Box {
     }
 
     @Fact
+    func PatternInAFieldInitializer_IsFutureDependent() {
+        const prefix = `package P
+
+func G(o object) int32 {
+    return 0
+}
+
+class C {
+    let ok bool = G(1) is [1]
+}
+
+func Main() {
+    let done = 0
+`
+        const witness = `}
+
+func G(i int32) []int32 {
+    return []int32{1}
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0175")
+        AssertFutureDependent(result, "GS0175", "later-overload")
+    }
+
+    @Fact
+    func LongAliasChainOfANarrowedRead_IsFutureDependent() {
+        const prefix = `package P
+
+func G(o object) int32? {
+    return 0
+}
+
+func Main() {
+    let v = G(1)
+    if v != nil {
+        let a = v
+        let b = a
+        let c = b
+        let d = c
+        let e = d
+        let f = e
+        let s string = f
+    }
+    let done = 0
+`
+        const witness = `}
+
+func G(i int32) string? {
+    return ""
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
+    func WriteToAGlobalOfAnotherTree_IsFutureDependent() {
+        const cutTree = "package P\n\nfunc G(o object) int32 {\n    return 0\n}\n\nvar y = G(1)\nlet done = 0\n"
+        const other = "package P\n\nfunc Use() {\n    y = \"\"\n}\n"
+        let otherTree = SyntaxTree.Parse(SourceText.From(other, "other.gs"))
+        let tree = SyntaxTree.Parse(SourceText.From(cutTree, "prefix.gs"))
+        let result = Compilation(tree, otherTree).BindPrefix(
+            tree,
+            cutTree.Length,
+            PrefixBindOptions(PrefixRemainder.Nothing, includeScope: false)
+        )
+        let completed = SyntaxTree.Parse(
+            SourceText.From(cutTree + "\nfunc G(i int32) string {\n    return \"\"\n}\n", "prefix.gs")
+        )
+        Assert.DoesNotContain(
+            Compilation(completed, SyntaxTree.Parse(SourceText.From(other, "other.gs"))).GetDiagnostics(),
+            (d Diagnostic) -> d.Id == "GS0155"
+        )
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
+    func TypeImportedStaticCall_ALaterTopLevelGlobalCanHideIt() {
+        const source = `package P
+
+import System.Math
+
+func Use() {
+    let x string = Abs(1)
+}
+
+let before = 0
+/*CUT*/
+let Abs = func (i int32) string {
+    return ""
+}
+`
+        AssertWitness(source.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(source), "GS0155", "later-overload")
+    }
+
+    @Fact
     func ResolvedCall_AnExactNonGenericMatchCannotBeBeaten() {
         const prefix = `package P
 
