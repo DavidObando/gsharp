@@ -197,9 +197,17 @@ internal shared class PrefixRetarget {
         if !cut.LaterOverloadsPossible {
             return false
         }
-        // In Nothing mode, a later declaration can hide a type-imported static call.
+        // In Nothing mode, a later declaration can hide a type-imported static call or a simple-name
+        // conversion call inside a member or function body (#6229).
         if kind == PrefixCallKind.Name &&
-            (node is BoundImportedCallExpression || node is BoundClrStaticCallExpression) {
+            (
+            node is BoundImportedCallExpression ||
+                node is BoundClrStaticCallExpression ||
+                (
+                cut.LaterDeclarationsPossible && PrefixBindingContext.IsInMemberOrFunctionBody(syntax) &&
+                    IsSimpleNameConversionCall(syntax, node)
+            )
+        ) {
             return true
         }
         // A function value has a declared signature, and a constructor call has the type that it names,
@@ -294,6 +302,30 @@ internal shared class PrefixRetarget {
             return call.Function.ContainingType != nil
         }
         return true
+    }
+
+    private func IsSimpleNameConversionCall(syntax SyntaxNode, node BoundExpression) bool {
+        if syntax is not CallExpressionSyntax callSyntax ||
+            callSyntax.ConversionTypeClause != nil ||
+            callSyntax.Callee != nil ||
+            callSyntax.Identifier.ValueText == "cast" {
+            return false
+        }
+        if node is BoundConversionExpression {
+            return true
+        }
+        return !(
+            node is BoundCallExpression ||
+                node is BoundIndirectCallExpression ||
+                node is BoundFunctionPointerInvocationExpression ||
+                node is BoundTypeParameterConstructionExpression ||
+                node is BoundConstructorCallExpression ||
+                node is BoundClrConstructorCallExpression ||
+                node is BoundUserInstanceCallExpression ||
+                node is BoundImportedInstanceCallExpression ||
+                node is BoundImportedCallExpression ||
+                node is BoundClrStaticCallExpression
+        )
     }
 
     // Whether a type of [`type`](paramref)'s hierarchy, before [`stop`](paramref), can get members: a later

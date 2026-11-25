@@ -353,6 +353,12 @@ internal sealed class PrefixCut {
                     node is LambdaExpressionSyntax &&
                     (next is BlockExpressionSyntax || next is BlockStatementSyntax) {
                     inSiblingLambdaBlock = true
+                    if next is BlockExpressionSyntax block &&
+                        block.Expression is {} tail &&
+                        tail.Span.Start <= inner.Start &&
+                        inner.End <= tail.Span.End {
+                        inSiblingReturn = true
+                    }
                 } else if inSiblingLambdaBlock && next is ReturnStatementSyntax {
                     inSiblingReturn = true
                 }
@@ -612,15 +618,12 @@ internal shared class PrefixBindingContext {
     }
 
     /// Returns a value that tells whether a later top-level statement can declare a global that hides a
-    /// simple-name lookup inside [`syntax`](paramref) in `KeepDeclarations` mode (#6229). Only bodies bound
-    /// after top-level statements (functions, methods, constructors, accessors, and static initializers) see
-    /// later globals; earlier top-level statements and field initializers do not.
+    /// simple-name lookup inside [`syntax`](paramref) (#6229). Only bodies bound after top-level
+    /// statements (functions, methods, constructors, accessors, and static initializers) see later globals;
+    /// earlier top-level statements and field initializers do not.
     /// @param syntax The lookup syntax node.
-    /// @returns `true` when a later top-level global can shadow the lookup.
-    internal func LaterGlobalCanHide(syntax SyntaxNode) bool {
-        if current.Value is not{} cut || cut.LaterOverloadsPossible || !cut.LaterDeclarationsPossible {
-            return false
-        }
+    /// @returns `true` when [`syntax`](paramref) sits inside a member or function body.
+    internal func IsInMemberOrFunctionBody(syntax SyntaxNode) bool {
         let tree = syntax.SyntaxTree
         var node SyntaxNode? = syntax
         while node != nil {
@@ -639,6 +642,19 @@ internal shared class PrefixBindingContext {
             node = tree.GetParent(node)
         }
         return false
+    }
+
+    /// Returns a value that tells whether a later top-level statement can declare a global that hides a
+    /// simple-name lookup inside [`syntax`](paramref) in `KeepDeclarations` mode (#6229). Only bodies bound
+    /// after top-level statements (functions, methods, constructors, accessors, and static initializers) see
+    /// later globals; earlier top-level statements and field initializers do not.
+    /// @param syntax The lookup syntax node.
+    /// @returns `true` when a later top-level global can shadow the lookup.
+    internal func LaterGlobalCanHide(syntax SyntaxNode) bool {
+        if current.Value is not{} cut || cut.LaterOverloadsPossible || !cut.LaterDeclarationsPossible {
+            return false
+        }
+        return IsInMemberOrFunctionBody(syntax)
     }
 
     /// Returns a value that tells whether any type of [`type`](paramref)'s hierarchy before
@@ -1176,8 +1192,43 @@ internal shared class PrefixBindingContext {
             if child is FunctionLiteralExpressionSyntax {
                 continue
             }
-            if excludeCallLambdas && child is LambdaExpressionSyntax l {
-                if isFixedSignatureCall || l.Body is BlockExpressionSyntax || l.Body is BlockStatementSyntax {
+            if child is LambdaExpressionSyntax l {
+                if declared {
+                    continue
+                }
+                if excludeCallLambdas && (l.Body is BlockExpressionSyntax || l.Body is BlockStatementSyntax) {
+                    if !isFixedSignatureCall && l.Body is BlockExpressionSyntax block {
+                        if block.Expression is {} tail {
+                            CollectHeaderNames(
+                                statement,
+                                tail,
+                                true,
+                                names,
+                                declared,
+                                skipSubtree,
+                                report,
+                                declaredSpans,
+                                excludeCallLambdas,
+                                isFixedSignatureCall
+                            )
+                        }
+                        for stmt in block.Statements {
+                            if stmt is ReturnStatementSyntax {
+                                CollectHeaderNames(
+                                    statement,
+                                    stmt,
+                                    false,
+                                    names,
+                                    declared,
+                                    skipSubtree,
+                                    report,
+                                    declaredSpans,
+                                    excludeCallLambdas,
+                                    isFixedSignatureCall
+                                )
+                            }
+                        }
+                    }
                     continue
                 }
             }
@@ -1317,9 +1368,43 @@ internal shared class PrefixBindingContext {
                 continue
             }
             if excludeCallLambdas && child is LambdaExpressionSyntax lambdaChild {
-                if isFixedSignatureCall ||
-                    lambdaChild.Body is BlockExpressionSyntax ||
-                    lambdaChild.Body is BlockStatementSyntax {
+                if isFixedSignatureCall {
+                    continue
+                }
+                if lambdaChild.Body is BlockExpressionSyntax block {
+                    if block.Expression is {} tail &&
+                        HeaderContainsProvisional(
+                        cut,
+                        statement,
+                        tail,
+                        true,
+                        anyCall,
+                        report,
+                        skipSubtree,
+                        excludeCallLambdas,
+                        isFixedSignatureCall
+                    ) {
+                        return true
+                    }
+                    for stmt in block.Statements {
+                        if stmt is ReturnStatementSyntax &&
+                            HeaderContainsProvisional(
+                            cut,
+                            statement,
+                            stmt,
+                            false,
+                            anyCall,
+                            report,
+                            skipSubtree,
+                            excludeCallLambdas,
+                            isFixedSignatureCall
+                        ) {
+                            return true
+                        }
+                    }
+                    continue
+                }
+                if lambdaChild.Body is BlockStatementSyntax {
                     continue
                 }
             }

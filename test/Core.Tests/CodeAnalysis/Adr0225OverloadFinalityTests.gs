@@ -2727,6 +2727,100 @@ func Main() {
             DiagnosticFinality.Final,
             literalPiKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
         )
+
+        // 9. Block-tail expression in a sibling lambda propagates through overloaded calls in KeepDeclarations.
+        const blockTailSource = `package P
+
+import System
+
+class Closed {
+    shared {
+        func Apply(a Func[int32], b Func[int32, int32]) {
+        }
+
+        func Apply(a Func[string], b Func[string, string]) {
+        }
+    }
+}
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    let outer = func () {
+        Closed.Apply(() -> {
+            G(1)
+        }, (x) -> {
+            return "s"
+        })
+    }
+/*CUT*/
+    let G = func (i int32) string {
+        return ""
+    }
+}
+`
+        AssertWitness(blockTailSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(blockTailSource), "GS0155", "later-overload")
+
+        // 10. Non-identity conversion call `int32(v)` inside a function body can be shadowed by a later
+        // top-level global in Nothing mode (while `cast[int32](v)` stays Final).
+        const convShadowPrefix = `package P
+
+func Main(v float64) {
+    let s string = int32(v)
+`
+        const convShadowWitness = `}
+
+let int32 = func (x float64) string {
+    return ""
+}
+`
+        let convShadowResult = BindNothing(convShadowPrefix, []string{"}\n", convShadowWitness})
+        AssertWitness(convShadowPrefix + convShadowWitness, "GS0155")
+        AssertFutureDependent(convShadowResult, "GS0155", "later-overload")
+
+        const castControlPrefix = `package P
+
+func Main(v float64) {
+    let s string = cast[int32](v)
+    let done = 0
+`
+        let castControlResult = BindNothing(castControlPrefix, []string{"}\n"})
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            castControlResult.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        // 11. Parameter read inside a lambda whose body also has an unrelated provisional call stays Final.
+        const lambdaParamControl = `package P
+
+class Closed {
+    func Run(f (int32) -> void) {
+    }
+}
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    Closed().Run((x) -> {
+        let a = G(1)
+        let bad string = x
+    })
+/*CUT*/
+    let G = func (i int32) string {
+        return ""
+    }
+}
+`
+        let lambdaParamKeep = BindKeep(lambdaParamControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            lambdaParamKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
     }
 
     @Fact
