@@ -298,6 +298,17 @@ internal shared class PrefixRetarget {
             node is BoundTypeParameterConstructionExpression {
             return false
         }
+        if node is BoundImportedInstanceCallExpression invoke && string.Equals(
+            invoke.Method.Name,
+            "Invoke",
+            StringComparison.Ordinal
+        ) &&
+            invoke.Receiver.Type.ClrType is {} receiverClr &&
+            ClrTypeUtilities.IsDelegateType(receiverClr) &&
+            invoke.Receiver is BoundVariableExpression recvVar &&
+            recvVar.Variable is not GlobalVariableSymbol {
+            return false
+        }
         if node is BoundCallExpression call {
             return call.Function.ContainingType != nil
         }

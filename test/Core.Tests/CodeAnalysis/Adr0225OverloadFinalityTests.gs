@@ -2853,6 +2853,143 @@ func Main(c Closed) {
             DiagnosticFinality.Final,
             fixedSiblingExprVarKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
         )
+
+        // 13. Static single-candidate non-generic fixed call records before argument binding.
+        const fixedStaticSiblingControl = `package P
+
+class Closed {
+    shared {
+        func RunExpr(f () -> int32, g () -> void) {
+        }
+    }
+}
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    let outer = func () {
+        let v = G(1)
+        Closed.RunExpr(() -> v, () -> {
+            let bad int32 = "s"
+        })
+    }
+/*CUT*/
+    let G = func (i int32) string {
+        return ""
+    }
+}
+`
+        let fixedStaticSiblingKeep = BindKeep(fixedStaticSiblingControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            fixedStaticSiblingKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        // 14. Calling a CLR delegate local/parameter (`Func[int32]`) stays Final at a KeepDeclarations
+        // top-level cut.
+        const delegateLocalControl = `package P
+
+import System
+
+func Use(p Func[int32]) {
+    let f Func[int32] = () -> 1
+    let s1 string = f()
+    let s2 string = p()
+}
+
+let before = 0
+/*CUT*/
+let f = func () string {
+    return ""
+}
+let p = func () string {
+    return ""
+}
+`
+        let delegateKeep = BindKeep(delegateLocalControl)
+        let delegateMismatches = delegateKeep
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(2, delegateMismatches.Count)
+        Assert.All(delegateMismatches, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+
+        // 15. Fixed-signature exclusion on an outer `.Run` does not skip lambdas in its receiver's
+        // overloaded `Choose` subcall.
+        const receiverSubcallSource = `package P
+
+import System
+
+class BoxInt {
+    func Run(f (int32) -> void) {
+    }
+}
+
+class BoxStr {
+    func Run(f (string) -> void) {
+    }
+}
+
+func Choose(f Func[int32]) BoxInt {
+    return BoxInt()
+}
+
+func Choose(f Func[string]) BoxStr {
+    return BoxStr()
+}
+
+func Use() {
+    Choose(() -> int32(1)).Run((x) -> {
+        let s string = x
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        AssertWitness(receiverSubcallSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(receiverSubcallSource), "GS0155", "later-overload")
+
+        // 16. Overloaded call skips `skipSubtree` when checking the diagnostic's own lambda, so an earlier
+        // `return G(1)` in the same lambda does not make an unrelated literal mismatch FutureDependent.
+        const overloadedOwnLambdaControl = `package P
+
+class Overloaded {
+    func Run(a int32, f () -> int32) {
+    }
+
+    func Run(a string, f () -> string) {
+    }
+}
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    Overloaded().Run(1, () -> {
+        if false {
+            return G(1)
+        }
+        let bad int32 = "s"
+        return 0
+    })
+/*CUT*/
+    let G = func (i int32) string {
+        return ""
+    }
+}
+`
+        let overloadedOwnKeep = BindKeep(overloadedOwnLambdaControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            overloadedOwnKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
     }
 
     @Fact

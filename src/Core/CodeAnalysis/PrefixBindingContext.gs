@@ -277,13 +277,14 @@ internal sealed class PrefixCut {
     /// @param skipSpan Optional span whose provisional entries should be ignored (e.g. a lambda body).
     /// @param excludeCallLambdas When `true`, also ignores sibling lambda bodies that cannot affect
     /// [`location`](paramref)'s call signature (#6229).
-    /// @param isFixedSignatureCall When `true`, ignores all sibling lambda bodies under [`location`](paramref).
+    /// @param fixedCallSpan Optional span of the fixed-signature call whose direct lambda arguments
+    /// should be ignored (#6229).
     /// @returns `true` when a recorded expression is in the location.
     internal func ContainsProvisional(
         location TextLocation,
         skipSpan TextSpan? = nil,
         excludeCallLambdas bool = false,
-        isFixedSignatureCall bool = false
+        fixedCallSpan TextSpan? = nil
     ) bool {
         let span = location.Span
         lock provisionalGate {
@@ -301,7 +302,7 @@ internal sealed class PrefixCut {
                 if object.ReferenceEquals(entry.Text, location.Text) &&
                     span.Start <= entry.Span.Start &&
                     entry.Span.End <= span.End &&
-                    !IsShieldedFromOuterSpan(tree, span, entry.Span, excludeCallLambdas, isFixedSignatureCall) {
+                    !IsShieldedFromOuterSpan(tree, span, entry.Span, excludeCallLambdas, fixedCallSpan) {
                     return true
                 }
             }
@@ -314,7 +315,7 @@ internal sealed class PrefixCut {
         outer TextSpan,
         inner TextSpan,
         excludeCallLambdas bool = false,
-        isFixedSignatureCall bool = false
+        fixedCallSpan TextSpan? = nil
     ) bool {
         if tree == nil {
             return false
@@ -346,7 +347,11 @@ internal sealed class PrefixCut {
                     return true
                 }
                 if next is LambdaExpressionSyntax {
-                    if isFixedSignatureCall {
+                    if fixedCallSpan is {} callSpan && PrefixBindingContext.EnclosingCallOfArgumentExact(
+                        next.SyntaxTree,
+                        next,
+                        callSpan
+                    ) {
                         return true
                     }
                 } else if !inSiblingLambdaBlock &&
@@ -433,8 +438,7 @@ internal sealed class PrefixCut {
             if next == nil {
                 return false
             }
-            if next.Span.Start >= memberStart &&
-                (next is LambdaExpressionSyntax || next is FunctionLiteralExpressionSyntax) {
+            if next.Span.Start >= memberStart && next is FunctionLiteralExpressionSyntax {
                 return true
             }
             node = next
@@ -812,9 +816,13 @@ internal shared class PrefixBindingContext {
         if current.Value is not{} cut || (!cut.HasProvisional && !cut.LaterOverloadsPossible) {
             return nil
         }
-        let isFixedSignatureCall = excludeCallLambdas && cut.IsFixedSignatureCallAt(location)
-        return if cut.ContainsProvisional(location, skipSubtree?.Span, excludeCallLambdas, isFixedSignatureCall) ||
-            StatementUsesProvisional(cut, location, skipSubtree, excludeCallLambdas, isFixedSignatureCall) {
+        let fixedCallSpan TextSpan? = if excludeCallLambdas && cut.IsFixedSignatureCallAt(location) {
+            location.Span
+        } else {
+            default(TextSpan?)
+        }
+        return if cut.ContainsProvisional(location, skipSubtree?.Span, excludeCallLambdas, fixedCallSpan) ||
+            StatementUsesProvisional(cut, location, skipSubtree, excludeCallLambdas, fixedCallSpan) {
             PrefixPremise.LaterOverload
         } else {
             default(PrefixPremise?)
@@ -830,7 +838,7 @@ internal shared class PrefixBindingContext {
         location TextLocation,
         skipSubtree SyntaxNode? = nil,
         excludeCallLambdas bool = false,
-        isFixedSignatureCall bool = false
+        fixedCallSpan TextSpan? = nil
     ) bool {
         if cut.ProvisionalTree(location.Text) is not{} tree {
             return false
@@ -841,7 +849,7 @@ internal shared class PrefixBindingContext {
             location.Span,
             skipSubtree: skipSubtree,
             excludeCallLambdas: excludeCallLambdas,
-            isFixedSignatureCall: isFixedSignatureCall
+            fixedCallSpan: fixedCallSpan
         )
     }
 
@@ -851,7 +859,7 @@ internal shared class PrefixBindingContext {
         span TextSpan,
         skipSubtree SyntaxNode?,
         excludeCallLambdas bool = false,
-        isFixedSignatureCall bool = false
+        fixedCallSpan TextSpan? = nil
     ) bool {
         var statement SyntaxNode? = nil
         let enclosingLambdas = List[SyntaxNode]()
@@ -876,6 +884,16 @@ internal shared class PrefixBindingContext {
             // A field or a property initializer has no statement; its declaration is the context.
             if next is StatementSyntax || next is FieldDeclarationSyntax || next is PropertyDeclarationSyntax {
                 statement = next
+            } else if next is BlockExpressionSyntax block &&
+                block.Expression is {} tail &&
+                tail.Span.Start <= span.Start &&
+                span.End <= tail.Span.End {
+                statement = tail
+            } else if next is LambdaExpressionSyntax lambdaExpr &&
+                !(lambdaExpr.Body is BlockStatementSyntax || lambdaExpr.Body is BlockExpressionSyntax) &&
+                lambdaExpr.Body.Span.Start <= span.Start &&
+                span.End <= lambdaExpr.Body.Span.End {
+                statement = lambdaExpr.Body
             }
             node = next
         }
@@ -884,20 +902,21 @@ internal shared class PrefixBindingContext {
             while currentStatement is LabeledStatementSyntax labeled {
                 currentStatement = labeled.Statement
             }
+            let inExpression = currentStatement is ExpressionSyntax
             if HeaderContainsProvisional(
                 cut,
                 currentStatement,
                 currentStatement,
-                false,
+                inExpression,
                 false,
                 span,
                 skipSubtree,
                 excludeCallLambdas,
-                isFixedSignatureCall
+                fixedCallSpan
             ) ||
                 (
                 cut.LaterOverloadsPossible &&
-                    HeaderContainsUnproven(cut, currentStatement, currentStatement, false, span, skipSubtree)
+                    HeaderContainsUnproven(cut, currentStatement, currentStatement, inExpression, span, skipSubtree)
             ) ||
                 HeaderUsesProvisionalName(
                 cut,
@@ -908,7 +927,7 @@ internal shared class PrefixBindingContext {
                 skipSubtree,
                 span,
                 excludeCallLambdas,
-                isFixedSignatureCall
+                fixedCallSpan
             ) {
                 return true
             }
@@ -927,12 +946,16 @@ internal shared class PrefixBindingContext {
                 continue
             }
             if EnclosingCallOfArgument(tree, lambda) is {} enclosingCall {
-                let enclosingFixed = cut.IsFixedSignatureCall(enclosingCall)
+                let enclosingFixedSpan TextSpan? = if cut.IsFixedSignatureCall(enclosingCall) {
+                    enclosingCall.Span
+                } else {
+                    default(TextSpan?)
+                }
                 return cut.ContainsProvisional(
                     enclosingCall.Location,
                     lambda.Span,
                     excludeCallLambdas: true,
-                    isFixedSignatureCall: enclosingFixed
+                    fixedCallSpan: enclosingFixedSpan
                 ) ||
                     StatementUsesProvisionalCore(
                     cut,
@@ -940,11 +963,17 @@ internal shared class PrefixBindingContext {
                     enclosingCall.Span,
                     skipSubtree: lambda,
                     excludeCallLambdas: true,
-                    isFixedSignatureCall: enclosingFixed
+                    fixedCallSpan: enclosingFixedSpan
                 )
             }
         }
         return false
+    }
+
+    internal func EnclosingCallOfArgumentExact(tree SyntaxTree, expression SyntaxNode, callSpan TextSpan) bool {
+        return EnclosingCallOfArgument(tree, expression) is {} call &&
+            call.Span.Start == callSpan.Start &&
+            call.Span.End == callSpan.End
     }
 
     private func EnclosingCallOfArgument(tree SyntaxTree, expression SyntaxNode) SyntaxNode? {
@@ -976,7 +1005,7 @@ internal shared class PrefixBindingContext {
         skipSubtree SyntaxNode? = nil,
         report TextSpan? = nil,
         excludeCallLambdas bool = false,
-        isFixedSignatureCall bool = false
+        fixedCallSpan TextSpan? = nil
     ) bool {
         // The search errs toward a provisional report when it runs out of depth.
         if depth < 0 {
@@ -989,14 +1018,14 @@ internal shared class PrefixBindingContext {
         CollectHeaderNames(
             statement,
             statement,
-            false,
+            statement is ExpressionSyntax,
             names,
             declared: false,
             skipSubtree: skipSubtree,
             report: report,
             declaredSpans: nil,
             excludeCallLambdas: excludeCallLambdas,
-            isFixedSignatureCall: isFixedSignatureCall
+            fixedCallSpan: fixedCallSpan
         )
         if names.Count == 0 {
             return false
@@ -1145,7 +1174,7 @@ internal shared class PrefixBindingContext {
         report TextSpan? = nil,
         declaredSpans Dictionary[string, TextSpan]? = nil,
         excludeCallLambdas bool = false,
-        isFixedSignatureCall bool = false
+        fixedCallSpan TextSpan? = nil
     ) {
         if skipSubtree != nil && object.ReferenceEquals(node, skipSubtree) {
             return
@@ -1169,7 +1198,7 @@ internal shared class PrefixBindingContext {
                             report,
                             declaredSpans,
                             excludeCallLambdas,
-                            isFixedSignatureCall
+                            fixedCallSpan
                         )
                     }
                 }
@@ -1186,6 +1215,9 @@ internal shared class PrefixBindingContext {
                 }
                 continue
             }
+            if skipSubtree != nil && object.ReferenceEquals(child, skipSubtree) {
+                continue
+            }
             if !inExpression && child is StatementSyntax && !object.ReferenceEquals(child, statement) {
                 continue
             }
@@ -1197,8 +1229,10 @@ internal shared class PrefixBindingContext {
                     continue
                 }
                 if excludeCallLambdas {
-                    if isFixedSignatureCall {
-                        continue
+                    if fixedCallSpan is {} callSpan {
+                        if EnclosingCallOfArgumentExact(l.SyntaxTree, l, callSpan) {
+                            continue
+                        }
                     }
                     if l.Body is BlockExpressionSyntax || l.Body is BlockStatementSyntax {
                         if l.Body is BlockExpressionSyntax block {
@@ -1213,7 +1247,7 @@ internal shared class PrefixBindingContext {
                                     report,
                                     declaredSpans,
                                     excludeCallLambdas,
-                                    isFixedSignatureCall
+                                    fixedCallSpan
                                 )
                             }
                             for stmt in block.Statements {
@@ -1228,7 +1262,7 @@ internal shared class PrefixBindingContext {
                                         report,
                                         declaredSpans,
                                         excludeCallLambdas,
-                                        isFixedSignatureCall
+                                        fixedCallSpan
                                     )
                                 }
                             }
@@ -1247,7 +1281,7 @@ internal shared class PrefixBindingContext {
                 report,
                 declaredSpans,
                 excludeCallLambdas,
-                isFixedSignatureCall
+                fixedCallSpan
             )
         }
     }
@@ -1326,7 +1360,7 @@ internal shared class PrefixBindingContext {
         report TextSpan?,
         skipSubtree SyntaxNode?,
         excludeCallLambdas bool = false,
-        isFixedSignatureCall bool = false
+        fixedCallSpan TextSpan? = nil
     ) bool {
         if skipSubtree != nil && object.ReferenceEquals(node, skipSubtree) {
             return false
@@ -1349,7 +1383,7 @@ internal shared class PrefixBindingContext {
                             report,
                             skipSubtree,
                             excludeCallLambdas,
-                            isFixedSignatureCall
+                            fixedCallSpan
                         ) {
                             return true
                         }
@@ -1365,6 +1399,9 @@ internal shared class PrefixBindingContext {
             if child is SyntaxToken {
                 continue
             }
+            if skipSubtree != nil && object.ReferenceEquals(child, skipSubtree) {
+                continue
+            }
             if !inExpression && child is StatementSyntax && !object.ReferenceEquals(child, statement) {
                 continue
             }
@@ -1373,8 +1410,10 @@ internal shared class PrefixBindingContext {
                 continue
             }
             if excludeCallLambdas && child is LambdaExpressionSyntax lambdaChild {
-                if isFixedSignatureCall {
-                    continue
+                if fixedCallSpan is {} callSpan {
+                    if EnclosingCallOfArgumentExact(lambdaChild.SyntaxTree, lambdaChild, callSpan) {
+                        continue
+                    }
                 }
                 if lambdaChild.Body is BlockExpressionSyntax block {
                     if block.Expression is {} tail &&
@@ -1387,7 +1426,7 @@ internal shared class PrefixBindingContext {
                         report,
                         skipSubtree,
                         excludeCallLambdas,
-                        isFixedSignatureCall
+                        fixedCallSpan
                     ) {
                         return true
                     }
@@ -1402,7 +1441,7 @@ internal shared class PrefixBindingContext {
                             report,
                             skipSubtree,
                             excludeCallLambdas,
-                            isFixedSignatureCall
+                            fixedCallSpan
                         ) {
                             return true
                         }
@@ -1422,7 +1461,7 @@ internal shared class PrefixBindingContext {
                 report,
                 skipSubtree,
                 excludeCallLambdas,
-                isFixedSignatureCall
+                fixedCallSpan
             ) {
                 return true
             }

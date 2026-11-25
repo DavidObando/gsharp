@@ -4066,6 +4066,16 @@ internal partial class ExpressionBinder {
             ce,
             isStatic: true
         )
+        if PrefixBindingContext.Current is {} prefixCut && !prefixCut.LaterOverloadsPossible && structSym != nil {
+            let staticMethods = TypeMemberModel.GetMethods(
+                structSym,
+                methodName,
+                MemberQuery.InheritedStatic(MemberKinds.Method)
+            )
+            if staticMethods.Length == 1 && !staticMethods[0].IsGeneric {
+                PrefixBindingContext.AddFixedSignatureCall(ce)
+            }
+        }
         let bindStaticArgumentsAndDispatch = func () BoundExpression {
             let boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
             var deferredStaticLambdaIndices List[int32]? = nil
