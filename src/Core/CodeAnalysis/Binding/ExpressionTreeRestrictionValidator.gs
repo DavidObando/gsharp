@@ -172,7 +172,7 @@ internal shared class ExpressionTreeRestrictionValidator {
     }
 
     private func ValidateExpression(expression BoundExpression?, diagnostics DiagnosticBag) {
-        if expression == nil {
+        if expression == nil || expression is BoundCallOperationExpression{IsElidedConditionalCall: true} {
             return
         }
         if (expression.Type is ByRefTypeSymbol or PointerTypeSymbol) || TypeSymbol.IsByRefLike(expression.Type) {

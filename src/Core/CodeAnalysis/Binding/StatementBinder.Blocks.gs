@@ -1281,6 +1281,9 @@ internal partial class StatementBinder {
         captureReceiver Func[BoundExpression, BoundExpression],
         captureArgument Func[BoundExpression, BoundExpression]
     ) BoundExpression {
+        if expression is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+            return expression
+        }
         var rebuilt BoundExpression
         switch expression {
             case call is BoundCallExpression {

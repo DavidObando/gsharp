@@ -25,6 +25,16 @@ internal class SuspensionPointCollector : BoundTreeWalker {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    override func VisitExpression(node BoundExpression?) {
+        if node is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+            return
+        }
+        base.VisitExpression(node)
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     protected override func VisitGoStatement(node BoundGoStatement) {
         goDepth++
         try {

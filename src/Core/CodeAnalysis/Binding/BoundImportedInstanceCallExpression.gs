@@ -108,7 +108,7 @@ class BoundImportedInstanceCallExpression : BoundCallOperationExpression {
     /// ```
     private var _type TypeSymbol
 
-    override prop Type TypeSymbol -> _type
+    override prop Type TypeSymbol -> GetConditionalCallType(_type)
 
     internal prop SignatureReturnType TypeSymbol -> signatureReturnType
 

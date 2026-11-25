@@ -83,6 +83,9 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         expression BoundExpression,
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
+        if expression is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+            return this.TranslateExpression(BoundDefaultExpression(expression.Syntax, TypeSymbol.Void), parameterMap)
+        }
         switch expression {
             case literal is BoundLiteralExpression {
                 return BuildLiteralExpressionNode(literal)

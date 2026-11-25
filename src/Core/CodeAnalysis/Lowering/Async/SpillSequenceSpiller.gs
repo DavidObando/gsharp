@@ -787,6 +787,9 @@ shared class SpillSequenceSpiller {
         /// embedded awaits (they've all been lifted out as side-effect statements).
         /// If the expression has no awaits, returns a trivial spill sequence.
         private func SpillExpression(expression BoundExpression) BoundSpillSequenceExpression {
+            if expression is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+                return Trivial(expression)
+            }
             switch expression {
                 case awaitExpr is BoundAwaitExpression {
                     return SpillAwait(awaitExpr)

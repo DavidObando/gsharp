@@ -506,7 +506,7 @@ internal partial class StatementBinder {
         if statement is BoundExpressionStatement exprStmt {
             callExpr = exprStmt.Expression
         }
-        if callExpr == nil {
+        if callExpr == nil || callExpr is BoundCallOperationExpression{IsElidedConditionalCall: true} {
             return
         }
         var memberNames ImmutableArray[string]
@@ -2725,7 +2725,9 @@ internal partial class StatementBinder {
         exitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]],
         includeNullableNullCoalescing bool = false
     ) {
-        if node == nil || processed.Contains(node) {
+        if node == nil || node is BoundCallOperationExpression{IsElidedConditionalCall: true} || processed.Contains(
+            node
+        ) {
             return
         }
         switch node {
@@ -7488,6 +7490,9 @@ internal partial class StatementBinder {
         }
 
         private func ProcessExpression(node BoundExpression) {
+            if node is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+                return
+            }
             if IsCallableType(node.Type) ||
                 node is BoundCallOperationExpression or
                 BoundFunctionLiteralExpression or
@@ -13701,6 +13706,9 @@ internal partial class StatementBinder {
         }
 
         internal func HasShallowExpressionEffects(node BoundExpression) bool {
+            if node is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+                return false
+            }
             if IsStableSystemIndexOperation(node) {
                 return false
             }
@@ -13735,7 +13743,7 @@ internal partial class StatementBinder {
                 return false
             }
             return switch node {
-                case _ is BoundCallExpression{IsConditionalElided: true}: false
+                case _ is BoundCallOperationExpression{IsElidedConditionalCall: true}: false
                 case _ is BoundCallOperationExpression or
                     BoundClrConstructorCallExpression or
                     BoundConstructorChainingExpression or

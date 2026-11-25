@@ -54,7 +54,7 @@ class BoundCallExpression : BoundCallOperationExpression {
         Function = function
         _arguments = arguments
         ReturnType = returnType
-        IsConditionalElided = isConditionalElided
+        IsElidedConditionalCall = isConditionalElided
     }
 
     /// ```xmldoc
@@ -70,7 +70,7 @@ class BoundCallExpression : BoundCallOperationExpression {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    override prop Type TypeSymbol -> ReturnType ?? Function.Type
+    override prop Type TypeSymbol -> GetConditionalCallType(ReturnType ?? Function.Type)
 
     /// Gets, for issue #1209, the constructed generic user type when a
     /// static (`shared`) method is dispatched on a constructed generic user
@@ -128,7 +128,5 @@ class BoundCallExpression : BoundCallOperationExpression {
     /// `true`, the emitter and interpreter must not evaluate the
     /// receiver, the arguments, or invoke the target method; the call is a
     /// no-op of type `void` at the call site.
-    prop IsConditionalElided bool {
-        get;
-    }
+    prop IsConditionalElided bool -> IsElidedConditionalCall
 }
