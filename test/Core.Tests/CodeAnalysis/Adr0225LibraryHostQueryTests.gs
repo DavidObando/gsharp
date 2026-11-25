@@ -600,6 +600,12 @@ func BranchThenVal[T](first T, second T) {
 func TupleWithNil[T](pair (T, string?), next T) {
 }
 
+func PairWithTuple[T](pair (T, int32), next T) {
+}
+
+struct ValueBox[T](first T, second T) {
+}
+
 func OverGroup(x int32) bool -> x > 0
 func OverGroup(s string) bool -> s.Length > 0
 func SingleGroup(x int32) bool -> x > 0
@@ -624,6 +630,9 @@ func F(
     PredThenVal(SingleGroup, 1)
     BranchThenVal(if flag { nil } else { "a" }, "b")
     TupleWithNil((1, nil), 2)
+    PairWithTuple((Derived(), 0), Base())
+    let _ = ValueBox(1, 2)
+    let _ = ValueBox[string]("va", "vb")
 }
 `
         let edgeTree = SyntaxTree.Parse(SourceText.From(edgeSource, "generic-edges.gs"))
@@ -664,7 +673,27 @@ func F(
             NullableTypeSymbol.Get(TypeSymbol.String),
             edgeModel.GetExpectedType(edgeSource.IndexOf("\"b\")\n    TupleWithNil", StringComparison.Ordinal))
         )
-        Assert.Equal(TypeSymbol.Int32, edgeModel.GetExpectedType(edgeSource.IndexOf("2)\n}", StringComparison.Ordinal)))
+        Assert.Equal(
+            TypeSymbol.Int32,
+            edgeModel.GetExpectedType(edgeSource.IndexOf("2)\n    PairWithTuple", StringComparison.Ordinal))
+        )
+        Assert.Equal(
+            derivedSym,
+            edgeModel.GetExpectedType(edgeSource.IndexOf("Base())\n    let _ = ValueBox", StringComparison.Ordinal))
+        )
+        Assert.Null(
+            edgeModel.GetExpectedType(
+                edgeSource.IndexOf("1, 2)\n    let _ = ValueBox[string]", StringComparison.Ordinal)
+            )
+        )
+        Assert.Equal(
+            TypeSymbol.Int32,
+            edgeModel.GetExpectedType(edgeSource.IndexOf("2)\n    let _ = ValueBox[string]", StringComparison.Ordinal))
+        )
+        Assert.Equal(
+            TypeSymbol.String,
+            edgeModel.GetExpectedType(edgeSource.IndexOf("\"va\"", StringComparison.Ordinal))
+        )
 
         // Cancellation is honored before building the failed-call index on an unindexed model.
         let cancelledTree = SyntaxTree.Parse(SourceText.From("func C() { Missing(1) }\n", "cancelled.gs"))

@@ -378,6 +378,18 @@ partial class SemanticModel {
             }
             return result
         }
+        if bound is BoundStructLiteralExpression{CopySource: nil, IsZeroInitialization: false} structLiteral {
+            let openDef = structLiteral.StructType.Definition ?? structLiteral.StructType
+            let targetStruct = if call.TypeArgumentList == nil && openDef.IsGenericDefinition {
+                openDef
+            } else {
+                structLiteral.StructType
+            }
+            if targetStruct.HasPrimaryConstructor {
+                result.Add(ExpectedCallCandidate(sourcePrimaryStruct: targetStruct))
+            }
+            return result
+        }
         if GetSymbolInfo(call, cancellationToken).Symbol is {} called {
             switch called {
                 case function is FunctionSymbol {
@@ -960,13 +972,18 @@ partial class SemanticModel {
                 expr is RefArgumentExpressionSyntax{IsInlineDeclaration: false, Expression: {} refTarget} {
                 bound = GetBoundNode(refTarget, cancellationToken)
             }
-            while bound is BoundConversionExpression conversion &&
-                (
-                object.ReferenceEquals(conversion.ImplicitConversionOperand, conversion.Expression) ||
+            while bound != nil {
+                if bound is BoundExpression boundExpr && boundExpr.ImplicitConversionOperand is {} originalOperand {
+                    bound = originalOperand
+                    continue
+                }
+                if bound is BoundConversionExpression conversion &&
                     conversion.Expression is BoundMethodGroupExpression or
-                    BoundClrMethodGroupExpression
-            ) {
-                bound = conversion.Expression
+                    BoundClrMethodGroupExpression {
+                    bound = conversion.Expression
+                    continue
+                }
+                break
             }
             if bound is BoundClrMethodGroupExpression {
                 return nil
