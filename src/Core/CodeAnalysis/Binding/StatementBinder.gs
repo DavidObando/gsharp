@@ -199,6 +199,9 @@ internal partial class StatementBinder {
     }
 
     internal func BindStatement(syntax StatementSyntax) BoundStatement? {
+        if !$scope.ConditionalCompilation.IsActive(syntax) {
+            return nil
+        }
         // ADR-0169: guarantee the dispatch-level anchor so semantic-model and
         // analyzer queries can resolve this statement by its syntax.
         let result = BindStatementCore(syntax)
@@ -346,7 +349,9 @@ internal partial class StatementBinder {
         // tree and never bound; anything else in annotation position before a
         // block is the ADR-0047 §2 "not allowed on statement" error.
         for annotation in syntax.Annotations {
-            if DiagnosticSuppressionMap.IsSuppressDiagnostic(annotation) {
+            if ConditionalCompilationMap.IsIntrinsic(annotation) {
+                continue
+            } else if DiagnosticSuppressionMap.IsSuppressDiagnostic(annotation) {
                 DeclarationBinder.ValidateSuppressDiagnostic(annotation, Diagnostics)
             } else if ObliviousScope.IsScopeAnnotation(annotation) {
                 // ADR-0186 §9: `@Oblivious { … }` / `@NullabilityEnabled { … }`
@@ -673,6 +678,7 @@ internal partial class StatementBinder {
         trailingStatement(() -> BoundStatement)? = nil,
         trailingSyntax SyntaxNode? = nil
     ) bool {
+        var statementSyntaxes = $scope.ConditionalCompilation.Filter(statementSyntaxes)
         // Issue #208: push a persistent narrowing frame for this statement list.
         // After each call statement whose method carries [MemberNotNull], the
         // named fields are added to this frame and remain narrowed for all
@@ -691,6 +697,9 @@ internal partial class StatementBinder {
         try {
             for var i = startIndex; i < statementSyntaxes.Length; i++ {
                 let statementSyntax = statementSyntaxes[i]
+                if !$scope.ConditionalCompilation.IsActive(statementSyntax) {
+                    continue
+                }
                 var preparedStatement BoundStatement? = nil
                 beforeBind?(statementSyntax)
                 EnterBackwardJumpSpanIfFirstStatement(statementSyntax)

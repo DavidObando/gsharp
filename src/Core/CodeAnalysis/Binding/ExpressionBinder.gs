@@ -1705,6 +1705,14 @@ internal partial class ExpressionBinder {
 
     private func BindExpressionpublic(syntax ExpressionSyntax, canBeVoid bool = false) BoundExpression {
         switch syntax.Kind {
+            case SyntaxKind.DefinedExpression {
+                let query = cast[DefinedExpressionSyntax](syntax)
+                if !ConditionalCompilationMap.TryQuery(query, out var name) {
+                    Diagnostics.ReportDefinedExpressionInvalid(query.Location)
+                    return BoundErrorExpression(query)
+                }
+                return BoundLiteralExpression(query, $scope.ConditionalCompilation.SymbolsAt(query).Contains(name))
+            }
             case SyntaxKind.ParenthesizedExpression {
                 return BindParenthesizedExpression(cast[ParenthesizedExpressionSyntax](syntax), canBeVoid)
             }

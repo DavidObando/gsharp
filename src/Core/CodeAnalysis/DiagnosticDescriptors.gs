@@ -2558,6 +2558,21 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Warning,
         "Code-fix provider '{0}' failed on diagnostic {1} and gives no fix: {2}"
     )
+    internal let ScopedSymbolInvalid DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS9309",
+        DiagnosticSeverity.Error,
+        "Invalid scoped symbol annotation: {0}."
+    )
+    internal let ConditionalInclusionInvalid DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS9310",
+        DiagnosticSeverity.Error,
+        "Invalid conditional inclusion: {0}."
+    )
+    internal let DefinedExpressionInvalid DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS9311",
+        DiagnosticSeverity.Error,
+        "'@defined' requires exactly one literal string containing a valid symbol name."
+    )
     internal let SourceGeneratorExecutionFailure DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9996",
         DiagnosticSeverity.Error,

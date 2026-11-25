@@ -181,8 +181,21 @@ open class Compilation {
     @AllowNull
     prop PreprocessorSymbols ImmutableHashSet[string]? {
         get -> preprocessorSymbols
-        set -> preprocessorSymbols = value ?? ImmutableHashSet[string].Empty
+        set {
+            preprocessorSymbols = value ?? ImmutableHashSet[string].Empty
+            conditionalCompilation = nil
+        }
     }
+
+    private var conditionalCompilation ConditionalCompilationMap?
+
+    internal prop ConditionalCompilation ConditionalCompilationMap ->
+    conditionalCompilation ??= ConditionalCompilationMap(preprocessorSymbols)
+
+    /// Tests whether syntax participates in this compilation's semantic model.
+    /// @param syntax The original, unmodified syntax node.
+    /// @returns False for syntax excluded by a conditional-inclusion annotation.
+    func IsActive(syntax SyntaxNode) bool -> ConditionalCompilation.IsActive(syntax)
 
     /// Gets or sets the PDB-related emit options. Defaults to a fresh
     /// (cref:DebugInformationOptions) instance with
@@ -476,14 +489,16 @@ open class Compilation {
                         SyntaxTrees,
                         References,
                         EffectiveConsumerAssemblyName,
-                        hasExplicitConsumerAssemblyName: true
+                        hasExplicitConsumerAssemblyName: true,
+                        activeCode: ConditionalCompilation
                     ),
                     References,
                     ImplicitSystemImport,
                     PreprocessorSymbols,
                     IsLibrary,
                     Submission,
-                    EffectiveConsumerAssemblyName
+                    EffectiveConsumerAssemblyName,
+                    ConditionalCompilation
                 )
             } finally {
                 recordedFailedCalls = CallCandidateRecorder.EndBody(scopeFailedCalls)

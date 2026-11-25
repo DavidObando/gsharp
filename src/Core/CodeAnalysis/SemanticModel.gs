@@ -68,6 +68,9 @@ partial class SemanticModel {
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The bound node, or null.
     func GetBoundNode(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) BoundNode? {
+        if !compilation.IsActive(node) {
+            return nil
+        }
         cancellationToken.ThrowIfCancellationRequested()
         index.Get(cancellationToken)
         if index.Value.BoundBySyntax.TryGetValue(node, out var bound) {
@@ -156,6 +159,9 @@ partial class SemanticModel {
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The declared symbol, or null when the node declares nothing.
     func GetDeclaredSymbol(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) Symbol? {
+        if !compilation.IsActive(node) {
+            return nil
+        }
         cancellationToken.ThrowIfCancellationRequested()
         index.Get(cancellationToken)
         if index.Value.DeclaredBySyntax.TryGetValue(node, out var symbol) {
@@ -220,6 +226,9 @@ partial class SemanticModel {
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The resolution result; (cref:SymbolInfo.Symbol) is null when nothing is referenced.
     func GetSymbolInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) SymbolInfo {
+        if !compilation.IsActive(node) {
+            return SymbolInfo.None
+        }
         cancellationToken.ThrowIfCancellationRequested()
         index.Get(cancellationToken)
         if node is SyntaxToken{Kind: SyntaxKind.IdentifierToken} token {
@@ -315,6 +324,9 @@ partial class SemanticModel {
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The resolution result; (cref:TypeInfo.Type) is null for non-expressions.
     func GetTypeInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) TypeInfo {
+        if !compilation.IsActive(node) {
+            return TypeInfo.None
+        }
         return if GetBoundNode(node, cancellationToken) is BoundExpression expression {
             TypeInfo((CapturedIndexArgument(expression, expectedBlockSyntax: node) ?? expression).Type)
         } else {

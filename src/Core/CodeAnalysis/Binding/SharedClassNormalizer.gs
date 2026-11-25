@@ -28,8 +28,16 @@ internal shared class SharedClassNormalizer {
     /// @param declaration The (possibly already partial-merged) class/struct declaration.
     /// @param diagnostics The bag that receives GS0617 and GS0619.
     /// @returns The normalized declaration.
-    func Normalize(declaration StructDeclarationSyntax, diagnostics DiagnosticBag) StructDeclarationSyntax {
-        let nestedTypes = NormalizeNestedTypes(declaration.NestedTypes, diagnostics)
+    func Normalize(
+        declaration StructDeclarationSyntax,
+        diagnostics DiagnosticBag,
+        activeCode ConditionalCompilationMap? = nil
+    ) StructDeclarationSyntax {
+        let nestedTypes = NormalizeNestedTypes(
+            activeCode?.Filter(declaration.NestedTypes) ?? declaration.NestedTypes,
+            diagnostics,
+            activeCode
+        )
         if !declaration.IsClass || declaration.SharedModifier is not{} sharedModifier {
             return if nestedTypes.Equals(declaration.NestedTypes) {
                 declaration
@@ -37,7 +45,7 @@ internal shared class SharedClassNormalizer {
                 declaration.WithMemberLists(declaration.Methods, declaration.SharedBlock, nestedTypes)
             }
         }
-        Validate(declaration, diagnostics)
+        Validate(declaration, diagnostics, activeCode)
         // A `shared { }` block inside the class is diagnosed above; its members are still
         // folded in so they bind (and do not cascade into "member not found" errors).
         let explicitBlock = declaration.SharedBlock
@@ -55,7 +63,11 @@ internal shared class SharedClassNormalizer {
         return declaration.WithMembersInSharedBlock(sharedBlock, nestedTypes)
     }
 
-    private func Validate(declaration StructDeclarationSyntax, diagnostics DiagnosticBag) {
+    private func Validate(
+        declaration StructDeclarationSyntax,
+        diagnostics DiagnosticBag,
+        activeCode ConditionalCompilationMap?
+    ) {
         let className = declaration.Identifier.Text
         if declaration.HasBaseType {
             diagnostics.ReportSharedClassCannotHaveBaseTypes(
@@ -66,14 +78,14 @@ internal shared class SharedClassNormalizer {
         if declaration.PrimaryConstructorOpenParenthesisToken is {} primaryConstructor {
             diagnostics.ReportSharedClassCannotDeclare(primaryConstructor.Location, className, "a primary constructor")
         }
-        for constructor in declaration.Constructors {
+        for constructor in activeCode?.Filter(declaration.Constructors) ?? declaration.Constructors {
             diagnostics.ReportSharedClassCannotDeclare(
                 constructor.InitKeyword.Location,
                 className,
                 "an 'init' constructor"
             )
         }
-        if declaration.Deinitializer is {} deinitializer {
+        if declaration.Deinitializer is {} deinitializer && activeCode?.IsActive(deinitializer) != false {
             diagnostics.ReportSharedClassCannotDeclare(deinitializer.DeinitKeyword.Location, className, "a 'deinit'")
         }
         if declaration.SharedBlock is {} explicitBlock {
@@ -86,13 +98,13 @@ internal shared class SharedClassNormalizer {
         // The body parser accepts `open` and `override` on a method, property or event, and
         // the shared-member binders would silently drop them (a shared member is static
         // and never virtual), unlike the same member in a `shared { }` block. Reject them.
-        for method in declaration.Methods {
+        for method in activeCode?.Filter(declaration.Methods) ?? declaration.Methods {
             ReportVirtualModifiers(diagnostics, className, "method", method.OpenModifier, method.OverrideModifier)
         }
-        for property in declaration.Properties {
+        for property in activeCode?.Filter(declaration.Properties) ?? declaration.Properties {
             ReportVirtualModifiers(diagnostics, className, "property", property.OpenModifier, property.OverrideModifier)
         }
-        for evt in declaration.Events {
+        for evt in activeCode?.Filter(declaration.Events) ?? declaration.Events {
             ReportVirtualModifiers(diagnostics, className, "event", evt.OpenModifier, evt.OverrideModifier)
         }
     }
@@ -118,7 +130,8 @@ internal shared class SharedClassNormalizer {
 
     private func NormalizeNestedTypes(
         nestedTypes ImmutableArray[MemberSyntax],
-        diagnostics DiagnosticBag
+        diagnostics DiagnosticBag,
+        activeCode ConditionalCompilationMap?
     ) ImmutableArray[MemberSyntax] {
         if nestedTypes.IsDefaultOrEmpty {
             return nestedTypes
@@ -129,7 +142,7 @@ internal shared class SharedClassNormalizer {
                 rebuilt?.Add(nestedTypes[i])
                 continue
             }
-            let normalized = Normalize(nested, diagnostics)
+            let normalized = Normalize(nested, diagnostics, activeCode)
             if rebuilt == nil && !object.ReferenceEquals(normalized, nested) {
                 rebuilt = ImmutableArray.CreateBuilder[MemberSyntax](nestedTypes.Length)
                 rebuilt.AddRange(nestedTypes, i)

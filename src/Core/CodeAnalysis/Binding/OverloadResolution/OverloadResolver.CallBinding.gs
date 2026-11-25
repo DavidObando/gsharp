@@ -3478,7 +3478,7 @@ internal partial class OverloadResolver {
         returnType TypeSymbol?,
         methodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
     ) BoundCallExpression {
-        if KnownAttributes.IsConditionallyElided(function, Scope.PreprocessorSymbols) {
+        if KnownAttributes.IsConditionallyElided(function, Scope.ConditionalCompilation.SymbolsAt(syntax)) {
             return BoundCallExpression(
                 nil,
                 function,

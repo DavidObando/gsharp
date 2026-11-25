@@ -33,7 +33,7 @@ internal partial class ExpressionBinder {
             (
             call.IsElidedConditionalCall || KnownAttributes.IsConditionallyElided(
                 call.CalledFunction,
-                $scope.PreprocessorSymbols
+                $scope.ConditionalCompilation.SymbolsAt(call.Syntax)
             )
         ) {
             call.IsElidedConditionalCall = true

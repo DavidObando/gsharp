@@ -211,6 +211,8 @@ class DiagnosticSuppressionMap {
             case e is EventDeclarationSyntax: e.Annotations
             case en is EnumMemberSyntax: en.Annotations
             case pa is ParameterSyntax: pa.Annotations
+            case accessor is PropertyAccessorSyntax: accessor.Annotations
+            case accessor is EventAccessorSyntax: accessor.Annotations
             default: ImmutableArray[AnnotationSyntax].Empty
         }
 

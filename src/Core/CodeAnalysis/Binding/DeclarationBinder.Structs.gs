@@ -603,40 +603,40 @@ internal partial class DeclarationBinder {
         // Value types cannot be derived from, so they have no base class members
         // to override and keep the diagnostic.
         let overridesAllowed = syntax.IsClass
-        for field in syntax.Fields {
+        for field in $scope.ConditionalCompilation.Filter(syntax.Fields) {
             ReportProtectedToken(field.AccessibilityModifier)
         }
-        for method in syntax.Methods {
+        for method in $scope.ConditionalCompilation.Filter(syntax.Methods) {
             if !(overridesAllowed && method.IsOverride) {
                 ReportProtectedToken(method.AccessibilityModifier)
             }
         }
-        for prop in syntax.Properties {
+        for prop in $scope.ConditionalCompilation.Filter(syntax.Properties) {
             if !(overridesAllowed && prop.OverrideModifier != nil) {
                 ReportProtectedToken(prop.AccessibilityModifier)
             }
         }
-        for evt in syntax.Events {
+        for evt in $scope.ConditionalCompilation.Filter(syntax.Events) {
             if !(overridesAllowed && evt.OverrideModifier != nil) {
                 ReportProtectedToken(evt.AccessibilityModifier)
             }
         }
         if !syntax.Constructors.IsDefaultOrEmpty {
-            for ctor in syntax.Constructors {
+            for ctor in $scope.ConditionalCompilation.Filter(syntax.Constructors) {
                 ReportProtectedToken(ctor.AccessibilityModifier)
             }
         }
         if syntax.SharedBlock != nil {
-            for field in syntax.SharedBlock!!.Fields {
+            for field in $scope.ConditionalCompilation.Filter(syntax.SharedBlock!!.Fields) {
                 ReportProtectedToken(field.AccessibilityModifier)
             }
-            for method in syntax.SharedBlock!!.Methods {
+            for method in $scope.ConditionalCompilation.Filter(syntax.SharedBlock!!.Methods) {
                 ReportProtectedToken(method.AccessibilityModifier)
             }
-            for prop in syntax.SharedBlock!!.Properties {
+            for prop in $scope.ConditionalCompilation.Filter(syntax.SharedBlock!!.Properties) {
                 ReportProtectedToken(prop.AccessibilityModifier)
             }
-            for evt in syntax.SharedBlock!!.Events {
+            for evt in $scope.ConditionalCompilation.Filter(syntax.SharedBlock!!.Events) {
                 ReportProtectedToken(evt.AccessibilityModifier)
             }
         }
@@ -867,7 +867,7 @@ internal partial class DeclarationBinder {
         // machinery), so a bare `var items map[K, V]` field is never null.
         let pendingZeroValueInstanceFields = List[(Field FieldSymbol, Syntax SyntaxNode)]()
         let pendingZeroValueStaticFields = List[(Field FieldSymbol, Syntax SyntaxNode)]()
-        for fieldSyntax in syntax.Fields {
+        for fieldSyntax in $scope.ConditionalCompilation.Filter(syntax.Fields) {
             let fieldName = fieldSyntax.Identifier.ValueText
             if !seenFieldNames.Add(fieldName) {
                 Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName)
@@ -1574,7 +1574,7 @@ internal partial class DeclarationBinder {
         let pendingConversionOperators = memberBinding.PendingConversionOperators
         if !syntax.Methods.IsDefaultOrEmpty {
             let methodsBuilder = ImmutableArray.CreateBuilder[FunctionSymbol]()
-            for methodSyntax in syntax.Methods {
+            for methodSyntax in $scope.ConditionalCompilation.Filter(syntax.Methods) {
                 let methodName = methodSyntax.Identifier.ValueText
                 // Issue #938 / ADR-0029: inline and data structs synthesize a
                 // fixed set of members (Equals, GetHashCode, ToString,
@@ -1762,7 +1762,7 @@ internal partial class DeclarationBinder {
                         (
                         isAsyncIteratorReturnType(returnType) &&
                             methodSyntax.Body is {} methodBody &&
-                            IteratorDetection.ContainsYield(methodBody)
+                            IteratorDetection.ContainsActiveYield(methodBody, $scope.ConditionalCompilation)
                     )
                     // Issue #2361: now that the parameter list/return type are
                     // bound, validate a data class/struct's ToString shape.
@@ -1992,7 +1992,7 @@ internal partial class DeclarationBinder {
                         (
                         isAsyncIteratorReturnType(returnType) &&
                             methodSyntax.Body is {} methodBodyForSymbol &&
-                            IteratorDetection.ContainsYield(methodBodyForSymbol)
+                            IteratorDetection.ContainsActiveYield(methodBodyForSymbol, $scope.ConditionalCompilation)
                     )
                     methodSymbol.IsAsyncVoid = methodIsAsyncVoid
                     methodSymbol.SuspendingKind = if methodSyntax.IsSuspend {
@@ -2179,7 +2179,11 @@ internal partial class DeclarationBinder {
                         "a data positional property has matching primary constructor syntax",
                         expression: "parameterSyntax"
                     )
-                    let hasExplicitReplacement = !syntax.Properties.IsDefaultOrEmpty && syntax.Properties.Any(
+                    let hasExplicitReplacement = !syntax.Properties.IsDefaultOrEmpty &&
+                        $scope
+                        .ConditionalCompilation
+                        .Filter(syntax.Properties)
+                        .Any(
                         (propSyntax PropertyDeclarationSyntax) -> !propSyntax.IsIndexer &&
                             !propSyntax.HasExplicitInterfaceClause &&
                             propSyntax.Identifier.ValueText == parameter.Name
@@ -2246,7 +2250,7 @@ internal partial class DeclarationBinder {
             // `this[...]` with a different parameter list is accepted while an
             // exact duplicate still reports GS0102.
             let declaredIndexerSignatures = List[ImmutableArray[ParameterSymbol]]()
-            for propSyntax in syntax.Properties {
+            for propSyntax in $scope.ConditionalCompilation.Filter(syntax.Properties) {
                 // ADR-0118 / issue #944: an indexer member (`prop this[…] T`)
                 // is modelled as a property whose CLR name is `Item` carrying
                 // an index-parameter list.
@@ -2754,7 +2758,7 @@ internal partial class DeclarationBinder {
         // ADR-0052: bind event declarations.
         if !syntax.Events.IsDefaultOrEmpty {
             let eventsBuilder = ImmutableArray.CreateBuilder[EventSymbol]()
-            for eventSyntax in syntax.Events {
+            for eventSyntax in $scope.ConditionalCompilation.Filter(syntax.Events) {
                 let eventName = eventSyntax.Identifier.ValueText
                 // Check for duplicate names.
                 // ADR-0149: mirrors the property collision exemption above —
@@ -3130,7 +3134,7 @@ internal partial class DeclarationBinder {
             // Static fields
             let staticFieldsBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
             let sharedConstFieldsBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
-            for fieldSyntax in syntax.SharedBlock!!.Fields {
+            for fieldSyntax in $scope.ConditionalCompilation.Filter(syntax.SharedBlock!!.Fields) {
                 let fieldName = fieldSyntax.Identifier.ValueText
                 if methodNames.Contains(fieldName) || !existingNames.Add(fieldName) {
                     Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName)
@@ -3278,7 +3282,7 @@ internal partial class DeclarationBinder {
         if syntax.SharedBlock != nil {
             // Static methods
             let staticMethodsBuilder = ImmutableArray.CreateBuilder[FunctionSymbol]()
-            for methodSyntax in syntax.SharedBlock!!.Methods {
+            for methodSyntax in $scope.ConditionalCompilation.Filter(syntax.SharedBlock!!.Methods) {
                 let methodName = methodSyntax.Identifier.ValueText
                 // ADR-0063: allow same-name overloads in a shared block; only reject
                 // collision with a non-method member of the same name (field/property/event).
@@ -3449,7 +3453,7 @@ internal partial class DeclarationBinder {
                         (
                         isAsyncIteratorReturnType(returnType) &&
                             methodSyntax.Body is {} methodBody &&
-                            IteratorDetection.ContainsYield(methodBody)
+                            IteratorDetection.ContainsActiveYield(methodBody, $scope.ConditionalCompilation)
                     )
                     methodSymbol.IsAsyncVoid = methodIsAsyncVoid
                     methodSymbol.SuspendingKind = if methodSyntax.IsSuspend {
@@ -3554,7 +3558,7 @@ internal partial class DeclarationBinder {
         if syntax.SharedBlock != nil {
             // Static properties
             let staticPropertiesBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
-            for propSyntax in syntax.SharedBlock!!.Properties {
+            for propSyntax in $scope.ConditionalCompilation.Filter(syntax.SharedBlock!!.Properties) {
                 if propSyntax.AbstractModifier != nil {
                     Diagnostics.ReportInvalidAbstractProperty(
                         propSyntax.Identifier.Location,
@@ -3778,7 +3782,7 @@ internal partial class DeclarationBinder {
         if syntax.SharedBlock != nil {
             // Static events
             let staticEventsBuilder = ImmutableArray.CreateBuilder[EventSymbol]()
-            for eventSyntax in syntax.SharedBlock!!.Events {
+            for eventSyntax in $scope.ConditionalCompilation.Filter(syntax.SharedBlock!!.Events) {
                 let eventName = eventSyntax.Identifier.ValueText
                 let staticEventAlreadyDeclared = existingNames.Contains(eventName)
                 let staticEventExemptCollision = eventSyntax.HasExplicitInterfaceClause ||
@@ -4671,7 +4675,7 @@ internal partial class DeclarationBinder {
         if containerSyntax.NestedTypes.IsDefaultOrEmpty {
             return
         }
-        for nested in containerSyntax.NestedTypes {
+        for nested in $scope.ConditionalCompilation.Filter(containerSyntax.NestedTypes) {
             // Issue #950: a `protected` nested type is only meaningful when the
             // container is an inheritable `open class`. Otherwise nothing can
             // derive from the container to reach the nested type.
@@ -4714,7 +4718,7 @@ internal partial class DeclarationBinder {
         if containerSyntax.NestedTypes.IsDefaultOrEmpty {
             return
         }
-        for nested in containerSyntax.NestedTypes {
+        for nested in $scope.ConditionalCompilation.Filter(containerSyntax.NestedTypes) {
             switch nested {
                 case nestedStruct is StructDeclarationSyntax {
                     let nestedStructSymbol StructSymbol? = DeclareStructShell(nestedStruct, $package, containerSymbol)

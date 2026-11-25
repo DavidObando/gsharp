@@ -174,6 +174,7 @@ partial class BoundScope {
         Parent = parent
         References = references ?? parent?.References ?? ReferenceResolver.Default()
         PreprocessorSymbols = preprocessorSymbols ?? parent?.PreprocessorSymbols ?? ImmutableHashSet[string].Empty
+        ConditionalCompilation = parent?.ConditionalCompilation ?? ConditionalCompilationMap(PreprocessorSymbols)
     }
 
     private var explicitConsumerAssemblyName string?
@@ -268,6 +269,11 @@ partial class BoundScope {
     /// by the function's `[Conditional]` applications is in this set.
     prop PreprocessorSymbols ImmutableHashSet[string] {
         get;
+    }
+
+    internal prop ConditionalCompilation ConditionalCompilationMap {
+        get;
+        set;
     }
 
     /// Returns the enclosing scope, for a pop that pairs with an earlier

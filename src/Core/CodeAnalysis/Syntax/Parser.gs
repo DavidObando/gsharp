@@ -249,7 +249,7 @@ open partial class Parser {
         }
         let builder = ImmutableArray.CreateBuilder[AnnotationSyntax]()
         while Current.Kind == SyntaxKind.AtToken && Peek(1).Kind == SyntaxKind.IdentifierToken &&
-            (Peek(1).Text is "assembly" or "module") &&
+            (Peek(1).Text is "assembly" or "module" or "file") &&
             Peek(2).Kind == SyntaxKind.ColonToken {
             builder.Add(ParseAnnotation())
         }
@@ -728,6 +728,7 @@ open partial class Parser {
                 "event",
                 "module",
                 "assembly",
+                "file",
                 "genericparam" {
                     return true
                 }

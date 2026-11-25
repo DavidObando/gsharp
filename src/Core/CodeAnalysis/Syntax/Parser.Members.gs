@@ -1084,6 +1084,7 @@ open partial class Parser {
         let accessors = ImmutableArray.CreateBuilder[EventAccessorSyntax]()
         while Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken {
             let startToken = Current
+            let annotations = ParseAnnotations()
             if Current.Kind == SyntaxKind.IdentifierToken &&
                 (Current.Text == "add" || Current.Text == "remove" || Current.Text == "raise") {
                 let accessorKeyword = NextToken()
@@ -1094,7 +1095,9 @@ open partial class Parser {
                 } else if Current.Kind == SyntaxKind.SemicolonToken {
                     semicolon = NextToken()
                 }
-                accessors.Add(EventAccessorSyntax(syntaxTree, accessorKeyword, body, semicolon))
+                accessors.Add(
+                    EventAccessorSyntax(syntaxTree, accessorKeyword, body, semicolon).WithAnnotations(annotations)
+                )
             } else {
                 Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken)
                 NextToken()
@@ -1115,6 +1118,7 @@ open partial class Parser {
         let accessors = ImmutableArray.CreateBuilder[PropertyAccessorSyntax]()
         while Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken {
             let startToken = Current
+            let annotations = ParseAnnotations()
             var accessibilityModifier SyntaxToken? = nil
             if (
                 Current.Kind == SyntaxKind.PublicKeyword ||
@@ -1183,7 +1187,7 @@ open partial class Parser {
                         closeParen,
                         body,
                         semicolon
-                    )
+                    ).WithAnnotations(annotations)
                 )
             } else {
                 // Unknown token in accessor list — skip to avoid infinite loop.

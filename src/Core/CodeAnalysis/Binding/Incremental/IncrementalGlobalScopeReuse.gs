@@ -99,6 +99,10 @@ internal shared class IncrementalGlobalScopeReuse {
         if $scope.Previous != nil || $scope.HasNativeProtocols {
             return false
         }
+        // Inclusion can change declaration-time iterator classification inside an otherwise body-only edit.
+        if HasConditionalInclusion(previousTree) || HasConditionalInclusion(updatedTree) {
+            return false
+        }
         let previousText SourceText? = previousTree.Text
         let updatedText SourceText? = updatedTree.Text
         if previousText == nil || updatedText == nil {
@@ -525,6 +529,15 @@ internal shared class IncrementalGlobalScopeReuse {
         }
     }
 
+    private func HasConditionalInclusion(tree SyntaxTree) bool {
+        for node in tree.Root.DescendantNodesAndSelf() {
+            if node is AnnotationSyntax annotation && ConditionalCompilationMap.IsIf(annotation) {
+                return true
+            }
+        }
+        return false
+    }
+
     private func ContainsUnsupportedConstruct(tree SyntaxTree) bool {
         for node in Descendants(tree.Root) {
             // Top-level statements feed the synthesized <Main>$ entry-point body,
@@ -533,6 +546,7 @@ internal shared class IncrementalGlobalScopeReuse {
             if node is GlobalStatementSyntax {
                 return true
             }
+
             // ADR-0144: a `partial` type's symbol is bound from ONE synthetic
             // declaration that PartialTypeMerger builds by merging every part
             // (across files) during the full bind. The body-only positional

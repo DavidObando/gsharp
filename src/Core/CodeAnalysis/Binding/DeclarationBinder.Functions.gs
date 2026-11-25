@@ -381,9 +381,9 @@ internal partial class DeclarationBinder {
             function.TypeParameters = typeParameters
             function.IsAsync = syntax.IsAsync ||
                 (
-                isAsyncIteratorReturnType(type) && syntax.Body is {} functionBody && IteratorDetection.ContainsYield(
-                    functionBody
-                )
+                isAsyncIteratorReturnType(type) &&
+                    syntax.Body is {} functionBody &&
+                    IteratorDetection.ContainsActiveYield(functionBody, $scope.ConditionalCompilation)
             )
             function.IsAsyncVoid = isAsyncVoid
             function.SuspendingKind = if syntax.IsSuspend {
@@ -438,7 +438,12 @@ internal partial class DeclarationBinder {
         )
         function.TypeParameters = typeParameters
         function.IsAsync = syntax.IsAsync ||
-            (isAsyncIteratorReturnType(type) && syntax.Body is {} body && IteratorDetection.ContainsYield(body))
+            (
+            isAsyncIteratorReturnType(type) && syntax.Body is {} body && IteratorDetection.ContainsActiveYield(
+                body,
+                $scope.ConditionalCompilation
+            )
+        )
         function.IsAsyncVoid = isAsyncVoid
         function.SuspendingKind = if syntax.IsSuspend {
             SuspendingKind.Declared

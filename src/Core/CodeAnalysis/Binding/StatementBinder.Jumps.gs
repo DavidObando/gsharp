@@ -2095,23 +2095,32 @@ internal partial class StatementBinder {
         while current != nil {
             switch current {
                 case fn is FunctionDeclarationSyntax {
-                    return fn.Body != nil && IteratorDetection.ContainsYield(fn.Body)
+                    return fn.Body != nil && IteratorDetection.ContainsActiveYield(
+                        fn.Body,
+                        $scope.ConditionalCompilation
+                    )
                 }
                 case lit is FunctionLiteralExpressionSyntax {
-                    return IteratorDetection.ContainsYield(lit.Body)
+                    return IteratorDetection.ContainsActiveYield(lit.Body, $scope.ConditionalCompilation)
                 }
                 case lam is LambdaExpressionSyntax {
-                    return IteratorDetection.ContainsYield(lam.Body)
+                    return IteratorDetection.ContainsActiveYield(lam.Body, $scope.ConditionalCompilation)
                 }
                 case acc is PropertyAccessorSyntax {
-                    return acc.Body != nil && IteratorDetection.ContainsYield(acc.Body)
+                    return acc.Body != nil && IteratorDetection.ContainsActiveYield(
+                        acc.Body,
+                        $scope.ConditionalCompilation
+                    )
                 }
                 default {
                     current = current.Parent
                 }
             }
         }
-        return function!!.Declaration?.Body is {} declaredBody && IteratorDetection.ContainsYield(declaredBody)
+        return function!!.Declaration?.Body is {} declaredBody && IteratorDetection.ContainsActiveYield(
+            declaredBody,
+            $scope.ConditionalCompilation
+        )
     }
 
     private func BindReturnStatement(syntax ReturnStatementSyntax) BoundStatement {

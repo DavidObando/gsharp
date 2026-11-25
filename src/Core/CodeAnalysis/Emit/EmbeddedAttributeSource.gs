@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Emit
 
 import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
@@ -77,7 +78,8 @@ internal shared class EmbeddedAttributeSource {
         trees ImmutableArray[SyntaxTree],
         references ReferenceResolver?,
         consumerAssemblyName string? = nil,
-        hasExplicitConsumerAssemblyName bool = false
+        hasExplicitConsumerAssemblyName bool = false,
+        activeCode ConditionalCompilationMap? = nil
     ) ImmutableArray[SyntaxTree] {
         if references == nil || trees.IsDefaultOrEmpty || !references.TargetsDownlevelFramework() {
             return trees
@@ -92,26 +94,26 @@ internal shared class EmbeddedAttributeSource {
             effectiveConsumer,
             out var publishedNullable
         ) &&
-            !DeclaresType(trees, CompilerServicesPackage, NullableName)
+            !DeclaresType(trees, CompilerServicesPackage, NullableName, activeCode)
         let needContext = !references.TryResolvePublishedEmbeddableAttribute(
             NullableContextFullName,
             effectiveConsumer,
             out var publishedContext
         ) &&
-            !DeclaresType(trees, CompilerServicesPackage, NullableContextName)
+            !DeclaresType(trees, CompilerServicesPackage, NullableContextName, activeCode)
         let needReadOnly = !references.TryResolvePublishedEmbeddableAttribute(
             IsReadOnlyFullName,
             effectiveConsumer,
             out var _publishedReadOnly
         ) &&
-            !DeclaresType(trees, CompilerServicesPackage, IsReadOnlyName) &&
+            !DeclaresType(trees, CompilerServicesPackage, IsReadOnlyName, activeCode) &&
             MayNeedIsReadOnlyAttribute(trees)
         let needExternalInit = !references.TryResolvePublishedEmbeddableAttribute(
             IsExternalInitFullName,
             effectiveConsumer,
             out var _publishedExternalInit
         ) &&
-            !DeclaresType(trees, CompilerServicesPackage, IsExternalInitName) &&
+            !DeclaresType(trees, CompilerServicesPackage, IsExternalInitName, activeCode) &&
             MayNeedIsExternalInit(trees)
         if !needNullable && !needContext && !needReadOnly && !needExternalInit {
             return trees
@@ -119,7 +121,7 @@ internal shared class EmbeddedAttributeSource {
         // One tree per package: a source file declares a single `package`. The marker is
         // synthesized unless the project already declares it, which the copies then reuse.
         var result = trees
-        if !DeclaresType(trees, MarkerPackage, MarkerName) {
+        if !DeclaresType(trees, MarkerPackage, MarkerName, activeCode) {
             result = result.Add(CreateSyntheticTree(BuildMarkerSource(), "-marker>"))
         }
         return result.Add(
@@ -293,7 +295,12 @@ internal shared class EmbeddedAttributeSource {
 
     // Matches the package-qualified, non-generic top-level declaration only: a homonym in
     // another package (or a generic one) is a different type and must not suppress embedding.
-    private func DeclaresType(trees ImmutableArray[SyntaxTree], packageName string, name string) bool {
+    private func DeclaresType(
+        trees ImmutableArray[SyntaxTree],
+        packageName string,
+        name string,
+        activeCode ConditionalCompilationMap?
+    ) bool {
         for tree in trees {
             let package_ = tree.Root.Members.OfType[PackageSyntax]().FirstOrDefault()
             if package_ == nil || string.Join(
@@ -304,7 +311,7 @@ internal shared class EmbeddedAttributeSource {
             }
             for member in tree.Root.Members {
                 let declaration = member as StructDeclarationSyntax
-                if declaration != nil &&
+                if declaration != nil && activeCode?.IsActive(declaration) != false &&
                     declaration.Identifier.ValueText == name &&
                     declaration.TypeParameterList == nil {
                     return true

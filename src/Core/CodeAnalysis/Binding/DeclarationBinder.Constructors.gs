@@ -1137,7 +1137,7 @@ internal partial class DeclarationBinder {
         // overload set), or when a class needs an init(...) overload for
         // diagnostics or chaining purposes. For pure primary-ctor classes we
         // leave the existing path unchanged.
-        if syntax.Constructors.IsDefaultOrEmpty {
+        if $scope.ConditionalCompilation.Filter(syntax.Constructors).IsDefaultOrEmpty {
             return
         }
         // ADR-0065 §5: when both a primary-constructor parameter list and
@@ -1152,9 +1152,11 @@ internal partial class DeclarationBinder {
             (
             structSymbol.UsesConstructorOwnedDataConstruction &&
                 (
-                structSymbol.HasDeclaredPrimaryConstructor || !syntax.Constructors.Any(
-                    (constructor ConstructorDeclarationSyntax) -> constructor.Parameters.Count == 0
-                )
+                structSymbol.HasDeclaredPrimaryConstructor ||
+                    !$scope
+                    .ConditionalCompilation
+                    .Filter(syntax.Constructors)
+                    .Any((constructor ConstructorDeclarationSyntax) -> constructor.Parameters.Count == 0)
             )
         ) {
             synthesizedPrimary = SynthesizePrimaryConstructor(structSymbol, $package)
@@ -1167,7 +1169,7 @@ internal partial class DeclarationBinder {
         if (structSymbol.IsClass || structSymbol.UsesConstructorOwnedDataConstruction) && synthesizedPrimary != nil {
             ctorBuilder.Add(synthesizedPrimary)
         }
-        for ctorSyntax in syntax.Constructors {
+        for ctorSyntax in $scope.ConditionalCompilation.Filter(syntax.Constructors) {
             let ctor ConstructorSymbol? = BindSingleConstructorDeclaration(
                 ctorSyntax,
                 structSymbol,
@@ -1261,7 +1263,7 @@ internal partial class DeclarationBinder {
         $package PackageSymbol
     ) {
         let deinitSyntax DeinitDeclarationSyntax? = syntax.Deinitializer
-        if deinitSyntax == nil {
+        if deinitSyntax == nil || !$scope.ConditionalCompilation.IsActive(deinitSyntax) {
             return
         }
         // Defence-in-depth: the parser already reports GS0289 when `deinit`

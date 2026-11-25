@@ -116,6 +116,9 @@ class GSharpAnalyzerDriver {
     private func DispatchSyntax() {
         for tree in compilation.SyntaxTrees {
             cancellationToken.ThrowIfCancellationRequested()
+            if !compilation.IsActive(tree.Root) {
+                continue
+            }
             let isGenerated = IsGeneratedTree(tree)
             for entry in registry.SyntaxTreeActions {
                 if SkipsGenerated(entry.Owner, isGenerated) {
@@ -372,6 +375,9 @@ class GSharpAnalyzerDriver {
         }
 
         override func Visit(node SyntaxNode?) {
+            if node != nil && !driver.compilation.IsActive(node) {
+                return
+            }
             if node != nil &&
                 !(node is SyntaxToken) &&
                 driver.registry.SyntaxNodeActions.TryGetValue(node.Kind, out var entries) {
