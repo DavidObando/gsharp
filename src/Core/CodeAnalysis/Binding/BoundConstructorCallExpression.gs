@@ -45,6 +45,12 @@ class BoundConstructorCallExpression : BoundExpression {
         get;
     }
 
+    /// Gets the candidate constructors considered before binding (#6223).
+    internal prop ConstructorGroup ImmutableArray[object] {
+        get;
+        set;
+    }
+
     override prop Type TypeSymbol -> StructType
     override prop Kind BoundNodeKind -> BoundNodeKind.ConstructorCallExpression
 }

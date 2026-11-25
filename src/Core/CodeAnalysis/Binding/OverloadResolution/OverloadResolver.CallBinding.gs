@@ -711,6 +711,27 @@ internal partial class OverloadResolver {
             !aggregate.EffectiveExplicitConstructors.IsDefaultOrEmpty
     )
 
+    private func RecordSourceConstructorFallbackCandidates(structType StructSymbol) {
+        if !structType.EffectiveExplicitConstructors.IsDefaultOrEmpty {
+            let ctors = structType.EffectiveExplicitConstructors
+            let functions = ImmutableArray.CreateBuilder[FunctionSymbol](ctors.Length)
+            for ctor in ctors {
+                functions.Add(
+                    if structType.IsGenericDefinition {
+                        ctor.Function
+                    } else {
+                        CreateConstructedConstructorCandidate(ctor, structType)
+                    }
+                )
+            }
+            CallCandidateRecorder.RecordSourceConstructors(functions.MoveToImmutable(), structType)
+            return
+        }
+        if structType.HasPrimaryConstructor {
+            CallCandidateRecorder.RecordSourcePrimaryConstructor(structType)
+        }
+    }
+
     /// Binds calls with the same conversion and construction rules for simple and qualified targets.
     /// @param syntax The call syntax.
     /// @param resolvedType The exact qualified target, or null for ordinary lookup.
@@ -982,6 +1003,16 @@ internal partial class OverloadResolver {
                     explicitConversionType,
                     explicitConversionType.Name
                 )
+                if syntax.NullableQuestionToken == nil &&
+                    IsConstructibleSourceType(singleArgClass, syntax.Arguments.Count) {
+                    RecordSourceConstructorFallbackCandidates(
+                        if syntax.TypeArgumentList != nil && explicitConversionType is StructSymbol closedStruct {
+                            closedStruct
+                        } else {
+                            singleArgClass
+                        }
+                    )
+                }
                 return conversions.BindConversion(syntax.Arguments[0], explicitConversionType, allowExplicit: true)
             }
             if syntax.NullableQuestionToken != nil ||

@@ -9,8 +9,10 @@ import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import GSharp.Core.Tests
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 import Xunit
 
@@ -190,7 +192,7 @@ func F() {
     }
 
     @Fact
-    func GetExpectedType_AnswersOnlyWhenTheSlotMapsToASourceParameter() {
+    func GetExpectedType_AnswersForSourceImportedGenericAndNamedSlots() {
         const source = `package P
 
 import System
@@ -223,10 +225,351 @@ func F() {
         Assert.Equal(TypeSymbol.String, model.GetExpectedType(source.IndexOf("\"a\")", StringComparison.Ordinal)))
         Assert.Equal(TypeSymbol.String, model.GetExpectedType(source.IndexOf("\"t\"", StringComparison.Ordinal)))
         Assert.Equal(TypeSymbol.Float64, model.GetExpectedType(source.IndexOf("2.0", StringComparison.Ordinal)))
-        // A generic callee, an imported method and a named argument answer nothing.
+        // Before the type parameter is fixed, slot 0 of Same(1, 2) answers nothing; slot 1 gets int32.
         Assert.Null(model.GetExpectedType(source.IndexOf("1, 2)", StringComparison.Ordinal)))
-        Assert.Null(model.GetExpectedType(source.IndexOf("\"x\"", StringComparison.Ordinal)))
-        Assert.Null(model.GetExpectedType(source.IndexOf("3)", StringComparison.Ordinal)))
+        Assert.Equal(TypeSymbol.Int32, model.GetExpectedType(source.IndexOf("2)", StringComparison.Ordinal)))
+        // Without member-group recording, the chosen overload of Console.WriteLine expects string?.
+        Assert.Equal(
+            NullableTypeSymbol.Get(TypeSymbol.String),
+            model.GetExpectedType(source.IndexOf("\"x\"", StringComparison.Ordinal))
+        )
+        // Named arguments resolve by parameter name.
+        Assert.Equal(TypeSymbol.String, model.GetExpectedType(source.IndexOf("\"q\"", StringComparison.Ordinal)))
+        Assert.Equal(TypeSymbol.Int32, model.GetExpectedType(source.IndexOf("3)", StringComparison.Ordinal)))
+        // With member-group recording, Console.WriteLine's disagreeing overloads answer nothing.
+        let recordedTree = SyntaxTree.Parse(SourceText.From(source, "recorded.gs"))
+        let recorded = Compilation(recordedTree){.RecordMemberGroups: true}
+        Assert.Empty(recorded.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        Assert.Null(
+            recorded.GetSemanticModel(recordedTree).GetExpectedType(source.IndexOf("\"x\"", StringComparison.Ordinal))
+        )
+    }
+
+    @Fact
+    func GetExpectedType_ImportedMethodAndConstructorSlots_FollowAdr0193AndOverloadAgreement() {
+        const csharpContract = `
+#nullable enable
+namespace Contract6223 {
+    public sealed class SingleCtor {
+        public SingleCtor(string path) { }
+        public void SetRequired(string value) { }
+        public void SetNullable(string? value) { }
+    }
+
+    public sealed class AgreeMulti {
+        public AgreeMulti(string? label) { }
+        public AgreeMulti(string? label, int count) { }
+        public static void Agree(string? text) { }
+        public static void Agree(string? text, int count) { }
+        public static void MixNullability(string text, int count) { }
+        public static void MixNullability(string? text, string tag) { }
+    }
+
+    public sealed class GenericBox<T> {
+        public GenericBox(T value) { }
+        public void PutRequired(T value) { }
+        public void PutNullable(T? value) { }
+    }
+    public sealed partial class MixPlatform {
+        public static void Take(string text, int count) { }
+    }
+}
+
+#nullable disable
+namespace Contract6223 {
+    public sealed class ObliviousApi {
+        public ObliviousApi(string text) { }
+        public static void Take(string text) { }
+    }
+
+    public sealed partial class MixPlatform {
+        public static void Take(string text, string tag) { }
+    }
+}
+`
+        using let fixture = CSharpFixture(csharpContract)
+        using let references = fixture.RuntimeReferences()
+
+        let AssertPrefix = func (prefix string, expected TypeSymbol?) {
+            let tree = SyntaxTree.Parse(SourceText.From(prefix, "imported-prefix.gs"))
+            let compilation = Compilation(references, tree){.RecordMemberGroups: true}
+            let result = compilation.BindPrefix(tree, prefix.Length, PrefixBindOptions(PrefixRemainder.Nothing))
+            let actual = result.Compilation.GetSemanticModel(result.SyntaxTree).GetExpectedType(prefix.Length)
+            Assert.Equal(expected, actual)
+        }
+
+        const header = `package P
+import Contract6223
+import System
+import System.Collections.Generic
+import System.IO
+import System.Text
+
+func F(
+    sb StringBuilder,
+    list List[string],
+    nullableList List[string?],
+    dict Dictionary[string, int32],
+    nullableDict Dictionary[string, string?],
+    box GenericBox[string]
+) {
+`
+        // Bcl methods and constructors: disagreeing slots return null, agreeing slots return ADR-0193 type.
+        AssertPrefix(header + "    sb.Append(", nil)
+        AssertPrefix(header + "    sb.Append(\"x\", ", nil)
+        AssertPrefix(header + "    sb.Append(\"x\", 0, ", TypeSymbol.Int32)
+        AssertPrefix(header + "    StringBuilder(", nil)
+        AssertPrefix(header + "    StringBuilder(\"x\", ", TypeSymbol.Int32)
+        AssertPrefix(header + "    System.Text.StringBuilder(\"x\", ", TypeSymbol.Int32)
+        AssertPrefix(header + "    FileInfo(", TypeSymbol.String)
+        AssertPrefix(header + "    Path.GetFullPath(", TypeSymbol.String)
+        AssertPrefix(header + "    Console.WriteLine(", nil)
+
+        // Constructed generic receivers preserve type-argument substitution and nullability.
+        AssertPrefix(header + "    list.Add(", TypeSymbol.String)
+        AssertPrefix(header + "    nullableList.Add(", NullableTypeSymbol.Get(TypeSymbol.String))
+        AssertPrefix(header + "    dict.TryGetValue(", TypeSymbol.String)
+        AssertPrefix(header + "    dict.TryGetValue(\"k\", ", ByRefTypeSymbol.Get(TypeSymbol.Int32))
+        AssertPrefix(header + "    nullableDict.Add(\"k\", ", NullableTypeSymbol.Get(TypeSymbol.String))
+
+        // ADR-0193 fidelity on custom C# contracts (non-null, stated nullable, oblivious platform type).
+        AssertPrefix(header + "    SingleCtor(", TypeSymbol.String)
+        AssertPrefix(header + "    SingleCtor(\"a\").SetRequired(", TypeSymbol.String)
+        AssertPrefix(header + "    SingleCtor(\"a\").SetNullable(", NullableTypeSymbol.Get(TypeSymbol.String))
+        AssertPrefix(header + "    AgreeMulti.Agree(", NullableTypeSymbol.Get(TypeSymbol.String))
+        AssertPrefix(header + "    AgreeMulti(\"x\", ", TypeSymbol.Int32)
+        AssertPrefix(header + "    AgreeMulti.MixNullability(", nil)
+        AssertPrefix(header + "    ObliviousApi(", PlatformTypeSymbol.Get(TypeSymbol.String))
+        AssertPrefix(header + "    ObliviousApi.Take(", PlatformTypeSymbol.Get(TypeSymbol.String))
+        AssertPrefix(header + "    GenericBox[string](", TypeSymbol.String)
+        AssertPrefix(header + "    GenericBox[string?](", NullableTypeSymbol.Get(TypeSymbol.String))
+        AssertPrefix(header + "    box.PutRequired(", TypeSymbol.String)
+        AssertPrefix(header + "    box.PutNullable(", NullableTypeSymbol.Get(TypeSymbol.String))
+
+        // Multi-overload constructors that agree at slot 0 return the agreed type.
+        const agreeCtorSource = header + "    let _ = AgreeMulti(\"ok\")\n}\n"
+        let agreeTree = SyntaxTree.Parse(SourceText.From(agreeCtorSource, "agree-ctor.gs"))
+        let agreeComp = Compilation(references, agreeTree){.RecordMemberGroups: true}
+        Assert.Empty(agreeComp.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(
+            NullableTypeSymbol.Get(TypeSymbol.String),
+            agreeComp.GetSemanticModel(agreeTree).GetExpectedType(
+                agreeCtorSource.IndexOf("\"ok\"", StringComparison.Ordinal)
+            )
+        )
+
+        // Disagreeing oblivious vs stated non-null overload returns null.
+        AssertPrefix(header + "    MixPlatform.Take(", nil)
+    }
+
+    @Fact
+    func GetExpectedType_NamedArgumentSlots_ResolveByNameAcrossCandidates() {
+        const header = `package P
+
+import System
+import System.Collections.Generic
+import System.Text
+
+func Named(a int32, b string) {
+}
+
+func Over(a int32) {
+}
+
+func Over(a int32, b string) {
+}
+
+func Disjoint(a int32, b string) {
+}
+
+func Disjoint(a string, b int32) {
+}
+
+func F(sb StringBuilder, dict Dictionary[string, int32]) {
+`
+        let AssertPrefix = func (prefix string, expected TypeSymbol?) {
+            let tree = SyntaxTree.Parse(SourceText.From(prefix, "named-prefix.gs"))
+            let compilation = Compilation(tree){.RecordMemberGroups: true}
+            let result = compilation.BindPrefix(tree, prefix.Length, PrefixBindOptions(PrefixRemainder.Nothing))
+            let actual = result.Compilation.GetSemanticModel(result.SyntaxTree).GetExpectedType(prefix.Length)
+            Assert.Equal(expected, actual)
+        }
+
+        // Source named slots: reordered, matching partial overload set, disagreeing, unknown, duplicate.
+        AssertPrefix(header + "    Named(b: ", TypeSymbol.String)
+        AssertPrefix(header + "    Named(b: \"q\", a: ", TypeSymbol.Int32)
+        AssertPrefix(header + "    Named(a: 1, ", TypeSymbol.String)
+        AssertPrefix(header + "    Named(b: \"q\", ", nil)
+        AssertPrefix(header + "    Over(b: ", TypeSymbol.String)
+        AssertPrefix(header + "    Disjoint(b: ", nil)
+        AssertPrefix(header + "    Named(unknown: ", nil)
+        AssertPrefix(header + "    Named(a: 1, a: ", nil)
+        AssertPrefix(header + "    Named(1, a: ", nil)
+
+        // Imported named slots: method, constructor, generic receiver, and unknown name.
+        AssertPrefix(header + "    StringBuilder(capacity: ", TypeSymbol.Int32)
+        AssertPrefix(header + "    sb.Append(repeatCount: ", TypeSymbol.Int32)
+        AssertPrefix(header + "    dict.TryGetValue(key: ", TypeSymbol.String)
+        AssertPrefix(header + "    dict.TryGetValue(value: ", ByRefTypeSymbol.Get(TypeSymbol.Int32))
+        AssertPrefix(header + "    sb.Append(nope: ", nil)
+
+        // Complete call checks: position on label name before ':' returns null; duplicate name returns null.
+        const complete = header + `
+    Named(b: "q", a: 3)
+    Named(a: 1, a: 2)
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(complete, "named-complete.gs"))
+        let compilation = Compilation(tree){.RecordMemberGroups: true}
+        let model = compilation.GetSemanticModel(tree)
+        Assert.Null(model.GetExpectedType(complete.IndexOf("b: \"q\"", StringComparison.Ordinal)))
+        Assert.Equal(TypeSymbol.String, model.GetExpectedType(complete.IndexOf("\"q\"", StringComparison.Ordinal)))
+        Assert.Equal(TypeSymbol.Int32, model.GetExpectedType(complete.IndexOf("3)", StringComparison.Ordinal)))
+        Assert.Null(model.GetExpectedType(complete.IndexOf("1, a: 2", StringComparison.Ordinal)))
+        Assert.Null(model.GetExpectedType(complete.IndexOf("2)", StringComparison.Ordinal)))
+    }
+
+    @Fact
+    func GetExpectedType_GenericSlots_AnswerWhenFixedBeforeSlotAndNullOtherwise() {
+        const csharpGeneric = `
+#nullable enable
+namespace GenericContract6223 {
+    public static class Helpers {
+        public static void Pair<T>(T first, T second) { }
+        public static void Tri<T>(T a, T b, T c) { }
+        public static void OpenNullable<T>(T first, T? second) { }
+    }
+}
+`
+        using let fixture = CSharpFixture(csharpGeneric)
+        using let references = fixture.RuntimeReferences()
+
+        let AssertPrefix = func (prefix string, expected TypeSymbol?) {
+            let tree = SyntaxTree.Parse(SourceText.From(prefix, "generic-prefix.gs"))
+            let compilation = Compilation(references, tree){.RecordMemberGroups: true}
+            let result = compilation.BindPrefix(tree, prefix.Length, PrefixBindOptions(PrefixRemainder.Nothing))
+            let actual = result.Compilation.GetSemanticModel(result.SyntaxTree).GetExpectedType(prefix.Length)
+            Assert.Equal(expected, actual)
+        }
+
+        const header = `package P
+import GenericContract6223
+import System
+import System.Collections.Generic
+import System.Linq
+
+func Pair[T](first T, second T) {
+}
+
+func Tri[T](a T, b T, c T) {
+}
+
+func Map[T, U](items []T, f (T) -> U) {
+}
+
+func Filter[T](items []T, f (T) -> bool) {
+}
+
+class GenBox[T](first T, second T) {
+    func Combine[U](x T, y U, z U) {
+    }
+}
+
+class GenInit[T] {
+    init(a T, b T) {
+    }
+}
+
+func (items []T) ZipWith[T, U](other []U, f (T, U) -> int32) {
+}
+
+func Outer[E](e E, items []int32, words []string, box GenBox[string]) {
+`
+        // Source generic function: unfixed slot 0, fixed slot 1, explicit type arg, reordered named, conflict.
+        AssertPrefix(header + "    Pair(", nil)
+        AssertPrefix(header + "    Pair(1, ", TypeSymbol.Int32)
+        AssertPrefix(header + "    Pair[string](", TypeSymbol.String)
+        AssertPrefix(header + "    Pair(second: ", nil)
+        AssertPrefix(header + "    Pair(second: 1, first: ", TypeSymbol.Int32)
+        AssertPrefix(header + "    Tri(1, \"s\", ", nil)
+        AssertPrefix(header + "    Tri(1, 2, ", TypeSymbol.Int32)
+
+        // Multi-parameter generic function: Map's U is still unfixed, Filter's T is fixed.
+        AssertPrefix(header + "    Map(items, ", nil)
+        AssertPrefix(
+            header + "    Filter(items, ",
+            FunctionTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32), TypeSymbol.Bool)
+        )
+
+        // Source generic constructors (primary and explicit init).
+        AssertPrefix(header + "    GenBox(", nil)
+        AssertPrefix(header + "    GenBox(1, ", TypeSymbol.Int32)
+        AssertPrefix(header + "    GenBox[string](", TypeSymbol.String)
+        AssertPrefix(header + "    GenInit(", nil)
+        AssertPrefix(header + "    GenInit(1, ", TypeSymbol.Int32)
+
+        // Generic instance & extension methods.
+        AssertPrefix(header + "    box.Combine(", TypeSymbol.String)
+        AssertPrefix(header + "    box.Combine(\"a\", ", nil)
+        AssertPrefix(header + "    box.Combine(\"a\", 1, ", TypeSymbol.Int32)
+        AssertPrefix(
+            header + "    items.ZipWith(words, ",
+            FunctionTypeSymbol.Get(
+                ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32, TypeSymbol.String),
+                TypeSymbol.Int32
+            )
+        )
+
+        // Imported generic methods (static, extension, explicit type args, conflicting inference, [Nullable(2)] T).
+        AssertPrefix(header + "    Helpers.Pair(", nil)
+        AssertPrefix(header + "    Helpers.Pair(1, ", TypeSymbol.Int32)
+        AssertPrefix(header + "    Helpers.Pair[string](", TypeSymbol.String)
+        AssertPrefix(header + "    Helpers.Tri(1, \"s\", ", nil)
+        AssertPrefix(header + "    Helpers.Tri(1, 2, ", TypeSymbol.Int32)
+        AssertPrefix(header + "    Helpers.OpenNullable(\"a\", ", NullableTypeSymbol.Get(TypeSymbol.String))
+        AssertPrefix(header + "    Enumerable.Append(", nil)
+        AssertPrefix(header + "    Enumerable.Append(items, ", TypeSymbol.Int32)
+        AssertPrefix(header + "    items.Append(", TypeSymbol.Int32)
+
+        // Complete generic calls: slot 0 stays null even when later arguments infer T.
+        const complete = header + `
+    Pair(1, 2)
+    Helpers.Pair(1, 2)
+    let _ = GenBox(1, 2)
+    let _ = GenInit(1, 2)
+    let list = List[E]()
+    list.Add(e)
+    Pair(e, e)
+}
+`
+        let completeTree = SyntaxTree.Parse(SourceText.From(complete, "generic-complete.gs"))
+        let completeComp = Compilation(references, completeTree){.RecordMemberGroups: true}
+        Assert.Empty(completeComp.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let completeModel = completeComp.GetSemanticModel(completeTree)
+        Assert.Null(completeModel.GetExpectedType(complete.IndexOf("1, 2)\n    Helpers", StringComparison.Ordinal)))
+        Assert.Equal(
+            TypeSymbol.Int32,
+            completeModel.GetExpectedType(complete.IndexOf("2)\n    Helpers", StringComparison.Ordinal))
+        )
+        Assert.Null(
+            completeModel.GetExpectedType(complete.IndexOf("1, 2)\n    let _ = GenBox", StringComparison.Ordinal))
+        )
+        Assert.Equal(
+            TypeSymbol.Int32,
+            completeModel.GetExpectedType(complete.IndexOf("2)\n    let _ = GenBox", StringComparison.Ordinal))
+        )
+        Assert.Null(
+            completeModel.GetExpectedType(complete.IndexOf("1, 2)\n    let _ = GenInit", StringComparison.Ordinal))
+        )
+        Assert.Null(completeModel.GetExpectedType(complete.IndexOf("1, 2)\n    let list", StringComparison.Ordinal)))
+
+        // Enclosing generic type parameter E fixed via List[E] and Pair(e, ...).
+        let outerFn = Assert.IsAssignableFrom[FunctionSymbol](
+            completeModel.GetDeclaredSymbol(Descendants(completeTree.Root).OfType[FunctionDeclarationSyntax]().Last())
+        )
+        let eParam = outerFn.TypeParameters[0]
+        Assert.Equal(eParam, completeModel.GetExpectedType(complete.IndexOf("e)\n    Pair", StringComparison.Ordinal)))
+        Assert.Equal(eParam, completeModel.GetExpectedType(complete.IndexOf("e)\n}", StringComparison.Ordinal)))
     }
 
     @Fact
