@@ -1563,6 +1563,16 @@ namespace Demo
             }
             return iterations;
         }
+        static int SwitchVarArmCatchAllForgiving()
+        {
+            Row? current = new Row { Id = 7 };
+            current.OnRead = () => { current = new Row { Id = 8 }; };
+            return current switch
+            {
+                { A: 0 } => 0,
+                var matched => matched!.Id,
+            };
+        }
         public static string Run() =>
             LoopTypedDowncast() + " / " +
             LoopNullableSubject() + " / " +
@@ -1614,8 +1624,9 @@ namespace Demo
             SwitchDelayedCompoundOrAndConversionCapture() + " / " +
             SwitchVarArmClearedToNull() + " / " +
             SwitchInterleavedNullArmClearedToNull() + " / " +
-            LoopNonBindingOrPatternMultiIteration();
+            LoopNonBindingOrPatternMultiIteration() + " / " +
+            SwitchVarArmCatchAllForgiving();
     }
-}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3 / True 2 1 3 / False 2 / True 2 1 / True 2 1 / True True True False / False 2 0 3 / True 2 1 3 3 / 1 / True 9 1 / 1 / 1 / True 1 1 / False / 1 / 1 null / True 9 1 / 1 1 / 1 / True / True 9 1 / 1 / 1 / 1", rejectRedundantAssertions: true)
+}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3 / True 2 1 3 / False 2 / True 2 1 / True 2 1 / True True True False / False 2 0 3 / True 2 1 3 3 / 1 / True 9 1 / 1 / 1 / True 1 1 / False / 1 / 1 null / True 9 1 / 1 1 / 1 / True / True 9 1 / 1 / 1 / 1 / 8", rejectRedundantAssertions: true)
     }
 }
