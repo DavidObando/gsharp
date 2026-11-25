@@ -441,6 +441,13 @@ namespace GenericContract6223 {
         public static void OpenNullable<T>(T first, T? second) { }
     }
 }
+
+#nullable disable
+namespace GenericContract6223 {
+    public static class ObliviousSource {
+        public static string GetText() => "";
+    }
+}
 `
         using let fixture = CSharpFixture(csharpGeneric)
         using let references = fixture.RuntimeReferences()
@@ -505,9 +512,11 @@ func Outer[E](e E, items []int32, words []string, box GenBox[string]) {
         // Source generic constructors (primary and explicit init).
         AssertPrefix(header + "    GenBox(", nil)
         AssertPrefix(header + "    GenBox(1, ", TypeSymbol.Int32)
+        AssertPrefix(header + "    GenBox(ObliviousSource.GetText(), ", PlatformTypeSymbol.Get(TypeSymbol.String))
         AssertPrefix(header + "    GenBox[string](", TypeSymbol.String)
         AssertPrefix(header + "    GenInit(", nil)
         AssertPrefix(header + "    GenInit(1, ", TypeSymbol.Int32)
+        AssertPrefix(header + "    GenInit(ObliviousSource.GetText(), ", PlatformTypeSymbol.Get(TypeSymbol.String))
 
         // Generic instance & extension methods.
         AssertPrefix(header + "    box.Combine(", TypeSymbol.String)

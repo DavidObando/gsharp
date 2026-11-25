@@ -534,6 +534,7 @@ partial class SemanticModel {
                 },
                 receiverType: candidate.ReceiverType,
                 allowExplicitTypeArguments: !isConstructor,
+                isConstructor: isConstructor,
                 call,
                 slot,
                 targetName,
@@ -555,6 +556,7 @@ partial class SemanticModel {
                 parameterOffset: 0,
                 receiverType: nil,
                 allowExplicitTypeArguments: false,
+                isConstructor: true,
                 call,
                 slot,
                 targetName,
@@ -588,6 +590,7 @@ partial class SemanticModel {
         parameterOffset int32,
         receiverType TypeSymbol?,
         allowExplicitTypeArguments bool,
+        isConstructor bool,
         call CallExpressionSyntax,
         slot int32,
         targetName string?,
@@ -716,11 +719,16 @@ partial class SemanticModel {
                     if argType == nil {
                         continue
                     }
-                    Binder.InferTypeArguments(
-                        param.Type,
-                        RefCapabilities.GetInferenceType(param, argType),
-                        substitution
-                    )
+                    let inferenceArgType = if isConstructor {
+                        if param.RefKind != RefKind.None {
+                            RefCapabilities.GetInferenceType(param, argType)
+                        } else {
+                            argType
+                        }
+                    } else {
+                        RefCapabilities.GetInferenceType(param, argType)
+                    }
+                    Binder.InferTypeArguments(param.Type, inferenceArgType, substitution)
                 }
                 for tp in typeParameters {
                     if !MemberLookup.TryResolveExpectedSourceTypeArgument(substitution, tp, out var resolved) {
