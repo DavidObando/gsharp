@@ -1789,6 +1789,8 @@ internal partial class ExpressionBinder {
                 recordDeferredArgumentSnapshot?(inner)
                 if inner is RefArgumentExpressionSyntax refArg {
                     boundArguments.Add(BindRefArgumentExpression(refArg, parameter: nil))
+                } else if !layoutOk {
+                    boundArguments.Add(BindExpression(inner))
                 } else if IsTargetDependentBlockArgumentSyntax(inner) {
                     if !delegateTargetCandidatesComputed {
                         delegateTargetCandidatesComputed = true

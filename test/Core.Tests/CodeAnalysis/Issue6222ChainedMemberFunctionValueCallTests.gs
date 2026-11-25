@@ -317,19 +317,27 @@ import System
 class StaticHolder {
     shared {
         var SD Func[int32, int32] = (v int32) -> v
+        let Fs []((int32) -> int32) = []((int32) -> int32){ (v int32) -> v }
     }
 }
 
-func Use(x int32) string -> StaticHolder.SD(x).ToString()
+func Use(x int32, i int32) string -> StaticHolder.SD(x).ToString() + StaticHolder.Fs[i](x).ToString()
 `
         let (staticModel, staticTree, staticCompilation) = CreateModel(staticSource)
         Assert.Empty(staticCompilation.GetDiagnostics())
-        let qualifier = Names(staticTree, "StaticHolder").Single()
-        Assert.Equal("StaticHolder", Assert.IsType[StructSymbol](staticModel.GetSymbolInfo(qualifier).Symbol).Name)
-        Assert.Null(staticModel.GetTypeInfo(qualifier).Type)
+        let qualifiers = Names(staticTree, "StaticHolder")
+        Assert.Equal(2, qualifiers.Length)
+        for qualifier in qualifiers {
+            Assert.Equal("StaticHolder", Assert.IsType[StructSymbol](staticModel.GetSymbolInfo(qualifier).Symbol).Name)
+            Assert.Null(staticModel.GetTypeInfo(qualifier).Type)
+        }
         let sdCall = Calls(staticTree, "SD").Single()
         Assert.Equal("Invoke", Assert.IsType[ImportedFunctionSymbol](staticModel.GetSymbolInfo(sdCall).Symbol).Name)
         Assert.Equal("SD", Assert.IsType[FieldSymbol](staticModel.GetSymbolInfo(sdCall.Identifier).Symbol).Name)
+        let staticFsCall = Calls(staticTree, "Fs").Single()
+        Assert.Equal("Fs", Assert.IsType[FieldSymbol](staticModel.GetSymbolInfo(staticFsCall).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, staticModel.GetTypeInfo(staticFsCall).Type)
+        Assert.Equal("Fs", Assert.IsType[FieldSymbol](staticModel.GetSymbolInfo(staticFsCall.Identifier).Symbol).Name)
     }
 
     shared {

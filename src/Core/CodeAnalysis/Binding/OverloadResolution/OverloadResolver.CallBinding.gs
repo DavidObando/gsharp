@@ -1175,7 +1175,11 @@ internal partial class OverloadResolver {
                 ).Add(deferredLambda)
                 boundArgument = BoundErrorExpression(deferredLambda)
             } else {
-                boundArgument = BindOverloadArgumentValue(argSyntax)
+                boundArgument = if layoutOk {
+                    BindOverloadArgumentValue(argSyntax)
+                } else {
+                    bindExpression(argSyntax)
+                }
             }
             ApplySubExpressionNarrowingEffects(argSyntax, boundArgument)
             boundArguments.Add(boundArgument)

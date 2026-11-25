@@ -62,6 +62,10 @@ internal partial class ExpressionBinder {
                     conv.ImplicitConversionOperand,
                     conv.Expression
                 ): conv.Expression
+                case idx is BoundIndexExpression: idx.Target
+                case clrIdx is BoundClrIndexExpression: clrIdx.Target
+                case userIdx is BoundUserInstanceCallExpression when !hasCalleeIdentifier: userIdx.Receiver
+                case clrIdxCall is BoundImportedInstanceCallExpression when !hasCalleeIdentifier: clrIdxCall.Receiver
                 default: default(BoundExpression?)
             }
         }

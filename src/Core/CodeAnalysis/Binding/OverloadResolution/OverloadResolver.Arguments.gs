@@ -584,7 +584,7 @@ internal partial class OverloadResolver {
             if inner is RefArgumentExpressionSyntax refArg {
                 let _ = bindRefArgumentExpression(refArg, nil)
             } else {
-                let _ = BindOverloadArgumentValue(inner)
+                let _ = bindExpression(inner)
             }
         }
         for argument in arguments {

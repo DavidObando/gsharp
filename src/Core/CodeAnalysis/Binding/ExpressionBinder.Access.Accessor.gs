@@ -4093,7 +4093,11 @@ internal partial class ExpressionBinder {
                     boundArgument = BoundErrorExpression(OverloadResolver.GetLambdaArgumentSyntax(inner) ?? inner)
                 }
                 if boundArgument == nil {
-                    boundArgument = BindArgumentDeferringBranchy(inner)
+                    if layoutOk {
+                        boundArgument = BindArgumentDeferringBranchy(inner)
+                    } else {
+                        boundArgument = BindExpression(inner)
+                    }
                 }
                 if preboundArguments.IsDefault {
                     ApplySubExpressionNarrowingEffects(inner, boundArgument)

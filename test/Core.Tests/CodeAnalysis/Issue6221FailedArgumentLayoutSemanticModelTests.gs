@@ -238,6 +238,55 @@ func Run() {
         Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(yArg).Type)
     }
 
+    @Fact
+    func FailedLayoutWithTargetDependentBlockArguments_KeepsBlockOperandAnswersWithoutExtraDiagnostics() {
+        let source = `package P
+
+class Box {
+    init(v int32) { }
+    func M(v int32) int32 -> v
+    shared {
+        func SM(v int32) int32 -> v
+    }
+}
+
+func H(v int32) int32 -> v
+
+func Run(b Box, x int32) {
+    let a = Box(v: {
+        let y = x
+        default
+    }, v: x)
+    let c = H(v: {
+        let y = x
+        default
+    }, v: x)
+    let d = b.M(v: {
+        let y = x
+        default
+    }, v: x)
+    let e = Box.SM(v: {
+        let y = x
+        default
+    }, v: x)
+}
+`
+        let (model, tree, compilation) = CreateModel(source, recordMemberGroups: true)
+        let errors = compilation
+            .GetDiagnostics()
+            .Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            .ToArray()
+        Assert.Equal(4, errors.Length)
+        Assert.All(errors, (d Diagnostic) -> Assert.Equal("GS0245", d.Id))
+
+        let xArgs = Names(tree, "x")
+        Assert.Equal(8, xArgs.Length)
+        for xArg in xArgs {
+            Assert.Equal("x", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(xArg).Symbol).Name)
+            Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(xArg).Type)
+        }
+    }
+
     shared {
         private const CallLayoutTemplate string = `package P
 
