@@ -70,6 +70,7 @@ open class Adr0225PrefixBindReuseTests {
     @Fact
     func SuccessiveCutsInAMemberOfAScript_ReuseTheDeclarations() {
         var checks = 0
+        var keptChecks = 0
         var scratchTicks = 0L
         var reusedTicks = 0L
         let wrong = List[string]()
@@ -93,6 +94,9 @@ open class Adr0225PrefixBindReuseTests {
                         let reused = compilation.BindPrefix(tree, cut, options, previous)
                         reusedTicks += watch.ElapsedTicks
                         checks++
+                        if remainder == PrefixRemainder.KeepDeclarations {
+                            keptChecks++
+                        }
                         if Describe(scratch) != Describe(reused) {
                             wrong.Add(
                                 "${Path.GetFileName(file)} ${remainder} cut ${cut}:\n${Describe(scratch)}\n---\n${Describe(reused)}"
@@ -109,7 +113,45 @@ open class Adr0225PrefixBindReuseTests {
         )
         Assert.True(checks > 200, "checked ${checks} cuts")
         Assert.True(wrong.Count == 0, string.Join("\n\n", wrong.Take(5)))
-        Assert.True(reuses > checks / 2, "${reuses} declaration reuses in ${checks} cuts")
+        // With nothing after the cut, the reused global statements would miss the provisional records of
+        // the cut (ADR-0225 D6.8), so only the cuts that keep the declarations reuse them.
+        Assert.True(
+            reuses > keptChecks / 2,
+            "${reuses} declaration reuses in ${keptChecks} cuts that keep the declarations"
+        )
+    }
+
+    /// #6178: a script whose open body starts to suspend (ADR-0174), and a script whose globals read a type of
+    /// another tree, report on chained cuts what a bind from scratch reports.
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ChainedCutsOfAScriptWithSuspensionOrAnotherTree_ReportWhatABindFromScratchReports(otherTree bool) {
+        let source = if otherTree {
+            "package P\n\nlet e = E()\nlet value = e.Message\n\nfunc F() {\n    let a = 1\n    let b int32 = value\n    let c = 2\n    let d = 3\n}\n"
+        } else {
+            "package P\n\nlet ch = chan[int32](1)\nlet run = func () {\n    Work()\n}\nWork()\nlet after = 0\n\nfunc Work() {\n    let a = 1\n    ch <- a\n    let b = 2\n    let c = 3\n}\n"
+        }
+        let tree = SyntaxTree.Parse(SourceText.From(source, "script.gs"))
+        let compilation = if otherTree {
+            Compilation(
+                SyntaxTree.Parse(SourceText.From("package P\n\npartial class E : System.Exception {\n}\n", "e.gs")),
+                tree
+            )
+        } else {
+            Compilation(tree)
+        }
+        let body = tree.Root.DescendantNodes().OfType[FunctionDeclarationSyntax]().Last().Body!!
+        for remainder in[]PrefixRemainder{PrefixRemainder.KeepDeclarations, PrefixRemainder.Nothing} {
+            var previous PrefixBindResult? = nil
+            for statement in body.Statements {
+                let options = PrefixBindOptions(remainder)
+                let scratch = compilation.BindPrefix(tree, statement.Span.End, options)
+                let reused = compilation.BindPrefix(tree, statement.Span.End, options, previous)
+                Assert.Equal(Describe(scratch), Describe(reused))
+                previous = reused
+            }
+        }
     }
 
     /// #6178: a reused global of a script points at the new prefix tree, so the semantic model of the result
@@ -120,7 +162,7 @@ open class Adr0225PrefixBindReuseTests {
         let tree = SyntaxTree.Parse(SourceText.From(source, "script.gs"))
         let compilation = Compilation(tree)
         using let measurements = CompilationMeasurements.Start("test")
-        let options = PrefixBindOptions(PrefixRemainder.Nothing)
+        let options = PrefixBindOptions(PrefixRemainder.KeepDeclarations)
         let first = compilation.BindPrefix(tree, source.IndexOf("    let b", StringComparison.Ordinal), options)
         let second = compilation.BindPrefix(tree, source.IndexOf("    let c", StringComparison.Ordinal), options, first)
         Assert.True(measurements.GetCounter("declarations.reuses") > 0)

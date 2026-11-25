@@ -113,7 +113,8 @@ internal shared class IncrementalGlobalScopeReuse {
         // #6178: top-level statements are supported only when both trees share their text, which successive
         // cuts of one prefix chain do (ADR-0225 D6.6). The bound global statements then keep valid spans
         // and the same text, and the skeleton check below proves that the statements did not change.
-        let sharesText = object.ReferenceEquals(previousText, updatedText)
+        let sharesText = object.ReferenceEquals(previousText, updatedText) &&
+            ReusableGlobalStatements($scope, updatedTree)
         if ContainsUnsupportedConstruct(previousTree, allowTopLevelStatements: sharesText) ||
             ContainsUnsupportedConstruct(updatedTree, allowTopLevelStatements: sharesText) {
             return false
@@ -564,6 +565,33 @@ internal shared class IncrementalGlobalScopeReuse {
                 yield ev
             }
         }
+    }
+
+    // #6178: the reused global statements keep their bound form, so nothing that the open body can change
+    // may affect them. With nothing after the cut, a report in them reads the provisional expressions of
+    // the prefix cut (ADR-0225 D6.8), which only a bind records; the bind runs only with the declarations
+    // kept. A suspending function (ADR-0174) can change how a retained call of it is bound, so no function
+    // may suspend before or after the edit.
+    private func ReusableGlobalStatements($scope BoundGlobalScope, updatedTree SyntaxTree) bool {
+        if updatedTree.Prefix is not{} cut || cut.Remainder != PrefixRemainder.KeepDeclarations {
+            return false
+        }
+        for function in EnumerateFunctionSymbols($scope) {
+            if function.IsSuspending {
+                return false
+            }
+        }
+        for node in Descendants(updatedTree.Root) {
+            if node.Kind == SyntaxKind.LeftArrowToken ||
+                node.Kind == SyntaxKind.GoStatement ||
+                node.Kind == SyntaxKind.ChannelReceiveExpression ||
+                node.Kind == SyntaxKind.ChannelSendStatement ||
+                node.Kind == SyntaxKind.SelectStatement ||
+                node.Kind == SyntaxKind.SuspendKeyword {
+                return false
+            }
+        }
+        return true
     }
 
     private func ContainsUnsupportedConstruct(tree SyntaxTree, allowTopLevelStatements bool) bool {
