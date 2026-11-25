@@ -595,7 +595,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             if PrefixBindingContext.ClassifyCallResolution(location, frame.Kind) is {} premise {
                 return premise
             }
-            if PrefixBindingContext.ProvisionalPremise(frame.Syntax.Location, skipSubtree) is {} framePremise {
+            if PrefixBindingContext.ProvisionalPremise(
+                frame.Syntax.Location,
+                skipSubtree,
+                excludeCallLambdas: true
+            ) is {} framePremise {
                 return framePremise
             }
             // A fixed callee does not change, but the call itself can be a typed argument of an outer call.

@@ -44,6 +44,9 @@ internal partial class OverloadResolver {
             return nil
         }
         if overloads.Length <= 1 {
+            if overloads.Length == 1 && !overloads[0].IsGeneric {
+                PrefixBindingContext.AddFixedSignatureCall(ce)
+            }
             return if overloads.Length == 1 {
                 overloads[0]
             } else {
@@ -280,6 +283,9 @@ internal partial class OverloadResolver {
         explicitTypeArgCount int32 = 0
     ) FunctionSymbol? {
         CallCandidateRecorder.RecordFunctions(candidates)
+        if candidates.Length == 1 && !candidates[0].IsGeneric {
+            PrefixBindingContext.AddFixedSignatureCall(callSyntax)
+        }
         return SelectBestUserOverloadCore(
             candidates,
             argumentCount,

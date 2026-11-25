@@ -1144,6 +1144,17 @@ internal partial class OverloadResolver {
         let prebindDiagMark = Diagnostics.Count
         let rollbackPrebind = captureCallArgumentPrebindRollback?(syntax)
         let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
+        if PrefixBindingContext.Current is {} prefixCut &&
+            !prefixCut.LaterOverloadsPossible &&
+            resolvedType == nil &&
+            symbol is FunctionSymbol {
+            let fnOverloads = Scope.TryLookupFunctions(syntax.Identifier.ValueText)
+            if fnOverloads.Length == 1 &&
+                !fnOverloads[0].IsGeneric &&
+                !HasEnclosingMemberCallableCandidate(syntax.Identifier.ValueText) {
+                PrefixBindingContext.AddFixedSignatureCall(syntax)
+            }
+        }
         for argument in syntax.Arguments {
             // Issue #343: a named-argument wrapper carries the value expression
             // we want to bind; unwrap it so the value is bound on its own.

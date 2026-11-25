@@ -1778,6 +1778,18 @@ internal partial class ExpressionBinder {
             ce,
             isStatic: receiver == nil
         )
+        if PrefixBindingContext.Current is {} prefixCut &&
+            !prefixCut.LaterOverloadsPossible &&
+            receiver?.Type is StructSymbol fixedStructReceiver {
+            let instanceMethods = MemberLookup.CollectSourceInstanceMethods(fixedStructReceiver, methodName)
+            if instanceMethods.Length == 1 && !instanceMethods[0].IsGeneric && $scope.TryLookupExtensionFunctions(
+                fixedStructReceiver,
+                methodName
+            )
+                .IsDefaultOrEmpty {
+                PrefixBindingContext.AddFixedSignatureCall(ce)
+            }
+        }
         let bindArgumentsAndDispatch = func () BoundExpression {
             let boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
             let deferredArrowLambdaIndices = List[int32]()

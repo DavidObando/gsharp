@@ -238,12 +238,53 @@ internal sealed class PrefixCut {
         }
     }
 
+    private let fixedSignatureCallKeys HashSet[(Text SourceText, Span TextSpan)] = HashSet[
+        (Text SourceText, Span TextSpan)
+    ]()
+
+    /// Records that [`node`](paramref) is a non-generic single-candidate call whose parameter types do not
+    /// depend on sibling lambda bodies (#6229).
+    /// @param node The call syntax node.
+    internal func AddFixedSignatureCall(node SyntaxNode) {
+        let key = (node.SyntaxTree.Text, node.Span)
+        lock provisionalGate {
+            fixedSignatureCallKeys.Add(key)
+            provisionalTrees[node.SyntaxTree.Text] = node.SyntaxTree
+        }
+    }
+
+    /// Returns a value that tells whether [`location`](paramref) was recorded by (cref:AddFixedSignatureCall).
+    /// @param location The call syntax location.
+    /// @returns `true` when sibling lambda bodies cannot change the call's signature.
+    internal func IsFixedSignatureCallAt(location TextLocation) bool {
+        if location.Text is not{} text {
+            return false
+        }
+        let key = (text, location.Span)
+        lock provisionalGate {
+            return fixedSignatureCallKeys.Count > 0 && fixedSignatureCallKeys.Contains(key)
+        }
+    }
+
+    /// Returns a value that tells whether [`node`](paramref) was recorded by (cref:AddFixedSignatureCall).
+    /// @param node The call syntax node.
+    /// @returns `true` when sibling lambda bodies cannot change the call's signature.
+    internal func IsFixedSignatureCall(node SyntaxNode?) bool -> node != nil && IsFixedSignatureCallAt(node.Location)
+
     /// Returns a value that tells whether [`location`](paramref) contains an expression whose type a
     /// later declaration can change (#6179).
     /// @param location A diagnostic location.
     /// @param skipSpan Optional span whose provisional entries should be ignored (e.g. a lambda body).
+    /// @param excludeCallLambdas When `true`, also ignores sibling lambda bodies that cannot affect
+    /// [`location`](paramref)'s call signature (#6229).
+    /// @param isFixedSignatureCall When `true`, ignores all sibling lambda bodies under [`location`](paramref).
     /// @returns `true` when a recorded expression is in the location.
-    internal func ContainsProvisional(location TextLocation, skipSpan TextSpan? = nil) bool {
+    internal func ContainsProvisional(
+        location TextLocation,
+        skipSpan TextSpan? = nil,
+        excludeCallLambdas bool = false,
+        isFixedSignatureCall bool = false
+    ) bool {
         let span = location.Span
         lock provisionalGate {
             if provisionalSpans.Count == 0 {
@@ -260,7 +301,7 @@ internal sealed class PrefixCut {
                 if object.ReferenceEquals(entry.Text, location.Text) &&
                     span.Start <= entry.Span.Start &&
                     entry.Span.End <= span.End &&
-                    !IsShieldedFromOuterSpan(tree, span, entry.Span) {
+                    !IsShieldedFromOuterSpan(tree, span, entry.Span, excludeCallLambdas, isFixedSignatureCall) {
                     return true
                 }
             }
@@ -268,11 +309,19 @@ internal sealed class PrefixCut {
         return false
     }
 
-    private func IsShieldedFromOuterSpan(tree SyntaxTree?, outer TextSpan, inner TextSpan) bool {
+    private func IsShieldedFromOuterSpan(
+        tree SyntaxTree?,
+        outer TextSpan,
+        inner TextSpan,
+        excludeCallLambdas bool = false,
+        isFixedSignatureCall bool = false
+    ) bool {
         if tree == nil {
             return false
         }
         var node SyntaxNode = tree.Root
+        var inSiblingLambdaBlock = false
+        var inSiblingReturn = false
         while true {
             var next SyntaxNode? = nil
             for child in node.GetChildren() {
@@ -285,12 +334,28 @@ internal sealed class PrefixCut {
                 }
             }
             if next == nil {
-                return false
+                return inSiblingLambdaBlock && !inSiblingReturn
             }
             if (next is InterpolatedStringExpressionSyntax || next is NameOfExpressionSyntax) &&
                 outer.Start <= next.Span.Start &&
                 next.Span.End <= outer.End {
                 return true
+            }
+            if excludeCallLambdas && outer.Start < next.Span.Start && next.Span.End <= outer.End {
+                if next is FunctionLiteralExpressionSyntax {
+                    return true
+                }
+                if next is LambdaExpressionSyntax {
+                    if isFixedSignatureCall {
+                        return true
+                    }
+                } else if !inSiblingLambdaBlock &&
+                    node is LambdaExpressionSyntax &&
+                    (next is BlockExpressionSyntax || next is BlockStatementSyntax) {
+                    inSiblingLambdaBlock = true
+                } else if inSiblingLambdaBlock && next is ReturnStatementSyntax {
+                    inSiblingReturn = true
+                }
             }
             node = next
         }
@@ -708,17 +773,32 @@ internal shared class PrefixBindingContext {
         return false
     }
 
+    /// Records that [`node`](paramref) is a non-generic single-candidate call whose parameter types do not
+    /// depend on sibling lambda bodies (#6229).
+    /// @param node The call syntax node.
+    internal func AddFixedSignatureCall(node SyntaxNode?) {
+        if node != nil && current.Value is {} cut && !cut.LaterOverloadsPossible {
+            cut.AddFixedSignatureCall(node)
+        }
+    }
+
     /// Returns the premise of a report at [`location`](paramref) that contains an expression whose type
     /// a later declaration can change, or `null` (#6179).
     /// @param location The location of the report.
     /// @param skipSubtree Optional argument subtree whose provisional expressions should be ignored.
+    /// @param excludeCallLambdas When `true`, also ignores sibling lambda bodies of the call at [`location`](paramref).
     /// @returns (cref:PrefixPremise.LaterOverload) or `null`.
-    internal func ProvisionalPremise(location TextLocation, skipSubtree SyntaxNode? = nil) PrefixPremise? {
+    internal func ProvisionalPremise(
+        location TextLocation,
+        skipSubtree SyntaxNode? = nil,
+        excludeCallLambdas bool = false
+    ) PrefixPremise? {
         if current.Value is not{} cut || (!cut.HasProvisional && !cut.LaterOverloadsPossible) {
             return nil
         }
-        return if cut.ContainsProvisional(location, skipSubtree?.Span) ||
-            StatementUsesProvisional(cut, location, skipSubtree) {
+        let isFixedSignatureCall = excludeCallLambdas && cut.IsFixedSignatureCallAt(location)
+        return if cut.ContainsProvisional(location, skipSubtree?.Span, excludeCallLambdas, isFixedSignatureCall) ||
+            StatementUsesProvisional(cut, location, skipSubtree, excludeCallLambdas, isFixedSignatureCall) {
             PrefixPremise.LaterOverload
         } else {
             default(PrefixPremise?)
@@ -729,18 +809,33 @@ internal shared class PrefixBindingContext {
     // pattern of an `is`, the `!!` of an assertion, an index argument converted to the indexer's parameter,
     // or a statement inside a lambda/function literal whose signature comes from an enclosing call (#6179,
     // #6229).
-    private func StatementUsesProvisional(cut PrefixCut, location TextLocation, skipSubtree SyntaxNode? = nil) bool {
+    private func StatementUsesProvisional(
+        cut PrefixCut,
+        location TextLocation,
+        skipSubtree SyntaxNode? = nil,
+        excludeCallLambdas bool = false,
+        isFixedSignatureCall bool = false
+    ) bool {
         if cut.ProvisionalTree(location.Text) is not{} tree {
             return false
         }
-        return StatementUsesProvisionalCore(cut, tree, location.Span, skipSubtree: skipSubtree)
+        return StatementUsesProvisionalCore(
+            cut,
+            tree,
+            location.Span,
+            skipSubtree: skipSubtree,
+            excludeCallLambdas: excludeCallLambdas,
+            isFixedSignatureCall: isFixedSignatureCall
+        )
     }
 
     private func StatementUsesProvisionalCore(
         cut PrefixCut,
         tree SyntaxTree,
         span TextSpan,
-        skipSubtree SyntaxNode?
+        skipSubtree SyntaxNode?,
+        excludeCallLambdas bool = false,
+        isFixedSignatureCall bool = false
     ) bool {
         var statement SyntaxNode? = nil
         let enclosingLambdas = List[SyntaxNode]()
@@ -773,7 +868,17 @@ internal shared class PrefixBindingContext {
             while currentStatement is LabeledStatementSyntax labeled {
                 currentStatement = labeled.Statement
             }
-            if HeaderContainsProvisional(cut, currentStatement, currentStatement, false, false, span, skipSubtree) ||
+            if HeaderContainsProvisional(
+                cut,
+                currentStatement,
+                currentStatement,
+                false,
+                false,
+                span,
+                skipSubtree,
+                excludeCallLambdas,
+                isFixedSignatureCall
+            ) ||
                 (
                 cut.LaterOverloadsPossible &&
                     HeaderContainsUnproven(cut, currentStatement, currentStatement, false, span, skipSubtree)
@@ -785,7 +890,9 @@ internal shared class PrefixBindingContext {
                 4,
                 HashSet[object](ReferenceEqualityComparer.Instance),
                 skipSubtree,
-                span
+                span,
+                excludeCallLambdas,
+                isFixedSignatureCall
             ) {
                 return true
             }
@@ -804,10 +911,21 @@ internal shared class PrefixBindingContext {
                 continue
             }
             if EnclosingCallOfArgument(tree, lambda) is {} enclosingCall {
-                if cut.ContainsProvisional(enclosingCall.Location, lambda.Span) ||
-                    StatementUsesProvisionalCore(cut, tree, enclosingCall.Span, skipSubtree: lambda) {
-                    return true
-                }
+                let enclosingFixed = cut.IsFixedSignatureCall(enclosingCall)
+                return cut.ContainsProvisional(
+                    enclosingCall.Location,
+                    lambda.Span,
+                    excludeCallLambdas: true,
+                    isFixedSignatureCall: enclosingFixed
+                ) ||
+                    StatementUsesProvisionalCore(
+                    cut,
+                    tree,
+                    enclosingCall.Span,
+                    skipSubtree: lambda,
+                    excludeCallLambdas: true,
+                    isFixedSignatureCall: enclosingFixed
+                )
             }
         }
         return false
@@ -840,7 +958,9 @@ internal shared class PrefixBindingContext {
         depth int32,
         visited HashSet[object],
         skipSubtree SyntaxNode? = nil,
-        report TextSpan? = nil
+        report TextSpan? = nil,
+        excludeCallLambdas bool = false,
+        isFixedSignatureCall bool = false
     ) bool {
         // The search errs toward a provisional report when it runs out of depth.
         if depth < 0 {
@@ -857,7 +977,10 @@ internal shared class PrefixBindingContext {
             names,
             declared: false,
             skipSubtree: skipSubtree,
-            report: report
+            report: report,
+            declaredSpans: nil,
+            excludeCallLambdas: excludeCallLambdas,
+            isFixedSignatureCall: isFixedSignatureCall
         )
         if names.Count == 0 {
             return false
@@ -1004,7 +1127,9 @@ internal shared class PrefixBindingContext {
         declared bool,
         skipSubtree SyntaxNode? = nil,
         report TextSpan? = nil,
-        declaredSpans Dictionary[string, TextSpan]? = nil
+        declaredSpans Dictionary[string, TextSpan]? = nil,
+        excludeCallLambdas bool = false,
+        isFixedSignatureCall bool = false
     ) {
         if skipSubtree != nil && object.ReferenceEquals(node, skipSubtree) {
             return
@@ -1018,7 +1143,18 @@ internal shared class PrefixBindingContext {
                     if child is not SyntaxToken &&
                         child.Span.Start <= reportSpan.Start &&
                         reportSpan.End <= child.Span.End {
-                        CollectHeaderNames(statement, child, true, names, declared, skipSubtree, report, declaredSpans)
+                        CollectHeaderNames(
+                            statement,
+                            child,
+                            true,
+                            names,
+                            declared,
+                            skipSubtree,
+                            report,
+                            declaredSpans,
+                            excludeCallLambdas,
+                            isFixedSignatureCall
+                        )
                     }
                 }
             }
@@ -1040,6 +1176,11 @@ internal shared class PrefixBindingContext {
             if child is FunctionLiteralExpressionSyntax {
                 continue
             }
+            if excludeCallLambdas && child is LambdaExpressionSyntax l {
+                if isFixedSignatureCall || l.Body is BlockExpressionSyntax || l.Body is BlockStatementSyntax {
+                    continue
+                }
+            }
             CollectHeaderNames(
                 statement,
                 child,
@@ -1048,7 +1189,9 @@ internal shared class PrefixBindingContext {
                 declared,
                 skipSubtree,
                 report,
-                declaredSpans
+                declaredSpans,
+                excludeCallLambdas,
+                isFixedSignatureCall
             )
         }
     }
@@ -1125,7 +1268,9 @@ internal shared class PrefixBindingContext {
         inExpression bool,
         anyCall bool,
         report TextSpan?,
-        skipSubtree SyntaxNode?
+        skipSubtree SyntaxNode?,
+        excludeCallLambdas bool = false,
+        isFixedSignatureCall bool = false
     ) bool {
         if skipSubtree != nil && object.ReferenceEquals(node, skipSubtree) {
             return false
@@ -1139,7 +1284,17 @@ internal shared class PrefixBindingContext {
                     if child is not SyntaxToken &&
                         child.Span.Start <= reportSpan.Start &&
                         reportSpan.End <= child.Span.End {
-                        if HeaderContainsProvisional(cut, statement, child, true, anyCall, report, skipSubtree) {
+                        if HeaderContainsProvisional(
+                            cut,
+                            statement,
+                            child,
+                            true,
+                            anyCall,
+                            report,
+                            skipSubtree,
+                            excludeCallLambdas,
+                            isFixedSignatureCall
+                        ) {
                             return true
                         }
                     }
@@ -1161,6 +1316,13 @@ internal shared class PrefixBindingContext {
             if child is FunctionLiteralExpressionSyntax {
                 continue
             }
+            if excludeCallLambdas && child is LambdaExpressionSyntax lambdaChild {
+                if isFixedSignatureCall ||
+                    lambdaChild.Body is BlockExpressionSyntax ||
+                    lambdaChild.Body is BlockStatementSyntax {
+                    continue
+                }
+            }
             if HeaderContainsProvisional(
                 cut,
                 statement,
@@ -1168,7 +1330,9 @@ internal shared class PrefixBindingContext {
                 inExpression || child is ExpressionSyntax,
                 anyCall,
                 report,
-                skipSubtree
+                skipSubtree,
+                excludeCallLambdas,
+                isFixedSignatureCall
             ) {
                 return true
             }

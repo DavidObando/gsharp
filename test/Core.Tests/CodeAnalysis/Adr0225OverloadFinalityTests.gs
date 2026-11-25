@@ -2584,6 +2584,149 @@ func F(i int32, out v string) bool {
         let inlineOutResult = BindNothing(inlineOutPrefix, []string{"}\n", inlineOutWitness})
         AssertWitness(inlineOutPrefix + inlineOutWitness, "GS0155")
         AssertFutureDependent(inlineOutResult, "GS0155", "later-overload")
+
+        // 6. Multi-index assignment on a partial type records the hierarchy dependency.
+        const multiIndexPrefix = `package P
+
+partial class Coll {
+    prop this[a object, b object] int32 {
+        get {
+            return 0
+        }
+        set {
+        }
+    }
+}
+
+func Main(c Coll) {
+    c[1, 2] = ""
+    let done = 0
+`
+        const multiIndexWitness = `}
+
+partial class Coll {
+    prop this[a int32, b int32] string {
+        get {
+            return ""
+        }
+        set {
+        }
+    }
+}
+`
+        let multiIndexResult = BindNothing(multiIndexPrefix, []string{"}\n", multiIndexWitness})
+        AssertWitness(multiIndexPrefix + multiIndexWitness, "GS0155")
+        AssertFutureDependent(multiIndexResult, "GS0155", "later-overload")
+
+        // 7. Two-argument fixed non-generic call excludes sibling lambda bodies, and 20 nested fixed calls
+        // complete linearly without exponential recursion.
+        const twoLambdaControl = `package P
+
+class Closed {
+    func Run(f () -> void, g () -> void) {
+    }
+
+    func RunExpr(f () -> int32, g () -> void) {
+    }
+}
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    Closed().Run(() -> {
+        let a = G(1)
+    }, () -> {
+        let bad int32 = "s"
+    })
+    Closed().RunExpr(() -> G(1), () -> {
+        let bad2 int32 = "s"
+    })
+/*CUT*/
+    let G = func (i int32) string {
+        return ""
+    }
+}
+`
+        let twoLambdaKeep = BindKeep(twoLambdaControl)
+        let twoLambdaErrors = twoLambdaKeep
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(2, twoLambdaErrors.Count)
+        Assert.All(twoLambdaErrors, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+
+        let nestedSb = System.Text.StringBuilder()
+        nestedSb.AppendLine("package P")
+        nestedSb.AppendLine("class Closed { func Run(f () -> void) {} }")
+        nestedSb.AppendLine("func G(o object) int32 { return 0 }")
+        nestedSb.AppendLine("func Main() {")
+        for var depth = 0; depth < 20; depth++ {
+            nestedSb.AppendLine("    Closed().Run(() -> {")
+        }
+        nestedSb.AppendLine("        let a = G(1)")
+        nestedSb.AppendLine("        let bad int32 = \"s\"")
+        for var depth = 0; depth < 20; depth++ {
+            nestedSb.AppendLine("    })")
+        }
+        nestedSb.AppendLine("/*CUT*/")
+        nestedSb.AppendLine("    let G = func (i int32) string { return \"\" }")
+        nestedSb.AppendLine("}")
+        let nestedKeep = BindKeep(nestedSb.ToString())
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            nestedKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        // 8. Negative controls verified with gsc 0.5.793: receiver-form `func (x int32) Secret()` prevents
+        // top-level `let Secret` from shadowing `Holder.Secret` (GS0472 stays Final), and a local `let PI`
+        // after `let f = func () { let s string = PI }` does not shadow `System.Math.PI` (GS0155 stays Final).
+        const extSecretControl = `package P
+
+import P.Holder
+
+class Holder {
+    shared {
+        private let Secret int32 = 42
+    }
+}
+
+func (x int32) Secret() int32 {
+    return x
+}
+
+func Use() int32 {
+    return Secret
+}
+
+let before = 0
+/*CUT*/
+let Secret int32 = 1
+`
+        let extSecretKeep = BindKeep(extSecretControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            extSecretKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0472").Finality
+        )
+
+        const literalPiControl = `package P
+
+import System.Math
+
+func Main() {
+    let f = func () {
+        let s string = PI
+    }
+/*CUT*/
+    let PI = ""
+}
+`
+        let literalPiKeep = BindKeep(literalPiControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            literalPiKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
     }
 
     @Fact
