@@ -2821,6 +2821,38 @@ func Main() {
             DiagnosticFinality.Final,
             lambdaParamKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
         )
+
+        // 12. Expression-bodied sibling lambda reading a provisional variable inside a fixed-signature call
+        // does not leak provisionality to the sibling lambda body.
+        const fixedSiblingExprVarControl = `package P
+
+class Closed {
+    func RunExpr(f () -> int32, g () -> void) {
+    }
+}
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main(c Closed) {
+    let outer = func () {
+        let v = G(1)
+        c.RunExpr(() -> v, () -> {
+            let bad int32 = "s"
+        })
+    }
+/*CUT*/
+    let G = func (i int32) string {
+        return ""
+    }
+}
+`
+        let fixedSiblingExprVarKeep = BindKeep(fixedSiblingExprVarControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            fixedSiblingExprVarKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
     }
 
     @Fact

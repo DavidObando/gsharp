@@ -1196,28 +1196,17 @@ internal shared class PrefixBindingContext {
                 if declared {
                     continue
                 }
-                if excludeCallLambdas && (l.Body is BlockExpressionSyntax || l.Body is BlockStatementSyntax) {
-                    if !isFixedSignatureCall && l.Body is BlockExpressionSyntax block {
-                        if block.Expression is {} tail {
-                            CollectHeaderNames(
-                                statement,
-                                tail,
-                                true,
-                                names,
-                                declared,
-                                skipSubtree,
-                                report,
-                                declaredSpans,
-                                excludeCallLambdas,
-                                isFixedSignatureCall
-                            )
-                        }
-                        for stmt in block.Statements {
-                            if stmt is ReturnStatementSyntax {
+                if excludeCallLambdas {
+                    if isFixedSignatureCall {
+                        continue
+                    }
+                    if l.Body is BlockExpressionSyntax || l.Body is BlockStatementSyntax {
+                        if l.Body is BlockExpressionSyntax block {
+                            if block.Expression is {} tail {
                                 CollectHeaderNames(
                                     statement,
-                                    stmt,
-                                    false,
+                                    tail,
+                                    true,
                                     names,
                                     declared,
                                     skipSubtree,
@@ -1227,9 +1216,25 @@ internal shared class PrefixBindingContext {
                                     isFixedSignatureCall
                                 )
                             }
+                            for stmt in block.Statements {
+                                if stmt is ReturnStatementSyntax {
+                                    CollectHeaderNames(
+                                        statement,
+                                        stmt,
+                                        false,
+                                        names,
+                                        declared,
+                                        skipSubtree,
+                                        report,
+                                        declaredSpans,
+                                        excludeCallLambdas,
+                                        isFixedSignatureCall
+                                    )
+                                }
+                            }
                         }
+                        continue
                     }
-                    continue
                 }
             }
             CollectHeaderNames(
