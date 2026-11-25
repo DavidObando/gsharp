@@ -25,6 +25,8 @@ internal shared class PrefixRetarget {
         }
         if CanChange(cut, syntax, kind, bound, qualifierType) {
             PrefixBindingContext.AddProvisional(syntax)
+        } else {
+            PrefixBindingContext.AddFixed(syntax)
         }
     }
 
@@ -33,8 +35,13 @@ internal shared class PrefixRetarget {
     /// @param target The indexed expression.
     /// @param targetType The type of the target.
     func NoteIndexTarget(target SyntaxNode, targetType TypeSymbol?) {
-        if PrefixBindingContext.Current is {} cut && cut.LaterOverloadsPossible && HierarchyCanGrow(targetType, nil) {
+        if PrefixBindingContext.Current is not{} cut {
+            return
+        }
+        if cut.LaterOverloadsPossible && HierarchyCanGrow(targetType, nil) {
             PrefixBindingContext.AddProvisional(target)
+        } else {
+            PrefixBindingContext.AddFixed(target.Parent)
         }
     }
 
@@ -52,6 +59,50 @@ internal shared class PrefixRetarget {
         if HierarchyCanGrow(type, nil) || (deconstruction && !(type is TupleTypeSymbol) && type != nil) {
             PrefixBindingContext.AddProvisional(source)
         }
+    }
+
+    /// Records a member access when a later member of a type between a receiver and the member's owner can
+    /// hide a field or a property that the chain reads (a later part of a partial type, also over a member
+    /// of an imported base). Calls of the chain record themselves (#6179).
+    /// @param syntax The member access.
+    /// @param bound The bound access.
+    func NoteAccess(syntax SyntaxNode, bound BoundExpression) {
+        if PrefixBindingContext.Current is not{} cut || !cut.LaterOverloadsPossible {
+            return
+        }
+        var node BoundExpression? = bound
+        for var depth = 0; depth < 32 && node != nil; depth++ {
+            if node.LogicalCompletionOperand is {} logical {
+                node = logical
+                continue
+            }
+            if node is BoundConversionExpression conversion {
+                node = conversion.Expression
+                continue
+            }
+            var receiver BoundExpression? = nil
+            var owner TypeSymbol? = nil
+            if node is BoundPropertyReferenceOperationExpression property {
+                receiver = property.Instance
+                owner = property.ReferencedProperty?.ContainingType
+            } else if node is BoundFieldAccessExpression field {
+                receiver = field.Receiver
+                owner = field.Field.ContainingType
+            } else if node is BoundImportedInstanceCallExpression call {
+                receiver = call.Receiver
+            } else if node is BoundUserInstanceCallExpression userCall {
+                receiver = userCall.Receiver
+                owner = userCall.Method.ContainingType
+            } else {
+                break
+            }
+            if receiver != nil && HierarchyCanGrow(receiver.Type, owner) {
+                PrefixBindingContext.AddProvisional(syntax)
+                return
+            }
+            node = receiver
+        }
+        PrefixBindingContext.AddFixed(syntax)
     }
 
     /// Records [`syntax`](paramref) when it names a variable whose inferred type a later declaration can

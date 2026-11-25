@@ -147,6 +147,29 @@ internal sealed class PrefixCut {
         AddProvisional(node.Location)
     }
 
+    private let fixedKeys HashSet[(Text SourceText, Span TextSpan)] = HashSet[(Text SourceText, Span TextSpan)]()
+
+    /// Records that no later declaration can change the type of [`node`](paramref): a call, a member access
+    /// or an index expression that the binder showed to be fixed (#6179).
+    /// @param node The expression.
+    internal func AddFixed(node SyntaxNode) {
+        let key = (node.SyntaxTree.Text, node.Span)
+        lock provisionalGate {
+            fixedKeys.Add(key)
+            provisionalTrees[node.SyntaxTree.Text] = node.SyntaxTree
+        }
+    }
+
+    /// Returns a value that tells whether the binder showed [`node`](paramref) to be fixed (#6179).
+    /// @param node The expression.
+    /// @returns `true` for a node that (cref:AddFixed) recorded.
+    internal func IsFixed(node SyntaxNode) bool {
+        let key = (node.SyntaxTree.Text, node.Span)
+        lock provisionalGate {
+            return fixedKeys.Contains(key)
+        }
+    }
+
     /// Returns the tree of [`text`](paramref) when the bind recorded an expression in it (#6179).
     /// @param text A source text.
     /// @returns The tree, or `null`.
@@ -473,6 +496,14 @@ internal shared class PrefixBindingContext {
         }
     }
 
+    /// Records that the binder showed [`node`](paramref) to be fixed (#6179).
+    /// @param node A call, a member access or an index expression.
+    internal func AddFixed(node SyntaxNode?) {
+        if node != nil && current.Value is {} cut {
+            cut.AddFixed(node)
+        }
+    }
+
     /// Records that a later declaration can change the type of the expression at [`location`](paramref)
     /// (#6179).
     /// @param location The location of an expression that binds before the cut.
@@ -487,7 +518,7 @@ internal shared class PrefixBindingContext {
     /// @param location The location of the report.
     /// @returns (cref:PrefixPremise.LaterOverload) or `null`.
     internal func ProvisionalPremise(location TextLocation) PrefixPremise? {
-        if current.Value is not{} cut || !cut.HasProvisional {
+        if current.Value is not{} cut || (!cut.HasProvisional && !cut.LaterOverloadsPossible) {
             return nil
         }
         return if cut.ContainsProvisional(location) || StatementUsesProvisional(cut, location) {
@@ -527,6 +558,7 @@ internal shared class PrefixBindingContext {
         return statement != nil &&
             (
             HeaderContainsProvisional(cut, statement, statement, false, false) ||
+                (cut.LaterOverloadsPossible && HeaderContainsUnproven(cut, statement, statement, false, span)) ||
                 HeaderUsesProvisionalName(cut, tree, statement, 4, HashSet[object](ReferenceEqualityComparer.Instance))
         )
     }
@@ -543,7 +575,11 @@ internal shared class PrefixBindingContext {
         depth int32,
         visited HashSet[object]
     ) bool {
-        if depth < 0 || !visited.Add(statement) {
+        // The search errs toward a provisional report when it runs out of depth.
+        if depth < 0 {
+            return true
+        }
+        if !visited.Add(statement) {
             return false
         }
         let names = HashSet[string](StringComparer.Ordinal)
@@ -589,6 +625,44 @@ internal shared class PrefixBindingContext {
         }
         return false
     }
+
+    // With nothing after the cut, a call, a member access or an index expression of a statement's header
+    // counts as provisional unless the binder showed it to be fixed, so a binding path without a record
+    // errs toward a provisional report (#6179).
+    // A node that contains the report is still binding when the binder reports inside it; the premises of
+    // its call frame cover such a report.
+    private func HeaderContainsUnproven(
+        cut PrefixCut,
+        statement SyntaxNode,
+        node SyntaxNode,
+        inExpression bool,
+        report TextSpan
+    ) bool {
+        let containsReport = node.Span.Start <= report.Start && report.End <= node.Span.End
+        if (node is CallExpressionSyntax || node is IndexExpressionSyntax || IsOutermostAccessor(node)) &&
+            !containsReport &&
+            !cut.IsFixed(node) {
+            return true
+        }
+        for child in node.GetChildren() {
+            if child is SyntaxToken {
+                continue
+            }
+            if !inExpression && child is StatementSyntax && !object.ReferenceEquals(child, statement) {
+                continue
+            }
+            if child is FunctionLiteralExpressionSyntax || child is LambdaExpressionSyntax {
+                continue
+            }
+            if HeaderContainsUnproven(cut, statement, child, inExpression || child is ExpressionSyntax, report) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func IsOutermostAccessor(node SyntaxNode) bool -> node is AccessorExpressionSyntax &&
+        !(node.Parent is AccessorExpressionSyntax parent && object.ReferenceEquals(parent.RightPart, node))
 
     // The identifiers of a statement's header, not those of its nested statements or of a function
     // literal's body. With [`declared`](paramref), the names that it declares or writes (an identifier that

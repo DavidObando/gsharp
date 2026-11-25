@@ -1391,6 +1391,32 @@ partial class Box {
     }
 
     @Fact
+    func InheritedPropertyOfAPartialType_ALaterPartCanHideIt() {
+        const prefix = `package P
+
+open class Base {
+    prop Size int32 -> 1
+}
+
+partial class Box : Base {
+}
+
+func Main() {
+    let s string = Box().Size
+    let done = 0
+`
+        const witness = `}
+
+partial class Box {
+    prop Size string -> ""
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
     func ResolvedCall_AnExactNonGenericMatchCannotBeBeaten() {
         const prefix = `package P
 
