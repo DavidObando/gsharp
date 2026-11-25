@@ -958,6 +958,41 @@ namespace Demo
             }
         }
 
+        public int QualifiedNestedHeaderInheritsOuterGuard(int kind, int inner, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    switch (inner)
+                    {
+                        case 2 when holder.Text.Length > 0:
+                            return holder.Text.Length;
+                        default:
+                            return 0;
+                    }
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedNestedStackedCaseAndDefault(int kind, int inner, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    switch (inner)
+                    {
+                        case 10:
+                        default:
+                            return holder.Text.Length;
+                        case 2 when TouchBool():
+                            return 0;
+                    }
+                default:
+                    return 0;
+            }
+        }
+
         public int ReadonlyFieldStringIsNullOrEmptyGuardExpr(int kind) =>
             kind switch
             {
@@ -1061,6 +1096,9 @@ namespace Demo
                 p.QualifiedNestedConditionalAccessStmt(1, h) + "|" +
                 p.QualifiedNestedConditionalAccessMutated(1, h, false) + "|" +
                 p.QualifiedNestedDefaultLaterHeaderCallInvalidates(1, 1, h) + "|" +
+                p.QualifiedNestedHeaderInheritsOuterGuard(1, 2, h) + "|" +
+                p.QualifiedNestedStackedCaseAndDefault(1, 10, h) + "|" +
+                p.QualifiedNestedStackedCaseAndDefault(1, 1, h) + "|" +
                 p.ReadonlyFieldStringIsNullOrEmptyGuardExpr(1) + "|" +
                 p.ReadonlyFieldStringIsNullOrEmptyGuardStmt(1) + "|" +
                 p.QualifiedStringIsNullOrEmptyGuardExpr(1, h) + "|" +
@@ -1075,7 +1113,7 @@ namespace Demo
 }`
         let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
             source,
-            "4|4|4|4|4|4|5|5|5|5|5|5|2|5|5|5|5|4|4|5|4|4|4|4|2|5",
+            "4|4|4|4|4|4|5|5|5|5|5|5|2|5|5|5|5|5|5|5|4|4|5|4|4|4|4|2|5",
             rejectRedundantAssertions: true
         )
         Assert.Contains(
@@ -1116,6 +1154,12 @@ namespace Demo
         Assert.Contains("holder!!.Text!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains(
             "default {\n                        return holder.Text!!.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("case 2 when holder.Text.Length > 0", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "case 10 {\n                        return holder.Text.Length",
             printed,
             StringComparison.Ordinal
         )

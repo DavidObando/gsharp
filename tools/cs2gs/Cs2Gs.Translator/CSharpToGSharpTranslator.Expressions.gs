@@ -14526,6 +14526,8 @@ partial class CSharpToGSharpTranslator {
             return parent is Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax ||
                 parent is Microsoft.CodeAnalysis.CSharp.Syntax.ElseClauseSyntax ||
                 parent is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax ||
+                parent is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax ||
+                parent is Microsoft.CodeAnalysis.CSharp.Syntax.WhenClauseSyntax ||
                 parent is Microsoft.CodeAnalysis.CSharp.Syntax.EqualsValueClauseSyntax ||
                 parent is VariableDeclaratorSyntax ||
                 parent is Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclarationSyntax
@@ -15208,13 +15210,7 @@ partial class CSharpToGSharpTranslator {
                 !object.ReferenceEquals(enclosing, scope_); enclosing = enclosing!!.Parent {
                 if enclosing is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax section &&
                     !object.ReferenceEquals(section, rightOperand) && rightOperand.Span.Contains(section.Span) &&
-                    section.Labels.Any(
-                    (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> label is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .DefaultSwitchLabelSyntax
-                ) &&
+                    this.IsActiveDefaultSwitchSection(section) &&
                     section.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax switchStatement &&
                     switchStatement.Sections.Any(
                     (
@@ -15241,6 +15237,21 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             return false
+        }
+
+        private func IsActiveDefaultSwitchSection(
+            section Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax
+        ) bool {
+            if this.ActiveSwitchSectionLabel(section) is {} activeLabel {
+                return activeLabel is Microsoft.CodeAnalysis.CSharp.Syntax.DefaultSwitchLabelSyntax
+            }
+            return section.Labels.Any(
+                (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> label is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .DefaultSwitchLabelSyntax
+            )
         }
 
         private func SiblingConditionOperandKillsStablePath(
@@ -22396,13 +22407,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 if enclosing is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax section &&
-                    !section.Span.Contains(narrowingGuard.Span) && section.Labels.Any(
-                    (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> label is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .DefaultSwitchLabelSyntax
-                ) &&
+                    !section.Span.Contains(narrowingGuard.Span) && this.IsActiveDefaultSwitchSection(section) &&
                     section.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax switchStatement &&
                     switchStatement.Sections.Any(
                     (
