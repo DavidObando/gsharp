@@ -1507,62 +1507,6 @@ internal partial class ExpressionBinder {
         }
     }
 
-    // #6199: a call through a member function value whose arguments do not analyse keeps its callee for
-    // the semantic model. The member is resolved as a call with no arguments would resolve it, and the
-    // diagnostics of that resolution are dropped: the layout report is the call's only diagnostic.
-    private func RecordCallableMemberOfFailedLayout(
-        receiver BoundExpression?,
-        classSymbol ImportedClassSymbol?,
-        methodName string,
-        ce CallExpressionSyntax
-    ) {
-        if classSymbol != nil || receiver == nil || !(receiver.Type is StructSymbol or InterfaceSymbol) {
-            return
-        }
-        // A method of the name wins over a callable field or property (the order of the call path), and the
-        // layout failure gives no callee to a method call (#6221).
-        if !TypeMemberModel.GetMethods(receiver.Type, methodName, MemberQuery.Instance(MemberKinds.Method))
-            .IsDefaultOrEmpty {
-            return
-        }
-        // A default method of an implemented interface also wins (ADR-0085).
-        if receiver.Type is StructSymbol receiverClass {
-            for level in receiverClass.GetHierarchy() {
-                for iface in level.Interfaces {
-                    if iface == nil {
-                        continue
-                    }
-                    // Only a method with a default body is a candidate of the call path; an abstract one is
-                    // implemented by the class, where the callable member was found first.
-                    for candidate in TypeMemberModel.GetMethods(
-                        iface,
-                        methodName,
-                        MemberQuery.Instance(MemberKinds.Method)
-                    ) {
-                        if InterfaceSymbol.HasDefaultBody(candidate) {
-                            return
-                        }
-                    }
-                }
-            }
-        }
-        let mark = Diagnostics.Count
-        let narrowing = CaptureNarrowingBindSnapshot()
-        let selectedProperty = lastSelectedCallablePropertyLoad
-        let _ = TryBindUserCallableMemberInvocation(
-            receiver,
-            receiver.Type,
-            methodName,
-            ImmutableArray[BoundExpression].Empty,
-            ce,
-            isStatic: false,
-            out _
-        )
-        lastSelectedCallablePropertyLoad = selectedProperty
-        RestoreNarrowingBindSnapshot(narrowing)
-        Diagnostics.TruncateTo(mark)
-    }
-
     internal func BindAccessorCall(
         receiver BoundExpression?,
         classSymbol ImportedClassSymbol?,
@@ -1721,13 +1665,12 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportNamedArgumentOnlyValidForCopy(ce.Location)
             return BoundErrorExpression(nil)
         }
-        // Issue #343: validate named-argument layout (positional precedes named,
-        // no duplicate names). Errors are reported by the helper so the call
-        // short-circuits to a bound error here.
-        if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
-            RecordCallableMemberOfFailedLayout(receiver, classSymbol, methodName, ce)
-            return BoundErrorExpression(nil)
-        }
+        // Issue #343 / #6221: validate named-argument layout (positional precedes named,
+        // no duplicate names). When layout fails, continue binding arguments and resolving
+        // the callee with extra reports dropped so the semantic model keeps both (#6221).
+        let layoutOk = overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames)
+        let layoutDiagMark = Diagnostics.Count
+        let layoutLiteralDiagCount = literalTargetDiagnostics.Count
         // Issue #311: resolve an explicit `[T1, T2]` type-argument list (e.g.
         // `Array.Empty[string]()`) into mapped CLR types up front so every
         // generic-method dispatch path below can close the candidate.
@@ -1790,6 +1733,8 @@ internal partial class ExpressionBinder {
                 recordDeferredArgumentSnapshot?(inner)
                 if inner is RefArgumentExpressionSyntax refArg {
                     boundArguments.Add(BindRefArgumentExpression(refArg, parameter: nil))
+                } else if !layoutOk {
+                    boundArguments.Add(BindExpression(inner))
                 } else if IsTargetDependentBlockArgumentSyntax(inner) {
                     if !delegateTargetCandidatesComputed {
                         delegateTargetCandidatesComputed = true
@@ -1957,7 +1902,7 @@ internal partial class ExpressionBinder {
                     receiverStart,
                     hasUnresolvedTypeArguments
                 )
-                if !hasUnresolvedTypeArguments && conversions.TryRefreshReboundArguments(
+                if layoutOk && !hasUnresolvedTypeArguments && conversions.TryRefreshReboundArguments(
                     initialArguments,
                     out var refreshedArguments
                 ) {
@@ -1994,7 +1939,7 @@ internal partial class ExpressionBinder {
             } else {
                 default(BoundExpression?)
             }
-            if selectedCalleeEffectsLoad != nil && ce.Arguments.Count > 0 {
+            if layoutOk && selectedCalleeEffectsLoad != nil && ce.Arguments.Count > 0 {
                 lastSelectedCallablePropertyLoad = nil
                 lastSelectedIndexedCalleeLoad = nil
                 result = Diagnostics.ReplaceDiagnosticsIn(
@@ -2011,6 +1956,24 @@ internal partial class ExpressionBinder {
                         return bindArgumentsAndDispatch()
                     }
                 )
+            }
+            if !layoutOk {
+                Diagnostics.TruncateTo(layoutDiagMark)
+                if literalTargetDiagnostics.Count > layoutLiteralDiagCount {
+                    literalTargetDiagnostics.RemoveRange(
+                        layoutLiteralDiagCount,
+                        literalTargetDiagnostics.Count - layoutLiteralDiagCount
+                    )
+                }
+                for arg in ce.Arguments {
+                    $scope.RemoveVariablesDeclaredInSpan(arg.SyntaxTree, arg.Span)
+                }
+                RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
+                return if result is BoundErrorExpression {
+                    result
+                } else {
+                    BoundErrorExpression.FindFailedCall(result) ?? BoundErrorExpression(nil)
+                }
             }
             return result
         } finally {
