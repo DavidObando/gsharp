@@ -2573,6 +2573,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "'@defined' requires exactly one literal string containing a valid symbol name."
     )
+    internal let InvalidConditionalSymbolName DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS9312",
+        DiagnosticSeverity.Error,
+        "Invalid conditional symbol name '{0}'."
+    )
     internal let SourceGeneratorExecutionFailure DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9996",
         DiagnosticSeverity.Error,
