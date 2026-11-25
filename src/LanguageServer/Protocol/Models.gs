@@ -512,8 +512,26 @@ class CodeAction {
     @JsonPropertyName("edit")
     prop Edit WorkspaceEdit?
 
+    // LSP: the client runs the command after it applies the edit.
+    @JsonPropertyName("command")
+    prop Command Command?
+
     @JsonPropertyName("data")
     prop Data CodeActionData?
+}
+
+/// The argument of the command that selects the placeholder of an applied fix (ADR-0227 D5).
+class SelectPlaceholderArguments {
+    @JsonPropertyName("uri")
+    prop Uri string
+
+    // The range of the placeholder in the document after the edit.
+    @JsonPropertyName("range")
+    prop Range Range
+
+    // The text of the placeholder. The server selects the range only when the document holds it there.
+    @JsonPropertyName("text")
+    prop Text string
 }
 
 /// The data that `codeAction/resolve` uses to compute the edit of a fix again (ADR-0227 D7).

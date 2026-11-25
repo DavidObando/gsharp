@@ -33,6 +33,15 @@ class CodeActionClientOptions {
     /// Gets or sets a value that tells whether the client resolves the `edit` of an action lazily.
     prop SupportsResolveEdit bool
 
+    /// Gets or sets a value that tells whether the client opens a document and selects a range on a
+    /// `window/showDocument` request (`window.showDocument.support`, LSP 3.16).
+    prop SupportsShowDocument bool
+
+    /// Gets a value that tells whether a fix with placeholders selects its first placeholder after the
+    /// client applies it (ADR-0227 D5, issue #6185). It is true for a client that gets no snippet edits
+    /// and supports `window/showDocument`.
+    prop SelectsPlaceholders bool -> SupportsShowDocument && (!SupportsDocumentChanges || !SupportsSnippetEdits)
+
     /// Gets or sets the stored content of an open document (its tree and client version, captured
     /// together), or `null` when the document is not open. The server sets it; an edit of another
     /// open document carries that version.
@@ -56,6 +65,10 @@ shared class CodeActionComputer {
 
     /// The time budget of each analyzer when the computer runs the analyzers itself.
     private const AnalyzerTimeBudgetMilliseconds int32 = 2000
+
+    /// The command that selects the placeholder of an applied fix with `window/showDocument`
+    /// (ADR-0227 D5, issue #6185). Its one argument is a (cref:SelectPlaceholderArguments).
+    const SelectPlaceholderCommand string = "gsharp.selectPlaceholder"
 
     /// Computes the code actions for [`range`](paramref) with no request context.
     /// @param uri The document URI for edit attribution.
@@ -169,6 +182,10 @@ shared class CodeActionComputer {
         if data == nil || action.Edit != nil {
             return action
         }
+        // Issue #6185: the command selects the placeholder of the edit. An action that gets no edit
+        // gets no command.
+        let command Command? = action.Command
+        action.Command = nil
         // ADR-0227 D7: resolve returns the edit that the list request computed and gated, never a
         // recomputed one. It returns no edit when a snapshot that the edit depends on changed.
         if !ResolveCache.TryGetValue(data.Key, out var entry) {
@@ -196,7 +213,25 @@ shared class CodeActionComputer {
             }
         }
         action.Edit = entry.Edit
+        action.Command = command
         return action
+    }
+
+    /// Returns the action that a resolve gives when it finds no edit for it: without the command that
+    /// selects the placeholder of the edit (issue #6185).
+    /// @param action The action from the client. It is not changed.
+    /// @returns The action when it has an edit; otherwise a copy without its command.
+    func Unresolved(action CodeAction) CodeAction {
+        if action.Edit != nil || action.Command == nil {
+            return action
+        }
+        return CodeAction{
+            Title: action.Title,
+            Kind: action.Kind,
+            Diagnostics: action.Diagnostics,
+            IsPreferred: action.IsPreferred,
+            Data: action.Data
+        }
     }
 
     // The gated edits that a lazy client resolves later, by an opaque ID (ADR-0227 D7). The cache
@@ -294,7 +329,12 @@ shared class CodeActionComputer {
             }
             let edit WorkspaceEdit? = BuildEdit(uri, content, changes, client, out var otherVersions)
             if edit != nil {
-                survivors.Add(Candidate(fix, edit, otherVersions))
+                let selection Command? = if client.SelectsPlaceholders {
+                    SelectPlaceholder(uri, content, changes)
+                } else {
+                    default(Command?)
+                }
+                survivors.Add(Candidate(fix, edit, otherVersions, selection))
             }
         }
         let offered = survivors.Select((c Candidate) -> c.Fix).ToImmutableArray()
@@ -308,7 +348,8 @@ shared class CodeActionComputer {
                     true
                 } else {
                     default(bool?)
-                }
+                },
+                Command: candidate.Selection
             }
             if client.SupportsResolveEdit {
                 let id = Remember(
@@ -320,6 +361,68 @@ shared class CodeActionComputer {
             }
             yield action
         }
+    }
+
+    // ADR-0227 D5 (issue #6185): the command that selects the first placeholder of the first document
+    // that has one, at its range in the changed text. `null` when no change has a placeholder.
+    internal func SelectPlaceholder(uri DocumentUri, content DocumentContent, changes FixChanges) Command? {
+        for document in changes.Documents {
+            if document.Placeholders.IsEmpty {
+                continue
+            }
+            let documentUri DocumentUri? = if object.ReferenceEquals(document.Tree, content.SyntaxTree) {
+                uri
+            } else {
+                DocumentUri.FromFileSystemPath(document.Tree.Text.FileName)
+            }
+            if documentUri == nil {
+                return nil
+            }
+            let placeholder = document.Placeholders.OrderBy((p TextSpan) -> p.Start).First()
+            let changed = document.GetChangedText()
+            // A provider gives the spans. An empty or out-of-range span gives no selection, and the
+            // fix keeps its edit.
+            if placeholder.Start < 0 ||
+                placeholder.Start > changed.Length ||
+                placeholder.Length <= 0 ||
+                placeholder.Length > changed.Length - placeholder.Start {
+                return nil
+            }
+            return Command{
+                Title: "Select the placeholder",
+                Name: SelectPlaceholderCommand,
+                Arguments: []object? {
+                    SelectPlaceholderArguments{
+                        Uri: documentUri.ToString(),
+                        Range: SemanticLookup.ToRange(changed, placeholder),
+                        Text: changed.ToString(placeholder)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    // Issue #6185: whether the document holds the placeholder's text at its range. The client sends the
+    // command after it applies the edit, so a document without the text did not get the edit.
+    internal func HoldsPlaceholder(content DocumentContent, arguments SelectPlaceholderArguments) bool {
+        let text = content.SyntaxTree.Text
+        let start = PositionToOffset(text, arguments.Range.Start)
+        let end = PositionToOffset(text, arguments.Range.End)
+        return start >= 0 && end >= start && text.ToString(TextSpan(start, end - start)) == arguments.Text
+    }
+
+    private func PositionToOffset(text SourceText, position Position) int32 {
+        if position.Line < 0 || position.Line >= text.Lines.Length || position.Character < 0 {
+            return -1
+        }
+        let line = text.Lines[position.Line]
+        // SemanticLookup.ToRange can end a range after the line break of the last line (a span that ends
+        // with a CR at the end of the text), so the range of a placeholder can name that position.
+        if position.Character > line.LengthIncludingLineBreak {
+            return -1
+        }
+        return line.Start + position.Character
     }
 
     // ADR-0227 D5: the one machine-applicable fix of a diagnostic is the preferred action.
@@ -805,10 +908,15 @@ shared class CodeActionComputer {
     }
 
     private class Candidate {
-        init(fix CodeFix, edit WorkspaceEdit, otherVersions Dictionary[string, int32?]) {
+        init(fix CodeFix, edit WorkspaceEdit, otherVersions Dictionary[string, int32?], selection Command?) {
             Fix = fix
             Edit = edit
             OtherVersions = otherVersions
+            Selection = selection
+        }
+
+        prop Selection Command? {
+            get;
         }
 
         prop Fix CodeFix {

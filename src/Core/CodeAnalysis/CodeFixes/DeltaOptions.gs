@@ -64,7 +64,8 @@ class DeltaOptions {
     }
 
     /// Gets or sets the options of the analyzer driver, such as a time budget for each analyzer.
-    /// `null` uses the driver's defaults.
+    /// `null` uses the driver's defaults. With a time budget, the body-local check runs the analyzers
+    /// on the edited body only while each analyzer's time stays well under the budget (issue #6183).
     prop AnalyzerOptions AnalyzerOptions?
 
     /// Gets or sets a value that tells whether the check stops after the parse in every case: it

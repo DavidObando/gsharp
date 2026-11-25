@@ -8,8 +8,10 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
+import System.Collections.Generic
 import System.Collections.Immutable
 import System.Threading
+import SystemObject = System.Object
 
 /// The kind of a failed lookup that a report states (ADR-0225).
 internal enum PrefixLookupKind {
@@ -118,6 +120,142 @@ internal sealed class PrefixCut {
 
     private var unfinishedTokenDiagnostics ImmutableArray[Diagnostic]
 
+    /// Gets or sets a value that tells whether a declaration after the cut can add a candidate to a call that
+    /// resolves before the cut: nothing follows the cut, or the bind could not keep the later declarations
+    /// (#6179).
+    internal prop LaterOverloadsPossible bool {
+        get;
+        set;
+    }
+
+    // #6179: the spans of the expressions whose type a later declaration can change. Bodies can bind in
+    // parallel, so the lock guards both collections.
+    private let provisionalGate object = SystemObject()
+    private let provisionalKeys HashSet[(Text SourceText, Span TextSpan)] = HashSet[(Text SourceText, Span TextSpan)]()
+    private let provisionalSpans List[(Text SourceText, Span TextSpan)] = List[(Text SourceText, Span TextSpan)]()
+    private let provisionalTrees Dictionary[SourceText, SyntaxTree] = Dictionary[SourceText, SyntaxTree](
+        ReferenceEqualityComparer.Instance
+    )
+
+    /// Records that a later declaration can change the type of [`node`](paramref) (#6179).
+    /// @param node An expression that binds before the cut.
+    internal func AddProvisional(node SyntaxNode) {
+        let tree = node.SyntaxTree
+        lock provisionalGate {
+            provisionalTrees[tree.Text] = tree
+        }
+        AddProvisional(node.Location)
+    }
+
+    private let fixedKeys HashSet[(Text SourceText, Span TextSpan)] = HashSet[(Text SourceText, Span TextSpan)]()
+
+    /// Records that no later declaration can change the type of [`node`](paramref): a call, a member access
+    /// or an index expression that the binder showed to be fixed (#6179).
+    /// @param node The expression.
+    internal func AddFixed(node SyntaxNode) {
+        let key = (node.SyntaxTree.Text, node.Span)
+        lock provisionalGate {
+            fixedKeys.Add(key)
+            provisionalTrees[node.SyntaxTree.Text] = node.SyntaxTree
+        }
+    }
+
+    /// Returns a value that tells whether the binder showed [`node`](paramref) to be fixed (#6179).
+    /// @param node The expression.
+    /// @returns `true` for a node that (cref:AddFixed) recorded.
+    internal func IsFixed(node SyntaxNode) bool {
+        let key = (node.SyntaxTree.Text, node.Span)
+        lock provisionalGate {
+            return fixedKeys.Contains(key)
+        }
+    }
+
+    /// Returns the trees in which the bind recorded an expression or a name (#6179).
+    /// @returns The trees.
+    internal func ProvisionalTreeList() List[SyntaxTree] {
+        lock provisionalGate {
+            return List[SyntaxTree](provisionalTrees.Values)
+        }
+    }
+
+    /// Records that the bind binds names in [`tree`](paramref), so that a report in it can follow a global
+    /// of another tree (#6179).
+    /// @param tree A tree of the compilation.
+    internal func AddTree(tree SyntaxTree) {
+        lock provisionalGate {
+            provisionalTrees[tree.Text] = tree
+        }
+    }
+
+    /// Returns the tree of [`text`](paramref) when the bind recorded an expression in it (#6179).
+    /// @param text A source text.
+    /// @returns The tree, or `null`.
+    internal func ProvisionalTree(text SourceText?) SyntaxTree? {
+        if text == nil {
+            return nil
+        }
+        lock provisionalGate {
+            return if provisionalTrees.TryGetValue(text, out var tree) {
+                tree
+            } else {
+                default(SyntaxTree?)
+            }
+        }
+    }
+
+    /// Records that a later declaration can change the type of the expression at [`location`](paramref)
+    /// (#6179).
+    /// @param location The location of an expression that binds before the cut.
+    internal func AddProvisional(location TextLocation) {
+        if location.Text is not{} text {
+            return
+        }
+        let key = (text, location.Span)
+        lock provisionalGate {
+            if provisionalKeys.Add(key) {
+                provisionalSpans.Add(key)
+            }
+        }
+    }
+
+    /// Returns a value that tells whether [`node`](paramref) is an expression whose type a later
+    /// declaration can change (#6179).
+    /// @param node A syntax node.
+    /// @returns `true` for a node at a location that (cref:AddProvisional) recorded.
+    internal func IsProvisional(node SyntaxNode) bool {
+        let key = (node.SyntaxTree.Text, node.Span)
+        lock provisionalGate {
+            return provisionalSpans.Count > 0 && provisionalKeys.Contains(key)
+        }
+    }
+
+    /// Gets a value that tells whether the bind recorded an expression whose type can change (#6179).
+    internal prop HasProvisional bool {
+        get {
+            lock provisionalGate {
+                return provisionalSpans.Count > 0
+            }
+        }
+    }
+
+    /// Returns a value that tells whether [`location`](paramref) contains an expression whose type a
+    /// later declaration can change (#6179).
+    /// @param location A diagnostic location.
+    /// @returns `true` when a recorded expression is in the location.
+    internal func ContainsProvisional(location TextLocation) bool {
+        let span = location.Span
+        lock provisionalGate {
+            for entry in provisionalSpans {
+                if object.ReferenceEquals(entry.Text, location.Text) &&
+                    span.Start <= entry.Span.Start &&
+                    entry.Span.End <= span.End {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     /// Gets or sets the span of the last source token before the cut, or an empty span at 0.
     internal prop LastToken TextSpan {
         get;
@@ -155,6 +293,15 @@ internal sealed class PrefixCut {
         } else {
             OpenMemberStart
         }
+        return IsInDeferredBodyAfter(memberStart, location)
+    }
+
+    /// Returns a value that tells whether [`location`](paramref) is in a function literal or a lambda that
+    /// starts at or after [`memberStart`](paramref) and before the cut.
+    /// @param memberStart The first position to examine, or -1 for none.
+    /// @param location A diagnostic location.
+    /// @returns `true` when a later statement can declare a local that the location sees.
+    internal func IsInDeferredBodyAfter(memberStart int32, location TextLocation) bool {
         if memberStart < 0 || !object.ReferenceEquals(location.Text, Text) || Tree is not{} tree {
             return false
         }
@@ -210,6 +357,10 @@ internal sealed class PrefixPremise {
 
         /// Gets the premise of a failed member lookup: a later declaration can declare the member.
         internal let LaterMember PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "later-member")
+
+        /// Gets the premise of an expression whose type a later declaration can change: a call that a later
+        /// overload, member or receiver function can retarget, or a local whose type such a call infers (#6179).
+        internal let LaterOverload PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "later-overload")
 
         /// Gets the premise of a check at the end of an open body.
         internal let RestOfBody PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "rest-of-body")
@@ -339,6 +490,317 @@ internal shared class PrefixBindingContext {
         } else {
             ClassifyFailedLookup(location, PrefixLookupKind.Name)
         }
+    }
+
+    /// Returns a value that tells whether a later local can hide a simple name at [`location`](paramref):
+    /// the location is in a function literal before the cut, and a later statement of the open member, or
+    /// of the top-level statements, can declare a local that the literal sees (#6179).
+    /// @param location The location of the name.
+    /// @returns `true` when a later local can hide what the name resolved to.
+    internal func LaterLocalCanHide(location TextLocation) bool {
+        if current.Value is not{} cut {
+            return false
+        }
+        return cut.IsInDeferredBodyOfOpenMember(location) ||
+            (cut.LaterDeclarationsPossible && cut.OpenMemberStart < 0 && cut.IsInDeferredBodyAfter(0, location))
+    }
+
+    /// Records that a later declaration can change the type of [`node`](paramref) (#6179).
+    /// @param node An expression that binds before the cut.
+    internal func AddProvisional(node SyntaxNode?) {
+        if node != nil && current.Value is {} cut {
+            cut.AddProvisional(node)
+        }
+    }
+
+    /// Records that the binder showed [`node`](paramref) to be fixed (#6179).
+    /// @param node A call, a member access or an index expression.
+    internal func AddFixed(node SyntaxNode?) {
+        if node != nil && current.Value is {} cut {
+            cut.AddFixed(node)
+        }
+    }
+
+    /// Records that the bind binds names in [`tree`](paramref) (#6179).
+    /// @param tree A tree of the compilation.
+    internal func AddTree(tree SyntaxTree) {
+        if current.Value is {} cut {
+            cut.AddTree(tree)
+        }
+    }
+
+    /// Records that a later declaration can change the type of the expression at [`location`](paramref)
+    /// (#6179).
+    /// @param location The location of an expression that binds before the cut.
+    internal func AddProvisional(location TextLocation) {
+        if current.Value is {} cut {
+            cut.AddProvisional(location)
+        }
+    }
+
+    /// Returns the premise of a report at [`location`](paramref) that contains an expression whose type
+    /// a later declaration can change, or `null` (#6179).
+    /// @param location The location of the report.
+    /// @returns (cref:PrefixPremise.LaterOverload) or `null`.
+    internal func ProvisionalPremise(location TextLocation) PrefixPremise? {
+        if current.Value is not{} cut || (!cut.HasProvisional && !cut.LaterOverloadsPossible) {
+            return nil
+        }
+        return if cut.ContainsProvisional(location) || StatementUsesProvisional(cut, location) {
+            PrefixPremise.LaterOverload
+        } else {
+            default(PrefixPremise?)
+        }
+    }
+
+    // A report can be located on a part of a statement that does not contain the expression it checks: the
+    // pattern of an `is`, the `!!` of an assertion, an index argument converted to the indexer's parameter.
+    // So a report counts as provisional when the innermost statement that contains it uses a provisional
+    // expression outside its nested statements (#6179).
+    private func StatementUsesProvisional(cut PrefixCut, location TextLocation) bool {
+        if cut.ProvisionalTree(location.Text) is not{} tree {
+            return false
+        }
+        let span = location.Span
+        var statement SyntaxNode? = nil
+        var node SyntaxNode = tree.Root
+        while true {
+            var next SyntaxNode? = nil
+            for child in node.GetChildren() {
+                if child.Span.Start <= span.Start && span.End <= child.Span.End && child.Span.Length > 0 {
+                    next = child
+                    break
+                }
+            }
+            if next == nil {
+                break
+            }
+            // A field or a property initializer has no statement; its declaration is the context.
+            if next is StatementSyntax || next is FieldDeclarationSyntax || next is PropertyDeclarationSyntax {
+                statement = next
+            }
+            node = next
+        }
+        return statement != nil &&
+            (
+            HeaderContainsProvisional(cut, statement, statement, false, false) ||
+                (cut.LaterOverloadsPossible && HeaderContainsUnproven(cut, statement, statement, false, span)) ||
+                HeaderUsesProvisionalName(cut, tree, statement, 4, HashSet[object](ReferenceEqualityComparer.Instance))
+        )
+    }
+
+    // A statement can read a variable whose type an earlier statement inferred from a provisional
+    // expression, through any form of read (an assignment target, the `await` of an `async let`, a narrowed
+    // read, the call of a function value). The check is by name, so it errs toward a provisional report: a
+    // name of the header that an earlier statement in scope, or an enclosing statement's header, also
+    // contains, where that statement uses a provisional expression, directly or by another such name.
+    private func HeaderUsesProvisionalName(
+        cut PrefixCut,
+        tree SyntaxTree,
+        statement SyntaxNode,
+        depth int32,
+        visited HashSet[object]
+    ) bool {
+        // The search errs toward a provisional report when it runs out of depth.
+        if depth < 0 {
+            return true
+        }
+        if !visited.Add(statement) {
+            return false
+        }
+        let names = HashSet[string](StringComparer.Ordinal)
+        CollectHeaderNames(statement, statement, false, names, declared: false)
+        if names.Count == 0 {
+            return false
+        }
+        let earlier = List[SyntaxNode]()
+        var current SyntaxNode = statement
+        while tree.GetParent(current) is {} parent {
+            if parent is StatementSyntax && parent is not BlockStatementSyntax {
+                earlier.Add(parent)
+            }
+            for sibling in parent.GetChildren() {
+                if sibling.Span.End <= statement.Span.Start &&
+                    (sibling is StatementSyntax || sibling is GlobalStatementSyntax) {
+                    earlier.Add(sibling)
+                }
+            }
+            current = parent
+        }
+        // A global is visible in every member, wherever its statement is, also in another tree.
+        for member in tree.Root.Members {
+            if member is GlobalStatementSyntax global && !(global.Span.End <= statement.Span.Start) {
+                earlier.Add(global)
+            }
+        }
+        for other in cut.ProvisionalTreeList() {
+            if !object.ReferenceEquals(other, tree) {
+                for member in other.Root.Members {
+                    if member is GlobalStatementSyntax global {
+                        earlier.Add(global)
+                    }
+                }
+            }
+        }
+        for entry in earlier {
+            let candidate SyntaxNode = if entry is GlobalStatementSyntax global {
+                global.Statement
+            } else {
+                entry
+            }
+            let declared = HashSet[string](StringComparer.Ordinal)
+            CollectHeaderNames(candidate, candidate, false, declared, declared: true)
+            if !declared.Overlaps(names) {
+                continue
+            }
+            if HeaderContainsProvisional(cut, candidate, candidate, false, false) ||
+                HeaderUsesProvisionalName(cut, tree, candidate, depth - 1, visited) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // With nothing after the cut, a call, a member access or an index expression of a statement's header
+    // counts as provisional unless the binder showed it to be fixed, so a binding path without a record
+    // errs toward a provisional report (#6179).
+    // A node that contains the report is still binding when the binder reports inside it; the premises of
+    // its call frame cover such a report.
+    private func HeaderContainsUnproven(
+        cut PrefixCut,
+        statement SyntaxNode,
+        node SyntaxNode,
+        inExpression bool,
+        report TextSpan
+    ) bool {
+        let containsReport = node.Span.Start <= report.Start && report.End <= node.Span.End
+        if (node is CallExpressionSyntax || node is IndexExpressionSyntax || IsOutermostAccessor(node)) &&
+            !containsReport &&
+            !cut.IsFixed(node) {
+            return true
+        }
+        for child in node.GetChildren() {
+            if child is SyntaxToken {
+                continue
+            }
+            if !inExpression && child is StatementSyntax && !object.ReferenceEquals(child, statement) {
+                continue
+            }
+            if child is FunctionLiteralExpressionSyntax || child is LambdaExpressionSyntax {
+                continue
+            }
+            if HeaderContainsUnproven(cut, statement, child, inExpression || child is ExpressionSyntax, report) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func IsOutermostAccessor(node SyntaxNode) bool -> node is AccessorExpressionSyntax &&
+        !(node.Parent is AccessorExpressionSyntax parent && object.ReferenceEquals(parent.RightPart, node))
+
+    // The identifiers of a statement's header, not those of its nested statements or of a function
+    // literal's body. With [`declared`](paramref), the names that it declares or writes (an identifier that
+    // is not a read in an expression, or the target of an assignment); otherwise the simple names that it
+    // reads (not the member name of an access).
+    private func CollectHeaderNames(
+        statement SyntaxNode,
+        node SyntaxNode,
+        inExpression bool,
+        names HashSet[string],
+        declared bool
+    ) {
+        for child in node.GetChildren() {
+            if child is SyntaxToken token {
+                if token.Kind == SyntaxKind.IdentifierToken && !token.IsMissing && IsNameOfKind(node, declared) {
+                    names.Add(token.ValueText)
+                }
+                continue
+            }
+            if !inExpression && child is StatementSyntax && !object.ReferenceEquals(child, statement) {
+                continue
+            }
+            if child is FunctionLiteralExpressionSyntax {
+                continue
+            }
+            CollectHeaderNames(statement, child, inExpression || child is ExpressionSyntax, names, declared)
+        }
+    }
+
+    // Whether an identifier whose parent is [`parent`](paramref) declares a name (with
+    // [`declared`](paramref)) or reads a simple name.
+    private func IsNameOfKind(parent SyntaxNode, declared bool) bool {
+        if parent is AssignmentExpressionSyntax {
+            return true
+        }
+        let read = (
+            parent is NameExpressionSyntax || parent is CallExpressionSyntax || parent is GenericNameExpressionSyntax
+        ) &&
+            !IsMemberName(parent)
+        return if declared {
+            parent is not ExpressionSyntax
+        } else {
+            read
+        }
+    }
+
+    private func IsMemberName(node SyntaxNode) bool -> node.Parent is AccessorExpressionSyntax accessor &&
+        object.ReferenceEquals(accessor.RightPart, node)
+
+    /// Returns a value that tells whether a later declaration can change the type of
+    /// [`variable`](paramref): the type is inferred from an expression whose type can change (#6179).
+    /// @param variable A local or a global that a name refers to.
+    /// @returns `true` when a reference to the variable has a type that can change.
+    internal func IsProvisionalVariable(variable VariableSymbol) bool {
+        if current.Value is not{} cut || variable is ParameterSymbol || variable.DeclaringSyntax is not{} declaration {
+            return false
+        }
+        if declaration is VariableDeclarationSyntax typed && typed.TypeClause != nil {
+            return false
+        }
+        let anyCall = variable is GlobalVariableSymbol && cut.LaterOverloadsPossible
+        if !anyCall && !cut.HasProvisional {
+            return false
+        }
+        let tree = declaration.SyntaxTree
+        var statement SyntaxNode = declaration
+        while statement is not StatementSyntax && tree.GetParent(statement) is {} parent {
+            statement = parent
+        }
+        // A global can be read in another body, which can bind first or come from the body cache. Any call
+        // in its declaration then counts (anyCall).
+        return HeaderContainsProvisional(cut, statement, statement, false, anyCall)
+    }
+
+    // The declaration part of [`statement`](paramref): the nested statements of a compound statement (the
+    // body of a `for` or an `if`) do not type its variables, but every part of an expression can, except
+    // the body of a function literal.
+    private func HeaderContainsProvisional(
+        cut PrefixCut,
+        statement SyntaxNode,
+        node SyntaxNode,
+        inExpression bool,
+        anyCall bool
+    ) bool {
+        if cut.IsProvisional(node) || (anyCall && node is CallExpressionSyntax) {
+            return true
+        }
+        for child in node.GetChildren() {
+            if child is SyntaxToken {
+                continue
+            }
+            if !inExpression && child is StatementSyntax && !object.ReferenceEquals(child, statement) {
+                continue
+            }
+            // A function literal declares its return type, so its body does not change its type.
+            if child is FunctionLiteralExpressionSyntax {
+                continue
+            }
+            if HeaderContainsProvisional(cut, statement, child, inExpression || child is ExpressionSyntax, anyCall) {
+                return true
+            }
+        }
+        return false
     }
 
     /// Returns a value that tells whether the type of [`value`](paramref) comes from the parameter that

@@ -474,9 +474,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// Reports that positional deconstruction needs a tuple or data struct.
     /// @param location The text location where the error was found.
     /// @param type The actual initializer type.
-    func ReportDeconstructionRequiresTupleOrDataStruct(location TextLocation, type TypeSymbol) -> Report(
+    /// @remarks ADR-0225 (#6179): a later `Deconstruct` member or receiver function can remove the report.
+    func ReportDeconstructionRequiresTupleOrDataStruct(location TextLocation, type TypeSymbol) -> ReportFailedLookup(
         location,
         DiagnosticDescriptors.DeconstructionRequiresTupleOrDataStruct,
+        PrefixLookupKind.Member,
         type
     )
 

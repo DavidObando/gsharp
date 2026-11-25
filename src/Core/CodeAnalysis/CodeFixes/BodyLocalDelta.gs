@@ -46,11 +46,16 @@ import System.Threading
 /// - a diagnostic outside the body touches a changed span;
 /// - an analyzer runs that is not body-local in scope (cref:AnalyzerScope.MemberBody), an analyzer
 ///   failed, ran out of time or reported an unsupported ID, or the analyzers report on the declared
-///   body, bound speculatively, other than they reported on it in the baseline (issue #6165).
+///   body, bound speculatively, other than they reported on it in the baseline (issue #6165);
+/// - the analyzers have a time budget, and an analyzer's time in the baseline plus its time on the new
+///   body is more than half the budget (issue #6183).
 ///
 /// The analyzers' diagnostics after the edit are the baseline's, without those that the dispatch on
 /// the edited member reported and with spans moved by the edit, and those that they report on the new
 /// body.
+///
+/// No analyzer code runs while the check holds the compilation's build gate (issue #6183). An analyzer
+/// can query a semantic model, and the index of a semantic model takes the same gate.
 internal shared class BodyLocalDelta {
     /// Assembles the diagnostics after the edit, before the host's filter, or gives the reason why it cannot.
     func TryCollect(
@@ -77,11 +82,33 @@ internal shared class BodyLocalDelta {
             declarations.HasNativeProtocols {
             return BodyLocalResult("the compilation has no published body pass")
         }
+        // Issue #6183: no analyzer code runs while this thread holds the build gate. An analyzer can
+        // query a semantic model, whose index takes the same gate, and the gate is not reentrant.
+        // So the analyzers initialize here and run after the gate is released.
+        let options = baseline.EffectiveOptions
+        if !options.Analyzers.IsEmpty {
+            let run = baseline.AnalyzerRun
+            if run == nil {
+                return BodyLocalResult("the baseline has no analyzer run")
+            }
+            if !GSharpAnalyzerDriver.AreBodyLocal(options.Analyzers, compilation) {
+                return BodyLocalResult("an analyzer is not body-local in scope")
+            }
+            if run.Diagnostics.Any(IsAnalyzerHostDiagnostic) {
+                return BodyLocalResult("an analyzer failed, ran out of time or reported an unsupported ID")
+            }
+            // Issue #6183: the check after the run on the new body adds that run's time.
+            if options.AnalyzerOptions?.TimeBudgetMilliseconds is {} budget &&
+                !FitTimeBudget(run, nil, options.Analyzers.Length, budget) {
+                return BodyLocalResult(TimeBudgetReason)
+            }
+        }
         if !compilation.TryEnterBuildGate(cancellationToken) {
             return BodyLocalResult("the compilation cannot build")
         }
+        var result BodyLocalResult
         try {
-            return Collect(
+            result = Collect(
                 baseline,
                 compilation,
                 snapshot,
@@ -97,6 +124,22 @@ internal shared class BodyLocalDelta {
         } finally {
             compilation.ExitBuildGate()
         }
+        let analyzerPhase = result.AnalyzerPhase
+        if !result.Succeeded || analyzerPhase == nil {
+            return result
+        }
+        let analyzerItems = List[Diagnostic]()
+        let reason string? = analyzerPhase(analyzerItems)
+        if reason != nil {
+            return BodyLocalResult(reason)
+        }
+        // A successor can retire the compilation while the analyzers run without the gate, and the
+        // retirement re-points the symbols that they read.
+        if !compilation.TryEnterBuildGate(cancellationToken) {
+            return BodyLocalResult("the compilation cannot build")
+        }
+        compilation.ExitBuildGate()
+        return BodyLocalResult(result.Diagnostics.AddRange(analyzerItems))
     }
 
     private func Collect(
@@ -144,22 +187,6 @@ internal shared class BodyLocalDelta {
             return BodyLocalResult("the body is not the body of one function or method")
         }
         let options = baseline.EffectiveOptions
-        if !options.Analyzers.IsEmpty {
-            let run = baseline.AnalyzerRun
-            if run == nil {
-                return BodyLocalResult("the baseline has no analyzer run")
-            }
-            if !GSharpAnalyzerDriver.AreBodyLocal(options.Analyzers, compilation) {
-                return BodyLocalResult("an analyzer is not body-local in scope")
-            }
-            // A time budget covers an analyzer's whole run, and a run on one body starts its own clock.
-            if options.AnalyzerOptions?.TimeBudgetMilliseconds != nil {
-                return BodyLocalResult("the analyzers have a time budget, which covers the whole run")
-            }
-            if run.Diagnostics.Any(IsAnalyzerHostDiagnostic) {
-                return BodyLocalResult("an analyzer failed, ran out of time or reported an unsupported ID")
-            }
-        }
         if function.IsPInvoke ||
             function.NullableSequenceSpecialization != NullableSequenceSpecializationKind.None ||
             function.IsReturnTypeInferred {
@@ -255,14 +282,16 @@ internal shared class BodyLocalDelta {
             }
             body.Add(moved!!)
         }
-        // The analyzers' diagnostics (issue #6165).
-        let analyzerItems = List[Diagnostic]()
+        // The analyzers' diagnostics (issue #6165) come from a phase that runs after the build gate is
+        // released (issue #6183).
+        var analyzerPhase Func[List[Diagnostic], string?]? = nil
         if !options.Analyzers.IsEmpty {
-            let reason = CollectAnalyzerDiagnostics(
+            let target = function
+            analyzerPhase = (analyzerItems List[Diagnostic]) -> CollectAnalyzerDiagnostics(
                 baseline,
                 compilation,
                 snapshot,
-                function,
+                target,
                 oldDeclaration,
                 newDeclaration,
                 speculative,
@@ -272,9 +301,6 @@ internal shared class BodyLocalDelta {
                 analyzerItems,
                 cancellationToken
             )
-            if reason != nil {
-                return BodyLocalResult(reason)
-            }
         }
         let declarationItems = snapshot.ApplySourceSuppressions(declaration.ToImmutableArray())
         let bodyItems = snapshot.ApplySourceSuppressions(body.ToImmutableArray())
@@ -291,7 +317,7 @@ internal shared class BodyLocalDelta {
             }
             items = items.AddRange(snapshot.ApplySourceSuppressions(documentation.ToImmutableArray()))
         }
-        return BodyLocalResult(items.AddRange(analyzerItems))
+        return BodyLocalResult(items, analyzerPhase)
     }
 
     // Issue #6165: the analyzers' diagnostics after the edit, or the reason why the check cannot give
@@ -370,6 +396,10 @@ internal shared class BodyLocalDelta {
         if after == nil || after.Diagnostics.Any(IsAnalyzerHostDiagnostic) {
             return "an analyzer failed on the new body"
         }
+        if options.AnalyzerOptions?.TimeBudgetMilliseconds is {} budget &&
+            !FitTimeBudget(run, after, options.Analyzers.Length, budget) {
+            return TimeBudgetReason
+        }
         for d in after.Diagnostics {
             if !TryRelocate(d, oldText, newText, spanMap, out var moved) {
                 return "an analyzer diagnostic of the new body touches the edit outside the new body"
@@ -380,6 +410,38 @@ internal shared class BodyLocalDelta {
         }
         return nil
     }
+
+    // Issue #6183: the time budget (AnalyzerOptions.TimeBudgetMilliseconds) limits the time of each
+    // analyzer over the whole run, and the full run reports GS9302 when an analyzer goes over it. The
+    // time of the full run after the edit is the baseline's time, less the declared body, plus the new
+    // body. The baseline's time plus the new body's time is more than that. The check keeps the
+    // body-local path only when that sum, multiplied by this factor, is not more than the budget.
+    // Times change from run to run, so the factor keeps the full run well under the budget.
+    internal const TimeBudgetMarginFactor int64 = 2
+
+    internal const TimeBudgetReason string = "an analyzer's time is not well under the time budget"
+
+    // Whether each analyzer's time in the baseline, plus its time on the new body when one is given, is
+    // well under the budget. It is false when a run gives no time for each analyzer.
+    internal func FitTimeBudget(baseline AnalyzerRun, newBody AnalyzerRun?, analyzerCount int32, budget int32) bool {
+        if baseline.Elapsed.Length != analyzerCount || (newBody != nil && newBody.Elapsed.Length != analyzerCount) {
+            return false
+        }
+        for var i = 0; i < analyzerCount; i++ {
+            var total = baseline.Elapsed[i]
+            if newBody != nil {
+                total += newBody.Elapsed[i]
+            }
+            if !FitsTimeBudget(total, budget) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // Whether a time, multiplied by the margin factor, is not more than the budget.
+    internal func FitsTimeBudget(time TimeSpan, budget int32) bool -> budget >= 0 &&
+        time.Ticks <= TimeSpan.FromMilliseconds(budget).Ticks / TimeBudgetMarginFactor
 
     // GS9300 (an analyzer threw), GS9302 (it ran out of time) and GS9304 (it reported an ID it does not
     // support, once per run): a run on one body would not report them as a run on the compilation does.
@@ -630,6 +692,18 @@ internal class BodyLocalResult {
     init(diagnostics ImmutableArray[Diagnostic]) {
         Diagnostics = diagnostics
         Succeeded = true
+    }
+
+    init(diagnostics ImmutableArray[Diagnostic], analyzerPhase Func[List[Diagnostic], string?]?) {
+        Diagnostics = diagnostics
+        Succeeded = true
+        AnalyzerPhase = analyzerPhase
+    }
+
+    // Issue #6183: adds the analyzers' diagnostics after the edit to the list, or gives the reason why it
+    // cannot. The caller runs it after it releases the compilation's build gate.
+    prop AnalyzerPhase Func[List[Diagnostic], string?]? {
+        get;
     }
 
     prop Succeeded bool {

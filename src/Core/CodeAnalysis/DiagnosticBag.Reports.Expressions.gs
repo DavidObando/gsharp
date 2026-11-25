@@ -110,9 +110,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// Reports that indexing was attempted on a non-array expression.
     /// @param location The text location.
     /// @param type The actual type.
-    func ReportTypeNotIndexable(location TextLocation, type TypeSymbol) -> Report(
+    /// @remarks ADR-0225 (#6179): a later indexer or `GetEnumerator` member can remove the report.
+    func ReportTypeNotIndexable(location TextLocation, type TypeSymbol) -> ReportFailedLookup(
         location,
         DiagnosticDescriptors.TypeNotIndexable,
+        PrefixLookupKind.Member,
         type
     )
 

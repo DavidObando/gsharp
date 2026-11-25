@@ -865,7 +865,16 @@ func Value(x int32) int32 {
                 "let local__ = func (a int32) int32 {\n    return a\n}\nlet localResult__ = local__()",
                 "GS0144",
                 DiagnosticFinality.Final
-            )
+            ),
+            // #6179: no later declaration changes the type of a literal, of a local that a literal types, or of a
+            // member of an imported type. The last statement keeps the report away from the cut.
+            ("let mismatch__ int32 = \"s\"\nlet after__ = 0", "GS0155", DiagnosticFinality.Final),
+            (
+                "let fromLiteral__ = 1\nlet localMismatch__ string = fromLiteral__\nlet after__ = 0",
+                "GS0155",
+                DiagnosticFinality.Final
+            ),
+            ("let importedMismatch__ string = System.Math.Abs(1)\nlet after__ = 0", "GS0155", DiagnosticFinality.Final)
         }
 
         private func Bind(source string, remainder PrefixRemainder) PrefixBindResult -> BindWith(

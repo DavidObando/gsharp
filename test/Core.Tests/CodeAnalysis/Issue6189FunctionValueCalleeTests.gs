@@ -246,6 +246,70 @@ open class Issue6189FunctionValueCalleeTests {
         )
     }
 
+    @Theory
+    @InlineData("c.G(x, 2)", "c.G(x)", "G", "FieldSymbol", "((int32) -> int32)!")
+    @InlineData("c.G?(x, 2)", "c.G?(x)", "G", "FieldSymbol", "((int32) -> int32)!")
+    @InlineData("c.P(x, 2)", "c.P(x)", "P", "PropertySymbol", "((int32) -> int32)!")
+    @InlineData("C.SG(x, 2)", "C.SG(x)", "SG", "FieldSymbol", "((int32) -> int32)!")
+    @InlineData("c.H(x, 2)", "c.H(x)", "H", "FieldSymbol", "Named!")
+    func FailedCallThroughAnObliviousMemberFunctionValue_ReportsGS0144AndCalleeAnswers(
+        failed string,
+        bound string,
+        member string,
+        symbolKind string,
+        type string
+    ) {
+        let template = `package P
+
+delegate Named(v int32) int32;
+
+class C {
+    @Oblivious var G (int32) -> int32 = (v int32) -> v
+    @Oblivious prop P (int32) -> int32 {
+        get { return (v int32) -> v }
+    }
+    @Oblivious var H Named = (v int32) -> v
+    shared {
+        @Oblivious var SG (int32) -> int32 = (v int32) -> v
+    }
+}
+
+func F(c C) {
+    let x = 1
+    let k = @@CALL
+}
+`
+        AssertCalleeAnswersAsInACallThatBinds(template, failed, bound, "GS0144")
+        for source in[]string{failed, bound} {
+            let (model, tree, _) = CreateModel(template.Replace("@@CALL", source))
+            let callee = LastCall(tree).Identifier
+            let symbol = Assert.IsAssignableFrom[Symbol](model.GetSymbolInfo(callee).Symbol)
+            Assert.Equal(symbolKind, symbol.GetType().Name)
+            Assert.Equal(member, symbol.Name)
+            Assert.Equal(type, model.GetTypeInfo(callee).Type?.ToString())
+        }
+    }
+
+    @Fact
+    func ObliviousMemberFunctionValueThroughAReceiver_RuntimeControl() {
+        let result = GSharp.Tests.EmittedOracle.Evaluate(`package P
+
+class C {
+    @Oblivious var G (int32) -> int32 = (v int32) -> v + 10
+}
+
+func Run() int32 {
+    let c = C()
+    let a = c.G(5)
+    let b = c.G?(6) ?? 0
+    return a + b
+}
+Run()
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(31, result.Value)
+    }
+
     @Fact
     func MemberCallOnTheResultOfAFunctionValueWithTheSameName_AnswersTheMethod() {
         // Both calls are named `G`; the field's load answers only the call that invokes it.

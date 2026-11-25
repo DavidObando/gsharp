@@ -1999,7 +1999,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         graph ReturnContractGraph,
         requirePromotion bool = false,
         awaitDepth int32 = 0,
-        visited HashSet[(Symbol ISymbol, Path string, Depth int32)]? = nil,
+        visited HashSet[(Symbol ISymbol, Path string, Depth int32, RequirePromotion bool)]? = nil,
         tuplePath string = ""
     ) bool {
         if awaitDepth != 0 {
@@ -2009,8 +2009,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             if !requirePromotion && ProjectedSourceTypeIsNullable(symbol, awaitDepth, tuplePath) {
                 return true
             }
-            let seen = visited ?? HashSet[(Symbol ISymbol, Path string, Depth int32)]()
-            if !seen.Add((symbol, tuplePath, awaitDepth)) {
+            // Issue #6038: Include requirePromotion so a narrowed branch cannot suppress a later unnarrowed traversal of the same source.
+            let seen = visited ?? HashSet[(Symbol ISymbol, Path string, Depth int32, RequirePromotion bool)]()
+            if !seen.Add((symbol, tuplePath, awaitDepth, requirePromotion)) {
                 return false
             }
             if !TryGetSourceMember(compilation, symbol, out var projectedOwner, out var projectedSource) {

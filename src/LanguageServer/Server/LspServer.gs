@@ -127,7 +127,10 @@ class LspServer {
         this.initializationOptions = request?.InitializationOptions ?? LanguageServerInitializationOptions()
         return Task.FromResult(
             InitializeResult{
-                Capabilities: ServerCapabilitiesFactory.Create(this.initializationOptions),
+                Capabilities: ServerCapabilitiesFactory.Create(
+                    this.initializationOptions,
+                    this.codeActionClientOptions
+                ),
                 ServerInfo: ServerInfo{Name: "GSharp Language Server", Version: "1.0.0"}
             }
         )
@@ -645,7 +648,7 @@ class LspServer {
     ) Task[CodeAction] {
         let uri DocumentUri? = DocumentUri.From(request.Data?.Uri)
         if uri == nil {
-            return Task.FromResult(request)
+            return Task.FromResult(CodeActionComputer.Unresolved(request))
         }
         return this.ReadDocumentAsync(
             TextDocumentIdentifier{Uri: uri},
@@ -655,10 +658,86 @@ class LspServer {
                 this.codeActionClientOptions,
                 ct
             ),
-            request,
+            CodeActionComputer.Unresolved(request),
             cancellationToken,
             caller: "CodeActionResolveAsync"
         )
+    }
+
+    // ADR-0227 D5 (issue #6185): the client runs the command of a fix with placeholders after it applies
+    // the edit. The server then asks the client to select the first placeholder. It sends the request
+    // only when the document holds the placeholder's text at the range, and it does not wait for the
+    // reply.
+    @JsonRpcMethod("workspace/executeCommand", UseSingleObjectParameterDeserialization = true)
+    async func ExecuteCommandAsync(
+        request ExecuteCommandParams,
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) Task[object?] {
+        if request?.Command != CodeActionComputer.SelectPlaceholderCommand ||
+            !this.codeActionClientOptions.SupportsShowDocument {
+            return nil
+        }
+        let selection SelectPlaceholderArguments? = ReadSelection(request.Arguments)
+        if selection == nil {
+            return nil
+        }
+        let uri DocumentUri? = DocumentUri.From(selection.Uri)
+        if uri == nil {
+            return nil
+        }
+        // The edit can name a document by another encoding of its path than the client opened it with,
+        // so the lookup matches the path (ADR-0227 D7). The lookup, the text check and the request are
+        // under one hold of the gate, so a later didChange or didClose comes after the request.
+        await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false)
+        try {
+            let content DocumentContent? = LspServer.FindOpenDocument(this.documentContentService, uri)
+            if content != nil && CodeActionComputer.HoldsPlaceholder(content, selection) {
+                this.SendShowDocument(ShowDocumentParams{Uri: uri, TakeFocus: true, Selection: selection.Range})
+            }
+        } finally {
+            this.gate.Release()
+        }
+        return nil
+    }
+
+    // The one argument of the select-placeholder command, or `null` when it is not complete.
+    private func ReadSelection(arguments([]JsonElement)?) SelectPlaceholderArguments? {
+        if arguments == nil || arguments.Length != 1 {
+            return nil
+        }
+        try {
+            let selection SelectPlaceholderArguments? = arguments[0].Deserialize[SelectPlaceholderArguments](
+                LspJson.Options
+            )
+            if selection == nil ||
+                selection.Uri == nil ||
+                selection.Text == nil ||
+                selection.Range?.Start == nil ||
+                selection.Range.End == nil {
+                return nil
+            }
+            return selection
+        } catch (ex JsonException) {
+            LogHandlerException("ExecuteCommandAsync", ex)
+            return nil
+        }
+    }
+
+    private func SendShowDocument(request ShowDocumentParams) {
+        let connection JsonRpc? = this.rpc
+        if connection == nil {
+            return
+        }
+        try {
+            // The reply only tells whether the client showed the document, so the server does not wait.
+            let _ = connection.InvokeWithParameterObjectAsync[JsonElement]("window/showDocument", request).ContinueWith(
+                (t Task[JsonElement]) -> t.Exception,
+                TaskContinuationOptions.OnlyOnFaulted
+            )
+        } catch {
+            // The client may have disconnected.
+
+        }
     }
 
     @JsonRpcMethod("textDocument/codeLens", UseSingleObjectParameterDeserialization = true)
@@ -1367,6 +1446,15 @@ class LspServer {
                             this.codeActionClientOptions.SupportsResolveEdit = true
                         }
                     }
+                }
+                // ADR-0227 D5 (issue #6185): the client selects a range on `window/showDocument`.
+                if capabilities.TryGetProperty("window", out var window) &&
+                    window.ValueKind == JsonValueKind.Object &&
+                    window.TryGetProperty("showDocument", out var showDocument) &&
+                    showDocument.ValueKind == JsonValueKind.Object &&
+                    showDocument.TryGetProperty("support", out var showDocumentSupport) &&
+                    showDocumentSupport.ValueKind == JsonValueKind.True {
+                    this.codeActionClientOptions.SupportsShowDocument = true
                 }
                 if capabilities.TryGetProperty("workspace", out var workspace) &&
                     workspace.ValueKind == JsonValueKind.Object &&

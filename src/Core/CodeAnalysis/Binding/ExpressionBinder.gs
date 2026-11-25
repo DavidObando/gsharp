@@ -1723,7 +1723,12 @@ internal partial class ExpressionBinder {
                 return BindExpression((cast[SpreadElementExpressionSyntax](syntax)).Expression, canBeVoid)
             }
             case SyntaxKind.AccessorExpression {
-                return BindAccessorExpression(cast[AccessorExpressionSyntax](syntax))
+                let accessor = cast[AccessorExpressionSyntax](syntax)
+                let boundAccess = BindAccessorExpression(accessor)
+                // #6179: a later member of a type in a receiver's hierarchy can hide a member that the chain
+                // reads.
+                PrefixRetarget.NoteAccess(accessor, boundAccess)
+                return boundAccess
             }
             case SyntaxKind.ArrayCreationExpression {
                 return BindArrayCreationExpression(cast[ArrayCreationExpressionSyntax](syntax))
@@ -1917,6 +1922,13 @@ internal partial class ExpressionBinder {
     }
 
     private func BindNameExpression(syntax NameExpressionSyntax) BoundExpression {
+        let bound = BindNameExpressionUnrecorded(syntax)
+        // #6179: a local whose type a later declaration can change gives its references that premise.
+        PrefixRetarget.NoteName(syntax, bound)
+        return bound
+    }
+
+    private func BindNameExpressionUnrecorded(syntax NameExpressionSyntax) BoundExpression {
         let name = syntax.IdentifierToken.ValueText
         if syntax.IdentifierToken.IsMissing {
             // This means the token was inserted by the parser. We already

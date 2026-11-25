@@ -166,4 +166,12 @@ class ServerCapabilities {
 
     @JsonPropertyName("diagnosticProvider")
     prop DiagnosticProvider DiagnosticOptions
+
+    @JsonPropertyName("executeCommandProvider")
+    prop ExecuteCommandProvider ExecuteCommandOptions?
+}
+
+class ExecuteCommandOptions {
+    @JsonPropertyName("commands")
+    prop Commands[]string
 }

@@ -585,6 +585,16 @@ internal partial class OverloadResolver {
                 return true
             }
         }
+        for importedType in binderCtx.GetStaticImportTypes() {
+            if BinderContext.ImportedTypeExposesStaticCallable(importedType, name) {
+                return true
+            }
+        }
+        for clrType in Scope.EnumerateStaticImportClrTypes() {
+            if BinderContext.ClrTypeExposesStaticCallable(clrType, name) {
+                return true
+            }
+        }
         return false
     }
 
@@ -730,6 +740,17 @@ internal partial class OverloadResolver {
             }
             binderCtx.CompleteCall(bound, syntax.Arguments, call: syntax)
             CallCandidateRecorder.Stamp(frame, bound)
+            // #6179: a later declaration can retarget the call and change the type of its result.
+            PrefixRetarget.NoteCall(
+                syntax,
+                if resolvedType == nil {
+                    PrefixCallKind.Name
+                } else {
+                    PrefixCallKind.Member
+                },
+                bound,
+                resolvedType
+            )
             return bound
         } finally {
             CallCandidateRecorder.End(frame)
@@ -1746,7 +1767,8 @@ internal partial class OverloadResolver {
             let fixedDiagnostics = Diagnostics
             let fixedPushed = fixedDiagnostics.PushCallFrame(
                 syntax,
-                if variable is LocalVariableSymbol {
+                // #6179: a local whose type a call infers changes with that call.
+                if variable is LocalVariableSymbol && !PrefixBindingContext.IsProvisionalVariable(variable) {
                     PrefixCallKind.Fixed
                 } else {
                     PrefixCallKind.Name
@@ -1786,7 +1808,9 @@ internal partial class OverloadResolver {
             let fixedDiagnostics = Diagnostics
             let fixedPushed = fixedDiagnostics.PushCallFrame(
                 syntax,
-                if namedDelegateVar is LocalVariableSymbol {
+                if namedDelegateVar is LocalVariableSymbol && !PrefixBindingContext.IsProvisionalVariable(
+                    namedDelegateVar
+                ) {
                     PrefixCallKind.Fixed
                 } else {
                     PrefixCallKind.Name
@@ -1963,45 +1987,18 @@ internal partial class OverloadResolver {
         }
         var explicitOverloadTypeArguments = default(ImmutableArray[TypeSymbol])
         if overloadSet.Length > 1 {
-            if syntax.TypeArgumentList != nil {
-                let explicitArguments = ImmutableArray.CreateBuilder[TypeSymbol](
-                    syntax.TypeArgumentList.Arguments.Count
-                )
-                for explicitArgument in syntax.TypeArgumentList!!.Arguments {
-                    let boundTypeArgument TypeSymbol? = bindTypeClause(explicitArgument)
-                    if boundTypeArgument == nil {
-                        return BoundErrorExpression(nil)
-                    }
-                    explicitArguments.Add(boundTypeArgument)
-                }
-                explicitOverloadTypeArguments = explicitArguments.MoveToImmutable()
-                let constraintMatches = ImmutableArray.CreateBuilder[FunctionSymbol]()
-                for candidate in overloadSet {
-                    if candidate.TypeParameters.Length != explicitOverloadTypeArguments.Length {
-                        continue
-                    }
-                    // Issue #4043: a DEPENDENT bound is answered on the whole
-                    // vector, so build the positional map before asking.
-                    let explicitVector = BuildTypeArgumentVector(
-                        candidate.TypeParameters,
-                        explicitOverloadTypeArguments,
-                        candidate.StaticOwnerType ?? candidate.ReceiverType
-                    )
-                    var constraintsSatisfied = true
-                    for var i = 0; i < candidate.TypeParameters.Length; i++ {
-                        constraintsSatisfied &= satisfiesConstraint(
-                            explicitOverloadTypeArguments[i],
-                            candidate.TypeParameters[i],
-                            explicitVector
-                        )
-                    }
-                    if constraintsSatisfied {
-                        constraintMatches.Add(candidate)
-                    }
-                }
-                if constraintMatches.Count > 0 {
-                    overloadSet = constraintMatches.ToImmutable()
-                }
+            if syntax.TypeArgumentList is {} explicitTypeArgumentList &&
+                !TrySelectCandidatesByExplicitTypeArguments(
+                overloadSet,
+                explicitTypeArgumentList,
+                function.Name,
+                syntax.Arguments.Count,
+                receiverType: nil,
+                typeArgumentsAlreadyBound: false,
+                out overloadSet,
+                out explicitOverloadTypeArguments
+            ) {
+                return BoundErrorExpression(nil)
             }
             let selected FunctionSymbol? = SelectBestUserOverload(
                 overloadSet,

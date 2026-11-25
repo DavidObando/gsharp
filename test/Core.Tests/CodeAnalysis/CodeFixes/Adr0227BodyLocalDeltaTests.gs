@@ -19,6 +19,7 @@ import System.Collections.Immutable
 import System.IO
 import System.Linq
 import System.Threading
+import System.Threading.Tasks
 import Xunit
 
 /// ADR-0227 D4 (issue #6128): the body-local check of the diagnostic-delta gate gives the delta of the
@@ -577,12 +578,12 @@ open class Adr0227BodyLocalDeltaTests {
     }
 
     @Fact
-    func BodyLocalAnalyzersWithATimeBudget_FallBack() {
-        // The budget covers the whole run; a run on the edited body alone would start a clock of its own.
-        const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n"
+    func BodyLocalAnalyzersWithATimeBudget_AndAmpleHeadroom_AreBodyLocal() {
+        // Issue #6183: the analyzers take a few milliseconds of a 60-second budget.
+        const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n\nfunc G() int32 {\n    let a = 2\n    return a\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
         let compilation = Compilation(tree)
-        let changes = Changes(tree, "return 1", "return 2")
+        let changes = Changes(tree, "return 1", "let b = 2\n    return b")
         let service = CodeFixService(CodeFixRegistry())
         let set = Analyzers(BodyLocalAnalyzers())
         let budget = AnalyzerOptions{TimeBudgetMilliseconds: 60000}
@@ -599,9 +600,122 @@ open class Adr0227BodyLocalDeltaTests {
             changes,
             ImmutableArray[Diagnostic].Empty
         )
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+        Assert.Contains(local.Added, (d Diagnostic) -> d.Id == "TA0001")
+        AssertSameDelta(full, local, "ample time budget")
+    }
+
+    @Fact
+    func BodyLocalAnalyzersNearTheTimeBudget_FallBack() {
+        // Issue #6183: the baseline gives each analyzer a time that is more than half the budget. The
+        // times are set, not measured, so the test does not depend on the load of the machine.
+        const source = "package P\n\nfunc F() int32 {\n    return 1\n}\n\nfunc G() int32 {\n    let a = 2\n    return a\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "f0.gs"))
+        let compilation = Compilation(tree)
+        let changes = Changes(tree, "return 1", "let b = 2\n    return b")
+        let service = CodeFixService(CodeFixRegistry())
+        let set = Analyzers(BodyLocalAnalyzers())
+        let budget = AnalyzerOptions{TimeBudgetMilliseconds: 60000}
+        let full = service.ComputeDelta(
+            DeltaBaseline.Create(
+                compilation,
+                DeltaOptions{BodyLocalBind: false, Analyzers: set, AnalyzerOptions: budget}
+            ),
+            changes,
+            ImmutableArray[Diagnostic].Empty
+        )
+        let measured = DeltaBaseline.Create(compilation, DeltaOptions{Analyzers: set, AnalyzerOptions: budget})
+        let run = measured.AnalyzerRun!!
+        Assert.Equal(set.Length, run.Elapsed.Length)
+        // One analyzer near the budget is enough: the other keeps its measured time.
+        let near = run.Elapsed.SetItem(1, TimeSpan.FromMilliseconds(30001))
+        let baseline = DeltaBaseline(
+            compilation,
+            measured.EffectiveOptions,
+            measured.Diagnostics,
+            AnalyzerRun(run.Diagnostics, run.Origins, near)
+        )
+        let local = service.ComputeDelta(baseline, changes, ImmutableArray[Diagnostic].Empty)
         Assert.False(local.BodyLocal)
-        Assert.Equal("the analyzers have a time budget, which covers the whole run", local.BodyLocalFallbackReason)
+        Assert.Equal(BodyLocalDelta.TimeBudgetReason, local.BodyLocalFallbackReason)
+        Assert.Contains(local.Added, (d Diagnostic) -> d.Id == "TA0001")
         AssertSameDelta(full, local, "time budget")
+        // The same times without a budget give the body-local path.
+        let unbudgeted = DeltaBaseline.Create(compilation, DeltaOptions{Analyzers: set})
+        let free = service.ComputeDelta(
+            DeltaBaseline(
+                compilation,
+                unbudgeted.EffectiveOptions,
+                unbudgeted.Diagnostics,
+                AnalyzerRun(unbudgeted.AnalyzerRun!!.Diagnostics, unbudgeted.AnalyzerRun!!.Origins, near)
+            ),
+            changes,
+            ImmutableArray[Diagnostic].Empty
+        )
+        Assert.True(free.BodyLocal, free.BodyLocalFallbackReason)
+        AssertSameDelta(full, free, "no time budget")
+    }
+
+    @Fact
+    func FitTimeBudget_AddsTheNewBodysTime_AndKeepsHalfTheBudget() {
+        // Issue #6183: each analyzer's baseline time plus its time on the new body, times two, must not
+        // be more than the budget.
+        let none = ImmutableArray[Diagnostic].Empty
+        let origins = ImmutableArray[Symbol?].Empty
+        let baseline = AnalyzerRun(none, origins, ImmutableArray.Create(Ms(10), Ms(300)))
+        let small = AnalyzerRun(none, origins, ImmutableArray.Create(Ms(5), Ms(200)))
+        let large = AnalyzerRun(none, origins, ImmutableArray.Create(Ms(5), Ms(201)))
+        Assert.True(BodyLocalDelta.FitTimeBudget(baseline, nil, 2, 1000))
+        Assert.True(BodyLocalDelta.FitTimeBudget(baseline, small, 2, 1000))
+        Assert.False(BodyLocalDelta.FitTimeBudget(baseline, large, 2, 1000))
+        Assert.False(BodyLocalDelta.FitTimeBudget(baseline, nil, 2, 599))
+        Assert.True(BodyLocalDelta.FitTimeBudget(baseline, nil, 2, 600))
+        // A run without a time for each analyzer does not fit.
+        Assert.False(BodyLocalDelta.FitTimeBudget(baseline, nil, 3, 60000))
+        Assert.False(
+            BodyLocalDelta.FitTimeBudget(baseline, AnalyzerRun(none, origins, ImmutableArray.Create(Ms(1))), 2, 60000)
+        )
+        Assert.False(BodyLocalDelta.FitsTimeBudget(TimeSpan.Zero, -1))
+    }
+
+    private func Ms(n float64) TimeSpan -> TimeSpan.FromMilliseconds(n)
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func BodyLocalAnalyzerThatQueriesTheSemanticModelOfAnotherTree_OnTheNewBody_DoesNotDeadlock(budgeted bool) {
+        // The analyzer builds a semantic-model index of another tree only for the new body. Building an
+        // index takes the compilation's build gate, so the check must not hold that gate while it runs
+        // the analyzers.
+        let sources = ImmutableArray.Create(
+            "package P\n\nfunc F() int32 {\n    return 1\n}\n",
+            "package P\n\nfunc G() int32 -> 2\n"
+        )
+        let trees = Parse(sources)
+        let compilation = Compilation(trees.ToArray())
+        let changes = Changes(trees[0], "return 1", "return G()")
+        let service = CodeFixService(CodeFixRegistry())
+        let set = ImmutableArray.Create[GSharpDiagnosticAnalyzer](ModelQueryReporter())
+        let budget = if budgeted {
+            AnalyzerOptions{TimeBudgetMilliseconds: 60000}
+        } else {
+            default(AnalyzerOptions?)
+        }
+        let full = service.ComputeDelta(
+            DeltaBaseline.Create(
+                compilation,
+                DeltaOptions{BodyLocalBind: false, Analyzers: set, AnalyzerOptions: budget}
+            ),
+            changes,
+            ImmutableArray[Diagnostic].Empty
+        )
+        let baseline = DeltaBaseline.Create(compilation, DeltaOptions{Analyzers: set, AnalyzerOptions: budget})
+        let work = Task.Run(() -> service.ComputeDelta(baseline, changes, ImmutableArray[Diagnostic].Empty))
+        Assert.True(work.Wait(TimeSpan.FromSeconds(120)), "the body-local check did not finish")
+        let local = work.Result
+        Assert.True(local.BodyLocal, local.BodyLocalFallbackReason)
+        Assert.Contains(local.Added, (d Diagnostic) -> d.Id == "TA0009" && d.Message.Contains("G"))
+        AssertSameDelta(full, local, "semantic-model query")
     }
 
     @Fact
@@ -668,6 +782,15 @@ open class Adr0227BodyLocalDeltaTests {
             isEnabledByDefault: true
         )
 
+        let QueryRule DiagnosticDescriptor = DiagnosticDescriptor(
+            "TA0009",
+            "Model query",
+            "Call; f1.gs declares {0}.",
+            "Testing",
+            DiagnosticSeverity.Warning,
+            isEnabledByDefault: true
+        )
+
         let BodyRule DiagnosticDescriptor = DiagnosticDescriptor(
             "TA0002",
             "Body",
@@ -695,6 +818,35 @@ open class Adr0227BodyLocalDeltaTests {
                     }
                 },
                 Enum.GetValues[BoundNodeKind]()
+            )
+        }
+    }
+
+    // Reports each call with the function that the semantic model of the file `f1.gs` declares first.
+    private class ModelQueryReporter : GSharpDiagnosticAnalyzer {
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray.Create(
+            Adr0227BodyLocalDeltaTests.QueryRule
+        )
+
+        override func Initialize(context AnalysisContext) {
+            context.ConfigureScope(AnalyzerScope.MemberBody)
+            context.RegisterBoundNodeAction(
+                (ctx BoundNodeAnalysisContext) -> {
+                    if ctx.BoundNode.Syntax is not{} syntax {
+                        return
+                    }
+                    let tree = ctx.Compilation.SyntaxTrees.First((t SyntaxTree) -> t.Text.FileName == "f1.gs")
+                    let declaration = tree.Root.DescendantNodes().OfType[FunctionDeclarationSyntax]().First()
+                    let declared = ctx.Compilation.GetSemanticModel(tree).GetDeclaredSymbol(declaration)
+                    ctx.ReportDiagnostic(
+                        Diagnostic.Create(
+                            Adr0227BodyLocalDeltaTests.QueryRule,
+                            syntax.Location,
+                            declared?.Name ?? "none"
+                        )
+                    )
+                },
+                BoundNodeKind.CallExpression
             )
         }
     }

@@ -11,7 +11,10 @@ import System
 /// Builds the static (cref:ServerCapabilities) advertised in the initialize result.
 /// The vscode client strips dynamic registration, so every feature is declared statically here.
 shared class ServerCapabilitiesFactory {
-    func Create(options LanguageServerInitializationOptions? = nil) ServerCapabilities {
+    func Create(
+        options LanguageServerInitializationOptions? = nil,
+        codeActions CodeActionClientOptions? = nil
+    ) ServerCapabilities {
         var options = options
         options ??= LanguageServerInitializationOptions()
         return ServerCapabilities{
@@ -73,6 +76,12 @@ shared class ServerCapabilitiesFactory {
                 Identifier: Constants.LanguageId,
                 InterFileDependencies: true,
                 WorkspaceDiagnostics: false
+            },
+            // ADR-0227 D5 (issue #6185): only a client that selects placeholders gets the command.
+            ExecuteCommandProvider: if codeActions?.SelectsPlaceholders == true {
+                ExecuteCommandOptions{Commands: []string{CodeActionComputer.SelectPlaceholderCommand}}
+            } else {
+                default(ExecuteCommandOptions?)
             }
         }
     }
