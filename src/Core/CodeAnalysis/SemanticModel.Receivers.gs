@@ -686,25 +686,33 @@ partial class SemanticModel {
         captures Dictionary[VariableSymbol, BoundExpression]? = nil
     ) BoundExpression? -> switch node {
         case userCall is BoundUserInstanceCallExpression: userCall.Receiver
-        case importedCall is BoundImportedInstanceCallExpression: if SkipCalleeMember(
+        case importedCall is BoundImportedInstanceCallExpression: if TrySkipCalleeMember(
             importedCall.Receiver,
             captures,
-            preserveUnmarked: false
-        ) is {} skippedReceiver {
-            skippedReceiver
+            out var skippedImportedReceiver
+        ) {
+            skippedImportedReceiver
         } else {
             importedCall.Receiver
         }
-        case indirect is BoundIndirectCallExpression: SkipCalleeMember(
+        case indirect is BoundIndirectCallExpression: if TrySkipCalleeMember(
             indirect.Target,
             captures,
-            preserveUnmarked: true
-        )
-        case fnPtr is BoundFunctionPointerInvocationExpression: SkipCalleeMember(
+            out var skippedIndirectReceiver
+        ) {
+            skippedIndirectReceiver
+        } else {
+            UnwrapCalleeTarget(indirect.Target, captures, out _)
+        }
+        case fnPtr is BoundFunctionPointerInvocationExpression: if TrySkipCalleeMember(
             fnPtr.Pointer,
             captures,
-            preserveUnmarked: true
-        )
+            out var skippedPtrReceiver
+        ) {
+            skippedPtrReceiver
+        } else {
+            UnwrapCalleeTarget(fnPtr.Pointer, captures, out _)
+        }
         case property is BoundPropertyReferenceOperationExpression: property.Instance
         case field is BoundFieldAccessExpression: field.Receiver
         case tuple is BoundTupleElementAccessExpression: tuple.Receiver
@@ -792,27 +800,25 @@ partial class SemanticModel {
 
     /// Removes the conversions and nil-unwraps the binder adds around a read
     /// without user syntax of their own, so the node reached is the read itself.
-    private func SkipCalleeMember(
+    private func TrySkipCalleeMember(
         target BoundExpression,
         captures Dictionary[VariableSymbol, BoundExpression]?,
-        preserveUnmarked bool
-    ) BoundExpression? {
+        out receiver BoundExpression?
+    ) bool {
+        receiver = nil
         if UnwrapCalleeTarget(target, captures, out var calleeMarked) is {} unwrapped {
             if calleeMarked {
-                return ReceiverOf(unwrapped, captures)
+                receiver = ReceiverOf(unwrapped, captures)
+                return true
             }
             if IndexTargetOf(unwrapped) is {} indexedTarget &&
                 UnwrapCalleeTarget(indexedTarget, captures, out var indexedCalleeMarked) is {} indexedBase &&
                 indexedCalleeMarked {
-                return ReceiverOf(indexedBase, captures)
-            }
-            return if preserveUnmarked {
-                unwrapped
-            } else {
-                default(BoundExpression?)
+                receiver = ReceiverOf(indexedBase, captures)
+                return true
             }
         }
-        return nil
+        return false
     }
 
     private func Unwrap(

@@ -309,6 +309,27 @@ func Use(o ClrOuter) {
             "Callback",
             Assert.IsAssignableFrom[FieldSymbol](clrModel.GetSymbolInfo(callbackCall.Identifier).Symbol).Name
         )
+
+        let staticSource = `package P
+
+import System
+
+class StaticHolder {
+    shared {
+        var SD Func[int32, int32] = (v int32) -> v
+    }
+}
+
+func Use(x int32) string -> StaticHolder.SD(x).ToString()
+`
+        let (staticModel, staticTree, staticCompilation) = CreateModel(staticSource)
+        Assert.Empty(staticCompilation.GetDiagnostics())
+        let qualifier = Names(staticTree, "StaticHolder").Single()
+        Assert.Equal("StaticHolder", Assert.IsType[StructSymbol](staticModel.GetSymbolInfo(qualifier).Symbol).Name)
+        Assert.Null(staticModel.GetTypeInfo(qualifier).Type)
+        let sdCall = Calls(staticTree, "SD").Single()
+        Assert.Equal("Invoke", Assert.IsType[ImportedFunctionSymbol](staticModel.GetSymbolInfo(sdCall).Symbol).Name)
+        Assert.Equal("SD", Assert.IsType[FieldSymbol](staticModel.GetSymbolInfo(sdCall.Identifier).Symbol).Name)
     }
 
     shared {
