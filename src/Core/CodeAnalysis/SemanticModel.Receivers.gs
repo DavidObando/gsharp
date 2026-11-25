@@ -728,33 +728,6 @@ partial class SemanticModel {
         default: default(BoundExpression?)
     }
 
-    /// Resolves a member-access name node or an inner right-nested accessor whose terminal is a
-    /// member name (#6217).
-    private func FindMemberAccessBoundExpression(target SyntaxNode) BoundExpression? {
-        var memberSyntax SyntaxNode = target
-        if memberSyntax is AccessorExpressionSyntax accessor {
-            let terminal = TerminalSegment(accessor)
-            if terminal is not NameExpressionSyntax {
-                return nil
-            }
-            memberSyntax = terminal
-        }
-        if memberSyntax is not NameExpressionSyntax name || !IsMemberAccessName(name) {
-            return nil
-        }
-        var found = FindBoundExpression(name)
-        while found is BoundNullConditionalAccessExpression hop && !(hop.WhenNotNull is BoundErrorExpression) {
-            found = PeelConversions(hop.WhenNotNull, name)
-        }
-        return found
-    }
-
-    private func IsMemberAccessName(name NameExpressionSyntax) bool -> name.Parent is AccessorExpressionSyntax ||
-        (
-        name.Parent is IndexExpressionSyntax indexExpr && object.ReferenceEquals(indexExpr.Target, name) &&
-            indexExpr.Parent is AccessorExpressionSyntax
-    )
-
     private func UnwrapExtensionReceiver(receiver BoundExpression, callSyntax SyntaxNode?) BoundExpression {
         var current = receiver
         while current is BoundConversionExpression conversion &&
@@ -789,10 +762,6 @@ partial class SemanticModel {
         var current = node
         while current is BoundConversionExpression conversion &&
             IsSynthesizedWrapper(conversion, conversion.Expression, receiverSyntax) {
-            if conversion.Expression is (BoundMethodGroupExpression or BoundClrMethodGroupExpression) &&
-                conversion.Expression.Type == TypeSymbol.Error {
-                break
-            }
             current = conversion.Expression
         }
         return current

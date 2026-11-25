@@ -340,6 +340,54 @@ func Use(x int32, i int32) string -> StaticHolder.SD(x).ToString() + StaticHolde
         Assert.Equal("Fs", Assert.IsType[FieldSymbol](staticModel.GetSymbolInfo(staticFsCall.Identifier).Symbol).Name)
     }
 
+    @Fact
+    func NullConditionalMemberAccess_AnswersMemberNotCaptureVariable() {
+        let source = `package P
+
+class Inner {
+    prop Auto string -> "abc"
+}
+
+class Wrapper {
+    let H Inner? = nil
+}
+
+func Use(w Wrapper) {
+    let a = w.H?.Auto
+    let b = w.H?.Auto.Length
+}
+`
+        let (model, tree, compilation) = CreateModel(source)
+        Assert.Empty(compilation.GetDiagnostics())
+
+        let aInit = tree
+            .Root
+            .DescendantNodes()
+            .OfType[VariableDeclarationSyntax]()
+            .Single((d VariableDeclarationSyntax) -> d.Identifier.Text == "a")
+            .Initializer!!
+        let aAccessor = Assert.IsType[AccessorExpressionSyntax](aInit)
+        let aInner = Assert.IsType[AccessorExpressionSyntax](aAccessor.RightPart)
+        let aAuto = Assert.IsType[NameExpressionSyntax](aInner.RightPart)
+        Assert.Equal("Auto", Assert.IsType[PropertySymbol](model.GetSymbolInfo(aAccessor).Symbol).Name)
+        Assert.Equal("Auto", Assert.IsType[PropertySymbol](model.GetSymbolInfo(aInner).Symbol).Name)
+        Assert.Equal("Auto", Assert.IsType[PropertySymbol](model.GetSymbolInfo(aAuto).Symbol).Name)
+        Assert.Equal("string?", model.GetTypeInfo(aAccessor).Type?.ToString())
+
+        let bInit = tree
+            .Root
+            .DescendantNodes()
+            .OfType[VariableDeclarationSyntax]()
+            .Single((d VariableDeclarationSyntax) -> d.Identifier.Text == "b")
+            .Initializer!!
+        let bAccessor = Assert.IsType[AccessorExpressionSyntax](bInit)
+        let bMid = Assert.IsType[AccessorExpressionSyntax](bAccessor.RightPart)
+        let bInner = Assert.IsType[AccessorExpressionSyntax](bMid.RightPart)
+        let bLength = Assert.IsType[NameExpressionSyntax](bInner.RightPart)
+        Assert.Equal("Length", Assert.IsAssignableFrom[PropertySymbol](model.GetSymbolInfo(bAccessor).Symbol).Name)
+        Assert.Equal("Length", Assert.IsAssignableFrom[PropertySymbol](model.GetSymbolInfo(bLength).Symbol).Name)
+    }
+
     shared {
         private const MemberChainTemplate string = `package P
 

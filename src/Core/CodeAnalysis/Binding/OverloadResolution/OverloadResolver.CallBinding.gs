@@ -1098,6 +1098,7 @@ internal partial class OverloadResolver {
             out var memberAccessibility
         ) {
             if !layoutOk {
+                binderCtx.RecordCallCallee(syntax, () -> BuildFailedCalleeLoad(callTarget, syntax, nil))
                 BindCallArgumentsForLayoutRecovery(syntax.Arguments)
                 return BoundErrorExpression(nil)
             }

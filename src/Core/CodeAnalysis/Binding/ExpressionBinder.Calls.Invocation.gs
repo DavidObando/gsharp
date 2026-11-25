@@ -1507,62 +1507,6 @@ internal partial class ExpressionBinder {
         }
     }
 
-    // #6199: a call through a member function value whose arguments do not analyse keeps its callee for
-    // the semantic model. The member is resolved as a call with no arguments would resolve it, and the
-    // diagnostics of that resolution are dropped: the layout report is the call's only diagnostic.
-    private func RecordCallableMemberOfFailedLayout(
-        receiver BoundExpression?,
-        classSymbol ImportedClassSymbol?,
-        methodName string,
-        ce CallExpressionSyntax
-    ) {
-        if classSymbol != nil || receiver == nil || !(receiver.Type is StructSymbol or InterfaceSymbol) {
-            return
-        }
-        // A method of the name wins over a callable field or property (the order of the call path), and the
-        // layout failure gives no callee to a method call (#6221).
-        if !TypeMemberModel.GetMethods(receiver.Type, methodName, MemberQuery.Instance(MemberKinds.Method))
-            .IsDefaultOrEmpty {
-            return
-        }
-        // A default method of an implemented interface also wins (ADR-0085).
-        if receiver.Type is StructSymbol receiverClass {
-            for level in receiverClass.GetHierarchy() {
-                for iface in level.Interfaces {
-                    if iface == nil {
-                        continue
-                    }
-                    // Only a method with a default body is a candidate of the call path; an abstract one is
-                    // implemented by the class, where the callable member was found first.
-                    for candidate in TypeMemberModel.GetMethods(
-                        iface,
-                        methodName,
-                        MemberQuery.Instance(MemberKinds.Method)
-                    ) {
-                        if InterfaceSymbol.HasDefaultBody(candidate) {
-                            return
-                        }
-                    }
-                }
-            }
-        }
-        let mark = Diagnostics.Count
-        let narrowing = CaptureNarrowingBindSnapshot()
-        let selectedProperty = lastSelectedCallablePropertyLoad
-        let _ = TryBindUserCallableMemberInvocation(
-            receiver,
-            receiver.Type,
-            methodName,
-            ImmutableArray[BoundExpression].Empty,
-            ce,
-            isStatic: false,
-            out _
-        )
-        lastSelectedCallablePropertyLoad = selectedProperty
-        RestoreNarrowingBindSnapshot(narrowing)
-        Diagnostics.TruncateTo(mark)
-    }
-
     internal func BindAccessorCall(
         receiver BoundExpression?,
         classSymbol ImportedClassSymbol?,
