@@ -248,7 +248,7 @@ partial class SemanticModel {
             } else if segments[depth] is IndexExpressionSyntax {
                 PeelConversions(IndexTargetOf(member), receiverSyntax)
             } else {
-                PeelConversions(ReceiverOf(member), receiverSyntax)
+                PeelConversions(ReceiverOf(member, captures), receiverSyntax)
             }
             if node is BoundVariableExpression read && captures.TryGetValue(read.Variable, out var captured) {
                 node = PeelConversions(captured, receiverSyntax)
@@ -681,9 +681,36 @@ partial class SemanticModel {
     }
 
     /// Gets a bound member's receiver, or null when it has none.
-    private func ReceiverOf(node BoundExpression) BoundExpression? -> switch node {
+    private func ReceiverOf(
+        node BoundExpression,
+        captures Dictionary[VariableSymbol, BoundExpression]? = nil
+    ) BoundExpression? -> switch node {
         case userCall is BoundUserInstanceCallExpression: userCall.Receiver
-        case importedCall is BoundImportedInstanceCallExpression: importedCall.Receiver
+        case importedCall is BoundImportedInstanceCallExpression: if Unwrap(importedCall.Receiver, captures) is {
+            CalleeIdentifier: not nil
+        } callee {
+            ReceiverOf(callee, captures)
+        } else {
+            importedCall.Receiver
+        }
+        case indirect is BoundIndirectCallExpression: if Unwrap(indirect.Target, captures) is {} target {
+            if target.CalleeIdentifier != nil {
+                ReceiverOf(target, captures)
+            } else {
+                target
+            }
+        } else {
+            default(BoundExpression?)
+        }
+        case fnPtr is BoundFunctionPointerInvocationExpression: if Unwrap(fnPtr.Pointer, captures) is {} pointer {
+            if pointer.CalleeIdentifier != nil {
+                ReceiverOf(pointer, captures)
+            } else {
+                pointer
+            }
+        } else {
+            default(BoundExpression?)
+        }
         case property is BoundPropertyReferenceOperationExpression: property.Instance
         case field is BoundFieldAccessExpression: field.Receiver
         case tuple is BoundTupleElementAccessExpression: tuple.Receiver
@@ -698,6 +725,33 @@ partial class SemanticModel {
             IsExtensionMethod(call.Function?.Method): UnwrapExtensionReceiver(call.Arguments[0], call.Syntax)
         default: default(BoundExpression?)
     }
+
+    /// Resolves a member-access name node or an inner right-nested accessor whose terminal is a
+    /// member name (#6217).
+    private func FindMemberAccessBoundExpression(target SyntaxNode) BoundExpression? {
+        var memberSyntax SyntaxNode = target
+        if memberSyntax is AccessorExpressionSyntax accessor {
+            let terminal = TerminalSegment(accessor)
+            if terminal is not NameExpressionSyntax {
+                return nil
+            }
+            memberSyntax = terminal
+        }
+        if memberSyntax is not NameExpressionSyntax name || !IsMemberAccessName(name) {
+            return nil
+        }
+        var found = FindBoundExpression(name)
+        while found is BoundNullConditionalAccessExpression hop && !(hop.WhenNotNull is BoundErrorExpression) {
+            found = PeelConversions(hop.WhenNotNull, name)
+        }
+        return found
+    }
+
+    private func IsMemberAccessName(name NameExpressionSyntax) bool -> name.Parent is AccessorExpressionSyntax ||
+        (
+        name.Parent is IndexExpressionSyntax indexExpr && object.ReferenceEquals(indexExpr.Target, name) &&
+            indexExpr.Parent is AccessorExpressionSyntax
+    )
 
     private func UnwrapExtensionReceiver(receiver BoundExpression, callSyntax SyntaxNode?) BoundExpression {
         var current = receiver
@@ -733,6 +787,10 @@ partial class SemanticModel {
         var current = node
         while current is BoundConversionExpression conversion &&
             IsSynthesizedWrapper(conversion, conversion.Expression, receiverSyntax) {
+            if conversion.Expression is (BoundMethodGroupExpression or BoundClrMethodGroupExpression) &&
+                conversion.Expression.Type == TypeSymbol.Error {
+                break
+            }
             current = conversion.Expression
         }
         return current

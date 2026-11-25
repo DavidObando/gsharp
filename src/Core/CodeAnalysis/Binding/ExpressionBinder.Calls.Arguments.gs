@@ -874,7 +874,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportNotAFunction(syntax.Location, delegateType.Name)
                 return BoundErrorExpression(syntax)
             }
-            return BoundIndirectCallExpression(nil, receiver, functionType, arguments, argumentRefKinds)
+            return BoundIndirectCallExpression(syntax, receiver, functionType, arguments, argumentRefKinds)
         }
         if syntax.NullableQuestionToken == nil {
             // ADR-0186 §4: invoking a delegate-typed member VALUE is a
@@ -1895,7 +1895,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         return BoundIndirectCallExpression(
-            nil,
+            ce,
             receiver,
             delegateSym.EquivalentFunctionType,
             convertedArgs,
@@ -3116,6 +3116,7 @@ internal partial class ExpressionBinder {
         }
         CallCandidateRecorder.RecordFunctions(ifaceOverloads, ifaceSym)
         if !overloads.TryAnalyzeCallArgumentLayout(synthesizedCall.Arguments, out _, out var argumentNames) {
+            overloads.BindCallArgumentsForLayoutRecovery(synthesizedCall.Arguments)
             return BoundErrorExpression(nil)
         }
         let arguments = BindBaseCallArguments(synthesizedCall)
@@ -3314,6 +3315,8 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         if !overloads.TryAnalyzeCallArgumentLayout(synthesizedCall.Arguments, out _, out var argumentNames) {
+            CallCandidateRecorder.RecordMethods(candidates, ifaceType)
+            overloads.BindCallArgumentsForLayoutRecovery(synthesizedCall.Arguments)
             return BoundErrorExpression(nil)
         }
         if !TryResolveExplicitMethodTypeArgs(
@@ -3472,6 +3475,7 @@ internal partial class ExpressionBinder {
         }
         CallCandidateRecorder.RecordFunctions(baseOverloads, GetBaseAccessThisParameter()?.Type ?? searchBase)
         if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
+            overloads.BindCallArgumentsForLayoutRecovery(ce.Arguments)
             return BoundErrorExpression(nil)
         }
         let arguments = BindBaseCallArguments(ce)
@@ -3590,6 +3594,16 @@ internal partial class ExpressionBinder {
             return false
         }
         if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
+            let baseReceiverType TypeSymbol? = if GetBaseAccessThisParameter() is {} baseThis &&
+                baseThis.Type is StructSymbol baseStruct {
+                baseStruct
+            } else if clrBase != nil {
+                TypeSymbol.FromClrTypeWithoutNullability(clrBase, NullabilityFreeReason.TypeStructure)
+            } else {
+                default(TypeSymbol?)
+            }
+            CallCandidateRecorder.RecordMethods(candidates, baseReceiverType)
+            overloads.BindCallArgumentsForLayoutRecovery(ce.Arguments)
             result = BoundErrorExpression(nil)
             return true
         }

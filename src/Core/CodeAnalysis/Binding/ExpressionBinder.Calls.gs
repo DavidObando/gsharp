@@ -1724,6 +1724,7 @@ internal partial class ExpressionBinder {
         let inlineOutArguments = GetInlineOutArgumentIndices(syntax)
         // Issue #343: pre-validate named-argument layout for CLR constructor calls.
         if !overloads.TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
+            overloads.BindCallArgumentsForLayoutRecovery(syntax.Arguments)
             DeclareInvalidClrConstructorInlineOutLocals(syntax, inlineOutArguments, bindExplicitTyped: true)
             result = BoundErrorExpression(syntax)
             return true

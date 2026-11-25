@@ -1069,21 +1069,11 @@ internal partial class OverloadResolver {
         if tryBindIntrinsicCall(syntax, out var intrinsic) {
             return intrinsic!!
         }
-        // Issue #343: pre-validate named-argument layout (positional precedes
-        // named, no duplicate names). Errors are reported by the helper so the
-        // call short-circuits to a bound error here.
-        if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
-            // #6199: the callee of a call through a function value answers although its arguments do not
-            // analyse.
-            if Scope.TryLookupSymbol(syntax.Identifier.ValueText) is VariableSymbol layoutCallee &&
-                IsCallableValueType(TryGetNarrowedVariableType(layoutCallee) ?? layoutCallee.Type) {
-                binderCtx.RecordCallCallee(
-                    syntax,
-                    () -> BuildFailedCalleeLoad(layoutCallee, syntax, TryGetNarrowedVariableType(layoutCallee))
-                )
-            }
-            return BoundErrorExpression(nil)
-        }
+        // Issue #343 / #6221: pre-validate named-argument layout (positional precedes
+        // named, no duplicate names). When layout fails, continue binding arguments and resolving
+        // the callee with extra reports dropped so the semantic model keeps both (#6221).
+        let layoutOk = TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames)
+        let layoutDiagMark = Diagnostics.Count
         var boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
         // Issue #951: untyped arrow lambdas whose binding
         // is deferred until the callee's parameter types are known, so the
@@ -1107,6 +1097,10 @@ internal partial class OverloadResolver {
             out var memberName,
             out var memberAccessibility
         ) {
+            if !layoutOk {
+                BindCallArgumentsForLayoutRecovery(syntax.Arguments)
+                return BoundErrorExpression(nil)
+            }
             let owner = Invariant.Required(
                 declaringOwner,
                 "an inaccessible implicit callable member has a declaring owner",
@@ -1136,6 +1130,16 @@ internal partial class OverloadResolver {
             TryGetNarrowedVariableType(callTargetVariable)
         } else {
             default(TypeSymbol?)
+        }
+        let layoutNarrowingRollback = if layoutOk {
+            default(Action?)
+        } else {
+            captureCallArgumentPrebindRollback?(syntax)
+        }
+        let layoutPreArgumentsNarrowing = if layoutOk {
+            default(StatementBinder.NarrowingBindSnapshot)
+        } else {
+            CaptureNarrowingBindSnapshot()
         }
         if symbol is ImplicitPropertyVariableSymbol || symbol is ImplicitStaticPropertyVariableSymbol {
             let preCalleeLoad = BuildCalleeLoad(cast[VariableSymbol](symbol), syntax.Identifier, narrowedCallTargetType)
@@ -1190,7 +1194,7 @@ internal partial class OverloadResolver {
             narrowedCallTargetType,
             preArgumentsNarrowing
         )
-        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+        if layoutOk && conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
             Diagnostics.TruncateNonReboundSince(overloadDiagMark)
             result = BindCallExpressionAfterArguments(
                 syntax,
@@ -1204,6 +1208,15 @@ internal partial class OverloadResolver {
                 narrowedCallTargetType,
                 preArgumentsNarrowing
             )
+        }
+        if !layoutOk {
+            Diagnostics.TruncateTo(layoutDiagMark)
+            layoutNarrowingRollback?.Invoke()
+            RestoreNarrowingBindSnapshot(layoutPreArgumentsNarrowing)
+            for argument in syntax.Arguments {
+                Scope.RemoveVariablesDeclaredInSpan(argument.SyntaxTree, argument.Span)
+            }
+            return BoundErrorExpression(nil)
         }
         if syntax.NullableQuestionToken != nil {
             intersectNarrowingWithSnapshot?(preArgumentsNarrowing)

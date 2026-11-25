@@ -568,6 +568,30 @@ internal partial class OverloadResolver {
         return ok
     }
 
+    /// Binds call arguments after an argument-layout failure so the semantic model keeps
+    /// argument answers without emitting extra diagnostics or leaking state (#6221).
+    internal func BindCallArgumentsForLayoutRecovery(
+        arguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax]
+    ) {
+        if arguments.Count == 0 {
+            return
+        }
+        let diagMark = Diagnostics.Count
+        let narrowing = CaptureNarrowingBindSnapshot()
+        binderCtx.ExpectCallArguments(arguments)
+        for argument in arguments {
+            let inner = UnwrapNamedArgumentValue(argument)
+            if inner is RefArgumentExpressionSyntax refArg {
+                let _ = bindRefArgumentExpression(refArg, nil)
+            } else {
+                let _ = BindOverloadArgumentValue(inner)
+            }
+            Scope.RemoveVariablesDeclaredInSpan(argument.SyntaxTree, argument.Span)
+        }
+        RestoreNarrowingBindSnapshot(narrowing)
+        Diagnostics.TruncateTo(diagMark)
+    }
+
     // Named binding stores arguments in parameter order, but evaluation remains
     // lexical. Capture converted argument values in source order inside the
     // first emitted parameter slot, then load those temps in parameter order.

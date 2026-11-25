@@ -248,6 +248,27 @@ partial class SemanticModel {
                 bound = operand
                 continue
             }
+            if current is BoundNullConditionalAccessExpression hop {
+                let unwrapWhenNotNull = switch hop.WhenNotNull {
+                    case BoundIndirectCallExpression{
+                        Target: BoundVariableExpression targetVar
+                    }: !object.ReferenceEquals(targetVar.Variable, hop.Capture)
+                    case BoundImportedInstanceCallExpression{Receiver: BoundVariableExpression receiverVar} when hop
+                        .Receiver
+                        .CalleeIdentifier != nil &&
+                        object.ReferenceEquals(receiverVar.Variable, hop.Capture): false
+                    case BoundFunctionPointerInvocationExpression{
+                        Pointer: BoundVariableExpression ptrVar
+                    }: !object.ReferenceEquals(ptrVar.Variable, hop.Capture)
+                    default: true
+                }
+                bound = if unwrapWhenNotNull {
+                    hop.WhenNotNull
+                } else {
+                    hop.Receiver
+                }
+                continue
+            }
             // An assignment answers the variable, field or property it writes, never the receiver
             // of the write (#6126). A write to a field-like event's backing field answers nothing.
             if current is BoundFieldAssignmentExpression{Field: {IsEventBackingField: true}} {

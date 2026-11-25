@@ -5877,6 +5877,7 @@ internal partial class ExpressionBinder {
         }
         CallCandidateRecorder.RecordMethods(candidates, constraintType)
         if !overloads.TryAnalyzeCallArgumentLayout(callSyntax.Arguments, out _, out var argumentNames) {
+            overloads.BindCallArgumentsForLayoutRecovery(callSyntax.Arguments)
             result = BoundErrorExpression(callSyntax)
             return true
         }
