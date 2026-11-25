@@ -437,7 +437,14 @@ class TranslateStage : IMigrationStage {
                 projectDirectory: currentProject.ProjectDirectory,
                 emitPartialMethodPairs: true,
                 translatedFilePaths: translatedFilePaths
-            ){ConditionalCompilation = context.Options.ConditionalCompilation}
+            ){
+                ConditionalCompilation = context.Options.ConditionalCompilation,
+                SupportsScopedConditionalSymbols = !context.Options.CompileViaSdk ||
+                    SdkCompilerCapabilities.SupportsScopedConditionalSymbols(
+                    context.Options.Config,
+                    context.Options.RepositorySdkVersion ?? context.Options.SdkVersion
+                )
+            }
             PreserveGeneratedFriendAssemblyAnnotations(context, currentProject, isReferencedProject, usedOutputPaths)
             // ADR-0143 2026-09-23 amendment / ADR-0192: translate EVERY unit of
             // the project first, reconciling the tentative partial method pairs
@@ -488,7 +495,10 @@ class TranslateStage : IMigrationStage {
                             projectDirectory: currentProject.ProjectDirectory,
                             emitPartialMethodPairs: true,
                             translatedFilePaths: translatedFilePaths
-                        ){ConditionalCompilation = context.Options.ConditionalCompilation}
+                        ){
+                            ConditionalCompilation = context.Options.ConditionalCompilation,
+                            SupportsScopedConditionalSymbols = translator.SupportsScopedConditionalSymbols
+                        }
                     }
                     translatedDocument.Units.Add(TranslatedUnit(document, unitIndex, package_, unitTranslator))
                 }
@@ -1610,7 +1620,14 @@ class TranslateStage : IMigrationStage {
                     projectDirectory: referencedProject.ProjectDirectory,
                     emitPartialMethodPairs: true,
                     translatedFilePaths: translatedFilePaths
-                ){ConditionalCompilation = context.Options.ConditionalCompilation}
+                ){
+                    ConditionalCompilation = context.Options.ConditionalCompilation,
+                    SupportsScopedConditionalSymbols = !context.Options.CompileViaSdk ||
+                        SdkCompilerCapabilities.SupportsScopedConditionalSymbols(
+                        context.Options.Config,
+                        context.Options.RepositorySdkVersion ?? context.Options.SdkVersion
+                    )
+                }
                 for document in referencedProject.Documents {
                     cancellationToken.ThrowIfCancellationRequested()
                     if IsResxDesignerCodebehind(document.FilePath) {

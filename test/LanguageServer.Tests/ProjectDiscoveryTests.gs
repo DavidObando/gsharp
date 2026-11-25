@@ -228,6 +228,25 @@ open class ProjectDiscoveryTests {
     }
 
     @Fact
+    func ParseConditionalSymbolsFromResponseFile_PreservesCaseAndAccumulatesAliases() {
+        let tempPath = Path.GetTempFileName()
+        try {
+            File.WriteAllLines(
+                tempPath,
+                []string{"/define:DEBUG, TRACE", "\"-d:debug;TRACE\"", "/define:bad-name;true;@name;Feature"}
+            )
+            let symbols = ProjectDiscovery.ParseConditionalSymbolsFromResponseFile(tempPath)
+            Assert.Equal(4, symbols.Count)
+            Assert.Contains("DEBUG", symbols)
+            Assert.Contains("debug", symbols)
+            Assert.Contains("TRACE", symbols)
+            Assert.Contains("Feature", symbols)
+        } finally {
+            File.Delete(tempPath)
+        }
+    }
+
+    @Fact
     func ParseReferencesFromResponseFile_HandlesOuterQuotedLines() {
         // On Windows, MSBuild wraps the entire switch in quotes when the path
         // contains spaces (e.g. "C:\Program Files\...").

@@ -43,7 +43,8 @@ shared class SemanticTokensHandler {
         SemanticTokenModifier.Readonly,
         SemanticTokenModifier.Static,
         SemanticTokenModifier.Async,
-        SemanticTokenModifier.Deprecated
+        SemanticTokenModifier.Deprecated,
+        SemanticTokenModifier.Inactive
     }
 
     /// Gets the semantic tokens legend (token types + modifiers).
@@ -71,20 +72,37 @@ shared class SemanticTokensComputer {
         // Build semantic model if possible for symbol classification
         var compilation Compilation? = nil
         var declarationPositions HashSet[int32]? = nil
+        let inactiveSpans = List[TextSpan]()
         try {
             compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(tree)
             declarationPositions = BuildDeclarationPositions(tree)
+            CollectInactiveSpans(tree.Root, compilation, inactiveSpans, ct)
         } catch {
             // Fall back to syntax-only classification
 
         }
         // Use ParseTokens to get ALL tokens including comments (parser filters them out)
         let allTokens = SyntaxTree.ParseTokens(text)
+        var inactiveIndex = 0
         for token in allTokens {
             // Whole-document token stream can be large; check between tokens so a
             // superseded request (fast typing) aborts instead of running to completion.
             ct.ThrowIfCancellationRequested()
             if token.IsMissing || token.Span.Length == 0 {
+                continue
+            }
+            while inactiveIndex < inactiveSpans.Count && inactiveSpans[inactiveIndex].End <= token.Span.Start {
+                inactiveIndex++
+            }
+            if inactiveIndex < inactiveSpans.Count && inactiveSpans[inactiveIndex].Start <= token.Span.Start {
+                PushRange(
+                    builder,
+                    text,
+                    token.Span.Start,
+                    token.Span.End,
+                    SemanticTokenType.Comment,
+                    []SemanticTokenModifier{SemanticTokenModifier.Inactive}
+                )
                 continue
             }
             // Interpolated string literals are decomposed: literal text is classified as String,
@@ -110,6 +128,24 @@ shared class SemanticTokensComputer {
             let line = text.GetLineIndex(token.Span.Start)
             let character = token.Span.Start - text.Lines[line].Start
             builder.Push(line, character, token.Span.Length, tokenType, modifiers)
+        }
+    }
+
+    private func CollectInactiveSpans(
+        node SyntaxNode,
+        compilation Compilation,
+        spans List[TextSpan],
+        ct CancellationToken
+    ) {
+        ct.ThrowIfCancellationRequested()
+        if !compilation.IsActive(node) {
+            spans.Add(node.Span)
+            return
+        }
+        for child in node.GetChildren() {
+            if child is not SyntaxToken {
+                CollectInactiveSpans(child, compilation, spans, ct)
+            }
         }
     }
 

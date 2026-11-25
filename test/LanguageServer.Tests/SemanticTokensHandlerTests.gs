@@ -12,6 +12,22 @@ import System.Linq
 import Xunit
 
 open class SemanticTokensHandlerTests {
+    @Fact
+    func Tokenize_MarksInactiveCodeWithoutResolvingItsNames() {
+        let content = LanguageServerTestHelpers.Content(
+            "@If(@defined(\"DISABLED\"))\nfunc hidden() int32 -> missing\nfunc visible() int32 -> 1\n"
+        )
+        let tokens = GetTokens(content)
+        let hidden = FindToken(tokens, 1, 5, 6)
+        Assert.NotNull(hidden)
+        Assert.Equal(TokenTypeIndex("Comment"), hidden!!.TokenType)
+        Assert.True((hidden.TokenModifiers & ModifierBit("Inactive")) != 0)
+        let visible = FindToken(tokens, 2, 5, 7)
+        Assert.NotNull(visible)
+        Assert.Equal(TokenTypeIndex("Function"), visible!!.TokenType)
+        Assert.Equal(0, visible.TokenModifiers & ModifierBit("Inactive"))
+    }
+
     @Theory
     @InlineData(`u8"$name"`, 9)
     @InlineData(`u8"é😀"`, 7)

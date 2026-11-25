@@ -9,6 +9,7 @@ import System.Collections.Generic
 import System.IO
 import System.Linq
 import System.Xml.Linq
+import GSharp.Core.CodeAnalysis
 
 /// Discovers GSharp projects and their source files within a workspace.
 shared class ProjectDiscovery {
@@ -68,6 +69,20 @@ shared class ProjectDiscovery {
     internal func ParseReferencesFromResponseFile(rspPath string) IReadOnlyList[
         string
     ] -> ParseSwitchValuesFromResponseFile(rspPath, "r", "reference")
+
+    /// Reads the case-sensitive conditional symbols from an SDK response file.
+    internal func ParseConditionalSymbolsFromResponseFile(rspPath string) HashSet[string] {
+        let symbols = HashSet[string](StringComparer.Ordinal)
+        for value in ParseSwitchValuesFromResponseFile(rspPath, "define", "d") {
+            for entry in value.Split([]char{',', ';'}, StringSplitOptions.RemoveEmptyEntries) {
+                let name = entry.Trim()
+                if ConditionalSymbols.IsValidName(name) {
+                    symbols.Add(name)
+                }
+            }
+        }
+        return symbols
+    }
 
     /// Parses the `/gsanalyzer:` lines out of an MSBuild-emitted
     /// response file — the project's G# analyzer set (ADR-0169).

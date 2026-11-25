@@ -38,6 +38,7 @@ open class ProjectState {
     private var references IReadOnlyList[string] = Array.Empty[string]()
     private var referenceSourcePath string?
     private var referenceSourceMtimeUtc DateTime = DateTime.MinValue
+    private var conditionalSymbols HashSet[string] = HashSet[string](StringComparer.Ordinal)
     private var nextReferenceDiscoveryUtc DateTime = DateTime.MinValue
     private var assemblyName string?
     private var cachedResolver ReferenceResolver?
@@ -159,6 +160,9 @@ open class ProjectState {
         get -> referenceSourcePath
         set {
             lock compilationLock {
+                if !string.Equals(referenceSourcePath, value, StringComparison.Ordinal) {
+                    SetConditionalSymbols_NoLock(HashSet[string](StringComparer.Ordinal))
+                }
                 referenceSourcePath = value
                 referenceSourceMtimeUtc = DateTime.MinValue
             }
@@ -414,6 +418,7 @@ open class ProjectState {
         } else {
             Compilation(trees)
         }
+        created.PreprocessorSymbols = conditionalSymbols.ToImmutableHashSet(StringComparer.Ordinal)
         // Before the first GlobalScope read: imported visibility is cached per consumer name (ADR-0212 S6b).
         // Successors copy the name from their predecessor, so this is the only place the server sets it.
         if !string.IsNullOrWhiteSpace(assemblyName) {
@@ -505,6 +510,7 @@ open class ProjectState {
         var currentMtime DateTime
         try {
             if !File.Exists(referenceSourcePath) {
+                SetConditionalSymbols_NoLock(HashSet[string](StringComparer.Ordinal))
                 return
             }
             currentMtime = File.GetLastWriteTimeUtc(referenceSourcePath!!)
@@ -517,11 +523,22 @@ open class ProjectState {
         // The .rsp was rewritten by a build — reparse so completion/hover see
         // any newly added or removed PackageReference / ProjectReference.
         let freshRefs = ProjectDiscovery.ParseReferencesFromResponseFile(referenceSourcePath!!)
+        let freshSymbols = ProjectDiscovery.ParseConditionalSymbolsFromResponseFile(referenceSourcePath!!)
         referenceSourceMtimeUtc = currentMtime
+        SetConditionalSymbols_NoLock(freshSymbols)
         if !ReferenceListsEqual(references, freshRefs) {
             references = freshRefs
             cachedResolver = nil
             resolverReferences = nil
+            Invalidate()
+        }
+    }
+
+    private func SetConditionalSymbols_NoLock(symbols HashSet[string]) {
+        if !conditionalSymbols.SetEquals(symbols) {
+            conditionalSymbols = symbols
+            RetireCompilation_NoLock()
+            compilation = nil
             Invalidate()
         }
     }

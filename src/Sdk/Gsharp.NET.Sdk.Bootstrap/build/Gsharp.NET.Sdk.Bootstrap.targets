@@ -82,6 +82,7 @@
       <_GsharpCoreCompileInputsToHash Include="$(DebugType)" />
       <_GsharpCoreCompileInputsToHash Include="$(Deterministic)" />
       <_GsharpCoreCompileInputsToHash Include="$(NoWarn)" />
+      <_GsharpCoreCompileInputsToHash Include="DefineConstants=$(DefineConstants)" />
       <_GsharpCoreCompileInputsToHash Include="$(TreatWarningsAsErrors)" />
       <_GsharpCoreCompileInputsToHash Include="$(WarningsAsErrors)" />
       <_GsharpCoreCompileInputsToHash Include="$(WarningsNotAsErrors)" />
@@ -146,6 +147,7 @@
         OutputType="$(OutputType)"
         RefAssembly="$(_GsharpRefAssemblyPath)"
         NoWarn="$(NoWarn)"
+        DefineConstants="$(DefineConstants)"
         TreatWarningsAsErrors="$(TreatWarningsAsErrors)"
         WarningsAsErrors="$(WarningsAsErrors)"
         WarningsNotAsErrors="$(WarningsNotAsErrors)"

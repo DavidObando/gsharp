@@ -7477,16 +7477,10 @@ partial class CSharpToGSharpTranslator {
             }
             let tree = expression.SyntaxTree
             var hasCondition = false
-            for var current IMethodSymbol? = method; current != nil; current = current?.OverriddenMethod {
-                for attribute in current.GetAttributes() {
-                    if attribute.AttributeClass?.ToDisplayString() == "System.Diagnostics.ConditionalAttribute" &&
-                        attribute.ConstructorArguments.Length == 1 &&
-                        attribute.ConstructorArguments[0].Value is string name {
-                        hasCondition = true
-                        if this.context.IsPreprocessorSymbolDefined(tree, expression.SpanStart, name) {
-                            return false
-                        }
-                    }
+            for name in CSharpToGSharpTranslator.GetConditionalMethodSymbols(method) {
+                hasCondition = true
+                if this.context.IsPreprocessorSymbolDefined(tree, expression.SpanStart, name) {
+                    return false
                 }
             }
             return hasCondition

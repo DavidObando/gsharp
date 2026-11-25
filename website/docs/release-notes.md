@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Scoped conditional symbols and semantic inclusion** (Fixes #6231, #6101, #6033, #6100). Add `@DefineSymbol`, `@UndefineSymbol`, file-scoped overrides, intrinsic `@defined("NAME")` queries, and `@If` inclusion. Forward `/define:`, `/d:`, and SDK `DefineConstants` through compiler and editor compilations. Preserve conditional-call state in cs2gs and reject unsupported destination SDKs. Inactive source still parses but does not bind or emit. The published SDK pin remains unchanged.
+
 - **Specify scoped conditional symbols and inclusion** (Part of #6101; ADR-0230, ADR-0231). The accepted design defines file, declaration, and block symbol overrides, compiler flags, SDK/editor propagation, the collision-free `@defined("NAME")` query, and semantic conditional inclusion through `@If(...)`. It records a translation contract preserving direct calls and public metadata. These ADRs specify implementation requirements; this documentation-only change does not add compiler support.
 
 - **Key `ReturnSourceIsNullable` visited state by `requirePromotion` in `cs2gs`** (Fixes #6038). `ObliviousNullabilityAnalyzer.ReturnSourceIsNullable` now includes `requirePromotion` in its visited-set key `(Symbol, Path, Depth, RequirePromotion)` so an earlier narrowed (`requirePromotion: true`) traversal cannot suppress a later unnarrowed (`requirePromotion: false`) full-contract traversal of the same projected source across `if`, ternary, `switch`, coalescing, tuple-source, and cross-owner branches.

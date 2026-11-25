@@ -4,6 +4,7 @@
 
 package GSharp.LanguageServer.Tests
 
+import CoreDiagnostic = GSharp.Core.CodeAnalysis.Diagnostic
 import GSharp.LanguageServer
 import System
 import System.IO
@@ -156,6 +157,45 @@ open class ProjectStateTests {
             try {
                 Directory.Delete(tempDir, recursive: true)
             } catch (IOException) { }
+        }
+    }
+
+    @Fact
+    func GetCompilation_RefreshesWhenOnlyConditionalSymbolsChange() {
+        let tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())
+        try {
+            Directory.CreateDirectory(tempDir)
+            let rspPath = Path.Combine(tempDir, "Sample.rsp")
+            File.WriteAllLines(rspPath, []string{"/define:DEBUG"})
+            let project = ProjectState(Path.Combine(tempDir, "Sample.gsproj"))
+            project.ReferenceSourcePath = rspPath
+            let source = "@If(@defined(\"DEBUG\"))\nfunc enabled() int32 -> missingSymbol\n"
+            project.UpdateFile(Path.Combine(tempDir, "Program.gs"), source)
+            let first = project.GetCompilation()
+            Assert.Contains("DEBUG", first.PreprocessorSymbols)
+            Assert.Contains(
+                first.GetDiagnostics(),
+                (diagnostic CoreDiagnostic) -> diagnostic.Message.Contains("missingSymbol", StringComparison.Ordinal)
+            )
+            File.WriteAllLines(rspPath, []string{"/d:RELEASE"})
+            File.SetLastWriteTimeUtc(rspPath, DateTime.UtcNow.AddSeconds(1))
+            let second = project.GetCompilation()
+            Assert.NotSame(first, second)
+            Assert.DoesNotContain("DEBUG", second.PreprocessorSymbols)
+            Assert.Contains("RELEASE", second.PreprocessorSymbols)
+            Assert.Empty(second.GetDiagnostics())
+            Assert.Contains("DEBUG", first.PreprocessorSymbols)
+            project.UpdateFile(Path.Combine(tempDir, "Program.gs"), source + "\n")
+            let successor = project.GetCompilation()
+            Assert.Contains("RELEASE", successor.PreprocessorSymbols)
+            Assert.DoesNotContain("DEBUG", successor.PreprocessorSymbols)
+            Assert.Empty(successor.GetDiagnostics())
+            File.Delete(rspPath)
+            let withoutResponseFile = project.GetCompilation()
+            Assert.NotSame(successor, withoutResponseFile)
+            Assert.Empty(withoutResponseFile.PreprocessorSymbols)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
         }
     }
 

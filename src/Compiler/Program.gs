@@ -46,6 +46,16 @@ open class Program {
             NoWarnIds = HashSet[string](StringComparer.OrdinalIgnoreCase)
             WarnAsErrorIds = HashSet[string](StringComparer.OrdinalIgnoreCase)
             WarnNotAsErrorIds = HashSet[string](StringComparer.OrdinalIgnoreCase)
+            ConditionalSymbols = HashSet[string](StringComparer.Ordinal)
+            InvalidConditionalSymbolNames = List[string]()
+        }
+
+        prop ConditionalSymbols HashSet[string] {
+            get;
+        }
+
+        prop InvalidConditionalSymbolNames List[string] {
+            get;
         }
 
         prop SourceFiles List[string] {
@@ -407,6 +417,21 @@ open class Program {
                 )
                 CompilationMeasurements.Count("parse.workers.active", workBudget.LastObservedWorkers)
                 parsePhase?.Dispose()
+                let symbolWarnings = ApplySuppressPromote(
+                    parsed.InvalidConditionalSymbolNames.Select(
+                        (name string) -> Diagnostic.Create(
+                            DiagnosticDescriptors.InvalidConditionalSymbolName,
+                            syntaxTrees[0].Root.Location,
+                            name
+                        )
+                            .WithSeverity(DiagnosticSeverity.Warning)
+                    ),
+                    parsed
+                )
+                DiagnosticWriter.WriteDiagnostics(Console.Out, symbolWarnings)
+                if symbolWarnings.Any((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error) {
+                    return Error
+                }
                 using let referencePhase = CompilationMeasurements.BeginPhase("references.setup")
                 if !ReferenceResolver.TryValidateDriverReferencePaths(parsed.References, out var referenceError) {
                     Console.Error.WriteLine(referenceError)
@@ -448,6 +473,7 @@ open class Program {
                         ImplicitSystemImport = parsed.ImplicitSystemImport,
                         Nullability = parsed.Nullability,
                         PlatformNilChecks = parsed.PlatformNilChecks,
+                        PreprocessorSymbols = parsed.ConditionalSymbols.ToImmutableHashSet(StringComparer.Ordinal),
                         IsLibrary = parsed.Target == OutputTarget.Library,
                         Optimize = parsed.Optimize,
                         Logger = logger,
@@ -1119,6 +1145,7 @@ Options:
                                Output type (default: exe).
   /targetframework:<tfm>        Target framework moniker (alias: /tfm:<tfm>).
   /r:<file>, /reference:<file>  Reference an assembly.
+  /define:<names>, /d:<names>  Define case-sensitive symbols (comma/semicolon separated; repeatable).
   /resource:<file>[,<name>[,public|private]]
                                 Embed a managed resource (alias: /res).
   /analyzer:<file>              Analyzer/generator assembly; runs gsgen before compiling (repeatable).
@@ -1210,6 +1237,19 @@ Options:
                             // Loaded into the binder's ReferenceResolver so imports can resolve types
                             // declared in user-supplied assemblies in addition to the BCL.
                             result.References.Add(value!!)
+                        }
+                        case "define", "d" {
+                            if value == nil || string.IsNullOrWhiteSpace(value) {
+                                throw CommandLineException("/define requires at least one conditional symbol.")
+                            }
+                            for entry in value.Split([]char{',', ';'}) {
+                                let symbol = entry.Trim()
+                                if GSharp.Core.CodeAnalysis.ConditionalSymbols.IsValidName(symbol) {
+                                    result.ConditionalSymbols.Add(symbol)
+                                } else {
+                                    result.InvalidConditionalSymbolNames.Add(symbol)
+                                }
+                            }
                         }
                         case "resource", "res" {
                             if string.IsNullOrWhiteSpace(value) {
