@@ -122,6 +122,20 @@ open class Issue6176SpeculativeStatementTests {
     }
 
     @Fact
+    func LocalFunctionOverloadBeforeAnotherOfTheSameName_IsDeclared() {
+        // The scope query keeps one declaration of a name; the statement's own declaration still answers.
+        const source = "package P\n\nfunc Main() {\n    let a = 1\n    let f = func (n int32) int32 {\n        return n\n    }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "complete.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let position = source.IndexOf("    let f", StringComparison.Ordinal) - 1
+        let result = model.GetSpeculativeStatementDiagnostics(
+            position,
+            SyntaxTree.ParseStatement("let f = func () int32 {\n    return 1\n}")!!
+        )
+        Assert.Equal("f", Assert.Single(result.DeclaredSymbols).Name)
+    }
+
+    @Fact
     func SpeculativeStatement_SeesTheFlowStateAtThePosition() {
         // GetSpeculativeTypeInfo starts with empty narrowing. A statement is bound in its body, so a
         // null check before it narrows `p`.
