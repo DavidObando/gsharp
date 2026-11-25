@@ -90,19 +90,19 @@ internal shared class SmartCastStability {
                 fa.InterfaceType == nil &&
                 IsStableField(fa.Field) {
                 {
-                    let parent = TryGetStablePath(fa.Receiver!!)
+                    let parent = TryGetStablePath(fa.Receiver)
                     return parent?.Append(fa.Field)
                 }
             }
             case pa is BoundPropertyAccessExpression when pa.Receiver != nil && IsStableProperty(pa.Property) {
                 {
-                    let parent = TryGetStablePath(pa.Receiver!!)
+                    let parent = TryGetStablePath(pa.Receiver)
                     return parent?.Append(pa.Property)
                 }
             }
             case ca is BoundClrPropertyAccessExpression when ca.Receiver != nil && IsStableClrMember(ca.Member) {
                 {
-                    let parent = TryGetStablePath(ca.Receiver!!)
+                    let parent = TryGetStablePath(ca.Receiver)
                     return parent?.Append(ca.Member)
                 }
             }

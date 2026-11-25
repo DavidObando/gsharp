@@ -1536,8 +1536,8 @@ class Lowerer : BoundTreeRewriter {
                 }
                 case openMap is MapTypeSymbol when openMap.ClrType == nil &&
                     MemberLookup.TryGetSymbolicOpenMapReceiverView(openMap, out var mapView) {
-                    openDef = mapView!!.OpenDefinition
-                    typeArguments = mapView!!.TypeArguments
+                    openDef = mapView.OpenDefinition
+                    typeArguments = mapView.TypeArguments
                 }
                 default {
                     return false

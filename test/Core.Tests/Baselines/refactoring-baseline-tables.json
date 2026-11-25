@@ -3822,7 +3822,7 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "Gsharp.Runtime.Values, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Extensions, 0.5.793.0, , flags=0, culture=, hash="
+      "Gsharp.Extensions, 0.5.803.0, , flags=0, culture=, hash="
     ],
     "CustomAttribute": [
       "rows=9 sha256=6EDF591863770451"
