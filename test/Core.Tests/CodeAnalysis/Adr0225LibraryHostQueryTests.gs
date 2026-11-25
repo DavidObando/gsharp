@@ -570,6 +570,80 @@ func Outer[E](e E, items []int32, words []string, box GenBox[string]) {
         let eParam = outerFn.TypeParameters[0]
         Assert.Equal(eParam, completeModel.GetExpectedType(complete.IndexOf("e)\n    Pair", StringComparison.Ordinal)))
         Assert.Equal(eParam, completeModel.GetExpectedType(complete.IndexOf("e)\n}", StringComparison.Ordinal)))
+
+        // Bound-direction preservation, repeated generic position conflicts, recursive nested
+        // nullability merging, and target-dependent earlier-argument isolation (#6223 review).
+        const edgeSource = `package P
+
+open class Base {
+}
+
+class Derived : Base {
+}
+
+func KeepExactWithUpper[T](xs []T, predicate (T) -> bool, next T) {
+}
+
+func FromPair[T](pair (T, T), next T) {
+}
+
+func TriTuple[T](a T, b T, c T) {
+}
+
+func PredThenVal[T](predicate (T) -> bool, value T) {
+}
+
+func BranchThenVal[T](first T, second T) {
+}
+
+func F(
+    derivedList []Derived,
+    baseList []Base,
+    basePred (Base) -> bool,
+    derivedPred (Derived) -> bool,
+    leftPair (string?, string),
+    rightPair (string, string?),
+    flag bool
+) {
+    KeepExactWithUpper(derivedList, basePred, Derived())
+    KeepExactWithUpper(baseList, derivedPred, Base())
+    FromPair((1, 2), 3)
+    FromPair((1, "s"), 0)
+    TriTuple(leftPair, rightPair, ("a", "b"))
+    PredThenVal((x) -> true, 1)
+    PredThenVal((x int32) -> x > 0, 1)
+    BranchThenVal(if flag { nil } else { "a" }, "b")
+}
+`
+        let edgeTree = SyntaxTree.Parse(SourceText.From(edgeSource, "generic-edges.gs"))
+        let edgeComp = Compilation(edgeTree){.RecordMemberGroups: true}
+        let edgeModel = edgeComp.GetSemanticModel(edgeTree)
+        let derivedSym = Assert.IsAssignableFrom[TypeSymbol](
+            edgeModel.GetDeclaredSymbol(Descendants(edgeTree.Root).OfType[StructDeclarationSyntax]().ElementAt(1))
+        )
+        Assert.Equal(derivedSym, edgeModel.GetExpectedType(edgeSource.IndexOf("Derived())", StringComparison.Ordinal)))
+        Assert.Null(edgeModel.GetExpectedType(edgeSource.IndexOf("Base())", StringComparison.Ordinal)))
+        Assert.Equal(TypeSymbol.Int32, edgeModel.GetExpectedType(edgeSource.IndexOf("3)", StringComparison.Ordinal)))
+        Assert.Null(edgeModel.GetExpectedType(edgeSource.IndexOf("0)", StringComparison.Ordinal)))
+        let mergedTuple = TupleTypeSymbol.Get(
+            ImmutableArray.Create[TypeSymbol](
+                NullableTypeSymbol.Get(TypeSymbol.String),
+                NullableTypeSymbol.Get(TypeSymbol.String)
+            )
+        )
+        Assert.Equal(
+            mergedTuple,
+            edgeModel.GetExpectedType(edgeSource.IndexOf("(\"a\", \"b\")", StringComparison.Ordinal))
+        )
+        Assert.Null(edgeModel.GetExpectedType(edgeSource.IndexOf("1)\n    PredThenVal", StringComparison.Ordinal)))
+        Assert.Equal(
+            TypeSymbol.Int32,
+            edgeModel.GetExpectedType(edgeSource.IndexOf("1)\n    BranchThenVal", StringComparison.Ordinal))
+        )
+        Assert.Equal(
+            NullableTypeSymbol.Get(TypeSymbol.String),
+            edgeModel.GetExpectedType(edgeSource.IndexOf("\"b\")\n}", StringComparison.Ordinal))
+        )
     }
 
     @Fact

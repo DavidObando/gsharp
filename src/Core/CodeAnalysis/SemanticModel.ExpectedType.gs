@@ -674,22 +674,22 @@ partial class SemanticModel {
             let substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
             OverloadResolver.SeedFixedOwnerTypeParameters(ownerType, substitution)
             let conflicted = HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            let unfixed = HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
             if allowExplicitTypeArguments && !explicitTypeArguments.IsDefault {
                 for var i = 0; i < typeParameters.Length; i++ {
                     if explicitTypeArguments[i] is {} explicitArg {
                         substitution[typeParameters[i]] = explicitArg
+                    } else {
+                        let _ = unfixed.Add(typeParameters[i])
                     }
                 }
             } else {
                 if parameterOffset == 1 && receiverType != nil && receiverType != TypeSymbol.Error {
-                    let receiverSub = Dictionary[TypeParameterSymbol, TypeSymbol]()
-                    OverloadResolver.SeedFixedOwnerTypeParameters(ownerType, receiverSub)
                     Binder.InferTypeArguments(
                         parameters[0].Type,
                         RefCapabilities.GetInferenceType(parameters[0], receiverType),
-                        receiverSub
+                        substitution
                     )
-                    MergeSourceInference(substitution, receiverSub, conflicted)
                 }
                 for var i = 0; i < slot && i < call.Arguments.Count; i++ {
                     let paramIdx = parameterOffset + mappedPriorParams[i]
@@ -701,65 +701,36 @@ partial class SemanticModel {
                     if argType == nil {
                         continue
                     }
-                    let argSub = Dictionary[TypeParameterSymbol, TypeSymbol]()
-                    OverloadResolver.SeedFixedOwnerTypeParameters(ownerType, argSub)
-                    Binder.InferTypeArguments(param.Type, RefCapabilities.GetInferenceType(param, argType), argSub)
-                    MergeSourceInference(substitution, argSub, conflicted)
+                    Binder.InferTypeArguments(
+                        param.Type,
+                        RefCapabilities.GetInferenceType(param, argType),
+                        substitution
+                    )
+                }
+                for tp in typeParameters {
+                    if !MemberLookup.TryResolveExpectedSourceTypeArgument(substitution, tp, out var resolved) {
+                        let _ = conflicted.Add(tp)
+                    } else if resolved != nil {
+                        substitution[tp] = resolved
+                    } else {
+                        let _ = unfixed.Add(tp)
+                    }
                 }
             }
-            if ContainsAnyTypeParameter(slotType, conflicted) {
+            if conflicted.Count > 0 && ContainsAnyTypeParameter(slotType, conflicted) {
+                expectedType = nil
+                return true
+            }
+            if unfixed.Count > 0 && ContainsAnyTypeParameter(slotType, unfixed) {
                 expectedType = nil
                 return true
             }
             if substitution.Count > 0 {
                 slotType = Binder.SubstituteType(slotType, substitution)
             }
-            let unfixed = HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
-            for tp in typeParameters {
-                if !substitution.ContainsKey(tp) {
-                    let _ = unfixed.Add(tp)
-                }
-            }
-            if unfixed.Count > 0 && ContainsAnyTypeParameter(slotType, unfixed) {
-                expectedType = nil
-                return true
-            }
         }
         expectedType = slotType
         return true
-    }
-
-    private func MergeSourceInference(
-        target Dictionary[TypeParameterSymbol, TypeSymbol],
-        incoming Dictionary[TypeParameterSymbol, TypeSymbol],
-        conflicted HashSet[TypeParameterSymbol]
-    ) {
-        for pair in incoming {
-            let tp = pair.Key
-            let incomingType = pair.Value
-            if conflicted.Contains(tp) {
-                continue
-            }
-            if !target.TryGetValue(tp, out var existing) {
-                target[tp] = incomingType
-                continue
-            }
-            if DeclarationBinder.TypeSignaturesEquivalent(existing, incomingType) {
-                if !TypeSymbol.ContainsReferenceNullableAnnotation(existing) &&
-                    TypeSymbol.ContainsReferenceNullableAnnotation(incomingType) {
-                    target[tp] = incomingType
-                }
-                continue
-            }
-            if Conversion.Classify(incomingType, existing).IsImplicit {
-                continue
-            }
-            if Conversion.Classify(existing, incomingType).IsImplicit {
-                target[tp] = incomingType
-                continue
-            }
-            let _ = conflicted.Add(tp)
-        }
     }
 
     private func TryResolveImportedExpectedType(
@@ -969,9 +940,37 @@ partial class SemanticModel {
         if expr is NamedArgumentExpressionSyntax named {
             expr = named.Expression
         }
-        var type = GetTypeInfo(expr, cancellationToken).Type
-        if type == nil && expr is RefArgumentExpressionSyntax{IsInlineDeclaration: false, Expression: {} refTarget} {
-            type = GetTypeInfo(refTarget, cancellationToken).Type
+        while expr is ParenthesizedExpressionSyntax parenthesized {
+            expr = parenthesized.Expression
+        }
+        if ExpressionBinder.IsTargetDependentExpressionSyntax(expr) {
+            return nil
+        }
+        var type TypeSymbol? = nil
+        if expr is LambdaExpressionSyntax or
+            FunctionLiteralExpressionSyntax{ReturnTypeClause: nil} ||
+            ExpressionBinder.IsTargetTypedBranchyArgumentSyntax(expr) {
+            type = GetSpeculativeTypeInfo(expr.Span.Start, expr, cancellationToken).Type
+        } else {
+            var bound = GetBoundNode(expr, cancellationToken)
+            if bound == nil &&
+                expr is RefArgumentExpressionSyntax{IsInlineDeclaration: false, Expression: {} refTarget} {
+                bound = GetBoundNode(refTarget, cancellationToken)
+            }
+            while bound is BoundConversionExpression conversion && object.ReferenceEquals(
+                conversion.ImplicitConversionOperand,
+                conversion.Expression
+            ) {
+                bound = conversion.Expression
+            }
+            if bound is BoundClrMethodGroupExpression {
+                return nil
+            }
+            if bound is BoundMethodGroupExpression methodGroup {
+                type = methodGroup.FunctionType
+            } else if bound is BoundExpression expression {
+                type = expression.Type
+            }
         }
         if type == nil || type == TypeSymbol.Error || type == TypeSymbol.Void || TypeSymbol.ContainsNullLiteralType(
             type
