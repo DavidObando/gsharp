@@ -221,8 +221,11 @@ class ProgramFixProvider : GSharpCodeFixProvider {
                         .OfType[CallExpressionSyntax]()
                         .FirstOrDefault((c CallExpressionSyntax) -> object.ReferenceEquals(c.Identifier, node))
                 }
-                // An indirect call (`(f)()`) invokes a value, never a constructor.
-                if call == nil || call.Callee != nil || model.GetSymbolInfo(call, ct).Symbol != nil {
+                // An indirect call (`(f)()`) invokes a value, never a constructor. A construction answers
+                // the imported constructor (#6177) or nothing.
+                if call == nil ||
+                    call.Callee != nil ||
+                    (model.GetSymbolInfo(call, ct).Symbol is {} called && called is not ImportedConstructorSymbol) {
                     return false
                 }
                 let type = model.GetTypeInfo(call, ct).Type

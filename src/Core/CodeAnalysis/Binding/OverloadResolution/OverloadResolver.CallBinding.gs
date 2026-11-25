@@ -1039,6 +1039,15 @@ internal partial class OverloadResolver {
         // named, no duplicate names). Errors are reported by the helper so the
         // call short-circuits to a bound error here.
         if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
+            // #6199: the callee of a call through a function value answers although its arguments do not
+            // analyse.
+            if Scope.TryLookupSymbol(syntax.Identifier.ValueText) is VariableSymbol layoutCallee &&
+                IsCallableValueType(TryGetNarrowedVariableType(layoutCallee) ?? layoutCallee.Type) {
+                binderCtx.RecordCallCallee(
+                    syntax,
+                    () -> BuildFailedCalleeLoad(layoutCallee, syntax, TryGetNarrowedVariableType(layoutCallee))
+                )
+            }
             return BoundErrorExpression(nil)
         }
         var boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
@@ -1075,6 +1084,8 @@ internal partial class OverloadResolver {
                 owner.Name,
                 memberAccessibility
             )
+            // #6199: the callee answers the member that the name resolves to, as a receiver call does.
+            binderCtx.RecordCallCallee(syntax, () -> BuildFailedCalleeLoad(callTarget, syntax, nil))
             return BoundErrorExpression(nil)
         }
         // Issue #2066: a smart-cast null-guard (`if x != nil { x(...) }`)

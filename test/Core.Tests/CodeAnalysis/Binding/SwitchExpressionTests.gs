@@ -326,6 +326,124 @@ let label = switch v { case > 0 and < 10: "x" case < 0 or > 100: "y" }
         Assert.Contains(diagnostics, (d Diagnostic) -> d.Message == "Switch expression must have a 'default' arm.")
     }
 
+    // Issue #5643: `when` guard when-true narrowing flows into the arm result.
+    @Fact
+    func SwitchExpression_WhenGuardNilCheck_NarrowsArmResultAndSemanticModel() {
+        let source = `import System
+func Check() string {
+    var s string? = "a"
+    var n = 1
+    let t = switch n { case 1 when s != nil: s default: "x" }
+    let z string = t
+    return z
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source))
+        let compilation = Compilation(tree)
+        Assert.Empty(compilation.GetDiagnostics())
+        let model = compilation.GetSemanticModel(tree)
+        let switchExpr = tree.Root.DescendantNodes().OfType[SwitchExpressionSyntax]().Single()
+        Assert.Equal(TypeSymbol.String, model.GetTypeInfo(switchExpr).Type)
+        let armResult = switchExpr.Arms[0].Result
+        Assert.Equal(TypeSymbol.String, model.GetTypeInfo(armResult).Type)
+        let tRead = tree
+            .Root
+            .DescendantNodes()
+            .OfType[NameExpressionSyntax]()
+            .Single((name NameExpressionSyntax) -> name.IdentifierToken.ValueText == "t")
+        Assert.Equal(TypeSymbol.String, model.GetTypeInfo(tRead).Type)
+    }
+
+    @Fact
+    func SwitchExpression_WhenGuard_NarrowsAcrossPatternForms() {
+        let source = ShapeHierarchy + `
+class Box {
+    let Text string? = "ok"
+}
+func Pick(o object?, s string?, b Base, box Box?, n int32) string {
+    let fromPatternVar = switch o {
+        case x is string? when x != nil: x
+        default: ""
+    }
+    let fromCompound = switch n {
+        case 1 when s != nil && s.Length > 0: s
+        default: ""
+    }
+    let fromIsVar = switch n {
+        case 1 when b is A a: a.Name()
+        default: ""
+    }
+    let fromNullCond = switch n {
+        case 1 when box?.Text != nil: box.Text
+        default: ""
+    }
+    let fromStringLen = switch n {
+        case 1 when s?.Length != nil: s.Length
+        default: 0
+    }
+    let _ string = fromPatternVar
+    let _ string = fromCompound
+    let _ string = fromIsVar
+    let _ string = fromNullCond
+    let _ int32 = fromStringLen
+    return fromPatternVar + fromCompound + fromIsVar + fromNullCond
+}
+`
+        Assert.Empty(Bind(source))
+    }
+
+    @Fact
+    func SwitchExpression_WhenGuard_SideEffectAndSiblingIsolation() {
+        let mutatedAfterCheck = Bind(`
+func Run(n int32) int32 {
+    var s string? = "a"
+    let clear = () -> {
+        s = nil
+        return true
+    }
+    return switch n {
+        case 1 when s != nil && clear(): s.Length
+        default: 0
+    }
+}
+`)
+        let mutatedDiag = Assert.Single(mutatedAfterCheck)
+        Assert.Equal("GS0158", mutatedDiag.Id)
+
+        let leakedToSibling = Bind(`
+func Run(n int32) int32 {
+    var s string? = "a"
+    return switch n {
+        case 1 when s != nil: s.Length
+        case 2: s.Length
+        default: 0
+    }
+}
+`)
+        let siblingDiag = Assert.Single(leakedToSibling)
+        Assert.Equal("GS0158", siblingDiag.Id)
+
+        let mutatedNullConditional = Bind(`
+class Box {
+    var Text string? = "ok"
+    func Touch(cb () -> void) string? {
+        cb()
+        return Text
+    }
+}
+func Run(n int32) string {
+    var box Box? = Box{}
+    let clear = () -> { box = nil }
+    return switch n {
+        case 1 when box?.Touch(clear) != nil: box.Text ?? ""
+        default: ""
+    }
+}
+`)
+        let nullCondDiag = Assert.Single(mutatedNullConditional)
+        Assert.Equal("GS0158", nullCondDiag.Id)
+    }
+
     shared {
         // Issue #1112: a class hierarchy used to exercise best-common-type and
         // target-typing across switch-expression arms.

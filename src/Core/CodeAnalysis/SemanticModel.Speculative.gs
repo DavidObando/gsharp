@@ -7,8 +7,10 @@ package GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 import System.Threading
 
@@ -65,4 +67,105 @@ partial class SemanticModel {
         )
         return TypeInfo(type)
     }
+
+    /// Binds [`statement`](paramref) as if its text stood at [`position`](paramref) of this model's text,
+    /// and returns its classified diagnostics and the locals that it declares (ADR-0229, #6176). The
+    /// bind is the bind of the text with the statement inserted: for a prefix tree (the tree of a
+    /// (cref:PrefixBindResult)), (cref:Compilation.Compilation.BindPrefix) with the same remainder and
+    /// the cut moved past the statement; for a complete tree, the complete text, and every diagnostic is
+    /// final. It runs every analysis that such a bind runs, flow analysis included, so it costs a bind of
+    /// the text. Nothing changes in this model's compilation.
+    /// @param position A character offset into this model's text, at a statement boundary. In a prefix tree
+    /// it is at or before the cut.
+    /// @param statement The statement to insert, for example from (cref:Syntax.SyntaxTree.ParseStatement).
+    /// @param cancellationToken Cancels this caller's wait for the bind.
+    /// @returns The diagnostics located in the inserted statement and the locals that it declares.
+    func GetSpeculativeStatementDiagnostics(
+        position int32,
+        statement StatementSyntax,
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) SpeculativeStatementResult {
+        cancellationToken.ThrowIfCancellationRequested()
+        ArgumentNullException.ThrowIfNull(statement, paramName: "statement")
+        let text = syntaxTree.Text
+        let prefix = syntaxTree.Prefix
+        let limit = if prefix != nil {
+            prefix.Cut
+        } else {
+            text.Length
+        }
+        if position < 0 || position > limit {
+            throw ArgumentOutOfRangeException(
+                "position",
+                position,
+                "The position must be in the text, at or before the cut."
+            )
+        }
+        // The statement gets lines of its own, so that it neither continues the text before it nor runs into
+        // the text after it.
+        let statementText = statement.SyntaxTree.Text.ToString(statement.Span)
+        let inserted = "\n" + statementText + "\n"
+        let host = text.ToString()
+        let insertedText = SourceText.From(
+            host.Substring(0, position) + inserted + host.Substring(position),
+            text.FileName
+        )
+        let insertedTree = SyntaxTree.Parse(insertedText)
+        let statementSpan = TextSpan(position + 1, statementText.Length)
+        let snapshot = compilation.WithReplacedSyntaxTree(syntaxTree, insertedTree)
+        var diagnostics = ImmutableArray.CreateBuilder[ClassifiedDiagnostic]()
+        var visible ImmutableArray[Symbol]
+        var boundTree SyntaxTree
+        if prefix != nil {
+            let result = snapshot.BindPrefix(
+                insertedTree,
+                prefix.Cut + inserted.Length,
+                PrefixBindOptions(prefix.Remainder, includeScope: false),
+                cancellationToken
+            )
+            for d in result.Diagnostics {
+                if InStatement(d.Diagnostic, result.SyntaxTree.Text, statementSpan) {
+                    diagnostics.Add(d)
+                }
+            }
+            // The scope right after the statement: the cut can be after blocks that close before it.
+            visible = result
+                .Compilation
+                .GetSemanticModel(result.SyntaxTree)
+                .LookupSymbols(statementSpan.End + 1, cancellationToken: cancellationToken)
+            boundTree = result.SyntaxTree
+        } else {
+            for d in snapshot.GetDiagnostics(cancellationToken) {
+                if InStatement(d, insertedText, statementSpan) {
+                    diagnostics.Add(ClassifiedDiagnostic(d, DiagnosticFinality.Final, string.Empty))
+                }
+            }
+            visible = snapshot.GetSemanticModel(insertedTree).LookupSymbols(
+                statementSpan.End + 1,
+                cancellationToken: cancellationToken
+            )
+            boundTree = insertedTree
+        }
+        // A symbol that the statement declares has its declaration in the statement.
+        let declared = ImmutableArray.CreateBuilder[Symbol]()
+        for symbol in visible {
+            for node in symbol.DeclaringSyntaxNodes {
+                if object.ReferenceEquals(node.SyntaxTree.Text, boundTree.Text) &&
+                    statementSpan.Start <= node.Span.Start &&
+                    node.Span.End <= statementSpan.End {
+                    declared.Add(symbol)
+                    break
+                }
+            }
+        }
+        return SpeculativeStatementResult(diagnostics.ToImmutable(), declared.ToImmutable(), boundTree, statementSpan)
+    }
+
+    private func InStatement(
+        diagnostic Diagnostic,
+        text SourceText,
+        statementSpan TextSpan
+    ) bool -> object.ReferenceEquals(diagnostic.Location.Text, text) &&
+        statementSpan.Start <= diagnostic.Location.Span.Start &&
+        diagnostic.Location.Span.End <= statementSpan.End
 }

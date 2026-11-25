@@ -580,12 +580,22 @@ public static class C
     }
 
     @Fact
-    func SwitchWhenNullGuard_DoesNotNarrowSectionBody() {
-        let printed = Translate(`#nullable enable
+    func SwitchWhenNullGuard_NarrowsSectionBodyAndSwitchExpression() {
+        let source = `#nullable enable
 
-public static class C
+public static class P
 {
-    public static int Measure(int kind, string? value)
+    public sealed class Box
+    {
+        public string Text = "ok";
+        public string? Touch(System.Action cb)
+        {
+            cb();
+            return Text;
+        }
+    }
+
+    public static int MeasureStmt(int kind, string? value)
     {
         switch (kind)
         {
@@ -595,9 +605,762 @@ public static class C
                 return 0;
         }
     }
-}`)
-        Assert.Contains("case 1 when value != nil", printed, StringComparison.Ordinal)
-        Assert.Contains("return value!!.Length", printed, StringComparison.Ordinal)
+
+    public static int MeasureExpr(int kind, string? value) =>
+        kind switch
+        {
+            1 when value != null => value.Length,
+            _ => 0,
+        };
+
+    public static int MeasureConditionalAccess(int kind, string? value) =>
+        kind switch
+        {
+            1 when value?.Length != null => value.Length,
+            _ => 0,
+        };
+
+    public static int MeasureConditionalAccessMutated(int kind, bool drop)
+    {
+        Box? box = new Box();
+        System.Action clear = () => { if (drop) box = null; };
+        return kind switch
+        {
+            1 when box?.Touch(clear) != null => box!.Text.Length,
+            _ => 0,
+        };
+    }
+
+    public static int MeasureMultiLabel(int kind, string? value)
+    {
+        switch (kind)
+        {
+            case 1 when value is not null:
+            case 2:
+                return value!.Length;
+            default:
+                return 0;
+        }
+    }
+
+    public static int MeasureMutatedInGuard(int kind, string? value, bool drop)
+    {
+        bool Clear()
+        {
+            if (drop) value = null;
+            return true;
+        }
+
+        return kind switch
+        {
+            1 when value != null && Clear() => value!.Length,
+            _ => 0,
+        };
+    }
+
+    public static int MeasureClosureAssignedFieldConditionalAccess(int kind)
+    {
+        Box? box = new Box();
+        System.Func<int> reader = () => (box?.Text ?? "").Length;
+        return kind switch
+        {
+            1 when box?.Text != null => box.Text.Length,
+            _ => reader(),
+        };
+    }
+
+    public static int MeasureNestedConditionalAccessMutated(int kind, string? value, bool drop)
+    {
+        return kind switch
+        {
+            1 when (value?.Substring((drop ? (value = null) : null) == null ? 0 : 0))?.Length != null => value!.Length,
+            _ => 0,
+        };
+    }
+
+    public static int MeasureNestedMultiLabel(int outer, int inner, string? value)
+    {
+        switch (outer)
+        {
+            case 1 when value is not null:
+            case 2:
+                switch (inner)
+                {
+                    case 10:
+                        return value!.Length;
+                    default:
+                        return 0;
+                }
+            default:
+                return -1;
+        }
+    }
+
+    public static int MeasureConditionalRelationalNotGuard(string? value)
+    {
+        if (value?.Length is not > 0 || value.Length > 10)
+            return -1;
+        return value.Length;
+    }
+
+    public static int MeasureConditionalIsTypeTestExpr(int kind, string? value)
+    {
+        return kind switch
+        {
+            1 when value?.Length is int => value.Length,
+            _ => 0,
+        };
+    }
+
+    public static int MeasureConditionalIsTypeTestStmt(int kind, string? value)
+    {
+        switch (kind)
+        {
+            case 1 when value?.Length is int:
+                return value.Length;
+            default:
+                return 0;
+        }
+    }
+
+    public static int MeasureConditionalIsTypeTestMutated(int kind, string? value, bool drop)
+    {
+        return kind switch
+        {
+            1 when (value?.Substring((drop ? (value = null) : null) == null ? 0 : 0))?.Length is int => value!.Length,
+            _ => 0,
+        };
+    }
+
+    public static string Run() =>
+        MeasureStmt(1, "ab") + "|" +
+        MeasureExpr(1, "abc") + "|" +
+        MeasureConditionalAccess(1, "abcd") + "|" +
+        MeasureConditionalAccess(1, null) + "|" +
+        MeasureConditionalAccessMutated(1, false) + "|" +
+        MeasureMultiLabel(1, "xy") + "|" +
+        MeasureMultiLabel(2, "z") + "|" +
+        MeasureMutatedInGuard(1, "q", false) + "|" +
+        MeasureClosureAssignedFieldConditionalAccess(1) + "|" +
+        MeasureNestedConditionalAccessMutated(1, "wxyz", false) + "|" +
+        MeasureNestedMultiLabel(1, 10, "hi") + "|" +
+        MeasureNestedMultiLabel(2, 10, "bye") + "|" +
+        MeasureConditionalRelationalNotGuard("hello") + "|" +
+        MeasureConditionalRelationalNotGuard(null) + "|" +
+        MeasureConditionalIsTypeTestExpr(1, "abcde") + "|" +
+        MeasureConditionalIsTypeTestStmt(1, "abcdef") + "|" +
+        MeasureConditionalIsTypeTestMutated(1, "ab", false);
+}`
+        let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
+            "using System;\nnamespace Demo {\n" + source + "\n}",
+            "2|3|4|0|2|2|1|1|2|4|2|3|5|-1|5|6|2",
+            rejectRedundantAssertions: true
+        )
+        Assert.Contains(
+            "case 1 when value != nil {\n                return value.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("case 1 when value != nil: value.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when value?.Length != nil: value.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("box!!.Text", printed, StringComparison.Ordinal)
+        Assert.Contains("case 2 {\n                return value!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("&& Clear(): value!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when box?.Text != nil: box.Text.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(")?.Length != nil: value!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 10 {\n                        return value.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 10 {\n                        return value!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("value!!.Length > 10", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when value?.Length is int32: value.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "case 1 when value?.Length is int32 {\n                return value.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(")?.Length is int32: value!!.Length", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func SwitchWhenNullGuard_ReadonlyFieldsAndStringGuards() {
+        let source = `#nullable enable
+using System;
+
+namespace Demo
+{
+    public sealed class Child
+    {
+        public readonly bool Flag;
+        public readonly int Value;
+
+        public Child(bool flag, int value)
+        {
+            Flag = flag;
+            Value = value;
+        }
+    }
+
+    public sealed class Holder
+    {
+        public readonly string? Text;
+        public readonly Child? Child;
+        public string? Mutable;
+
+        public Holder(string? text, string? mutable, Child? child = null)
+        {
+            Text = text;
+            Mutable = mutable;
+            Child = child;
+        }
+    }
+
+    public sealed class P
+    {
+        private readonly string? field;
+        private string? mutableField;
+        private static void Touch() { }
+
+        public P(string? value, string? mutable)
+        {
+            field = value;
+            mutableField = mutable;
+        }
+
+        public int Stmt(int kind)
+        {
+            switch (kind)
+            {
+                case 1 when field != null:
+                    return field.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int Expr(int kind) =>
+            kind switch
+            {
+                1 when field != null => field.Length,
+                _ => 0,
+            };
+
+        public int ExprThisIsNotNull(int kind) =>
+            kind switch
+            {
+                1 when this.field is not null => this.field.Length,
+                _ => 0,
+            };
+
+        public int ExprNegatedEqualsNull(int kind) =>
+            kind switch
+            {
+                1 when !(field == null) => field.Length,
+                _ => 0,
+            };
+
+        public int ExprTypePattern(int kind) =>
+            kind switch
+            {
+                1 when field is string => field.Length,
+                _ => 0,
+            };
+
+        public int ExprConditionalAccess(int kind) =>
+            kind switch
+            {
+                1 when field?.Length != null => field.Length,
+                _ => 0,
+            };
+
+        public int QualifiedExpr(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when holder.Text != null => holder.Text.Length,
+                _ => 0,
+            };
+
+        public int QualifiedStmt(int kind, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    return holder.Text.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedConditionalIsInt(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when holder.Text?.Length is int => holder.Text.Length,
+                _ => 0,
+            };
+
+        public int QualifiedNullableReceiverConditional(int kind, Holder? holder) =>
+            kind switch
+            {
+                1 when holder?.Text != null => holder.Text.Length,
+                _ => 0,
+            };
+
+        public int QualifiedStmtCallInvalidates(int kind, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    Touch();
+                    return holder.Text!.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedExprCallInvalidates(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when holder.Text != null => (Touch0() + holder.Text!.Length),
+                _ => 0,
+            };
+
+        public int QualifiedMutableKeepsAssertion(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when holder.Mutable != null => holder.Mutable!.Length,
+                _ => 0,
+            };
+
+        public int QualifiedNestedConditionalAccessExpr(int kind, Holder? holder) =>
+            kind switch
+            {
+                1 when holder?.Text?.Length != null => holder.Text.Length,
+                _ => 0,
+            };
+
+        public int QualifiedNestedConditionalAccessStmt(int kind, Holder? holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder?.Text?.Length != null:
+                    return holder.Text.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedNestedConditionalAccessMutated(int kind, Holder? holder, bool drop) =>
+            kind switch
+            {
+                1 when holder?.Text?.Substring((drop ? (holder = null) : null) == null ? 0 : 0) != null =>
+                    holder!.Text!.Length,
+                _ => 0,
+            };
+
+        public int QualifiedNestedDefaultLaterHeaderCallInvalidates(int kind, int inner, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    switch (inner)
+                    {
+                        default:
+                            return holder.Text!.Length;
+                        case 2 when TouchBool():
+                            return 0;
+                    }
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedNestedHeaderInheritsOuterGuard(int kind, int inner, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    switch (inner)
+                    {
+                        case 2 when holder.Text.Length > 0:
+                            return holder.Text.Length;
+                        default:
+                            return 0;
+                    }
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedNestedStackedCaseAndDefault(int kind, int inner, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    switch (inner)
+                    {
+                        case 10:
+                        default:
+                            return holder.Text.Length;
+                        case 2 when TouchBool():
+                            return 0;
+                    }
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedAuthoredSuppressionExpr(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when holder.Text != null => holder.Text!.Length,
+                _ => 0,
+            };
+
+        public int QualifiedAuthoredSuppressionStmt(int kind, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    return holder.Text!.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedFalseBranchBooleanConditional(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when !(holder.Child?.Flag != true) => holder.Child.Value,
+                _ => 0,
+            };
+
+        public int QualifiedNestedSwitchBackEdgeInvalidates(int kind, int inner, Holder holder, Holder other)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    switch (inner)
+                    {
+                        case 0:
+                            var len = holder.Text!.Length;
+                            holder = other;
+                            if (len < 0) goto case 0;
+                            return len;
+                        default:
+                            return 0;
+                    }
+                default:
+                    return 0;
+            }
+        }
+
+        public int ReadonlyFieldStringIsNullOrEmptyGuardExpr(int kind) =>
+            kind switch
+            {
+                1 when !string.IsNullOrEmpty(field) => field.Length,
+                _ => 0,
+            };
+
+        public int ReadonlyFieldStringIsNullOrEmptyGuardStmt(int kind)
+        {
+            switch (kind)
+            {
+                case 1 when !string.IsNullOrEmpty(field):
+                    return field.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedStringIsNullOrEmptyGuardExpr(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when !string.IsNullOrEmpty(holder.Text) => holder.Text.Length,
+                _ => 0,
+            };
+
+        private static bool TouchBool()
+        {
+            Touch();
+            return false;
+        }
+
+        public int MultiLabel(int kind)
+        {
+            switch (kind)
+            {
+                case 1 when field is not null:
+                case 2:
+                    return field!.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int StmtCallInvalidates(int kind)
+        {
+            switch (kind)
+            {
+                case 1 when field != null:
+                    Touch();
+                    return field!.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int ExprCallBeforeReadInvalidates(int kind) =>
+            kind switch
+            {
+                1 when field != null => (Touch0() + field!.Length),
+                _ => 0,
+            };
+
+        private static int Touch0()
+        {
+            Touch();
+            return 0;
+        }
+
+        public int MutableFieldKeepsAssertion(int kind) =>
+            kind switch
+            {
+                1 when mutableField != null => mutableField!.Length,
+                _ => 0,
+            };
+
+        public static int StringIsNullOrEmptyGuard(int kind, string? s) =>
+            kind switch
+            {
+                1 when !string.IsNullOrEmpty(s) => s.Length,
+                _ => 0,
+            };
+
+        public static string Run()
+        {
+            var p = new P("abcd", "xy");
+            var h = new Holder("abcde", "zw", new Child(true, 7));
+            return p.Stmt(1) + "|" +
+                p.Expr(1) + "|" +
+                p.ExprThisIsNotNull(1) + "|" +
+                p.ExprNegatedEqualsNull(1) + "|" +
+                p.ExprTypePattern(1) + "|" +
+                p.ExprConditionalAccess(1) + "|" +
+                p.QualifiedExpr(1, h) + "|" +
+                p.QualifiedStmt(1, h) + "|" +
+                p.QualifiedConditionalIsInt(1, h) + "|" +
+                p.QualifiedNullableReceiverConditional(1, h) + "|" +
+                p.QualifiedStmtCallInvalidates(1, h) + "|" +
+                p.QualifiedExprCallInvalidates(1, h) + "|" +
+                p.QualifiedMutableKeepsAssertion(1, h) + "|" +
+                p.QualifiedNestedConditionalAccessExpr(1, h) + "|" +
+                p.QualifiedNestedConditionalAccessStmt(1, h) + "|" +
+                p.QualifiedNestedConditionalAccessMutated(1, h, false) + "|" +
+                p.QualifiedNestedDefaultLaterHeaderCallInvalidates(1, 1, h) + "|" +
+                p.QualifiedNestedHeaderInheritsOuterGuard(1, 2, h) + "|" +
+                p.QualifiedNestedStackedCaseAndDefault(1, 10, h) + "|" +
+                p.QualifiedNestedStackedCaseAndDefault(1, 1, h) + "|" +
+                p.QualifiedAuthoredSuppressionExpr(1, h) + "|" +
+                p.QualifiedAuthoredSuppressionStmt(1, h) + "|" +
+                p.QualifiedFalseBranchBooleanConditional(1, h) + "|" +
+                p.QualifiedNestedSwitchBackEdgeInvalidates(1, 0, h, h) + "|" +
+                p.ReadonlyFieldStringIsNullOrEmptyGuardExpr(1) + "|" +
+                p.ReadonlyFieldStringIsNullOrEmptyGuardStmt(1) + "|" +
+                p.QualifiedStringIsNullOrEmptyGuardExpr(1, h) + "|" +
+                p.MultiLabel(1) + "|" +
+                p.MultiLabel(2) + "|" +
+                p.StmtCallInvalidates(1) + "|" +
+                p.ExprCallBeforeReadInvalidates(1) + "|" +
+                p.MutableFieldKeepsAssertion(1) + "|" +
+                StringIsNullOrEmptyGuard(1, "hello");
+        }
+    }
+}`
+        let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
+            source,
+            "4|4|4|4|4|4|5|5|5|5|5|5|2|5|5|5|5|5|5|5|5|5|7|5|4|4|5|4|4|4|4|2|5",
+            rejectRedundantAssertions: true
+        )
+        Assert.Contains(
+            "case 1 when field != nil {\n                return field.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("case 1 when field != nil: field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when this.field != nil: this.field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when !(field == nil): field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when field is string: field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when field?.Length != nil: field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when holder.Text != nil: holder.Text.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "case 1 when holder.Text != nil {\n                return holder.Text.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "case 1 when holder.Text?.Length is int32: holder.Text.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("case 1 when holder?.Text != nil: holder.Text.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("Touch()\n                return holder.Text!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("Touch0() + holder.Text!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("holder.Mutable != nil: holder.Mutable!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "case 1 when holder?.Text?.Length != nil: holder.Text.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "case 1 when holder?.Text?.Length != nil {\n                return holder.Text.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("holder!!.Text!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "default {\n                        return holder.Text!!.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("case 2 when holder.Text.Length > 0", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "case 10 {\n                        return holder.Text.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "case 1 when !(holder.Child?.Flag != true): holder.Child.Value",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("let len = holder.Text!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("case 1 when !string.IsNullOrEmpty(field): field.Length", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "case 1 when !string.IsNullOrEmpty(field) {\n                return field.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "case 1 when !string.IsNullOrEmpty(holder.Text): holder.Text.Length",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("case 2 {\n                return field!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("Touch()\n                return field!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("Touch0() + field!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("mutableField != nil: mutableField!!.Length", printed, StringComparison.Ordinal)
+        Assert.Contains("!string.IsNullOrEmpty(s): s.Length", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func SwitchWhenNullGuard_ObliviousSectionWritesAndGuardOrderFlow() {
+        let source = `using System;
+
+namespace Demo
+{
+    public static class P
+    {
+        private static int lastConsumed;
+        private static int lastSafe;
+        private static int lastNestedDefault;
+
+        private static void Consume(string x)
+        {
+            lastConsumed = x == null ? -1 : x.Length;
+        }
+
+        private static void ConsumeNestedDefault(string x)
+        {
+            lastNestedDefault = x == null ? -1 : x.Length;
+        }
+
+        private static bool Observe(string x)
+        {
+            return x == null || x.Length >= 0;
+        }
+
+        private static void SafeConsume(string x)
+        {
+            lastSafe = x.Length;
+        }
+
+        public static int TestSectionWriteInvalidates(int kind, string s)
+        {
+            switch (kind)
+            {
+                case 1 when s != null:
+                    s = null;
+                    Consume(s);
+                    break;
+                case 2 when s != null:
+                    SafeConsume(s);
+                    break;
+            }
+            return lastConsumed + lastSafe;
+        }
+
+        public static int TestGuardOrderObserveBeforeNullCheck(int kind, string s)
+        {
+            switch (kind)
+            {
+                case 1 when Observe(s) && s != null:
+                    return s.Length;
+                default:
+                    return -1;
+            }
+        }
+
+        public static int TestSectionConditionalWriteKeepsAssertion(int kind, string s, bool drop)
+        {
+            switch (kind)
+            {
+                case 1 when s != null:
+                    if (drop) s = null;
+                    return s.Length;
+                default:
+                    return -1;
+            }
+        }
+
+        public static int TestNestedDefaultLaterHeaderWriteInvalidates(int kind, int inner, string s)
+        {
+            switch (kind)
+            {
+                case 1 when s != null:
+                    switch (inner)
+                    {
+                        default:
+                            ConsumeNestedDefault(s);
+                            break;
+                        case 2 when (s = null) != null:
+                            break;
+                    }
+                    break;
+            }
+            return lastNestedDefault;
+        }
+
+        public static string Run()
+        {
+            int a = TestSectionWriteInvalidates(1, "hi");
+            int b = TestSectionWriteInvalidates(2, "abc");
+            int c = TestGuardOrderObserveBeforeNullCheck(1, null);
+            int d = TestGuardOrderObserveBeforeNullCheck(1, "xy");
+            int e = TestSectionConditionalWriteKeepsAssertion(1, "abcd", false);
+            int f = TestNestedDefaultLaterHeaderWriteInvalidates(1, 1, "hello");
+            return a + "|" + b + "|" + c + "|" + d + "|" + e + "|" + f;
+        }
+    }
+}`
+        let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
+            source,
+            "-1|2|-1|2|4|5",
+            rejectRedundantAssertions: true
+        )
+        Assert.Contains("func Consume(x string?)", printed, StringComparison.Ordinal)
+        Assert.Contains("func ConsumeNestedDefault(x string?)", printed, StringComparison.Ordinal)
+        Assert.Contains("func Observe(x string?) bool", printed, StringComparison.Ordinal)
+        Assert.Contains("func SafeConsume(x string)", printed, StringComparison.Ordinal)
+        Assert.Contains("SafeConsume(s)", printed, StringComparison.Ordinal)
+        Assert.Contains("return s!!.Length", printed, StringComparison.Ordinal)
     }
 
     shared {

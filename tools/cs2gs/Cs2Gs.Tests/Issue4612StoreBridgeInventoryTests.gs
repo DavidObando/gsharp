@@ -218,8 +218,8 @@ open class Issue4612StoreBridgeInventoryTests {
             ["TranslateCoalescingAssignmentAsExpression"] = (1, "result of ??=, not a store"),
             ["TranslateConditionalAccessWithLocalAssignmentSeam"] = (1, "receiver of a ?. access"),
             ["TranslateConversionCapturingAndPatternTest"] = (
-                3,
-                "two narrowed member receivers and a delayed pattern-binding read after successful conversion tests"
+                2,
+                "two narrowed member receivers after successful conversion tests"
             ),
             ["TranslateExpression"] = (
                 2,
