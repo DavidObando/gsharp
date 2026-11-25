@@ -63,24 +63,25 @@ open class Issue6177LookupMembersCacheTests {
 
     @Fact
     func RetainedModelAfterAnAssemblyRename_AnswersAsAFreshModel() {
-        // A rename starts a new binding generation, and the cache key holds it, so a retained model does not
-        // answer from the bind of the old name.
+        // A rename starts a new binding generation, and the cache key holds it, so the retained model does not
+        // answer the symbols of the old bind from its cache.
         const source = "package P\n\nimport System.Linq\n\nfunc (s string) Shout() string -> s\n\nfunc Main() {\n    let s = \"a\"\n    let n = s.Length\n}\n"
         let tree = SyntaxTree.Parse(SourceText.From(source, "cache.gs"))
         let compilation = Compilation(tree)
         compilation.AssemblyName = "First"
         let model = compilation.GetSemanticModel(tree)
         let position = source.IndexOf("s.Length", StringComparison.Ordinal)
-        let before = Describe(model.LookupMembers(position, TypeSymbol.String))
+        let before = model.LookupMembers(position, TypeSymbol.String, "Shout").Single()
         compilation.AssemblyName = "Second"
-        let after = Describe(compilation.GetSemanticModel(tree).LookupMembers(position, TypeSymbol.String))
-        let fresh = Compilation(SyntaxTree.Parse(SourceText.From(source, "cache.gs")))
-        fresh.AssemblyName = "Second"
+        // The retained model, not a new one.
+        let retained = model.LookupMembers(position, TypeSymbol.String, "Shout").Single()
+        let fresh = compilation.GetSemanticModel(tree).LookupMembers(position, TypeSymbol.String, "Shout").Single()
+        Assert.NotSame(before, retained)
+        Assert.Same(fresh, retained)
         Assert.Equal(
-            Describe(fresh.GetSemanticModel(fresh.SyntaxTrees[0]).LookupMembers(position, TypeSymbol.String)),
-            after
+            Describe(compilation.GetSemanticModel(tree).LookupMembers(position, TypeSymbol.String)),
+            Describe(model.LookupMembers(position, TypeSymbol.String))
         )
-        Assert.Equal(before, after)
     }
 
     shared {
