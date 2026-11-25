@@ -669,6 +669,124 @@ public static class App
         )
     }
 
+    @Fact
+    func TwoProjectProjectedForwarderChain_CleanOwnerReadsScaleLinearly() {
+        let options = CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+            NullableContextOptions.Disable
+        )
+        let nodeVisits = List[int64]()
+        let edgeVisits = List[int64]()
+        let allocations = List[int64]()
+        for length in[]int32{8, 32, 64, 128} {
+            let libSb = StringBuilder()
+            libSb.AppendLine("#nullable disable")
+            libSb.AppendLine("using System.Threading.Tasks;")
+            libSb.AppendLine("public static class UpstreamProjected")
+            libSb.AppendLine("{")
+            libSb.AppendLine("    public static Task<string> Present() => Task.FromResult(\"ok\");")
+            for var i = 0; i < length; i++ {
+                libSb.AppendLine("    public static Task<string> F$i() => F${i + 1}();")
+            }
+            libSb.AppendLine("    public static async Task<string> F$length() { await Task.Yield(); return null; }")
+            libSb.AppendLine("}")
+            let libTree = CSharpSyntaxTree.ParseText(libSb.ToString(), path: "UpstreamProjected.cs")
+            let lib = CSharpCompilation.Create(
+                "Issue6037UpstreamProjected$length",
+                []SyntaxTree{libTree},
+                CSharpProjectLoader.RuntimeReferences(),
+                options
+            )
+            Assert.Empty(lib.GetDiagnostics().Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error))
+            using let libStream = MemoryStream()
+            Assert.True(lib.Emit(libStream).Success)
+            let libRef = MetadataReference.CreateFromImage(libStream.ToArray())
+
+            let appSb = StringBuilder()
+            appSb.AppendLine("#nullable disable")
+            appSb.AppendLine("public static class DownstreamReaders")
+            appSb.AppendLine("{")
+            appSb.AppendLine(
+                "    public static string Control() => UpstreamProjected.Present().GetAwaiter().GetResult();"
+            )
+            for var i = 0; i < length; i++ {
+                appSb.AppendLine("    public static string R$i() => UpstreamProjected.F$i().GetAwaiter().GetResult();")
+            }
+            appSb.AppendLine("}")
+            let appTree = CSharpSyntaxTree.ParseText(appSb.ToString(), path: "DownstreamReaders.cs")
+            let app = CSharpCompilation.Create(
+                "Issue6037DownstreamReaders$length",
+                []SyntaxTree{appTree},
+                CSharpProjectLoader.RuntimeReferences().Append(libRef).ToArray(),
+                options
+            )
+            Assert.Empty(app.GetDiagnostics().Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error))
+
+            let catalog = []CSharpCompilation{app, lib}
+            let appModel = app.GetSemanticModel(appTree)
+            let appCtx = TranslationContext(app, appModel, appTree.FilePath, catalog, catalog)
+            let appType = app.GetTypeByMetadataName("DownstreamReaders")!!
+            let r0 = appType.GetMembers("R0").OfType[IMethodSymbol]().Single()
+            let control = appType.GetMembers("Control").OfType[IMethodSymbol]().Single()
+
+            let (r0Nullable, controlNullable, stats) = Task
+                .Run(
+                () -> {
+                    using let measurements = CompilationMeasurements.Start("issue-6037-two-project-projected")
+                    using let _ = ObliviousNullabilityAnalyzer.UseCatalogScope(appCtx)
+                    let started = Stopwatch.GetTimestamp()
+                    let before = GC.GetAllocatedBytesForCurrentThread()
+                    let r0Res = ObliviousNullabilityAnalyzer.ReturnContractIsNullable(app, r0)
+                    let controlRes = ObliviousNullabilityAnalyzer.ReturnContractIsNullable(app, control)
+                    let alloc = GC.GetAllocatedBytesForCurrentThread() - before
+                    let ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds
+                    return (
+                        r0Res,
+                        controlRes,
+                        MeasurementStats(
+                            measurements.GetCounter("translation.return_contract_graph_builds"),
+                            measurements.GetCounter("translation.return_contract_owner_scans"),
+                            measurements.GetCounter("translation.return_contract_syntax_node_visits"),
+                            measurements.GetCounter("translation.return_contract_fixed_iterations"),
+                            measurements.GetCounter("translation.return_contract_fixed_edge_visits"),
+                            measurements.GetCounter("translation.return_contract_propagation_iterations"),
+                            measurements.GetCounter("translation.return_contract_node_visits"),
+                            measurements.GetCounter("translation.return_contract_edge_visits"),
+                            ms,
+                            alloc
+                        )
+                    )
+                }
+            )
+                .GetAwaiter()
+                .GetResult()
+            Assert.True(r0Nullable)
+            Assert.False(controlNullable)
+            Assert.Equal(2, stats.Builds)
+            this.output.WriteLine(
+                "TwoProjectProjected N=$length: builds=${stats.Builds}, propIter=${stats.PropIterations}, " +
+                    "nodeVisits=${stats.NodeVisits}, edgeVisits=${stats.EdgeVisits}, " +
+                    "ms=${stats.ElapsedMs}, alloc=${stats.AllocatedBytes}"
+            )
+            if length != 8 {
+                nodeVisits.Add(stats.NodeVisits)
+                edgeVisits.Add(stats.EdgeVisits)
+                allocations.Add(stats.AllocatedBytes)
+            }
+        }
+        Assert.True(
+            nodeVisits[0] > 0 && nodeVisits[1] <= nodeVisits[0] * 3 && nodeVisits[2] <= nodeVisits[1] * 3,
+            "Two-project projected chain node visits must scale linearly: ${string.Join(", ", nodeVisits)}."
+        )
+        Assert.True(
+            edgeVisits[0] > 0 && edgeVisits[1] <= edgeVisits[0] * 3 && edgeVisits[2] <= edgeVisits[1] * 3,
+            "Two-project projected chain edge visits must scale linearly: ${string.Join(", ", edgeVisits)}."
+        )
+        Assert.True(
+            allocations[0] > 0 && allocations[1] <= allocations[0] * 3 && allocations[2] <= allocations[1] * 3,
+            "Two-project projected chain allocations must scale linearly: ${string.Join(", ", allocations)}."
+        )
+    }
+
     private struct MeasurementStats {
         init(
             builds int64,

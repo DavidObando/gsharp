@@ -801,6 +801,10 @@ internal shared class ObliviousNullabilityAnalyzer {
             (Owner CSharpCompilation, Target ISymbol, Source ISymbol)
         ]()
         let ExternallyAffectedOwners HashSet[CSharpCompilation] = HashSet[CSharpCompilation]()
+        let ProjectedAnswers Dictionary[ProjectedQueryKey, bool] = Dictionary[ProjectedQueryKey, bool](
+            ProjectedQueryKeyComparer.Instance
+        )
+        var IsFinalized bool = false
     }
 
     private struct ProjectedQueryKey {
@@ -2240,6 +2244,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 DrainProjectedStates()
             }
         }
+        graph.IsFinalized = true
         return graph
     }
 
@@ -2622,6 +2627,30 @@ internal shared class ObliviousNullabilityAnalyzer {
         visited HashSet[(Symbol ISymbol, Path string, Depth int32, RequirePromotion bool)]? = nil,
         tuplePath string = ""
     ) bool {
+        var hitCycle = false
+        return ReturnSourceIsNullableCore(
+            compilation,
+            symbol,
+            graph,
+            requirePromotion,
+            awaitDepth,
+            visited,
+            tuplePath,
+            out hitCycle
+        )
+    }
+
+    private func ReturnSourceIsNullableCore(
+        compilation Compilation,
+        symbol ISymbol,
+        graph ReturnContractGraph,
+        requirePromotion bool,
+        awaitDepth int32,
+        visited HashSet[(Symbol ISymbol, Path string, Depth int32, RequirePromotion bool)]?,
+        tuplePath string,
+        out hitCycle bool
+    ) bool {
+        hitCycle = false
         CompilationMeasurements.Count("translation.return_contract_edge_visits")
         if awaitDepth != 0 {
             if ProjectedSourceType(symbol, awaitDepth, tuplePath) == nil {
@@ -2629,11 +2658,6 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             if !requirePromotion && ProjectedSourceTypeIsNullable(symbol, awaitDepth, tuplePath) {
                 return true
-            }
-            // Issue #6038: Include requirePromotion so a narrowed branch cannot suppress a later unnarrowed traversal of the same source.
-            let seen = visited ?? HashSet[(Symbol ISymbol, Path string, Depth int32, RequirePromotion bool)]()
-            if !seen.Add((symbol, tuplePath, awaitDepth, requirePromotion)) {
-                return false
             }
             if !TryGetSourceMember(compilation, symbol, out var projectedOwner, out var projectedSource) {
                 return false
@@ -2657,46 +2681,85 @@ internal shared class ObliviousNullabilityAnalyzer {
             if projectedNode is not{} node {
                 return false
             }
-            if awaitDepth == 1 && node.ResultSeed {
-                return true
-            }
-            let atValueRoot = node.TuplePath.Length == 0 &&
-                node.Symbol is IMethodSymbol{IsAsync: true} &&
-                awaitDepth == 1
-            if atValueRoot && !IsEligibleTupleLeaf(SymbolValueType(node.Symbol)) {
-                return !requirePromotion && ProjectedSourceTypeIsNullable(node.Symbol, awaitDepth)
-            }
-            let nullableSource = node.Sources.Any(
-                (item(Owner Compilation, Symbol ISymbol, Narrowed bool, AwaitDepth int32, Guarded bool)) -> {
-                    if atValueRoot && item.Guarded {
-                        return false
+            let cacheKey = ProjectedQueryKey(node, awaitDepth, requirePromotion)
+            if projectedGraph.IsFinalized {
+                lock projectedGraph.ProjectedAnswers {
+                    if projectedGraph.ProjectedAnswers.TryGetValue(cacheKey, out var cached) {
+                        return cached
                     }
-                    return ReturnSourceIsNullable(
-                        item.Owner,
-                        item.Symbol,
-                        projectedGraph,
-                        requirePromotion || (atValueRoot && item.Narrowed),
-                        awaitDepth + item.AwaitDepth,
-                        seen
-                    )
                 }
-            )
-            if nullableSource {
-                return true
             }
-            return node.TupleSources.Any(
-                (item(Source TupleElementKey, Guarded bool)) ->
-                !(atValueRoot && item.Guarded) &&
-                    ReturnSourceIsNullable(
-                    node.Owner,
-                    item.Source.ContractSymbol!!,
-                    projectedGraph,
-                    requirePromotion,
-                    awaitDepth,
-                    seen,
-                    item.Source.ContractPath
-                )
-            )
+            // Issue #6038: Include requirePromotion so a narrowed branch cannot suppress a later unnarrowed traversal of the same source.
+            let isRoot = visited == nil
+            let seen = visited ?? HashSet[(Symbol ISymbol, Path string, Depth int32, RequirePromotion bool)]()
+            if !seen.Add((symbol, tuplePath, awaitDepth, requirePromotion)) {
+                hitCycle = true
+                return false
+            }
+            var result = false
+            var localCycle = false
+            if awaitDepth == 1 && node.ResultSeed {
+                result = true
+            } else {
+                let atValueRoot = node.TuplePath.Length == 0 &&
+                    node.Symbol is IMethodSymbol{IsAsync: true} &&
+                    awaitDepth == 1
+                if atValueRoot && !IsEligibleTupleLeaf(SymbolValueType(node.Symbol)) {
+                    result = !requirePromotion && ProjectedSourceTypeIsNullable(node.Symbol, awaitDepth)
+                } else {
+                    for item in node.Sources {
+                        if atValueRoot && item.Guarded {
+                            continue
+                        }
+                        var branchCycle = false
+                        if ReturnSourceIsNullableCore(
+                            item.Owner,
+                            item.Symbol,
+                            projectedGraph,
+                            requirePromotion || (atValueRoot && item.Narrowed),
+                            awaitDepth + item.AwaitDepth,
+                            seen,
+                            string.Empty,
+                            out branchCycle
+                        ) {
+                            result = true
+                            break
+                        }
+                        localCycle |= branchCycle
+                    }
+                    if !result {
+                        for item in node.TupleSources {
+                            if atValueRoot && item.Guarded {
+                                continue
+                            }
+                            var branchCycle = false
+                            if ReturnSourceIsNullableCore(
+                                node.Owner,
+                                item.Source.ContractSymbol!!,
+                                projectedGraph,
+                                requirePromotion,
+                                awaitDepth,
+                                seen,
+                                item.Source.ContractPath,
+                                out branchCycle
+                            ) {
+                                result = true
+                                break
+                            }
+                            localCycle |= branchCycle
+                        }
+                    }
+                }
+            }
+            if !result {
+                hitCycle = localCycle
+            }
+            if projectedGraph.IsFinalized && (result || !localCycle || isRoot) {
+                lock projectedGraph.ProjectedAnswers {
+                    projectedGraph.ProjectedAnswers[cacheKey] = result
+                }
+            }
+            return result
         }
         if tuplePath.Length == 0 &&
             !requirePromotion &&
