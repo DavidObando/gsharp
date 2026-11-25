@@ -712,10 +712,9 @@ partial class SemanticModel {
             if error.FailedCallee is {} callee {
                 VisitExpression(callee)
             }
-            if error.CallSyntax is {} callSyntax && !error.MemberGroup.IsDefaultOrEmpty && object.ReferenceEquals(
-                callSyntax.SyntaxTree,
-                tree
-            ) {
+            if error.CallSyntax is {} callSyntax &&
+                (!error.MemberGroup.IsDefaultOrEmpty || !error.ConstructorGroup.IsDefaultOrEmpty) &&
+                object.ReferenceEquals(callSyntax.SyntaxTree, tree) {
                 failedCalls.TryAdd(callSyntax, error)
             }
             if !error.FailedChildren.IsDefaultOrEmpty {

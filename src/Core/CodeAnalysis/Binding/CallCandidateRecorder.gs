@@ -29,6 +29,8 @@ internal shared class CallCandidateRecorder {
         ConcurrentDictionary[SyntaxNode, BoundErrorExpression]?
     ]()
 
+    internal prop IsEnabled bool -> enabled.Value
+
     /// Starts collecting failed-call records for a cacheable member body when recording is enabled.
     func BeginBody() List[BoundErrorExpression]? {
         let previous = currentBodyFailedCalls.Value
@@ -195,6 +197,49 @@ internal shared class CallCandidateRecorder {
         frame.ExtensionSet = set.MoveToImmutable()
     }
 
+    /// Records the reflected constructors an imported constructor call considers (#6223).
+    /// @param candidates The reflected constructors.
+    /// @param constructedType The constructed target type.
+    func RecordConstructors(candidates IReadOnlyCollection[ConstructorInfo], constructedType TypeSymbol) {
+        let frame = current.Value
+        if !enabled.Value || frame == nil || candidates.Count == 0 {
+            return
+        }
+        frame.ConstructorReceiverType = constructedType
+        let set = ImmutableArray.CreateBuilder[object](candidates.Count)
+        for candidate in candidates {
+            set.Add(candidate)
+        }
+        frame.AddConstructorSet(set.MoveToImmutable())
+    }
+
+    /// Records the explicit constructors a source constructor call considers (#6223).
+    /// @param candidates The source constructor functions.
+    /// @param structType The constructed or open target struct type.
+    func RecordSourceConstructors(candidates ImmutableArray[FunctionSymbol], structType StructSymbol) {
+        let frame = current.Value
+        if !enabled.Value || frame == nil || candidates.IsDefaultOrEmpty {
+            return
+        }
+        frame.ConstructorReceiverType = structType
+        let set = ImmutableArray.CreateBuilder[object](candidates.Length)
+        for candidate in candidates {
+            set.Add(candidate)
+        }
+        frame.AddConstructorSet(set.MoveToImmutable())
+    }
+
+    /// Records the primary constructor target type of a source constructor call (#6223).
+    /// @param structType The constructed or open target struct type.
+    func RecordSourcePrimaryConstructor(structType StructSymbol) {
+        let frame = current.Value
+        if !enabled.Value || frame == nil {
+            return
+        }
+        frame.ConstructorReceiverType = structType
+        frame.AddConstructorSet(ImmutableArray.Create[object](structType))
+    }
+
     /// Gives [`call`](paramref), or the call it wraps, the group [`frame`](paramref) recorded.
     /// @param frame The frame of the call.
     /// @param bound The expression the binder built for the call.
@@ -212,6 +257,20 @@ internal shared class CallCandidateRecorder {
             if node is BoundCallOperationExpression call {
                 if call.MemberGroup.IsDefault && (frame.Sets.Count > 0 || !frame.ExtensionSet.IsDefault) {
                     call.MemberGroup = Select(frame, call.CalledFunction, IsSourceExtensionCall(call, frame.Syntax))
+                }
+                PropagateFailedChildren(frame)
+                return
+            }
+            if node is BoundClrConstructorCallExpression clrCtor {
+                if clrCtor.ConstructorGroup.IsDefault && frame.ConstructorSets is {Count: > 0} sets {
+                    clrCtor.ConstructorGroup = sets[sets.Count - 1]
+                }
+                PropagateFailedChildren(frame)
+                return
+            }
+            if node is BoundConstructorCallExpression sourceCtor {
+                if sourceCtor.ConstructorGroup.IsDefault && frame.ConstructorSets is {Count: > 0} sets {
+                    sourceCtor.ConstructorGroup = sets[sets.Count - 1]
                 }
                 PropagateFailedChildren(frame)
                 return
@@ -237,6 +296,19 @@ internal shared class CallCandidateRecorder {
                         if currentBodyFailedCalls.Value is {} bodyList && !bodyList.Contains(error) {
                             bodyList.Add(error)
                         }
+                    }
+                }
+                if error.MemberGroup.IsDefault &&
+                    error.ConstructorGroup.IsDefault &&
+                    frame.ConstructorSets is {Count: > 0} constructorSets {
+                    error.CallSyntax = frame.Syntax
+                    error.ConstructorGroup = constructorSets[constructorSets.Count - 1]
+                    error.ReceiverType = frame.ConstructorReceiverType ?? frame.ReceiverType
+                    if currentFailedCalls.Value is {} table {
+                        table[frame.Syntax] = error
+                    }
+                    if currentBodyFailedCalls.Value is {} bodyList && !bodyList.Contains(error) {
+                        bodyList.Add(error)
                     }
                 }
                 if frame.FailedChildren is {Count: > 0} children {
@@ -417,6 +489,21 @@ internal shared class CallCandidateRecorder {
         prop ExtensionSet ImmutableArray[object] {
             get;
             set;
+        }
+
+        prop ConstructorSets List[ImmutableArray[object]]? {
+            get;
+            private set;
+        }
+
+        prop ConstructorReceiverType TypeSymbol? {
+            get;
+            set;
+        }
+
+        func AddConstructorSet(set ImmutableArray[object]) {
+            ConstructorSets ??= List[ImmutableArray[object]]()
+            ConstructorSets!!.Add(set)
         }
 
         prop FailedChildren List[BoundErrorExpression]? {

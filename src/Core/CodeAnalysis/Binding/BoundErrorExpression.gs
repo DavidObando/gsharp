@@ -37,6 +37,12 @@ class BoundErrorExpression : BoundExpression {
         set;
     }
 
+    /// Gets the candidate constructors considered before the constructor call failed (#6223).
+    internal prop ConstructorGroup ImmutableArray[object] {
+        get;
+        set;
+    }
+
     /// Gets the receiver type of the failed call, when any (ADR-0212 issue #5444).
     internal prop ReceiverType TypeSymbol? {
         get;
@@ -120,6 +126,7 @@ class BoundErrorExpression : BoundExpression {
     /// inner failed call, a failed receiver, failed arguments, a failed callee, failed operands,
     /// failed patterns, or failed prefix statements.
     internal prop HasFailedRecords bool -> !MemberGroup.IsDefaultOrEmpty ||
+        !ConstructorGroup.IsDefaultOrEmpty ||
         !FailedChildren.IsDefaultOrEmpty ||
         FailedReceiver != nil ||
         !FailedArguments.IsDefaultOrEmpty ||
