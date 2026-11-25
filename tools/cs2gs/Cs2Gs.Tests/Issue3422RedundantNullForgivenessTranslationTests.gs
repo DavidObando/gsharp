@@ -787,15 +787,29 @@ using System;
 
 namespace Demo
 {
+    public sealed class Child
+    {
+        public readonly bool Flag;
+        public readonly int Value;
+
+        public Child(bool flag, int value)
+        {
+            Flag = flag;
+            Value = value;
+        }
+    }
+
     public sealed class Holder
     {
         public readonly string? Text;
+        public readonly Child? Child;
         public string? Mutable;
 
-        public Holder(string? text, string? mutable)
+        public Holder(string? text, string? mutable, Child? child = null)
         {
             Text = text;
             Mutable = mutable;
+            Child = child;
         }
     }
 
@@ -993,6 +1007,51 @@ namespace Demo
             }
         }
 
+        public int QualifiedAuthoredSuppressionExpr(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when holder.Text != null => holder.Text!.Length,
+                _ => 0,
+            };
+
+        public int QualifiedAuthoredSuppressionStmt(int kind, Holder holder)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    return holder.Text!.Length;
+                default:
+                    return 0;
+            }
+        }
+
+        public int QualifiedFalseBranchBooleanConditional(int kind, Holder holder) =>
+            kind switch
+            {
+                1 when !(holder.Child?.Flag != true) => holder.Child.Value,
+                _ => 0,
+            };
+
+        public int QualifiedNestedSwitchBackEdgeInvalidates(int kind, int inner, Holder holder, Holder other)
+        {
+            switch (kind)
+            {
+                case 1 when holder.Text != null:
+                    switch (inner)
+                    {
+                        case 0:
+                            var len = holder.Text!.Length;
+                            holder = other;
+                            if (len < 0) goto case 0;
+                            return len;
+                        default:
+                            return 0;
+                    }
+                default:
+                    return 0;
+            }
+        }
+
         public int ReadonlyFieldStringIsNullOrEmptyGuardExpr(int kind) =>
             kind switch
             {
@@ -1078,7 +1137,7 @@ namespace Demo
         public static string Run()
         {
             var p = new P("abcd", "xy");
-            var h = new Holder("abcde", "zw");
+            var h = new Holder("abcde", "zw", new Child(true, 7));
             return p.Stmt(1) + "|" +
                 p.Expr(1) + "|" +
                 p.ExprThisIsNotNull(1) + "|" +
@@ -1099,6 +1158,10 @@ namespace Demo
                 p.QualifiedNestedHeaderInheritsOuterGuard(1, 2, h) + "|" +
                 p.QualifiedNestedStackedCaseAndDefault(1, 10, h) + "|" +
                 p.QualifiedNestedStackedCaseAndDefault(1, 1, h) + "|" +
+                p.QualifiedAuthoredSuppressionExpr(1, h) + "|" +
+                p.QualifiedAuthoredSuppressionStmt(1, h) + "|" +
+                p.QualifiedFalseBranchBooleanConditional(1, h) + "|" +
+                p.QualifiedNestedSwitchBackEdgeInvalidates(1, 0, h, h) + "|" +
                 p.ReadonlyFieldStringIsNullOrEmptyGuardExpr(1) + "|" +
                 p.ReadonlyFieldStringIsNullOrEmptyGuardStmt(1) + "|" +
                 p.QualifiedStringIsNullOrEmptyGuardExpr(1, h) + "|" +
@@ -1113,7 +1176,7 @@ namespace Demo
 }`
         let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(
             source,
-            "4|4|4|4|4|4|5|5|5|5|5|5|2|5|5|5|5|5|5|5|4|4|5|4|4|4|4|2|5",
+            "4|4|4|4|4|4|5|5|5|5|5|5|2|5|5|5|5|5|5|5|5|5|7|5|4|4|5|4|4|4|4|2|5",
             rejectRedundantAssertions: true
         )
         Assert.Contains(
@@ -1163,6 +1226,12 @@ namespace Demo
             printed,
             StringComparison.Ordinal
         )
+        Assert.Contains(
+            "case 1 when !(holder.Child?.Flag != true): holder.Child.Value",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("let len = holder.Text!!.Length", printed, StringComparison.Ordinal)
         Assert.Contains("case 1 when !string.IsNullOrEmpty(field): field.Length", printed, StringComparison.Ordinal)
         Assert.Contains(
             "case 1 when !string.IsNullOrEmpty(field) {\n                return field.Length",

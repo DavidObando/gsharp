@@ -14575,7 +14575,7 @@ partial class CSharpToGSharpTranslator {
                 parent is Microsoft.CodeAnalysis.CSharp.Syntax.CatchFilterClauseSyntax {
                 return false
             }
-            if node == originalExpression && parent is PostfixUnaryExpressionSyntax postfix && postfix.IsKind(
+            if node != originalExpression && parent is PostfixUnaryExpressionSyntax postfix && postfix.IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
             ) {
                 return false
@@ -14866,8 +14866,10 @@ partial class CSharpToGSharpTranslator {
                         targetRoot,
                         out checkedOperand
                     ) ||
-                        (
-                        wantNonNullWhenTrue && this.TryGetBooleanConditionalAccessOperand(condition, out checkedOperand)
+                        this.TryGetBooleanConditionalAccessOperand(
+                        condition,
+                        nonNull: wantNonNullWhenTrue,
+                        out checkedOperand
                     )
                     if !matchedOperand {
                         return false
@@ -14907,12 +14909,17 @@ partial class CSharpToGSharpTranslator {
 
         private func TryGetBooleanConditionalAccessOperand(
             condition Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            nonNull bool,
             out operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool {
             operand = nil
+            let expectedKind = if nonNull {
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression
+            } else {
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
+            }
             if StripParentheses(condition) is not Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary ||
-                !binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression) ||
-                this.NullComparisonUsesUserOperator(binary) {
+                !binary.IsKind(expectedKind) || this.NullComparisonUsesUserOperator(binary) {
                 return false
             }
             let left = StripParentheses(binary.Left)
@@ -15234,6 +15241,40 @@ partial class CSharpToGSharpTranslator {
                     )
                 ) {
                     return true
+                }
+            }
+            let gotoIndex = this.GetScopeGotoIndex(scope_)
+            for entry in gotoIndex.Jumps {
+                let jump = entry.Jump
+                if !rightOperand.Span.Contains(jump.Span) {
+                    continue
+                }
+                if entry.Target is not{} target {
+                    return true
+                }
+                if rightOperand.Span.Contains(target.Span) &&
+                    target.SpanStart <= jump.SpanStart &&
+                    target.SpanStart <= expression.SpanStart &&
+                    jump.Span.End > expression.SpanStart {
+                    let spanStart = System.Math.Max(rightOperand.SpanStart, target.SpanStart)
+                    let spanEnd = System.Math.Min(rightOperand.Span.End, jump.Span.End)
+                    for root in roots {
+                        for candidate in root.DescendantNodesAndSelf(OutsideNestedFunctions) {
+                            if candidate.SpanStart < spanStart || candidate.Span.End > spanEnd {
+                                continue
+                            }
+                            if this.ConditionSubexpressionInvalidatesStablePathBeforeUse(
+                                candidate,
+                                targetIsThisRoot,
+                                targetRoot,
+                                rootIsByReference,
+                                rootIsClosureAssigned,
+                                rootType
+                            ) {
+                                return true
+                            }
+                        }
+                    }
                 }
             }
             return false
