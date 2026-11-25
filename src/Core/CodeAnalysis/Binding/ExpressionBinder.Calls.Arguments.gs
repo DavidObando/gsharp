@@ -3421,6 +3421,8 @@ internal partial class ExpressionBinder {
             }
             binderCtx.CompleteCall(bound, ce.Arguments)
             CallCandidateRecorder.Stamp(frame, bound)
+            // #6179: a later member of an incomplete base class can retarget the call.
+            PrefixRetarget.NoteCall(callSyntax, PrefixCallKind.Member, bound)
             return bound
         } finally {
             CallCandidateRecorder.End(frame)

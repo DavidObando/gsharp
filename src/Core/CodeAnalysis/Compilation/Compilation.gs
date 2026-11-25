@@ -1052,6 +1052,10 @@ open class Compilation {
     internal func FindPrefixCut() PrefixCut? {
         for tree in SyntaxTrees {
             if tree.Prefix is {} prefixCut {
+                // #6179: a report in any tree can read a global of another tree.
+                for other in SyntaxTrees {
+                    prefixCut.AddTree(other)
+                }
                 return prefixCut
             }
         }

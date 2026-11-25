@@ -528,6 +528,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             Add(created.WithPrefixFinality(premise.Finality, premise.Reason))
         } else if callFrames is {Count: > 0} && ArgumentPremise(location) is {} argumentPremise {
             Add(created.WithPrefixFinality(argumentPremise.Finality, argumentPremise.Reason))
+        } else if callFrames is {Count: > 0} && CalleePremise(location) is {} calleePremise {
+            Add(created.WithPrefixFinality(calleePremise.Finality, calleePremise.Reason))
+        } else if PrefixBindingContext.ProvisionalPremise(location) is {} provisional {
+            // #6179: the report uses an expression whose type a later declaration can change.
+            Add(created.WithPrefixFinality(provisional.Finality, provisional.Reason))
         } else {
             Add(created)
         }
@@ -581,6 +586,36 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             span = frame.Syntax.Span
         }
         return nil
+    }
+
+    // #6179: a report on the call itself, outside its arguments, while the binder resolves it (an obsolete
+    // or experimental candidate): a later, better candidate can remove it. The binder reports it before it
+    // knows whether the call can change, so any call whose callee can get a candidate counts.
+    private func CalleePremise(location TextLocation) PrefixPremise? {
+        if PrefixBindingContext.Current is not{} cut || !cut.LaterOverloadsPossible {
+            return nil
+        }
+        let frames = callFrames!!
+        let frame = frames[frames.Count - 1]
+        if frame.Kind == PrefixCallKind.Body || frame.Kind == PrefixCallKind.Fixed {
+            return nil
+        }
+        let span = location.Span
+        let callSpan = frame.Syntax.Span
+        if span.Start < callSpan.Start || span.End > callSpan.End {
+            return nil
+        }
+        let arguments = if frame.Syntax is CallExpressionSyntax call {
+            call.Arguments
+        } else {
+            return nil
+        }
+        for argument in arguments {
+            if argument.Span.Start <= span.Start && span.End <= argument.Span.End {
+                return nil
+            }
+        }
+        return PrefixPremise.LaterOverload
     }
 
     // ADR-0225: the premises of the reports in progress, innermost last. It is null outside a prefix bind.
