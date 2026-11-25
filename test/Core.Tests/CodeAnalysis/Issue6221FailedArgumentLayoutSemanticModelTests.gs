@@ -379,6 +379,59 @@ func Run(b Box, x int32) {
         }
     }
 
+    @Fact
+    func FailedLayoutWithUntypedArrowLambdas_BindsLambdaBodiesWithoutExtraDiagnostics() {
+        let source = `package P
+
+class StaticHost {
+    shared {
+        func M(v (int32) -> int32) int32 -> v(1)
+        func M(v (int32) -> int32, w int32) int32 -> v(w)
+        func Caller(x int32) int32 -> M(v: (n) -> x, v: x)
+    }
+}
+
+func H(v (int32) -> int32) int32 -> v(1)
+
+func Run(x int32) {
+    let a = H(v: (n) -> x, v: x)
+    let b = StaticHost.M(v: (n) -> x, v: x)
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "issue6221-untyped-lambda.gs"))
+        let compilation = Compilation(tree)
+        compilation.RecordMemberGroups = true
+        let before = compilation.GetDiagnostics().Select(Describe).ToArray()
+        let model = compilation.GetSemanticModel(tree)
+
+        let xArgs = Names(tree, "x")
+        Assert.Equal(6, xArgs.Length)
+        for xArg in xArgs {
+            Assert.Equal("x", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(xArg).Symbol).Name)
+            Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(xArg).Type)
+        }
+
+        let calls = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .Where(
+            (c CallExpressionSyntax) -> c.Arguments.Count == 2 &&
+                (c.Identifier.ValueText == "H" || c.Identifier.ValueText == "M")
+        )
+            .ToArray()
+        Assert.Equal(3, calls.Length)
+        for call in calls {
+            Assert.NotEmpty(model.GetMemberGroup(call))
+            Assert.NotEmpty(model.GetMemberGroup(call.Identifier))
+        }
+
+        let after = compilation.GetDiagnostics().Select(Describe).ToArray()
+        Assert.Equal(before, after)
+        Assert.Equal(3, before.Length)
+        Assert.All(before, (line string) -> Assert.StartsWith("GS0245 Error ", line))
+    }
+
     shared {
         private const CallLayoutTemplate string = `package P
 

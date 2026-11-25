@@ -791,6 +791,8 @@ partial class SemanticModel {
     private func IndexedCalleeTargetOf(node BoundExpression) BoundExpression? -> switch node {
         case idx is BoundIndexExpression: idx.Target
         case idx is BoundClrIndexExpression: idx.Target
+        case dereference is BoundDereferenceExpression when dereference.Operand.Type is ByRefTypeSymbol &&
+            IsSynthesizedWrapper(dereference, dereference.Operand): IndexedCalleeTargetOf(dereference.Operand)
         case userCall is BoundUserInstanceCallExpression when userCall.Method.IsSpecialName &&
             userCall.Method.Name.StartsWith("get_", StringComparison.Ordinal): userCall.Receiver
         case importedCall is BoundImportedInstanceCallExpression when importedCall.Method.IsSpecialName &&

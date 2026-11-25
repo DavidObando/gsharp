@@ -406,6 +406,76 @@ func Use(w Wrapper) {
         Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(lengthName).Type)
     }
 
+    @Fact
+    func ClrByRefIndexerReturningDelegateInChain_PreservesIntermediateReceiverAnswers() {
+        let csharpSource = `using System;
+namespace ClrRefIndexerNs {
+    public sealed class RefFuncList {
+        private readonly Func<int, int>[] _items = new Func<int, int>[] { v => v + 1 };
+        public ref Func<int, int> this[int index] => ref _items[index];
+    }
+    public sealed class ClrInnerRefHolder {
+        public RefFuncList Fs { get; } = new RefFuncList();
+    }
+    public sealed class ClrOuterRefHolder {
+        public ClrInnerRefHolder Inner { get; } = new ClrInnerRefHolder();
+    }
+}`
+        let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue6222ClrRefIndexerHolder")
+        Directory.CreateDirectory(outputDir)
+        let libraryPath = Path.Combine(outputDir, "ClrRefIndexerHolderLib.dll")
+        let syntaxTree = CSharpSyntaxTree.ParseText(csharpSource, CSharpParseOptions(LanguageVersion.Latest))
+        let referencePaths = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)?.Split(Path.PathSeparator) ??
+            Array.Empty[string]()
+        let references = referencePaths
+            .Where(File.Exists)
+            .Select((p string) -> cast[MetadataReference](MetadataReference.CreateFromFile(p)))
+            .ToList()
+        let csCompilation = CSharpCompilation.Create(
+            "ClrRefIndexerHolderLib",
+            []RoslynSyntaxTree{syntaxTree},
+            references,
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithModuleName("ClrRefIndexerHolderLib.dll")
+        )
+        if true {
+            using let peStream = File.Create(libraryPath)
+            let emitResult = csCompilation.Emit(peStream)
+            Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics))
+        }
+        using let resolver = ReferenceResolver.WithReferences([]string{libraryPath})
+        let clrConsumer = `package P
+import ClrRefIndexerNs
+
+func Use(h ClrOuterRefHolder, i int32) string {
+    let x = 1
+    return h.Inner.Fs[i](x).ToString()
+}
+`
+        let clrTree = SyntaxTree.Parse(SourceText.From(clrConsumer, "clr-ref-indexer.gs"))
+        let clrCompilation = Compilation(resolver, clrTree)
+        Assert.Empty(clrCompilation.GetDiagnostics())
+        let clrModel = clrCompilation.GetSemanticModel(clrTree)
+
+        let innerName = Names(clrTree, "Inner").Single()
+        Assert.Equal("Inner", Assert.IsAssignableFrom[PropertySymbol](clrModel.GetSymbolInfo(innerName).Symbol).Name)
+        Assert.Equal("ClrRefIndexerNs.ClrInnerRefHolder", clrModel.GetTypeInfo(innerName).Type?.Name)
+        Assert.Equal("ClrRefIndexerNs.ClrInnerRefHolder", clrModel.GetReceiverTypeInfo(innerName).Type?.Name)
+
+        let fsCall = Calls(clrTree, "Fs").Single()
+        Assert.Equal(
+            "Fs",
+            Assert.IsAssignableFrom[PropertySymbol](clrModel.GetSymbolInfo(fsCall.Identifier).Symbol).Name
+        )
+        Assert.Same(TypeSymbol.Int32, clrModel.GetTypeInfo(fsCall).Type)
+
+        let toStringCall = Calls(clrTree, "ToString").Single()
+        Assert.Equal(
+            "ToString",
+            Assert.IsType[ImportedFunctionSymbol](clrModel.GetSymbolInfo(toStringCall).Symbol).Name
+        )
+        Assert.Same(TypeSymbol.String, clrModel.GetTypeInfo(toStringCall).Type)
+    }
+
     shared {
         private const MemberChainTemplate string = `package P
 

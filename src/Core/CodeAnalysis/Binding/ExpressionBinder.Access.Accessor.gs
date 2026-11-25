@@ -4080,7 +4080,9 @@ internal partial class ExpressionBinder {
                 if boundArgument == nil && refArgument != nil {
                     boundArgument = BindRefArgumentExpression(refArgument, parameter: nil)
                 }
-                if IsUntypedArrowLambda(inner) && (boundArgument == nil || boundArgument is BoundErrorExpression) {
+                if layoutOk &&
+                    IsUntypedArrowLambda(inner) &&
+                    (boundArgument == nil || boundArgument is BoundErrorExpression) {
                     (
                         (
                             if deferredStaticLambdaIndices == nil {

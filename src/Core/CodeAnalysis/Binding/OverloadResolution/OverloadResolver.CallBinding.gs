@@ -1159,7 +1159,8 @@ internal partial class OverloadResolver {
             if argSyntax is RefArgumentExpressionSyntax refArg {
                 // The first binding pass has no resolved parameter for inline out arguments.
                 boundArgument = bindRefArgumentExpression(refArg, nil)
-            } else if bindLambdaWithTarget != nil &&
+            } else if layoutOk &&
+                bindLambdaWithTarget != nil &&
                 lambdaSyntax is {} deferredLambda &&
                 IsUntypedArrowLambda(deferredLambda) {
                 // Issue #951: defer; bind once the parameter delegate target is
