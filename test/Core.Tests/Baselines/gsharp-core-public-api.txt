@@ -902,6 +902,7 @@ type enum GSharp.Core.CodeAnalysis.Symbols.SymbolKind : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind GlobalVariable = 1
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind Import = 6
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind ImportedClass = 7
+  field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind ImportedConstructor = 14
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind ImportedFunction = 8
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind LocalVariable = 2
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind Package = 5
@@ -5082,6 +5083,13 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.ImportedClassSymbol : GSharp.
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Declaration { get; }
   property public System.Type ClassType { get; }
   property public System.Type FamilyAccessBase { get; }
+type sealed class GSharp.Core.CodeAnalysis.Symbols.ImportedConstructorSymbol : GSharp.Core.CodeAnalysis.Symbols.Symbol
+  method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Type()
+  method public System.Reflection.ConstructorInfo get_Constructor()
+  method public virtual override GSharp.Core.CodeAnalysis.Symbols.SymbolKind get_Kind()
+  property public GSharp.Core.CodeAnalysis.Symbols.SymbolKind Kind { get; }
+  property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol Type { get; }
+  property public System.Reflection.ConstructorInfo Constructor { get; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.ImportedFunctionSymbol : GSharp.Core.CodeAnalysis.Symbols.Symbol
   method public Boolean get_IsSuspending()
   method public GSharp.Core.CodeAnalysis.Binding.RefKind get_ReturnRefKind()
