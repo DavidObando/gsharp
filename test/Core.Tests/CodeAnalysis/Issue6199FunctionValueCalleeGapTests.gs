@@ -139,6 +139,19 @@ open class Issue6199FunctionValueCalleeGapTests {
     }
 
     @Fact
+    func AbstractInterfaceMethodOfTheSameNameAsAnInheritedField_AnswersTheField() {
+        // An abstract interface method is not a candidate of the call path: the class implements it, and the
+        // call `c.G(x)` binds the inherited field. The call whose arguments do not analyse answers the field.
+        let source = "package P\n\ninterface I {\n    func G(v int32) int32;\n}\n\nopen class B {\n    var G (int32) -> int32 = (v int32) -> v\n}\n\nclass C : B, I {\n    func (I) G(v int32) int32 -> v\n}\n\nfunc F(c C) {\n    let x = 1\n    let k = @@CALL\n}\n"
+        let (boundModel, boundTree, boundCompilation) = CreateModel(source.Replace("@@CALL", "c.G(x)"))
+        AssertDiagnostic(boundCompilation, "")
+        Assert.IsType[FieldSymbol](boundModel.GetSymbolInfo(Callee(boundTree, "G")).Symbol)
+        let (model, tree, compilation) = CreateModel(source.Replace("@@CALL", "c.G(v: x, v: x)"))
+        AssertDiagnostic(compilation, "GS0245")
+        Assert.Equal("G", Assert.IsType[FieldSymbol](model.GetSymbolInfo(Callee(tree, "G")).Symbol).Name)
+    }
+
+    @Fact
     func FieldDeclarationToken_AnswersAsBeforeWhenACallFails() {
         // A failed call of an implicit field keeps its callee load. The declaration's token answers what it
         // answers when the call binds.

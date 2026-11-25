@@ -1529,13 +1529,19 @@ internal partial class ExpressionBinder {
         if receiver.Type is StructSymbol receiverClass {
             for level in receiverClass.GetHierarchy() {
                 for iface in level.Interfaces {
-                    if iface != nil && !TypeMemberModel.GetMethods(
+                    if iface == nil {
+                        continue
+                    }
+                    // Only a method with a default body is a candidate of the call path; an abstract one is
+                    // implemented by the class, where the callable member was found first.
+                    for candidate in TypeMemberModel.GetMethods(
                         iface,
                         methodName,
                         MemberQuery.Instance(MemberKinds.Method)
-                    )
-                        .IsDefaultOrEmpty {
-                        return
+                    ) {
+                        if InterfaceSymbol.HasDefaultBody(candidate) {
+                            return
+                        }
                     }
                 }
             }
