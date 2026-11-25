@@ -992,6 +992,9 @@ internal partial class ExpressionBinder {
         var delegateLoad = ApplyCallableMemberNarrowing(
             BoundClrPropertyAccessExpression(nil, receiver, member, memberTypeSymbol)
         )
+        let calleeLoad = delegateLoad
+        calleeLoad.CalleeIdentifier = ce.Identifier
+        binderCtx.RecordCallCallee(ce, () -> calleeLoad)
         if member is PropertyInfo {
             lastSelectedCallablePropertyLoad = delegateLoad
         }
@@ -1051,6 +1054,7 @@ internal partial class ExpressionBinder {
             // variadic packing.
             if !TryBindAmbiguousBracketAsIndex(ce, delegateLoad, out var indexedValue) ||
                 indexedValue.Type is not{} indexedType {
+                ForgetMemberCallee(ce, calleeLoad)
                 return false
             }
             if indexedType is FunctionPointerTypeSymbol indexedFpType {
@@ -1066,6 +1070,7 @@ internal partial class ExpressionBinder {
                 return true
             }
             if indexedType.ClrType is not{} indexedClrType || !ClrTypeUtilities.IsDelegateType(indexedClrType) {
+                ForgetMemberCallee(ce, calleeLoad)
                 return false
             }
             delegateLoad = indexedValue
@@ -1202,6 +1207,9 @@ internal partial class ExpressionBinder {
         var delegateLoad = ApplyCallableMemberNarrowing(
             BoundClrPropertyAccessExpression(nil, nil, member, memberTypeSymbol, classSymbol.SymbolicReceiver)
         )
+        let staticCalleeLoad = delegateLoad
+        staticCalleeLoad.CalleeIdentifier = ce.Identifier
+        binderCtx.RecordCallCallee(ce, () -> staticCalleeLoad)
         if member is PropertyInfo {
             lastSelectedCallablePropertyLoad = delegateLoad
         }
@@ -1254,6 +1262,7 @@ internal partial class ExpressionBinder {
             // instance members; reuse their index recovery before Invoke.
             if !TryBindAmbiguousBracketAsIndex(ce, delegateLoad, out var indexedValue) ||
                 indexedValue.Type is not{} indexedType {
+                ForgetMemberCallee(ce, staticCalleeLoad)
                 return false
             }
             if indexedType is FunctionPointerTypeSymbol indexedFpType {
@@ -1269,6 +1278,7 @@ internal partial class ExpressionBinder {
                 return true
             }
             if indexedType.ClrType is not{} indexedClrType || !ClrTypeUtilities.IsDelegateType(indexedClrType) {
+                ForgetMemberCallee(ce, staticCalleeLoad)
                 return false
             }
             delegateLoad = indexedValue

@@ -163,6 +163,7 @@ func Gen[T IImportedParsable[T]](s string) T -> T.Parse(s: s, s: s)
         let source = `package P
 
 import System
+import System.Collections.Generic
 
 class C {
     var G (int32) -> int32 = (v int32) -> v
@@ -171,12 +172,13 @@ class C {
 
 func H(v int32) int32 -> v
 
-func F(f (int32) -> int32, c C) {
+func F(f (int32) -> int32, c C, values List[int32]) {
     let x = 1
     let a = f(v: x, v: missingArg)
     let b = H(v: x, v: x)
     let d = c.M(v: x, v: x)
     let e = c.G(v: out var leaked int32, v: x)
+    let g = values.FindAll((v int32) -> { return "s" }, match: x, match: x)
 }
 `
         let tree = SyntaxTree.Parse(SourceText.From(source, "issue6221-diags.gs"))
@@ -193,7 +195,7 @@ func F(f (int32) -> int32, c C) {
         }
         let after = compilation.GetDiagnostics().Select(Describe).ToArray()
         Assert.Equal(before, after)
-        Assert.Equal(4, before.Length)
+        Assert.Equal(5, before.Length)
         Assert.All(before, (line string) -> Assert.StartsWith("GS0245 Error ", line))
     }
 

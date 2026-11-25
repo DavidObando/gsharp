@@ -686,42 +686,25 @@ partial class SemanticModel {
         captures Dictionary[VariableSymbol, BoundExpression]? = nil
     ) BoundExpression? -> switch node {
         case userCall is BoundUserInstanceCallExpression: userCall.Receiver
-        case importedCall is BoundImportedInstanceCallExpression: if UnwrapCalleeTarget(
+        case importedCall is BoundImportedInstanceCallExpression: if SkipCalleeMember(
             importedCall.Receiver,
             captures,
-            out var importedCalleeMarked
-        ) is {} callee &&
-            importedCalleeMarked {
-            ReceiverOf(callee, captures)
+            preserveUnmarked: false
+        ) is {} skippedReceiver {
+            skippedReceiver
         } else {
             importedCall.Receiver
         }
-        case indirect is BoundIndirectCallExpression: if UnwrapCalleeTarget(
+        case indirect is BoundIndirectCallExpression: SkipCalleeMember(
             indirect.Target,
             captures,
-            out var indirectCalleeMarked
-        ) is {} target {
-            if indirectCalleeMarked {
-                ReceiverOf(target, captures)
-            } else {
-                target
-            }
-        } else {
-            default(BoundExpression?)
-        }
-        case fnPtr is BoundFunctionPointerInvocationExpression: if UnwrapCalleeTarget(
+            preserveUnmarked: true
+        )
+        case fnPtr is BoundFunctionPointerInvocationExpression: SkipCalleeMember(
             fnPtr.Pointer,
             captures,
-            out var ptrCalleeMarked
-        ) is {} pointer {
-            if ptrCalleeMarked {
-                ReceiverOf(pointer, captures)
-            } else {
-                pointer
-            }
-        } else {
-            default(BoundExpression?)
-        }
+            preserveUnmarked: true
+        )
         case property is BoundPropertyReferenceOperationExpression: property.Instance
         case field is BoundFieldAccessExpression: field.Receiver
         case tuple is BoundTupleElementAccessExpression: tuple.Receiver
@@ -809,6 +792,29 @@ partial class SemanticModel {
 
     /// Removes the conversions and nil-unwraps the binder adds around a read
     /// without user syntax of their own, so the node reached is the read itself.
+    private func SkipCalleeMember(
+        target BoundExpression,
+        captures Dictionary[VariableSymbol, BoundExpression]?,
+        preserveUnmarked bool
+    ) BoundExpression? {
+        if UnwrapCalleeTarget(target, captures, out var calleeMarked) is {} unwrapped {
+            if calleeMarked {
+                return ReceiverOf(unwrapped, captures)
+            }
+            if IndexTargetOf(unwrapped) is {} indexedTarget &&
+                UnwrapCalleeTarget(indexedTarget, captures, out var indexedCalleeMarked) is {} indexedBase &&
+                indexedCalleeMarked {
+                return ReceiverOf(indexedBase, captures)
+            }
+            return if preserveUnmarked {
+                unwrapped
+            } else {
+                default(BoundExpression?)
+            }
+        }
+        return nil
+    }
+
     private func Unwrap(
         node BoundExpression?,
         captures Dictionary[VariableSymbol, BoundExpression]? = nil

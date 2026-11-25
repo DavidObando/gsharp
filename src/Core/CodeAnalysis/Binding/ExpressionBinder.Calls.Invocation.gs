@@ -1726,6 +1726,7 @@ internal partial class ExpressionBinder {
         // the callee with extra reports dropped so the semantic model keeps both (#6221).
         let layoutOk = overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames)
         let layoutDiagMark = Diagnostics.Count
+        let layoutLiteralDiagCount = literalTargetDiagnostics.Count
         // Issue #311: resolve an explicit `[T1, T2]` type-argument list (e.g.
         // `Array.Empty[string]()`) into mapped CLR types up front so every
         // generic-method dispatch path below can close the candidate.
@@ -2012,6 +2013,12 @@ internal partial class ExpressionBinder {
             }
             if !layoutOk {
                 Diagnostics.TruncateTo(layoutDiagMark)
+                if literalTargetDiagnostics.Count > layoutLiteralDiagCount {
+                    literalTargetDiagnostics.RemoveRange(
+                        layoutLiteralDiagCount,
+                        literalTargetDiagnostics.Count - layoutLiteralDiagCount
+                    )
+                }
                 for arg in ce.Arguments {
                     $scope.RemoveVariablesDeclaredInSpan(arg.SyntaxTree, arg.Span)
                 }

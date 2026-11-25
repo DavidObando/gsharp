@@ -4,12 +4,21 @@
 
 package GSharp.Core.Tests.CodeAnalysis
 
+import CSharpCompilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation
+import CSharpCompilationOptions = Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions
+import CSharpParseOptions = Microsoft.CodeAnalysis.CSharp.CSharpParseOptions
+import CSharpSyntaxTree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import LanguageVersion = Microsoft.CodeAnalysis.CSharp.LanguageVersion
+import MetadataReference = Microsoft.CodeAnalysis.MetadataReference
+import OutputKind = Microsoft.CodeAnalysis.OutputKind
+import RoslynSyntaxTree = Microsoft.CodeAnalysis.SyntaxTree
 import System
+import System.IO
 import System.Linq
 import Xunit
 
@@ -227,6 +236,81 @@ unsafe func Use(o Outer, h Holder) {
         Assert.Equal("D", Assert.IsType[FieldSymbol](model.GetSymbolInfo(dCall.Identifier).Symbol).Name)
     }
 
+    @Fact
+    func ChainedIndexedFunctionMemberAndReferencedClrDelegateHolder_PreserveIntermediateReceiverAnswers() {
+        let source = `package P
+
+delegate Named(v int32) int32;
+
+class Holder {
+    let Fs []((int32) -> int32) = []((int32) -> int32){ (v int32) -> v }
+    let Ds []Named = []Named{ (v int32) -> v }
+    prop Inner Holder {
+        get { return this }
+    }
+}
+
+func Use(h Holder, i int32) {
+    let x = 1
+    let a = h.Inner.Fs[i](x).ToString()
+    let b = h.Inner.Fs[0](x).ToString()
+    let c = h.Inner.Ds[i].Invoke(x).ToString()
+}
+`
+        let (model, tree, compilation) = CreateModel(source)
+        Assert.Empty(compilation.GetDiagnostics())
+
+        let innerNames = Names(tree, "Inner")
+        Assert.Equal(3, innerNames.Length)
+        for innerName in innerNames {
+            Assert.Equal("Inner", Assert.IsType[PropertySymbol](model.GetSymbolInfo(innerName).Symbol).Name)
+            Assert.Equal("Holder", model.GetTypeInfo(innerName).Type?.Name)
+            Assert.Equal("Holder", model.GetReceiverTypeInfo(innerName).Type?.Name)
+        }
+
+        let fsIndexCall = Calls(tree, "Fs").Single()
+        Assert.Equal("Fs", Assert.IsType[FieldSymbol](model.GetSymbolInfo(fsIndexCall).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(fsIndexCall).Type)
+        Assert.Equal("Fs", Assert.IsType[FieldSymbol](model.GetSymbolInfo(fsIndexCall.Identifier).Symbol).Name)
+        Assert.Equal("[](int32) -> int32", model.GetTypeInfo(fsIndexCall.Identifier).Type?.ToString())
+
+        let invokeCall = Calls(tree, "Invoke").Single()
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(invokeCall).Type)
+
+        let csharpSource = `using System;
+namespace ClrHolderNs {
+    public sealed class ClrInner {
+        public Func<int, int> Callback = v => v;
+    }
+    public sealed class ClrOuter {
+        public ClrInner Inner => new ClrInner();
+    }
+}`
+        let libraryPath = EmitCSharpLibrary(csharpSource)
+        using let resolver = ReferenceResolver.WithReferences([]string{libraryPath})
+        let clrConsumer = `package P
+import ClrHolderNs
+
+func Use(o ClrOuter) {
+    let x = 1
+    let s = o.Inner.Callback(x).ToString()
+}
+`
+        let clrTree = SyntaxTree.Parse(SourceText.From(clrConsumer, "clr-holder.gs"))
+        let clrCompilation = Compilation(resolver, clrTree)
+        Assert.Empty(clrCompilation.GetDiagnostics())
+        let clrModel = clrCompilation.GetSemanticModel(clrTree)
+        let clrInner = Names(clrTree, "Inner").Single()
+        Assert.Equal("Inner", Assert.IsAssignableFrom[PropertySymbol](clrModel.GetSymbolInfo(clrInner).Symbol).Name)
+        Assert.Equal("ClrHolderNs.ClrInner", clrModel.GetTypeInfo(clrInner).Type?.Name)
+        Assert.Equal("ClrHolderNs.ClrInner", clrModel.GetReceiverTypeInfo(clrInner).Type?.Name)
+        let callbackCall = Calls(clrTree, "Callback").Single()
+        Assert.Equal(
+            "Callback",
+            Assert.IsAssignableFrom[FieldSymbol](clrModel.GetSymbolInfo(callbackCall.Identifier).Symbol).Name
+        )
+    }
+
     shared {
         private const MemberChainTemplate string = `package P
 
@@ -274,5 +358,30 @@ func Use(c C) string {
             .OfType[NameExpressionSyntax]()
             .Where((n NameExpressionSyntax) -> n.IdentifierToken.Text == name)
             .ToArray()
+
+        private func EmitCSharpLibrary(csharpSource string) string {
+            let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue6222ClrHolder")
+            Directory.CreateDirectory(outputDir)
+            let libraryPath = Path.Combine(outputDir, "ClrHolderLib.dll")
+            let syntaxTree = CSharpSyntaxTree.ParseText(csharpSource, CSharpParseOptions(LanguageVersion.Latest))
+            let referencePaths = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)?.Split(
+                Path.PathSeparator
+            ) ??
+                Array.Empty[string]()
+            let references = referencePaths
+                .Where(File.Exists)
+                .Select((p string) -> cast[MetadataReference](MetadataReference.CreateFromFile(p)))
+                .ToList()
+            let compilation = CSharpCompilation.Create(
+                "ClrHolderLib",
+                []RoslynSyntaxTree{syntaxTree},
+                references,
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithModuleName("ClrHolderLib.dll")
+            )
+            using let peStream = File.Create(libraryPath)
+            let emitResult = compilation.Emit(peStream)
+            Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics))
+            return libraryPath
+        }
     }
 }
