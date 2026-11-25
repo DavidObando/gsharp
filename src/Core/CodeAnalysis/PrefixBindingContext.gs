@@ -218,6 +218,66 @@ internal sealed class PrefixCut {
         }
     }
 
+    // #6215: the expressions whose type a later source type that hides an imported type can change.
+    private let hiddenKeys HashSet[(Text SourceText, Span TextSpan)] = HashSet[(Text SourceText, Span TextSpan)]()
+    private let hiddenSpans List[(Text SourceText, Span TextSpan)] = List[(Text SourceText, Span TextSpan)]()
+
+    /// Records that a later source type can hide the imported type that [`node`](paramref) names or that
+    /// types it (#6215).
+    /// @param node A type clause, a type name or a construction.
+    internal func AddHideable(node SyntaxNode) {
+        let key = (node.SyntaxTree.Text, node.Span)
+        lock provisionalGate {
+            provisionalTrees[node.SyntaxTree.Text] = node.SyntaxTree
+            if hiddenKeys.Add(key) {
+                hiddenSpans.Add(key)
+            }
+        }
+    }
+
+    /// Returns a value that tells whether [`node`](paramref) is recorded in the registry of
+    /// [`hideable`](paramref): the type names that a later type can hide (#6215), or the expressions
+    /// that a later overload can change (#6179).
+    /// @param node A syntax node.
+    /// @param hideable Which registry.
+    /// @returns `true` for a recorded node.
+    internal func IsMarked(node SyntaxNode, hideable bool) bool {
+        if !hideable {
+            return IsProvisional(node)
+        }
+        let key = (node.SyntaxTree.Text, node.Span)
+        lock provisionalGate {
+            return hiddenSpans.Count > 0 && hiddenKeys.Contains(key)
+        }
+    }
+
+    /// Gets a value that tells whether the bind recorded a type name that a later type can hide (#6215).
+    internal prop HasHideable bool {
+        get {
+            lock provisionalGate {
+                return hiddenSpans.Count > 0
+            }
+        }
+    }
+
+    /// Returns a value that tells whether [`location`](paramref) contains a type name that a later type can
+    /// hide (#6215).
+    /// @param location A diagnostic location.
+    /// @returns `true` when a recorded name is in the location.
+    internal func ContainsHideable(location TextLocation) bool {
+        let span = location.Span
+        lock provisionalGate {
+            for entry in hiddenSpans {
+                if object.ReferenceEquals(entry.Text, location.Text) &&
+                    span.Start <= entry.Span.Start &&
+                    entry.Span.End <= span.End {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     /// Returns a value that tells whether [`node`](paramref) is an expression whose type a later
     /// declaration can change (#6179).
     /// @param node A syntax node.
@@ -361,6 +421,10 @@ internal sealed class PrefixPremise {
         /// Gets the premise of an expression whose type a later declaration can change: a call that a later
         /// overload, member or receiver function can retarget, or a local whose type such a call infers (#6179).
         internal let LaterOverload PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "later-overload")
+
+        /// Gets the premise of an expression that a later source type can change by hiding the imported type
+        /// that it names or that types it (#6215). It holds only when nothing follows the cut.
+        internal let LaterType PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "later-type")
 
         /// Gets the premise of a check at the end of an open body.
         internal let RestOfBody PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "rest-of-body")
@@ -513,6 +577,15 @@ internal shared class PrefixBindingContext {
         }
     }
 
+    /// Records that a later source type can hide the imported type that [`node`](paramref) names, when
+    /// nothing follows the cut (#6215).
+    /// @param node A type clause, a type name or a construction.
+    internal func AddHideable(node SyntaxNode?) {
+        if node != nil && current.Value is {} cut && cut.LaterOverloadsPossible {
+            cut.AddHideable(node)
+        }
+    }
+
     /// Records that the binder showed [`node`](paramref) to be fixed (#6179).
     /// @param node A call, a member access or an index expression.
     internal func AddFixed(node SyntaxNode?) {
@@ -543,11 +616,15 @@ internal shared class PrefixBindingContext {
     /// @param location The location of the report.
     /// @returns (cref:PrefixPremise.LaterOverload) or `null`.
     internal func ProvisionalPremise(location TextLocation) PrefixPremise? {
-        if current.Value is not{} cut || (!cut.HasProvisional && !cut.LaterOverloadsPossible) {
+        if current.Value is not{} cut || (!cut.HasProvisional && !cut.HasHideable && !cut.LaterOverloadsPossible) {
             return nil
         }
-        return if cut.ContainsProvisional(location) || StatementUsesProvisional(cut, location) {
-            PrefixPremise.LaterOverload
+        if cut.ContainsProvisional(location) || StatementUsesProvisional(cut, location, false) {
+            return PrefixPremise.LaterOverload
+        }
+        // #6215: a later source type can hide an imported type that the report depends on.
+        return if cut.HasHideable && (cut.ContainsHideable(location) || StatementUsesProvisional(cut, location, true)) {
+            PrefixPremise.LaterType
         } else {
             default(PrefixPremise?)
         }
@@ -557,7 +634,7 @@ internal shared class PrefixBindingContext {
     // pattern of an `is`, the `!!` of an assertion, an index argument converted to the indexer's parameter.
     // So a report counts as provisional when the innermost statement that contains it uses a provisional
     // expression outside its nested statements (#6179).
-    private func StatementUsesProvisional(cut PrefixCut, location TextLocation) bool {
+    private func StatementUsesProvisional(cut PrefixCut, location TextLocation, hideable bool) bool {
         if cut.ProvisionalTree(location.Text) is not{} tree {
             return false
         }
@@ -583,9 +660,20 @@ internal shared class PrefixBindingContext {
         }
         return statement != nil &&
             (
-            HeaderContainsProvisional(cut, statement, statement, false, false) ||
-                (cut.LaterOverloadsPossible && HeaderContainsUnproven(cut, statement, statement, false, span)) ||
-                HeaderUsesProvisionalName(cut, tree, statement, 4, HashSet[object](ReferenceEqualityComparer.Instance))
+            HeaderContainsProvisional(cut, statement, statement, false, false, hideable) ||
+                (
+                !hideable &&
+                    cut.LaterOverloadsPossible &&
+                    HeaderContainsUnproven(cut, statement, statement, false, span)
+            ) ||
+                HeaderUsesProvisionalName(
+                cut,
+                tree,
+                statement,
+                4,
+                HashSet[object](ReferenceEqualityComparer.Instance),
+                hideable
+            )
         )
     }
 
@@ -599,7 +687,8 @@ internal shared class PrefixBindingContext {
         tree SyntaxTree,
         statement SyntaxNode,
         depth int32,
-        visited HashSet[object]
+        visited HashSet[object],
+        hideable bool
     ) bool {
         // The search errs toward a provisional report when it runs out of depth.
         if depth < 0 {
@@ -618,6 +707,15 @@ internal shared class PrefixBindingContext {
         while tree.GetParent(current) is {} parent {
             if parent is StatementSyntax && parent is not BlockStatementSyntax {
                 earlier.Add(parent)
+            }
+            // A parameter declares a name that the body reads, typed by its clause (#6215).
+            if parent is ParameterSyntax {
+                earlier.Add(parent)
+            }
+            for child in parent.GetChildren() {
+                if child is ParameterSyntax {
+                    CollectParameters(child, earlier)
+                }
             }
             for sibling in parent.GetChildren() {
                 if sibling.Span.End <= statement.Span.Start &&
@@ -653,8 +751,8 @@ internal shared class PrefixBindingContext {
             if !declared.Overlaps(names) {
                 continue
             }
-            if HeaderContainsProvisional(cut, candidate, candidate, false, false) ||
-                HeaderUsesProvisionalName(cut, tree, candidate, depth - 1, visited) {
+            if HeaderContainsProvisional(cut, candidate, candidate, false, false, hideable) ||
+                HeaderUsesProvisionalName(cut, tree, candidate, depth - 1, visited, hideable) {
                 return true
             }
         }
@@ -698,6 +796,18 @@ internal shared class PrefixBindingContext {
 
     private func IsOutermostAccessor(node SyntaxNode) bool -> node is AccessorExpressionSyntax &&
         !(node.Parent is AccessorExpressionSyntax parent && object.ReferenceEquals(parent.RightPart, node))
+
+    private func CollectParameters(node SyntaxNode, parameters List[SyntaxNode]) {
+        if node is ParameterSyntax {
+            parameters.Add(node)
+            return
+        }
+        for child in node.GetChildren() {
+            if child is not SyntaxToken {
+                CollectParameters(child, parameters)
+            }
+        }
+    }
 
     // The identifiers of a statement's header, not those of its nested statements or of a function
     // literal's body. With [`declared`](paramref), the names that it declares or writes (an identifier that
@@ -769,7 +879,7 @@ internal shared class PrefixBindingContext {
         }
         // A global can be read in another body, which can bind first or come from the body cache. Any call
         // in its declaration then counts (anyCall).
-        return HeaderContainsProvisional(cut, statement, statement, false, anyCall)
+        return HeaderContainsProvisional(cut, statement, statement, false, anyCall, false)
     }
 
     // The declaration part of [`statement`](paramref): the nested statements of a compound statement (the
@@ -780,9 +890,10 @@ internal shared class PrefixBindingContext {
         statement SyntaxNode,
         node SyntaxNode,
         inExpression bool,
-        anyCall bool
+        anyCall bool,
+        hideable bool
     ) bool {
-        if cut.IsProvisional(node) || (anyCall && node is CallExpressionSyntax) {
+        if cut.IsMarked(node, hideable) || (anyCall && node is CallExpressionSyntax) {
             return true
         }
         for child in node.GetChildren() {
@@ -796,7 +907,14 @@ internal shared class PrefixBindingContext {
             if child is FunctionLiteralExpressionSyntax {
                 continue
             }
-            if HeaderContainsProvisional(cut, statement, child, inExpression || child is ExpressionSyntax, anyCall) {
+            if HeaderContainsProvisional(
+                cut,
+                statement,
+                child,
+                inExpression || child is ExpressionSyntax,
+                anyCall,
+                hideable
+            ) {
                 return true
             }
         }

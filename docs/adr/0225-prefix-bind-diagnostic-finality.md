@@ -35,7 +35,7 @@ class PrefixBindOptions {
 class ClassifiedDiagnostic {
     prop Diagnostic Diagnostic
     prop Finality DiagnosticFinality
-    prop Reason string          // "", "later-declaration", "later-member", "later-overload",
+    prop Reason string          // "", "later-declaration", "later-member", "later-overload", "later-type",
                                 // "rest-of-body", "rest-of-type", "rest-of-statement", "cut"
 }
 
@@ -151,7 +151,7 @@ Every premise is conditional on a prefix tree. A tree from `SyntaxTree.Parse` ha
    - A failed call is not recorded. It reports its own diagnostics, with the premise of its callee (D6.5).
    - Witnesses: a later `F(int32) int32` removes the `GS0155` of `let x int32 = F(1)` with `F(object) string`, also through an inferred local; it removes `GS0116` of `G(1)[0]` and of `for c in G(1)`, `GS0164` of `let (p, q) = G(1)`, and the condition's `GS0155`; a later `V(int32) Task` removes the `GS0124` of `let x = V(1)` and `await V(2)`; a later generic or default-parameter candidate is beaten by a later exact overload.
    - No witness, so these stay final: a later `GetAwaiter` does not make a type awaitable (G# awaits only a task, `GS0133`); a later receiver `GetEnumerator` does not make an imported type enumerable (the `foreach` binder reads the CLR type only); and a later, better receiver `operator` does not change an operator that resolved (`v + 1` keeps the first `func (a V) operator + (b object) int32`). A declared function or method has no inferred return type (an expression body without a return type is `void`), so a call of it cannot change through its body.
-   - A later source type that hides an imported type also changes a lookup that succeeds (`let x int32 = Console.Title` and a later `class Console`). The premise would make most diagnostics that use imported types future-dependent with `Nothing`, so it is not stated here (#6215).
+   - A later source type that hides an imported type also changes a lookup that succeeds (`let x int32 = Console.Title` and a later `class Console`). With `Nothing`, the binder records a type clause whose bare name resolves to an imported type, a construction of an imported type by its bare name, and a static member of an imported type that a bare name qualifies (#6215). A report that uses one of them, through the same containment, statement and name rules, gets its own reason, `later-type`, so that a host that does not expect later types to hide imported ones can treat it as final. A parameter's type clause counts for the reads of the parameter. `later-overload` wins when both hold. With `KeepDeclarations`, every later type is present, so the premise does not hold. Known limit: a signature or a field of a source type that names an imported type does not make the calls or reads of that member provisional.
 
 ## Consequences
 
@@ -172,6 +172,5 @@ Every premise is conditional on a prefix tree. A tree from `SyntaxTree.Parse` ha
 
 ## Follow-ups
 
-- A lookup that succeeds through an imported type that a later source type can hide (#6215, D6.8).
 - Reuse of the global scope for a file with top-level statements, the main shape of the samples (D6.6).
 - `GetSpeculativeStatementDiagnostics`, `GetSymbolInfo` of an imported constructor, the cost of `LookupMembers`, and `Diagnostic.Phase` (D6.7).

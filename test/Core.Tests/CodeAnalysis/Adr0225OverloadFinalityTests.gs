@@ -1546,6 +1546,121 @@ partial class Box {
     }
 
     @Fact
+    func StaticMemberOfAnImportedType_ALaterSourceTypeCanHideIt() {
+        const prefix = `package P
+
+import System
+
+func Main() {
+    let x int32 = Console.Title
+    let done = 0
+`
+        const witness = `}
+
+class Console {
+    shared {
+        let Title int32 = 0
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-type")
+        // Every later declaration is kept, so no later type can hide the imported one (#6215).
+        for d in BindKeep(prefix + "/*CUT*/" + witness).Diagnostics.Where(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"
+        ) {
+            Assert.NotEqual("later-type", d.Reason)
+        }
+    }
+
+    @Fact
+    func ImportedConstruction_ALaterSourceTypeCanHideIt() {
+        const prefix = `package P
+
+import System.Text
+
+func Main() {
+    let sb = StringBuilder()
+    let s string = sb.Length
+    let done = 0
+`
+        const witness = `}
+
+class StringBuilder {
+    prop Length string -> ""
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-type")
+        // Every later declaration is kept, so no later type can hide the imported one (#6215).
+        for d in BindKeep(prefix + "/*CUT*/" + witness).Diagnostics.Where(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"
+        ) {
+            Assert.NotEqual("later-type", d.Reason)
+        }
+    }
+
+    @Fact
+    func ParameterOfAnImportedType_ALaterSourceTypeCanHideIt() {
+        const prefix = `package P
+
+import System.Text
+
+func Use(sb StringBuilder) {
+    let s string = sb.Length
+    let done = 0
+`
+        const witness = `}
+
+class StringBuilder {
+    prop Length string -> ""
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-type")
+        // Every later declaration is kept, so no later type can hide the imported one (#6215).
+        for d in BindKeep(prefix + "/*CUT*/" + witness).Diagnostics.Where(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"
+        ) {
+            Assert.NotEqual("later-type", d.Reason)
+        }
+    }
+
+    @Fact
+    func StaticCallOfAnImportedType_ALaterSourceTypeCanHideIt() {
+        const prefix = `package P
+
+import System
+
+func Main() {
+    let x string = Math.Max(1, 2)
+    let done = 0
+`
+        const witness = `}
+
+class Math {
+    shared {
+        func Max(a int32, b int32) string {
+            return ""
+        }
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-type")
+        // Every later declaration is kept, so no later type can hide the imported one (#6215).
+        for d in BindKeep(prefix + "/*CUT*/" + witness).Diagnostics.Where(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"
+        ) {
+            Assert.NotEqual("later-type", d.Reason)
+        }
+    }
+
+    @Fact
     func ResolvedCall_AnExactNonGenericMatchCannotBeBeaten() {
         const prefix = `package P
 
