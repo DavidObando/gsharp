@@ -698,10 +698,10 @@ partial class SemanticModel {
     /// can take [`receiver`](paramref). The applicability rules are the binder's (see
     /// `Binder.CollectExtensionMembers`); only the order is set here.
     private let extensionMembers ConcurrentDictionary[
-        (Receiver TypeSymbol, Name string, All bool, Package string),
+        (Receiver TypeSymbol, Name string, All bool, Package string, Generation int64),
         (Source ImmutableArray[FunctionSymbol], Imported ImmutableArray[MethodInfo])
     ] = ConcurrentDictionary[
-        (Receiver TypeSymbol, Name string, All bool, Package string),
+        (Receiver TypeSymbol, Name string, All bool, Package string, Generation int64),
         (Source ImmutableArray[FunctionSymbol], Imported ImmutableArray[MethodInfo])
     ]()
 
@@ -740,7 +740,14 @@ partial class SemanticModel {
         // depends on the receiver type, the name, the package that declares the enclosing function and this
         // model's tree (the file's imports). A model belongs to one compilation and one tree, and a
         // successor compilation has models of its own, so the cache needs no invalidation.
-        let key = (receiver, name ?? string.Empty, name == nil, function?.Package?.Name ?? string.Empty)
+        // A rename of the assembly starts a new binding generation, which changes what is accessible.
+        let key = (
+            receiver,
+            name ?? string.Empty,
+            name == nil,
+            function?.Package?.Name ?? string.Empty,
+            compilation.BindingGeneration
+        )
         var found(Source ImmutableArray[FunctionSymbol], Imported ImmutableArray[MethodInfo])
         if !extensionMembers.TryGetValue(key, out found) {
             found = CollectExtensionMembers(receiver, name, function)

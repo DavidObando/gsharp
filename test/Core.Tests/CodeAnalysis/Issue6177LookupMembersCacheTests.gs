@@ -61,6 +61,28 @@ open class Issue6177LookupMembersCacheTests {
         Assert.Contains("Select", Describe(successor.GetSemanticModel(next).LookupMembers(shifted, TypeSymbol.String)))
     }
 
+    @Fact
+    func RetainedModelAfterAnAssemblyRename_AnswersAsAFreshModel() {
+        // A rename starts a new binding generation, and the cache key holds it, so a retained model does not
+        // answer from the bind of the old name.
+        const source = "package P\n\nimport System.Linq\n\nfunc (s string) Shout() string -> s\n\nfunc Main() {\n    let s = \"a\"\n    let n = s.Length\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "cache.gs"))
+        let compilation = Compilation(tree)
+        compilation.AssemblyName = "First"
+        let model = compilation.GetSemanticModel(tree)
+        let position = source.IndexOf("s.Length", StringComparison.Ordinal)
+        let before = Describe(model.LookupMembers(position, TypeSymbol.String))
+        compilation.AssemblyName = "Second"
+        let after = Describe(compilation.GetSemanticModel(tree).LookupMembers(position, TypeSymbol.String))
+        let fresh = Compilation(SyntaxTree.Parse(SourceText.From(source, "cache.gs")))
+        fresh.AssemblyName = "Second"
+        Assert.Equal(
+            Describe(fresh.GetSemanticModel(fresh.SyntaxTrees[0]).LookupMembers(position, TypeSymbol.String)),
+            after
+        )
+        Assert.Equal(before, after)
+    }
+
     shared {
         private func Describe(members System.Collections.Immutable.ImmutableArray[Symbol])[]string -> members.Select(
             (m Symbol) -> m.Name
