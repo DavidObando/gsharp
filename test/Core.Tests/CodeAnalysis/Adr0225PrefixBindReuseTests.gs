@@ -65,6 +65,79 @@ open class Adr0225PrefixBindReuseTests {
         )
     }
 
+    /// #6178: successive cuts in one member body of a script reuse the declarations, with the top-level
+    /// statements before and after the member unchanged, and report what a bind from scratch reports.
+    @Fact
+    func SuccessiveCutsInAMemberOfAScript_ReuseTheDeclarations() {
+        var checks = 0
+        var scratchTicks = 0L
+        var reusedTicks = 0L
+        let wrong = List[string]()
+        using let measurements = CompilationMeasurements.Start("test")
+        for file in SampleFiles() {
+            let tree = SyntaxTree.Parse(SourceText.From(File.ReadAllText(file), file))
+            if !tree.Root.Members.Any((m MemberSyntax) -> m is GlobalStatementSyntax) {
+                continue
+            }
+            let compilation = Compilation(tree)
+            for remainder in[]PrefixRemainder{PrefixRemainder.KeepDeclarations, PrefixRemainder.Nothing} {
+                for body in FunctionBodies(tree) {
+                    var previous PrefixBindResult? = nil
+                    for statement in body.Statements.Take(6) {
+                        let cut = statement.Span.End
+                        let options = PrefixBindOptions(remainder)
+                        var watch = System.Diagnostics.Stopwatch.StartNew()
+                        let scratch = compilation.BindPrefix(tree, cut, options)
+                        scratchTicks += watch.ElapsedTicks
+                        watch = System.Diagnostics.Stopwatch.StartNew()
+                        let reused = compilation.BindPrefix(tree, cut, options, previous)
+                        reusedTicks += watch.ElapsedTicks
+                        checks++
+                        if Describe(scratch) != Describe(reused) {
+                            wrong.Add(
+                                "${Path.GetFileName(file)} ${remainder} cut ${cut}:\n${Describe(scratch)}\n---\n${Describe(reused)}"
+                            )
+                        }
+                        previous = reused
+                    }
+                }
+            }
+        }
+        let reuses = measurements.GetCounter("declarations.reuses")
+        Console.WriteLine(
+            "#6178 script cuts: ${checks}, declaration reuses: ${reuses}, scratch ${scratchTicks * 1000 / System.Diagnostics.Stopwatch.Frequency} ms, chained ${reusedTicks * 1000 / System.Diagnostics.Stopwatch.Frequency} ms"
+        )
+        Assert.True(checks > 200, "checked ${checks} cuts")
+        Assert.True(wrong.Count == 0, string.Join("\n\n", wrong.Take(5)))
+        Assert.True(reuses > checks / 2, "${reuses} declaration reuses in ${checks} cuts")
+    }
+
+    /// #6178: a reused global of a script points at the new prefix tree, so the semantic model of the result
+    /// answers its declaration.
+    @Fact
+    func ReusedGlobalOfAScript_IsDeclaredInTheNewPrefixTree() {
+        const source = "package P\n\nlet total = 1\nlet more = total + 1\n\nfunc F() int32 {\n    let a = total\n    let b = a + 1\n    let c = b + 1\n    return c\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "script.gs"))
+        let compilation = Compilation(tree)
+        using let measurements = CompilationMeasurements.Start("test")
+        let options = PrefixBindOptions(PrefixRemainder.Nothing)
+        let first = compilation.BindPrefix(tree, source.IndexOf("    let b", StringComparison.Ordinal), options)
+        let second = compilation.BindPrefix(tree, source.IndexOf("    let c", StringComparison.Ordinal), options, first)
+        Assert.True(measurements.GetCounter("declarations.reuses") > 0)
+        let model = second.Compilation.GetSemanticModel(second.SyntaxTree)
+        let declaration = second
+            .SyntaxTree
+            .Root
+            .DescendantNodes()
+            .OfType[VariableDeclarationSyntax]()
+            .First((v VariableDeclarationSyntax) -> v.Identifier.ValueText == "total")
+        Assert.Equal("total", model.GetDeclaredSymbol(declaration)?.Name)
+        Assert.All(
+            Assert.IsAssignableFrom[Symbol](model.GetDeclaredSymbol(declaration)).DeclaringSyntaxNodes,
+            (n SyntaxNode) -> Assert.Same(second.SyntaxTree, n.SyntaxTree)
+        )
+    }
+
     /// A body that the open body makes suspending (ADR-0174) is reported as from scratch: the closed
     /// caller's report changes when the open body gets a channel operation.
     @Fact
