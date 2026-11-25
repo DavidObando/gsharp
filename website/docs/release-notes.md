@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Emit reified generic CLR indexer calls** (Fixes #6234). Indexers on imported generic types now use their selected accessor and constructed receiver type instead of legacy non-generic `IList`/`IDictionary` dispatch. Generic `ImmutableArray[T]` indexing produces valid IL without a runtime crash, and mutable struct indexers retain their original receiver storage.
+
 - **Key `ReturnSourceIsNullable` visited state by `requirePromotion` in `cs2gs`** (Fixes #6038). `ObliviousNullabilityAnalyzer.ReturnSourceIsNullable` now includes `requirePromotion` in its visited-set key `(Symbol, Path, Depth, RequirePromotion)` so an earlier narrowed (`requirePromotion: true`) traversal cannot suppress a later unnarrowed (`requirePromotion: false`) full-contract traversal of the same projected source across `if`, ternary, `switch`, coalescing, tuple-source, and cross-owner branches.
 
 - **Repository compiler uses published SDK 0.5.793** (Fixes #6226). The bootstrap pin moves from 0.5.767 to the package published on nuget.org. The repository builds without source changes. The sample PE baseline records the published extension assembly version; method bodies remain unchanged. The .NET SDK version and analyzer-testing dependency remain unchanged. This separate pin update requires a clean-clone build and passing CI, including the self-host fixpoint check.
