@@ -812,8 +812,8 @@ internal partial class OverloadResolver {
         // Issue #343: pre-validate named-argument layout (positional precedes
         // named, no duplicate names). Diagnostics are reported by the helper.
         if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
-            BindCallArgumentsForLayoutRecovery(syntax.Arguments)
             DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices)
+            BindCallArgumentsForLayoutRecovery(syntax.Arguments, preserveInlineOutDeclarations: true)
             return BoundErrorExpression(syntax)
         }
         if openGenericExplicit && CallCandidateRecorder.IsEnabled {

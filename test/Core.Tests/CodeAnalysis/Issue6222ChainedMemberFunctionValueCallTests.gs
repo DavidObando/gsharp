@@ -388,6 +388,24 @@ func Use(w Wrapper) {
         Assert.Equal("Length", Assert.IsAssignableFrom[PropertySymbol](model.GetSymbolInfo(bLength).Symbol).Name)
     }
 
+    @Fact
+    func DeepFluentClrChain_ResolvesReceiverAndMembersInLinearTime() {
+        var chain = "sb"
+        for var i = 0; i < 40; i++ {
+            chain = chain + ".Append(1)"
+        }
+        let source = "package P\n\nimport System.Text\n\nfunc Use(sb StringBuilder) int32 {\n    return " +
+            chain +
+            ".Length\n}\n"
+        let (model, tree, compilation) = CreateModel(source)
+        Assert.Empty(compilation.GetDiagnostics())
+        let sbName = Names(tree, "sb").Single()
+        Assert.Equal("sb", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(sbName).Symbol).Name)
+        let lengthName = Names(tree, "Length").Single()
+        Assert.Equal("Length", Assert.IsAssignableFrom[PropertySymbol](model.GetSymbolInfo(lengthName).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(lengthName).Type)
+    }
+
     shared {
         private const MemberChainTemplate string = `package P
 

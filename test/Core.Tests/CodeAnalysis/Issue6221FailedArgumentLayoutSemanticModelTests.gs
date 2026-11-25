@@ -4,12 +4,21 @@
 
 package GSharp.Core.Tests.CodeAnalysis
 
+import CSharpCompilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation
+import CSharpCompilationOptions = Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions
+import CSharpParseOptions = Microsoft.CodeAnalysis.CSharp.CSharpParseOptions
+import CSharpSyntaxTree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import LanguageVersion = Microsoft.CodeAnalysis.CSharp.LanguageVersion
+import MetadataReference = Microsoft.CodeAnalysis.MetadataReference
+import OutputKind = Microsoft.CodeAnalysis.OutputKind
+import RoslynSyntaxTree = Microsoft.CodeAnalysis.SyntaxTree
 import System
+import System.IO
 import System.Linq
 import Xunit
 
@@ -234,8 +243,91 @@ func Run() {
         }
 
         let yArg = Assert.Single(Names(tree, "y"))
-        Assert.Equal("y", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(yArg).Symbol).Name)
+        let yRef = Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(yArg).Symbol)
+        Assert.Equal("y", yRef.Name)
         Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(yArg).Type)
+        let outArg = tree.Root.DescendantNodes().OfType[RefArgumentExpressionSyntax]().Single()
+        Assert.Same(yRef, model.GetSymbolInfo(outArg).Symbol)
+        Assert.Equal("*int32", model.GetTypeInfo(outArg).Type?.ToString())
+    }
+
+    @Fact
+    func FailedLayoutConstructorRecovery_AppliesSequentialArgumentNarrowingEffectsWithoutLeaking() {
+        let source = `package P
+
+class Box {
+    init(v string?) { }
+}
+
+func Use(initial string?) {
+    var s string? = initial
+    if s != nil {
+        let b = Box(v: (s = nil), v: s)
+        let after = s
+    }
+}
+`
+        let (model, tree, compilation) = CreateModel(source)
+        let errors = compilation
+            .GetDiagnostics()
+            .Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            .ToArray()
+        Assert.Equal("GS0245", Assert.Single(errors).Id)
+
+        let sNames = Names(tree, "s")
+        Assert.Equal(3, sNames.Length)
+        Assert.Equal("string?", model.GetTypeInfo(sNames[1]).Type?.ToString())
+        Assert.Equal("string", model.GetTypeInfo(sNames[2]).Type?.ToString())
+
+        let csharpSource = `namespace ClrOutCtorNs {
+    public sealed class OutBox {
+        public OutBox(out int y, int extra) { y = extra; }
+    }
+}`
+        let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue6221ClrOutCtor")
+        Directory.CreateDirectory(outputDir)
+        let libraryPath = Path.Combine(outputDir, "ClrOutCtorLib.dll")
+        let csTree = CSharpSyntaxTree.ParseText(csharpSource, CSharpParseOptions(LanguageVersion.Latest))
+        let refs = (
+            (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)?.Split(Path.PathSeparator) ??
+                Array.Empty[string]()
+        )
+            .Where(File.Exists)
+            .Select((p string) -> cast[MetadataReference](MetadataReference.CreateFromFile(p)))
+            .ToList()
+        let csCompilation = CSharpCompilation.Create(
+            "ClrOutCtorLib",
+            []RoslynSyntaxTree{csTree},
+            refs,
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithModuleName("ClrOutCtorLib.dll")
+        )
+        if true {
+            using let pe = File.Create(libraryPath)
+            let emit = csCompilation.Emit(pe)
+            Assert.True(emit.Success)
+        }
+        using let resolver = ReferenceResolver.WithReferences([]string{libraryPath})
+        let clrSource = `package P
+import ClrOutCtorNs
+
+func Run() {
+    let b = OutBox(v: out var y int32, v: y)
+}
+`
+        let clrTree = SyntaxTree.Parse(SourceText.From(clrSource, "issue6221-clr-out.gs"))
+        let clrCompilation = Compilation(resolver, clrTree)
+        let clrErrors = clrCompilation
+            .GetDiagnostics()
+            .Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            .ToArray()
+        Assert.Equal("GS0245", Assert.Single(clrErrors).Id)
+        let clrModel = clrCompilation.GetSemanticModel(clrTree)
+        let clrYArg = Assert.Single(Names(clrTree, "y"))
+        let clrYRef = Assert.IsAssignableFrom[VariableSymbol](clrModel.GetSymbolInfo(clrYArg).Symbol)
+        Assert.Same(TypeSymbol.Int32, clrModel.GetTypeInfo(clrYArg).Type)
+        let clrOutArg = clrTree.Root.DescendantNodes().OfType[RefArgumentExpressionSyntax]().Single()
+        Assert.Same(clrYRef, clrModel.GetSymbolInfo(clrOutArg).Symbol)
+        Assert.Equal("*int32", clrModel.GetTypeInfo(clrOutArg).Type?.ToString())
     }
 
     @Fact

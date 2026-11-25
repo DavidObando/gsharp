@@ -767,8 +767,6 @@ partial class SemanticModel {
         return current
     }
 
-    /// Removes the conversions and nil-unwraps the binder adds around a read
-    /// without user syntax of their own, so the node reached is the read itself.
     private func TrySkipCalleeMember(
         target BoundExpression,
         captures Dictionary[VariableSymbol, BoundExpression]?,
@@ -780,7 +778,7 @@ partial class SemanticModel {
                 receiver = ReceiverOf(unwrapped, captures)
                 return true
             }
-            if IndexTargetOf(unwrapped) is {} indexedTarget &&
+            if IndexedCalleeTargetOf(unwrapped) is {} indexedTarget &&
                 UnwrapCalleeTarget(indexedTarget, captures, out var indexedCalleeMarked) is {} indexedBase &&
                 indexedCalleeMarked {
                 receiver = ReceiverOf(indexedBase, captures)
@@ -790,6 +788,19 @@ partial class SemanticModel {
         return false
     }
 
+    private func IndexedCalleeTargetOf(node BoundExpression) BoundExpression? -> switch node {
+        case idx is BoundIndexExpression: idx.Target
+        case idx is BoundClrIndexExpression: idx.Target
+        case userCall is BoundUserInstanceCallExpression when userCall.Method.IsSpecialName &&
+            userCall.Method.Name.StartsWith("get_", StringComparison.Ordinal): userCall.Receiver
+        case importedCall is BoundImportedInstanceCallExpression when importedCall.Method.IsSpecialName &&
+            importedCall.Method.Name.StartsWith("get_", StringComparison.Ordinal): importedCall.Receiver
+        case block is BoundBlockExpression: CapturedIndexTarget(block)
+        default: default(BoundExpression?)
+    }
+
+    /// Removes the conversions and nil-unwraps the binder adds around a read
+    /// without user syntax of their own, so the node reached is the read itself.
     private func Unwrap(
         node BoundExpression?,
         captures Dictionary[VariableSymbol, BoundExpression]? = nil

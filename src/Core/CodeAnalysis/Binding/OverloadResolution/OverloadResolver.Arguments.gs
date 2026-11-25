@@ -571,7 +571,8 @@ internal partial class OverloadResolver {
     /// Binds call arguments after an argument-layout failure so the semantic model keeps
     /// argument answers without emitting extra diagnostics or leaking state (#6221).
     internal func BindCallArgumentsForLayoutRecovery(
-        arguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax]
+        arguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+        preserveInlineOutDeclarations bool = false
     ) {
         if arguments.Count == 0 {
             return
@@ -581,13 +582,18 @@ internal partial class OverloadResolver {
         binderCtx.ExpectCallArguments(arguments)
         for argument in arguments {
             let inner = UnwrapNamedArgumentValue(argument)
-            if inner is RefArgumentExpressionSyntax refArg {
-                let _ = bindRefArgumentExpression(refArg, nil)
+            let boundArg = if inner is RefArgumentExpressionSyntax refArg {
+                bindRefArgumentExpression(refArg, nil)
             } else {
-                let _ = bindExpression(inner)
+                bindExpression(inner)
             }
+            ApplySubExpressionNarrowingEffects(inner, boundArg)
         }
         for argument in arguments {
+            if preserveInlineOutDeclarations &&
+                UnwrapNamedArgumentValue(argument) is RefArgumentExpressionSyntax{IsInlineDeclaration: true} {
+                continue
+            }
             Scope.RemoveVariablesDeclaredInSpan(argument.SyntaxTree, argument.Span)
         }
         RestoreNarrowingBindSnapshot(narrowing)
