@@ -1516,6 +1516,36 @@ let Abs = func (i int32) string {
     }
 
     @Fact
+    func InheritedStaticPropertyThroughAPartialType_ALaterPartCanHideIt() {
+        const prefix = `package P
+
+open class Base {
+    shared {
+        prop Size int32 -> 1
+    }
+}
+
+partial class Box : Base {
+}
+
+func Main() {
+    let s string = Box.Size
+    let done = 0
+`
+        const witness = `}
+
+partial class Box {
+    shared {
+        prop Size string -> ""
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    @Fact
     func ResolvedCall_AnExactNonGenericMatchCannotBeBeaten() {
         const prefix = `package P
 

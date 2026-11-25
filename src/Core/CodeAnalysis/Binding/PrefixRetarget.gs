@@ -96,7 +96,14 @@ internal shared class PrefixRetarget {
             } else {
                 break
             }
-            if receiver != nil && HierarchyCanGrow(receiver.Type, owner) {
+            // A static read has no receiver: its qualifier is the type that the lookup started from.
+            let qualifier = receiver?.Type ?? node.StaticQualifierType
+            if qualifier == nil && receiver == nil {
+                // No qualifier is known: the read cannot be shown to be fixed.
+                PrefixBindingContext.AddProvisional(syntax)
+                return
+            }
+            if HierarchyCanGrow(qualifier, owner) {
                 PrefixBindingContext.AddProvisional(syntax)
                 return
             }
