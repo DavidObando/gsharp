@@ -779,7 +779,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             }
             case fieldLink is BoundFieldAccessExpression when fieldLink.Receiver != nil {
                 {
-                    let owner = fieldLink.Receiver!!
+                    let owner = fieldLink.Receiver
                     let inner = if GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(owner.Type) {
                         this.MaybeSpill(owner, !IsStableLocalRead(owner), "owner", statements)
                     } else {
@@ -800,7 +800,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             }
             case clrLink is BoundClrPropertyAccessExpression when clrLink.Receiver != nil {
                 {
-                    let owner = clrLink.Receiver!!
+                    let owner = clrLink.Receiver
                     let inner = if GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(owner.Type) {
                         this.MaybeSpill(owner, !IsStableLocalRead(owner), "owner", statements)
                     } else {

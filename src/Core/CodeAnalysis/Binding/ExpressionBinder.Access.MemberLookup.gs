@@ -805,7 +805,7 @@ internal partial class ExpressionBinder {
             }
             case structLiteral is StructLiteralExpressionSyntax when classSymbol != nil {
                 if !TryResolveClosedNestedClrType(
-                    classSymbol!!,
+                    classSymbol,
                     structLiteral.TypeIdentifier.ValueText,
                     structLiteral.TypeArgumentList,
                     structLiteral.TypeIdentifier.Location,
@@ -5879,6 +5879,7 @@ internal partial class ExpressionBinder {
         }
         CallCandidateRecorder.RecordMethods(candidates, constraintType)
         if !overloads.TryAnalyzeCallArgumentLayout(callSyntax.Arguments, out _, out var argumentNames) {
+            overloads.BindCallArgumentsForLayoutRecovery(callSyntax.Arguments)
             result = BoundErrorExpression(callSyntax)
             return true
         }
@@ -7362,7 +7363,7 @@ internal partial class ExpressionBinder {
                     .ClrType
                     ?.IsSZArray == true: ByRefStorageMatching
                     .PreserveReferenceTupleIdentity(
-                    annot.ClrType!!.GetElementType(),
+                    annot.ClrType.GetElementType(),
                     annot.GetTypeArgumentSymbolForClrType(annot.ClrType!!.GetElementType())
                 )
                 default: default(TypeSymbol?)
@@ -7556,7 +7557,7 @@ internal partial class ExpressionBinder {
                 }
                 case annot is NullabilityAnnotatedTypeSymbol when annot.ClrType?.IsArray == true &&
                     annot.ClrType.GetArrayRank() == 1: ByRefStorageMatching.PreserveReferenceTupleIdentity(
-                    annot.ClrType!!.GetElementType(),
+                    annot.ClrType.GetElementType(),
                     annot.GetTypeArgumentSymbolForClrType(annot.ClrType!!.GetElementType())
                 )
                 default: default(TypeSymbol?)

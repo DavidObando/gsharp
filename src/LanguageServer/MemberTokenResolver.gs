@@ -550,7 +550,7 @@ internal shared class MemberTokenResolver {
             case objectCreation is ObjectCreationExpressionSyntax when objectCreation.Target != nil {
                 return TryResolveAccessorMemberContext(
                     tree,
-                    objectCreation.Target!!,
+                    objectCreation.Target,
                     receiver,
                     token,
                     out receiverExpression,
@@ -560,7 +560,7 @@ internal shared class MemberTokenResolver {
             case collectionInit is CollectionInitializerExpressionSyntax when collectionInit.Target != nil {
                 return TryResolveAccessorMemberContext(
                     tree,
-                    collectionInit.Target!!,
+                    collectionInit.Target,
                     receiver,
                     token,
                     out receiverExpression,

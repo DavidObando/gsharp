@@ -1257,7 +1257,7 @@ internal class MethodBodyPlanner {
         private func WalkStmtsForConsts(stmt BoundStatement, result Dictionary[VariableSymbol, object]) {
             switch stmt {
                 case vd is BoundVariableDeclaration when vd.ConstantValue != nil {
-                    result[vd.Variable] = vd.ConstantValue!!
+                    result[vd.Variable] = vd.ConstantValue
                 }
                 case block is BoundBlockStatement {
                     for s in block.Statements {

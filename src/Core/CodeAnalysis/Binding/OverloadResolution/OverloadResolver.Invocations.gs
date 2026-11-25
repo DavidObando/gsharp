@@ -100,7 +100,7 @@ internal partial class OverloadResolver {
         // (`f(x)` where `f` is declared in an ADR-0186 §9 oblivious scope) is
         // a coercion to non-null like every other delegate invocation target.
         receiverLoad = PlatformCoercion.CheckDelegateInvocationTarget(receiverLoad, syntax.Identifier.Location)
-        return BoundIndirectCallExpression(nil, receiverLoad, fnType, args, argumentRefKinds)
+        return BoundIndirectCallExpression(syntax, receiverLoad, fnType, args, argumentRefKinds)
     }
 
     /// Wraps a null-conditional delegate/event invocation in a
@@ -1293,6 +1293,7 @@ internal partial class OverloadResolver {
         }
         ApplySubExpressionNarrowingEffects(callee.Syntax, callee)
         if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
+            BindCallArgumentsForLayoutRecovery(syntax.Arguments)
             return BoundErrorExpression(nil)
         }
         // ADR-0186 §4/§5, issue #4325: invoking a delegate VALUE is a

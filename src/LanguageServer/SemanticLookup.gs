@@ -787,12 +787,12 @@ shared class SemanticLookup {
                         yield structLiteral.TypeIdentifier
                     }
                     case objectCreation is ObjectCreationExpressionSyntax when objectCreation.Target != nil {
-                        for t in EnumerateAccessorMemberTokens(objectCreation.Target!!) {
+                        for t in EnumerateAccessorMemberTokens(objectCreation.Target) {
                             yield t
                         }
                     }
                     case collectionInit is CollectionInitializerExpressionSyntax when collectionInit.Target != nil {
-                        for t in EnumerateAccessorMemberTokens(collectionInit.Target!!) {
+                        for t in EnumerateAccessorMemberTokens(collectionInit.Target) {
                             yield t
                         }
                     }

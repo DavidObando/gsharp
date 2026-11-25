@@ -4071,7 +4071,7 @@ internal partial class ExpressionBinder {
                     syntax
                 ) {
                     existing.Type = declaredType
-                    return BoundAddressOfExpression(syntax, BoundVariableExpression(nil, existing))
+                    return BoundAddressOfExpression(syntax, BoundVariableExpression(syntax, existing))
                 }
                 if !$scope.TryDeclareVariable(local) {
                     Diagnostics.ReportSymbolAlreadyDeclared(resolvedDeclarationIdentifier.Location, localName)
@@ -4081,7 +4081,7 @@ internal partial class ExpressionBinder {
                 // Discards never collide; always declare under the synthesized name.
                 $scope.TryDeclareVariable(local)
             }
-            let nameExpression = BoundVariableExpression(nil, local)
+            let nameExpression = BoundVariableExpression(syntax, local)
             return BoundAddressOfExpression(syntax, nameExpression)
         }
         // Plain lvalue form: bind the operand and check it's an lvalue.

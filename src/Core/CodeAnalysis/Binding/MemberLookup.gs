@@ -7841,8 +7841,8 @@ internal class MemberLookup {
                 }
                 case imp is ImportedTypeSymbol when imp.OpenDefinition != nil && !imp.TypeArguments.IsDefaultOrEmpty {
                     return TryBuildErasedClosedGeneric(
-                        imp.OpenDefinition!!,
-                        imp.OpenDefinition!!.GetGenericArguments(),
+                        imp.OpenDefinition,
+                        imp.OpenDefinition.GetGenericArguments(),
                         imp.TypeArguments,
                         contextObject
                     )
