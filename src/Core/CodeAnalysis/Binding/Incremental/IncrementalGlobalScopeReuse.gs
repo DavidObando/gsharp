@@ -258,7 +258,9 @@ internal shared class IncrementalGlobalScopeReuse {
             for var i = 0; i < previousGlobalNodes.Count; i++ {
                 let before = previousGlobalNodes[i]
                 let after = updatedGlobalNodes[i]
-                if before.Kind != after.Kind || before.Span.Start != after.Span.Start || before.Span.Length != after.Span.Length {
+                if before.Kind != after.Kind ||
+                    before.Span.Start != after.Span.Start ||
+                    before.Span.Length != after.Span.Length {
                     return false
                 }
                 globalMap[before] = after
