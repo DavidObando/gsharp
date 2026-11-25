@@ -814,7 +814,7 @@ internal partial class OverloadResolver {
             DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices)
             return BoundErrorExpression(syntax)
         }
-        if openGenericExplicit {
+        if openGenericExplicit && CallCandidateRecorder.IsEnabled {
             let openConstructors = GetAccessibleExplicitConstructorsOrAll(classType)
             if !openConstructors.IsDefaultOrEmpty {
                 let openFunctions = ImmutableArray.CreateBuilder[FunctionSymbol](openConstructors.Length)
@@ -870,7 +870,7 @@ internal partial class OverloadResolver {
         // Issue #1214: for a closed generic construction, the constructor table
         // lives on the open definition (EffectiveExplicitConstructors).
         var ctorOverloads = GetAccessibleExplicitConstructorsOrAll(classType)
-        if !openGenericExplicit && !ctorOverloads.IsDefaultOrEmpty {
+        if !openGenericExplicit && CallCandidateRecorder.IsEnabled && !ctorOverloads.IsDefaultOrEmpty {
             let constructedFunctions = ImmutableArray.CreateBuilder[FunctionSymbol](ctorOverloads.Length)
             for ctor in ctorOverloads {
                 constructedFunctions.Add(CreateConstructedConstructorCandidate(ctor, classType))

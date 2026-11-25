@@ -29,6 +29,8 @@ internal shared class CallCandidateRecorder {
         ConcurrentDictionary[SyntaxNode, BoundErrorExpression]?
     ]()
 
+    internal prop IsEnabled bool -> enabled.Value
+
     /// Starts collecting failed-call records for a cacheable member body when recording is enabled.
     func BeginBody() List[BoundErrorExpression]? {
         let previous = currentBodyFailedCalls.Value

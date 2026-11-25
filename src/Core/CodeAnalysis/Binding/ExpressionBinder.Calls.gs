@@ -1747,7 +1747,7 @@ internal partial class ExpressionBinder {
                 (canAccessInternalConstructors && (constructor.IsAssembly || constructor.IsFamilyOrAssembly))
         )
             .ToArray()
-        if ctors.Length > 0 {
+        if ctors.Length > 0 && CallCandidateRecorder.IsEnabled {
             let constructedType = resultTypeOverride ??
                 (
                 if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {

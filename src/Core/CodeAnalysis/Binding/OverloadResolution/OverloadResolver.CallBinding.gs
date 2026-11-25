@@ -712,6 +712,9 @@ internal partial class OverloadResolver {
     )
 
     private func RecordSourceConstructorFallbackCandidates(structType StructSymbol) {
+        if !CallCandidateRecorder.IsEnabled {
+            return
+        }
         if !structType.EffectiveExplicitConstructors.IsDefaultOrEmpty {
             let ctors = structType.EffectiveExplicitConstructors
             let functions = ImmutableArray.CreateBuilder[FunctionSymbol](ctors.Length)

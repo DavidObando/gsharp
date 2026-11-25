@@ -14,6 +14,7 @@ import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Threading
 import Xunit
 
 /// The library-host queries of ADR-0225 D6.7 and the Oats design note §6 (#6079): fragment parsing,
@@ -596,6 +597,13 @@ func PredThenVal[T](predicate (T) -> bool, value T) {
 func BranchThenVal[T](first T, second T) {
 }
 
+func TupleWithNil[T](pair (T, string?), next T) {
+}
+
+func OverGroup(x int32) bool -> x > 0
+func OverGroup(s string) bool -> s.Length > 0
+func SingleGroup(x int32) bool -> x > 0
+
 func F(
     derivedList []Derived,
     baseList []Base,
@@ -612,7 +620,10 @@ func F(
     TriTuple(leftPair, rightPair, ("a", "b"))
     PredThenVal((x) -> true, 1)
     PredThenVal((x int32) -> x > 0, 1)
+    PredThenVal(OverGroup, 1)
+    PredThenVal(SingleGroup, 1)
     BranchThenVal(if flag { nil } else { "a" }, "b")
+    TupleWithNil((1, nil), 2)
 }
 `
         let edgeTree = SyntaxTree.Parse(SourceText.From(edgeSource, "generic-edges.gs"))
@@ -635,14 +646,33 @@ func F(
             mergedTuple,
             edgeModel.GetExpectedType(edgeSource.IndexOf("(\"a\", \"b\")", StringComparison.Ordinal))
         )
-        Assert.Null(edgeModel.GetExpectedType(edgeSource.IndexOf("1)\n    PredThenVal", StringComparison.Ordinal)))
+        Assert.Null(
+            edgeModel.GetExpectedType(edgeSource.IndexOf("1)\n    PredThenVal((x int32)", StringComparison.Ordinal))
+        )
+        Assert.Equal(
+            TypeSymbol.Int32,
+            edgeModel.GetExpectedType(edgeSource.IndexOf("1)\n    PredThenVal(OverGroup", StringComparison.Ordinal))
+        )
+        Assert.Null(
+            edgeModel.GetExpectedType(edgeSource.IndexOf("1)\n    PredThenVal(SingleGroup", StringComparison.Ordinal))
+        )
         Assert.Equal(
             TypeSymbol.Int32,
             edgeModel.GetExpectedType(edgeSource.IndexOf("1)\n    BranchThenVal", StringComparison.Ordinal))
         )
         Assert.Equal(
             NullableTypeSymbol.Get(TypeSymbol.String),
-            edgeModel.GetExpectedType(edgeSource.IndexOf("\"b\")\n}", StringComparison.Ordinal))
+            edgeModel.GetExpectedType(edgeSource.IndexOf("\"b\")\n    TupleWithNil", StringComparison.Ordinal))
+        )
+        Assert.Equal(TypeSymbol.Int32, edgeModel.GetExpectedType(edgeSource.IndexOf("2)\n}", StringComparison.Ordinal)))
+
+        // Cancellation is honored before building the failed-call index on an unindexed model.
+        let cancelledTree = SyntaxTree.Parse(SourceText.From("func C() { Missing(1) }\n", "cancelled.gs"))
+        let cancelledModel = Compilation(cancelledTree){.RecordMemberGroups: true}.GetSemanticModel(cancelledTree)
+        Assert.Throws[OperationCanceledException](
+            () -> {
+                let _ = cancelledModel.GetExpectedType(19, CancellationToken(canceled: true))
+            }
         )
     }
 

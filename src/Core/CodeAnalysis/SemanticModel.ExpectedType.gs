@@ -298,8 +298,8 @@ partial class SemanticModel {
         cancellationToken CancellationToken
     ) List[ExpectedCallCandidate] {
         let result = List[ExpectedCallCandidate]()
-        let failed = FindFailedCallRecord(call)
         let memberGroup = GetMemberGroup(call, cancellationToken)
+        let failed = FindFailedCallRecord(call, cancellationToken)
         if !memberGroup.IsDefaultOrEmpty {
             for member in memberGroup {
                 switch member {
@@ -444,8 +444,11 @@ partial class SemanticModel {
         }
     }
 
-    private func FindFailedCallRecord(call CallExpressionSyntax) BoundErrorExpression? {
-        if index.Value.FailedCalls.TryGetValue(call, out var indexedFailed) {
+    private func FindFailedCallRecord(
+        call CallExpressionSyntax,
+        cancellationToken CancellationToken
+    ) BoundErrorExpression? {
+        if index.Get(cancellationToken).FailedCalls.TryGetValue(call, out var indexedFailed) {
             return indexedFailed
         }
         if compilation.FailedCalls.TryGetValue(call, out var recordedFailed) {
@@ -957,9 +960,11 @@ partial class SemanticModel {
                 expr is RefArgumentExpressionSyntax{IsInlineDeclaration: false, Expression: {} refTarget} {
                 bound = GetBoundNode(refTarget, cancellationToken)
             }
-            while bound is BoundConversionExpression conversion && object.ReferenceEquals(
-                conversion.ImplicitConversionOperand,
-                conversion.Expression
+            while bound is BoundConversionExpression conversion &&
+                (
+                object.ReferenceEquals(conversion.ImplicitConversionOperand, conversion.Expression) ||
+                    conversion.Expression is BoundMethodGroupExpression or
+                    BoundClrMethodGroupExpression
             ) {
                 bound = conversion.Expression
             }
@@ -967,15 +972,20 @@ partial class SemanticModel {
                 return nil
             }
             if bound is BoundMethodGroupExpression methodGroup {
-                type = methodGroup.FunctionType
+                type = if methodGroup.HasTargetDelegateType {
+                    GetSpeculativeTypeInfo(expr.Span.Start, expr, cancellationToken).Type
+                } else {
+                    methodGroup.FunctionType
+                }
             } else if bound is BoundExpression expression {
                 type = expression.Type
             }
         }
-        if type == nil || type == TypeSymbol.Error || type == TypeSymbol.Void || TypeSymbol.ContainsNullLiteralType(
-            type
-        ) ||
-            TypeSymbol.ContainsNeverType(type) {
+        if type == nil ||
+            type == TypeSymbol.Error ||
+            type == TypeSymbol.Void ||
+            type == TypeSymbol.Null ||
+            type == TypeSymbol.Never {
             return nil
         }
         return type
