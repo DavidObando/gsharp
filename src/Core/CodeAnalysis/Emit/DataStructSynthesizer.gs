@@ -1275,7 +1275,7 @@ internal class DataStructSynthesizer {
         let directBase = DataEqualityMemberModel.GetDirectBase(owner, out var importedMethod)
         token = switch directBase {
             case nil: default(EntityHandle)
-            case _ when importedMethod != nil: this.resolveImportedMethodRef(importedMethod!!, directBase!!)
+            case _ when importedMethod != nil: this.resolveImportedMethodRef(importedMethod, directBase!!)
             case sourceBase is StructSymbol: this.resolveUserInstanceMethodToken(sourceBase, sourceBase.DataEqualsSelf)
             default: throw InvalidOperationException(
                 "Data class '${owner.Name}' has an unsupported direct equality owner."
@@ -1585,7 +1585,7 @@ internal class DataStructSynthesizer {
         let directBase = DataPrintMembersModel.GetBase(structSym, out var importedMethod)
         token = switch directBase {
             case nil: default(EntityHandle)
-            case _ when importedMethod != nil: this.resolveImportedMethodRef(importedMethod!!, directBase!!)
+            case _ when importedMethod != nil: this.resolveImportedMethodRef(importedMethod, directBase!!)
             case sourceBase is StructSymbol: this.resolveUserInstanceMethodToken(
                 sourceBase,
                 GetPrintMembersSlot(sourceBase)

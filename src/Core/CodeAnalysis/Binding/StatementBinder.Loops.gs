@@ -216,7 +216,7 @@ internal partial class StatementBinder {
                 // garbage). Use the Indexed path instead so we emit `ldelem <T>`
                 // with the array's actual element type — same lowering C#'s
                 // `foreach (T x in arr)` produces.
-                if annotated.ClrType!!.IsArray && annotated.ClrType!!.GetArrayRank() == 1 {
+                if annotated.ClrType.IsArray && annotated.ClrType!!.GetArrayRank() == 1 {
                     iterationKind = if annotated.ClrType!!.IsSZArray {
                         ForRangeKind.Indexed
                     } else {
@@ -299,7 +299,7 @@ internal partial class StatementBinder {
             }
             case openImp is ImportedTypeSymbol when openImp.OpenDefinition != nil &&
                 openImp.HasSubstitutableTypeArgument {
-                if MemberLookup.TryGetClrDictionaryTypes(openImp.OpenDefinition!!, out var openDKey, out var openDVal) {
+                if MemberLookup.TryGetClrDictionaryTypes(openImp.OpenDefinition, out var openDKey, out var openDVal) {
                     iterationKind = ForRangeKind.Dictionary
                     keyType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         Invariant.Required(openDKey, "a dictionary definition has a key type", expression: "openDKey"),
@@ -356,7 +356,7 @@ internal partial class StatementBinder {
                 // NullabilityAnnotatedTypeSymbol branch above. Detect first and
                 // route to the Indexed path so iteration emits `ldelem <T>`
                 // (type-aware) rather than walking a boxing IEnumerator.
-                if imp.ClrType!!.IsArray && imp.ClrType!!.GetArrayRank() == 1 {
+                if imp.ClrType.IsArray && imp.ClrType!!.GetArrayRank() == 1 {
                     iterationKind = if imp.ClrType!!.IsSZArray {
                         ForRangeKind.Indexed
                     } else {

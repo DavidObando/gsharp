@@ -2113,7 +2113,7 @@ internal partial class StatementBinder {
         }
         switch storage {
             case field is BoundFieldAccessExpression when field.Receiver != nil {
-                let receiver = PrepareMultiAssignmentStorageReceiver(field.Receiver!!, targetSyntax, captures)
+                let receiver = PrepareMultiAssignmentStorageReceiver(field.Receiver, targetSyntax, captures)
                 return if field.InterfaceType != nil {
                     field
                 } else {
@@ -2855,16 +2855,16 @@ internal partial class StatementBinder {
                 case fa is BoundFieldAccessExpression when fa.Receiver != nil &&
                     fa.InterfaceType == nil &&
                     SmartCastStability.IsStableField(fa.Field) {
-                    return TryResolveStablePathWithCaptures(fa.Receiver!!, captures)?.Append(fa.Field)
+                    return TryResolveStablePathWithCaptures(fa.Receiver, captures)?.Append(fa.Field)
                 }
                 case pa is BoundPropertyAccessExpression when pa.Receiver != nil && SmartCastStability.IsStableProperty(
                     pa.Property
                 ) {
-                    return TryResolveStablePathWithCaptures(pa.Receiver!!, captures)?.Append(pa.Property)
+                    return TryResolveStablePathWithCaptures(pa.Receiver, captures)?.Append(pa.Property)
                 }
                 case ca is BoundClrPropertyAccessExpression when ca.Receiver != nil &&
                     SmartCastStability.IsStableClrMember(ca.Member) {
-                    return TryResolveStablePathWithCaptures(ca.Receiver!!, captures)?.Append(ca.Member)
+                    return TryResolveStablePathWithCaptures(ca.Receiver, captures)?.Append(ca.Member)
                 }
                 case nested is BoundNullConditionalAccessExpression {
                     let hadPrevious = captures.TryGetValue(nested.Capture, out var previous)
