@@ -54,6 +54,9 @@ class NullabilityFunnelAnalyzer : GSharpDiagnosticAnalyzer {
     override func Initialize(context AnalysisContext) {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None)
         context.EnableConcurrentExecution()
+        // ADR-0227 (issue #6184): the rule reads one body and the declarations of its owner, so the
+        // body-local delta check can run it on the edited body only.
+        context.ConfigureScope(AnalyzerScope.MemberBody)
         context.RegisterBoundBodyAction(AnalyzeBlock)
     }
 
