@@ -293,7 +293,7 @@ On a named delegate, annotations target the delegate type by default. Use `@retu
 
 Compiler-synthesized attributes such as `CompilerGenerated`, `Extension`, `AsyncStateMachine`, `Nullable`, and `NullableContext` are reserved. `@DllImport` opts a function into P/Invoke (see [Unmanaged interop (P/Invoke)](#unmanaged-interop-pinvoke) below); the historical blanket-rejection at `GS0211` no longer fires.
 
-### Proposed scoped conditional symbols
+### Scoped conditional symbol design
 
 ADR-0230 specifies compiler-intrinsic `@DefineSymbol("NAME")` and
 `@UndefineSymbol("NAME")` annotations on files, eligible declarations, and blocks.
@@ -303,7 +303,7 @@ ADR-0231 specifies the `@defined("NAME")` constant expression and `@If(predicate
 conditional inclusion. Inclusion checks inherited symbol state before adding the
 annotated node's own definitions. Ordinary `if` still checks both arms.
 These accepted contracts require implementation and are not supported by the
-published 0.5.767 SDK. They do not introduce runtime variables or textual preprocessing.
+published 0.5.793 SDK. They do not introduce runtime variables or textual preprocessing.
 Ordinary annotated blocks retain their existing variable scopes.
 
 ## By-ref pointers (`&` / `*` / `*T`)

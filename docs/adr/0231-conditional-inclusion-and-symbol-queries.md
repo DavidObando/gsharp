@@ -8,7 +8,8 @@
   [ADR-0175](0175-scoped-diagnostic-suppression.md),
   [ADR-0225](0225-prefix-bind-diagnostic-finality.md),
   [ADR-0230](0230-scoped-conditional-symbol-definitions.md),
-  issue [#6101](https://github.com/DavidObando/gsharp/issues/6101)
+  issues [#6231](https://github.com/DavidObando/gsharp/issues/6231) and
+  [#6101](https://github.com/DavidObando/gsharp/issues/6101)
 
 ## Context
 

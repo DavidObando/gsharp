@@ -3,7 +3,8 @@
 - **Status**: Accepted
 - **Date**: 2026-11-24
 - **Phase**: Language semantics / compiler configuration / translation
-- **Issue**: [#6101](https://github.com/DavidObando/gsharp/issues/6101)
+- **Issues**: [#6231](https://github.com/DavidObando/gsharp/issues/6231),
+  [#6101](https://github.com/DavidObando/gsharp/issues/6101)
 - **Related**: [ADR-0047](0047-attribute-syntax-and-declaration.md),
   [ADR-0154](0154-test-oracle-strength.md),
   [ADR-0175](0175-scoped-diagnostic-suppression.md),
