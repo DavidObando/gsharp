@@ -2016,7 +2016,11 @@ internal partial class ExpressionBinder {
                     $scope.RemoveVariablesDeclaredInSpan(arg.SyntaxTree, arg.Span)
                 }
                 RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
-                return BoundErrorExpression(nil)
+                return if result is BoundErrorExpression {
+                    result
+                } else {
+                    BoundErrorExpression.FindFailedCall(result) ?? BoundErrorExpression(nil)
+                }
             }
             return result
         } finally {

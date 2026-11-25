@@ -197,6 +197,45 @@ func F(f (int32) -> int32, c C) {
         Assert.All(before, (line string) -> Assert.StartsWith("GS0245 Error ", line))
     }
 
+    @Fact
+    func FailedLayoutOnConstructorInlineOutAndSiblingStaticCall_KeepArgumentAnswersWithoutMemberGroups() {
+        let source = `package P
+
+class Box {
+    init(v int32) { }
+}
+
+class Host {
+    shared {
+        func H(v int32) int32 -> v
+        func Caller(x int32) int32 -> H(v: x, v: x)
+    }
+}
+
+func Run() {
+    let b = Box(v: out var y int32, v: y)
+}
+`
+        let (model, tree, compilation) = CreateModel(source, recordMemberGroups: false)
+        let errors = compilation
+            .GetDiagnostics()
+            .Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+            .ToArray()
+        Assert.Equal(2, errors.Length)
+        Assert.All(errors, (d Diagnostic) -> Assert.Equal("GS0245", d.Id))
+
+        let xArgs = Names(tree, "x")
+        Assert.Equal(2, xArgs.Length)
+        for xArg in xArgs {
+            Assert.Equal("x", Assert.IsType[ParameterSymbol](model.GetSymbolInfo(xArg).Symbol).Name)
+            Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(xArg).Type)
+        }
+
+        let yArg = Assert.Single(Names(tree, "y"))
+        Assert.Equal("y", Assert.IsAssignableFrom[VariableSymbol](model.GetSymbolInfo(yArg).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(yArg).Type)
+    }
+
     shared {
         private const CallLayoutTemplate string = `package P
 

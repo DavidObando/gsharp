@@ -1216,7 +1216,11 @@ internal partial class OverloadResolver {
             for argument in syntax.Arguments {
                 Scope.RemoveVariablesDeclaredInSpan(argument.SyntaxTree, argument.Span)
             }
-            return BoundErrorExpression(nil)
+            return if result is BoundErrorExpression {
+                result
+            } else {
+                BoundErrorExpression.FindFailedCall(result) ?? BoundErrorExpression(nil)
+            }
         }
         if syntax.NullableQuestionToken != nil {
             intersectNarrowingWithSnapshot?(preArgumentsNarrowing)

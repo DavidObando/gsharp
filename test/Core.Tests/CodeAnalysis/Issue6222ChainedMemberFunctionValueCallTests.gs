@@ -183,6 +183,50 @@ func Use(c C) {
         Assert.Equal("object", model.GetTypeInfo(convertedAccessor).Type?.ToString())
     }
 
+    @Fact
+    func NarrowedNullableFunctionPointerInChainAndNullConditionalClrDelegate_AnswerExpectedSymbols() {
+        let source = `package P
+
+import System
+
+unsafe class Holder {
+    let Fp (unmanaged[Cdecl] () -> int32)? = nil
+    var D Func[int32, int32]? = nil
+}
+
+unsafe class Outer {
+    let Inner Holder
+    init(inner Holder) {
+        Inner = inner
+    }
+}
+
+unsafe func Use(o Outer, h Holder) {
+    let x = 1
+    if o.Inner.Fp != nil {
+        let s = o.Inner.Fp().ToString()
+    }
+    let d = h.D?(x)?.ToString()
+}
+`
+        let (model, tree, compilation) = CreateModel(source)
+        Assert.Empty(compilation.GetDiagnostics())
+
+        let fpCall = Calls(tree, "Fp").Single()
+        Assert.Equal("Fp", Assert.IsType[FieldSymbol](model.GetSymbolInfo(fpCall).Symbol).Name)
+        Assert.Same(TypeSymbol.Int32, model.GetTypeInfo(fpCall).Type)
+
+        let innerInIf = Names(tree, "Inner").Last()
+        Assert.Equal("Inner", Assert.IsType[FieldSymbol](model.GetSymbolInfo(innerInIf).Symbol).Name)
+        Assert.Equal("Holder", model.GetTypeInfo(innerInIf).Type?.Name)
+        Assert.Equal("Holder", model.GetReceiverTypeInfo(innerInIf).Type?.Name)
+
+        let dCall = Calls(tree, "D").Single()
+        Assert.Equal("Invoke", Assert.IsType[ImportedFunctionSymbol](model.GetSymbolInfo(dCall).Symbol).Name)
+        Assert.Equal("int32?", model.GetTypeInfo(dCall).Type?.ToString())
+        Assert.Equal("D", Assert.IsType[FieldSymbol](model.GetSymbolInfo(dCall.Identifier).Symbol).Name)
+    }
+
     shared {
         private const MemberChainTemplate string = `package P
 

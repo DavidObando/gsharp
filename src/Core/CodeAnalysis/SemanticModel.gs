@@ -253,10 +253,6 @@ partial class SemanticModel {
                     case BoundIndirectCallExpression{
                         Target: BoundVariableExpression targetVar
                     }: !object.ReferenceEquals(targetVar.Variable, hop.Capture)
-                    case BoundImportedInstanceCallExpression{Receiver: BoundVariableExpression receiverVar} when hop
-                        .Receiver
-                        .CalleeIdentifier != nil &&
-                        object.ReferenceEquals(receiverVar.Variable, hop.Capture): false
                     case BoundFunctionPointerInvocationExpression{
                         Pointer: BoundVariableExpression ptrVar
                     }: !object.ReferenceEquals(ptrVar.Variable, hop.Capture)

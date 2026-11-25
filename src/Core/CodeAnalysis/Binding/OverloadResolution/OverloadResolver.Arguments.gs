@@ -586,6 +586,8 @@ internal partial class OverloadResolver {
             } else {
                 let _ = BindOverloadArgumentValue(inner)
             }
+        }
+        for argument in arguments {
             Scope.RemoveVariablesDeclaredInSpan(argument.SyntaxTree, argument.Span)
         }
         RestoreNarrowingBindSnapshot(narrowing)

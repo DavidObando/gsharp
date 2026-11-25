@@ -686,15 +686,22 @@ partial class SemanticModel {
         captures Dictionary[VariableSymbol, BoundExpression]? = nil
     ) BoundExpression? -> switch node {
         case userCall is BoundUserInstanceCallExpression: userCall.Receiver
-        case importedCall is BoundImportedInstanceCallExpression: if Unwrap(importedCall.Receiver, captures) is {
-            CalleeIdentifier: not nil
-        } callee {
+        case importedCall is BoundImportedInstanceCallExpression: if UnwrapCalleeTarget(
+            importedCall.Receiver,
+            captures,
+            out var importedCalleeMarked
+        ) is {} callee &&
+            importedCalleeMarked {
             ReceiverOf(callee, captures)
         } else {
             importedCall.Receiver
         }
-        case indirect is BoundIndirectCallExpression: if Unwrap(indirect.Target, captures) is {} target {
-            if target.CalleeIdentifier != nil {
+        case indirect is BoundIndirectCallExpression: if UnwrapCalleeTarget(
+            indirect.Target,
+            captures,
+            out var indirectCalleeMarked
+        ) is {} target {
+            if indirectCalleeMarked {
                 ReceiverOf(target, captures)
             } else {
                 target
@@ -702,8 +709,12 @@ partial class SemanticModel {
         } else {
             default(BoundExpression?)
         }
-        case fnPtr is BoundFunctionPointerInvocationExpression: if Unwrap(fnPtr.Pointer, captures) is {} pointer {
-            if pointer.CalleeIdentifier != nil {
+        case fnPtr is BoundFunctionPointerInvocationExpression: if UnwrapCalleeTarget(
+            fnPtr.Pointer,
+            captures,
+            out var ptrCalleeMarked
+        ) is {} pointer {
+            if ptrCalleeMarked {
                 ReceiverOf(pointer, captures)
             } else {
                 pointer
@@ -801,9 +812,19 @@ partial class SemanticModel {
     private func Unwrap(
         node BoundExpression?,
         captures Dictionary[VariableSymbol, BoundExpression]? = nil
+    ) BoundExpression? -> UnwrapCalleeTarget(node, captures, out _)
+
+    private func UnwrapCalleeTarget(
+        node BoundExpression?,
+        captures Dictionary[VariableSymbol, BoundExpression]?,
+        out hasCalleeIdentifier bool
     ) BoundExpression? {
+        hasCalleeIdentifier = false
         var current = node
         while current != nil {
+            if current.CalleeIdentifier != nil {
+                hasCalleeIdentifier = true
+            }
             if current.LogicalCompletionOperand is {} operand {
                 current = operand
             } else if current is BoundConversionExpression conversion &&
