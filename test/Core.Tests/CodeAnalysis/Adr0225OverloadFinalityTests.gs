@@ -1759,6 +1759,684 @@ func (sb StringBuilder) Deconstruct(out p int32, out q int32) {
         }
     }
 
+    // #6229 Hole 1: a report inside a lambda or nested statement whose type comes from an enclosing call
+    // or labeled/multi-assignment header follows the enclosing provisional expression, while unrelated
+    // statements inside compound blocks or literals stay final.
+    @Fact
+    func ReportInsideLambdaArgumentOfProvisionalChain_IsFutureDependentInKeepDeclarations() {
+        const applySource = `package P
+
+class BoxInt {
+    func Apply(f (int32) -> void) {
+    }
+}
+
+class BoxStr {
+    func Apply(f (string) -> void) {
+    }
+}
+
+func G(o object) BoxInt {
+    return BoxInt()
+}
+
+func Main() {
+    let outer = func () {
+        G(1).Apply((x) -> {
+            let s string = x
+        })
+    }
+/*CUT*/
+    let G = func (i int32) BoxStr {
+        return BoxStr()
+    }
+}
+`
+        let complete = Diagnose(applySource.Replace("/*CUT*/", string.Empty))
+        Assert.True(complete.Length == 0, string.Join("; ", complete.Select((d Diagnostic) -> d.ToString())))
+        AssertFutureDependent(BindKeep(applySource), "GS0155", "later-overload")
+
+        const runSource = `package P
+
+class BoxInt {
+    func Run(f () -> int32) {
+    }
+}
+
+class BoxStr {
+    func Run(f () -> string) {
+    }
+}
+
+func G(o object) BoxInt {
+    return BoxInt()
+}
+
+func Main() {
+    let outer = func () {
+        G(1).Run(() -> {
+            if true {
+                return "s"
+            }
+            return ""
+        })
+    }
+/*CUT*/
+    let G = func (i int32) BoxStr {
+        return BoxStr()
+    }
+}
+`
+        AssertWitness(runSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(runSource), "GS0155", "later-overload")
+
+        // Negative controls: a fixed call without provisional expressions, an unrelated statement inside an
+        // `if` with a provisional condition, and an unrelated statement in a function literal stay Final.
+        const fixedControl = `package P
+
+class Closed {
+    func Run(a int32, f () -> int32) {
+    }
+}
+
+func Main() {
+    Closed().Run(1, () -> {
+        return "s"
+    })
+/*CUT*/
+}
+`
+        Assert.Equal(DiagnosticFinality.Final, Assert.Single(BindKeep(fixedControl).Diagnostics).Finality)
+
+        const compoundControl = `package P
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    if G(1) == 0 {
+        let x int32 = "s"
+    }
+    let outer = func () {
+        let a = G(1)
+        let y int32 = "s"
+    }
+    let done = 0
+`
+        let nothingControls = BindNothing(compoundControl, []string{"}\n"})
+        let mismatches = nothingControls
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(2, mismatches.Count)
+        Assert.All(mismatches, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+    }
+
+    @Fact
+    func LabeledAndMultiAssignmentHeaders_PropagateProvisionalVariableReads() {
+        const prefix = `package P
+
+class BoxInt {
+    var Val int32
+}
+
+class BoxStr {
+    var Val string = ""
+}
+
+func G(o object) int32 {
+    return 0
+}
+
+func H(o object) (int32, int32) {
+    return (1, 2)
+}
+
+func A(o object) []int32 {
+    return []int32{1}
+}
+
+func B(o object) BoxInt {
+    return BoxInt()
+}
+
+func Main() {
+done:
+    let y = G(1)
+    let s1 string = y
+    var a object = 0
+    a, let fresh = H(1)
+    let s2 string = fresh
+    let arr = A(1)
+    arr[0] = ""
+    let bx = B(1)
+    bx.Val = ""
+    let done = 0
+`
+        const witness = `}
+
+func G(i int32) string {
+    return ""
+}
+
+func H(i int32) (string, string) {
+    return ("", "")
+}
+
+func A(i int32) []string {
+    return []string{""}
+}
+
+func B(i int32) BoxStr {
+    return BoxStr()
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        Assert.Equal(4, result.Diagnostics.Count((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"))
+        AssertFutureDependent(result, "GS0155", "later-overload")
+    }
+
+    // #6229 Hole 2: in KeepDeclarations with the cut in top-level statements, a later top-level global
+    // shadows non-package simple names inside member/function bodies, but not package functions,
+    // locals/parameters, enclosing fields, qualified accesses, field initializers, or earlier top-level
+    // statements.
+    @Fact
+    func KeepDeclarations_LaterTopLevelGlobalShadowsNonPackageSimpleNames() {
+        const source = `package P
+
+import System
+import System.Math
+import System.Text
+
+class Box {
+    init(i int32) {
+    }
+}
+
+open class Base {
+    func BaseM(i int32) int32 {
+        return i
+    }
+
+    shared {
+        func BaseStatic(i int32) int32 {
+            return i
+        }
+    }
+}
+
+class Derived : Base {
+    func Inst(i int32) int32 {
+        return i
+    }
+
+    shared {
+        func Stat(i int32) int32 {
+            return i
+        }
+    }
+
+    func M() {
+        let a string = Box(1)
+        let b string = StringBuilder(16)
+        let c string = int32(1)
+        let d string = Inst(1)
+        let e string = Stat(1)
+        let f string = BaseM(1)
+        let g string = BaseStatic(1)
+        let h string = PI
+        let j (int32) -> string = Abs
+    }
+}
+
+class MyEx : Exception {
+    func M() {
+        let m string = HResult
+    }
+}
+
+let before = 0
+/*CUT*/
+let Box = func (i int32) string {
+    return ""
+}
+let StringBuilder = func (n int32) string {
+    return ""
+}
+let int32 = func (i int32) string {
+    return ""
+}
+let Inst = func (i int32) string {
+    return ""
+}
+let Stat = func (i int32) string {
+    return ""
+}
+let BaseM = func (i int32) string {
+    return ""
+}
+let BaseStatic = func (i int32) string {
+    return ""
+}
+let PI = ""
+let Abs = func (i int32) string {
+    return ""
+}
+let HResult = ""
+`
+        AssertWitness(source.Replace("/*CUT*/", string.Empty), "GS0155", "GS0218")
+        let keep = BindKeep(source)
+        Assert.True(
+            keep.Diagnostics.Count((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155") == 9,
+            string.Join("; ", keep.Diagnostics.Select((d ClassifiedDiagnostic) -> d.ToString()))
+        )
+        Assert.Equal(1, keep.Diagnostics.Count((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0218"))
+        AssertFutureDependent(keep, "GS0155", "later-overload")
+        AssertFutureDependent(keep, "GS0218", "later-overload")
+    }
+
+    @Fact
+    func KeepDeclarations_LaterTopLevelGlobalDoesNotShadowPackageFunctionsLocalsQualifiersOrSequentialTopLevel() {
+        const source = `package P
+
+import System
+import System.Math
+
+func Helper(i int32) int32 {
+    return i
+}
+
+class Box {
+    init(i int32) {
+    }
+
+    shared {
+        let Val int32 = 1
+    }
+}
+
+class Holder {
+    func Abs(i int32) string {
+        return ""
+    }
+}
+
+class FieldOwner {
+    let f string = Box(1)
+}
+
+class C {
+    shared {
+        let Encl int32 = 1
+    }
+
+    func M(p int32) {
+        let l = 1
+        let a string = Helper(1)
+        let b (int32) -> string = Helper
+        let c string = Encl
+        let d string = p
+        let e string = l
+        let f string = Math.Abs(1)
+        let g string = Box.Val
+    }
+}
+
+let top1 string = Abs(1)
+let top2 string = PI
+let top3 string = Box(1)
+/*CUT*/
+let Helper = func (i int32) string {
+    return ""
+}
+let Encl = ""
+let p = ""
+let l = ""
+let Math = Holder()
+let Box = func (i int32) string {
+    return ""
+}
+let Abs = func (i int32) string {
+    return ""
+}
+let PI = ""
+`
+        let complete = Diagnose(source.Replace("/*CUT*/", string.Empty)).Where((d Diagnostic) -> d.Id == "GS0155")
+            .ToList()
+        Assert.Equal(11, complete.Count)
+        let keep = BindKeep(source)
+        let keepMismatches = keep.Diagnostics.Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").ToList()
+        Assert.Equal(11, keepMismatches.Count)
+        Assert.All(keepMismatches, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+    }
+
+    @Fact
+    func KeepDeclarations_FunctionLiteralMethodGroup_CanBeALaterLocal() {
+        const source = `package P
+
+func Helper(i int32) int32 {
+    return i
+}
+
+func Main() {
+    let g = func () {
+        let f (int32) -> string = Helper
+    }
+/*CUT*/
+    let Helper = func (i int32) string {
+        return ""
+    }
+}
+`
+        AssertWitness(source.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(source), "GS0155", "later-overload")
+    }
+
+    // #6229 Hole 3: reports before a call is recorded (base call obsolete, KeepDeclarations obsolete,
+    // ref/parenthesized arguments, and fixed-call named-argument parameter errors).
+    @Fact
+    func ReportsBeforeCallIsRecorded_BaseObsoleteKeepDeclarationsObsoleteAndRefArguments() {
+        const basePrefix = `package P
+
+partial open class Base {
+    func F(o object) {
+    }
+}
+
+class Derived : Base {
+    func Use() {
+        base.F[int32](1)
+    }
+`
+        const baseWitness = `}
+
+partial open class Base {
+    func F[T](i int32) {
+    }
+}
+`
+        let baseResult = BindNothing(basePrefix, []string{"}\n", baseWitness})
+        AssertWitness(basePrefix + baseWitness, "GS0148")
+        AssertFutureDependent(baseResult, "GS0148", "later-member")
+
+        const keepLiteralObsolete = `package P
+
+@Obsolete("old")
+func F(i int32) int32 {
+    return i
+}
+
+func Main() {
+    let g = func () {
+        let x = F(1)
+    }
+/*CUT*/
+    let F = func (i int32) int32 {
+        return i
+    }
+}
+`
+        AssertWitness(keepLiteralObsolete.Replace("/*CUT*/", string.Empty), "GS0204")
+        AssertFutureDependent(BindKeep(keepLiteralObsolete), "GS0204", "later-overload")
+
+        const keepGlobalObsolete = `package P
+
+import System
+
+@Obsolete("old")
+class Box {
+    init(i int32) {
+    }
+}
+
+func Use() {
+    let x = Box(1)
+}
+
+let before = 0
+/*CUT*/
+let Box = func (i int32) int32 {
+    return i
+}
+`
+        AssertWitness(keepGlobalObsolete.Replace("/*CUT*/", string.Empty), "GS0204")
+        AssertFutureDependent(BindKeep(keepGlobalObsolete), "GS0204", "later-overload")
+
+        const refArgPrefix = `package P
+
+func F(out s string) {
+    s = ""
+}
+
+func Main() {
+    var x = 0
+    F(out x)
+`
+        const refArgWitness = `}
+
+func F(out i int32) {
+    i = 0
+}
+`
+        let refResult = BindNothing(refArgPrefix, []string{"}\n", refArgWitness})
+        AssertWitness(refArgPrefix + refArgWitness, "GS0154")
+        AssertFutureDependent(refResult, "GS0154", "later-declaration")
+
+        // Negative controls: obsolete package function in KeepDeclarations with top-level cut, and wrong
+        // named argument on a local function value stay Final.
+        const keepPackageObsolete = `package P
+
+@Obsolete("old")
+func Helper(i int32) int32 {
+    return i
+}
+
+func Use() {
+    let x = Helper(1)
+}
+
+let before = 0
+/*CUT*/
+let Helper = func (i int32) int32 {
+    return i
+}
+`
+        let helperKeep = BindKeep(keepPackageObsolete)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            helperKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0204").Finality
+        )
+
+        const fixedNamedPrefix = `package P
+
+func Main() {
+    let f = func (a int32) int32 {
+        return a
+    }
+    let x = f(bad: 1)
+    let done = 0
+`
+        let fixedNamedResult = BindNothing(fixedNamedPrefix, []string{"}\n"})
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            fixedNamedResult.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0246").Finality
+        )
+    }
+
+    // #6229 Hole 4: collection initializers, nameof, interpolation holes, and pattern operands.
+    @Fact
+    func ExpressionsWithoutARecordingBinder_WitnessesAndControls() {
+        const collMissingPrefix = `package P
+
+partial class Coll {
+}
+
+func Main() {
+    let c = Coll(){ 1 }
+    let done = 0
+`
+        const collMissingWitness = `}
+
+partial class Coll {
+    func Add(i int32) {
+    }
+}
+`
+        let collMissingResult = BindNothing(collMissingPrefix, []string{"}\n", collMissingWitness})
+        AssertWitness(collMissingPrefix + collMissingWitness, "GS0369")
+        AssertFutureDependent(collMissingResult, "GS0369", "later-member")
+
+        const collIndexPrefix = `package P
+
+partial class Coll {
+    prop this[s string] int32 {
+        get {
+            return 0
+        }
+        set {
+        }
+    }
+
+    func Add(i int32) {
+    }
+}
+
+func Main() {
+    let c1 = Coll(){ [0] = 1 }
+    c1[0] = 1
+    let done = 0
+`
+        const collIndexWitness = `}
+
+partial class Coll {
+    prop this[i int32] int32 {
+        get {
+            return 0
+        }
+        set {
+        }
+    }
+}
+`
+        let collIndexResult = BindNothing(collIndexPrefix, []string{"}\n", collIndexWitness})
+        AssertWitness(collIndexPrefix + collIndexWitness, "GS0155")
+        Assert.Equal(2, collIndexResult.Diagnostics.Count((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"))
+        AssertFutureDependent(collIndexResult, "GS0155", "later-overload")
+
+        const propPatternPrefix = `package P
+
+partial class Box {
+    prop X int32 -> 1
+}
+
+func Main(b Box) {
+    if b is { Missing: 1 } {
+    }
+    let done = 0
+`
+        const propPatternWitness = `}
+
+partial class Box {
+    prop Missing int32 -> 1
+}
+`
+        let propPatternResult = BindNothing(propPatternPrefix, []string{"}\n", propPatternWitness})
+        AssertWitness(propPatternPrefix + propPatternWitness, "GS0173")
+        AssertFutureDependent(propPatternResult, "GS0173", "later-member")
+
+        const eqPatternPrefix = `package P
+
+struct S {
+    var V int32
+}
+
+func Main(s S) {
+    if s is == s {
+    }
+    let done = 0
+`
+        const eqPatternWitness = `}
+
+func (a S) operator == (b S) bool {
+    return true
+}
+`
+        let eqPatternResult = BindNothing(eqPatternPrefix, []string{"}\n", eqPatternWitness})
+        AssertWitness(eqPatternPrefix + eqPatternWitness, "GS0174")
+        AssertFutureDependent(eqPatternResult, "GS0174", "later-member")
+
+        const interpHolePrefix = `package P
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    let f = func (s string) string {
+        return s
+    }
+    let s = "v=${f(G(1))}"
+    let done = 0
+`
+        const interpHoleWitness = `}
+
+func G(i int32) string {
+    return ""
+}
+`
+        let interpHoleResult = BindNothing(interpHolePrefix, []string{"}\n", interpHoleWitness})
+        AssertWitness(interpHolePrefix + interpHoleWitness, "GS0155")
+        AssertFutureDependent(interpHoleResult, "GS0155", "later-overload")
+
+        // Negative controls that must stay Final: nameof (even with member access), interpolation outer
+        // type (even with a provisional call or variable in a hole), closed collection initializer, closed
+        // object creation with initializer member access, closed property pattern, and relational `<`
+        // pattern on a struct.
+        const controlsPrefix = `package P
+
+import System
+
+class ClosedBox {
+    var X int32
+}
+
+struct S {
+    var V int32
+}
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main(cb ClosedBox, s S) {
+    let n1 int32 = nameof(System.Math.PI)
+    let n2 int32 = nameof(cb.X)
+    let i1 int32 = "v=${G(1)}"
+    let x = G(1)
+    let i1b int32 = "v=${x}"
+    let held = "v=${G(1)}"
+    let i2 int32 = held
+    let c1 = ClosedBox(){ 1 }
+    let o1 string = ClosedBox(){ X = 1 }.X
+    if cb is { Missing: 1 } {
+    }
+    if s is < s {
+    }
+    let done = 0
+`
+        let controlsResult = BindNothing(controlsPrefix, []string{"}\n"})
+        Assert.True(
+            controlsResult.Diagnostics.Length == 9,
+            string.Join("; ", controlsResult.Diagnostics.Select((d ClassifiedDiagnostic) -> d.ToString()))
+        )
+        Assert.All(
+            controlsResult.Diagnostics,
+            (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality)
+        )
+    }
+
     @Fact
     func AwaitOfAValueThatIsNotATask_IsFinal() {
         const prefix = `package P

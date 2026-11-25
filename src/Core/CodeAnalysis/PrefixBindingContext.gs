@@ -245,13 +245,47 @@ internal sealed class PrefixCut {
     internal func ContainsProvisional(location TextLocation) bool {
         let span = location.Span
         lock provisionalGate {
+            if provisionalSpans.Count == 0 {
+                return false
+            }
+            var tree SyntaxTree? = nil
+            if location.Text is {} text {
+                provisionalTrees.TryGetValue(text, out tree)
+            }
             for entry in provisionalSpans {
                 if object.ReferenceEquals(entry.Text, location.Text) &&
                     span.Start <= entry.Span.Start &&
-                    entry.Span.End <= span.End {
+                    entry.Span.End <= span.End &&
+                    !IsShieldedFromOuterSpan(tree, span, entry.Span) {
                     return true
                 }
             }
+        }
+        return false
+    }
+
+    private func IsShieldedFromOuterSpan(tree SyntaxTree?, outer TextSpan, inner TextSpan) bool {
+        if tree == nil {
+            return false
+        }
+        var node SyntaxNode = tree.Root
+        while true {
+            var next SyntaxNode? = nil
+            for child in node.GetChildren() {
+                if child.Span.Start <= inner.Start && inner.End <= child.Span.End && child.Span.Length > 0 {
+                    next = child
+                    break
+                }
+            }
+            if next == nil {
+                return false
+            }
+            if (next is InterpolatedStringExpressionSyntax || next is NameOfExpressionSyntax) &&
+                outer.Start <= next.Span.Start &&
+                next.Span.End <= outer.End {
+                return true
+            }
+            node = next
         }
         return false
     }
@@ -480,7 +514,7 @@ internal shared class PrefixBindingContext {
     internal func ClassifyCallResolution(location TextLocation, kind PrefixCallKind) PrefixPremise? {
         // A function literal of the open member can call a local that a later statement declares.
         return if kind == PrefixCallKind.Fixed {
-            if current.Value is {} cut && cut.IsInDeferredBodyOfOpenMember(location) {
+            if LaterLocalCanHide(location) {
                 PrefixPremise.LaterDeclaration
             } else {
                 default(PrefixPremise?)
@@ -503,6 +537,95 @@ internal shared class PrefixBindingContext {
         }
         return cut.IsInDeferredBodyOfOpenMember(location) ||
             (cut.LaterDeclarationsPossible && cut.OpenMemberStart < 0 && cut.IsInDeferredBodyAfter(0, location))
+    }
+
+    /// Returns a value that tells whether a later top-level statement can declare a global that hides a
+    /// simple-name lookup inside [`syntax`](paramref) in `KeepDeclarations` mode (#6229). Only bodies bound
+    /// after top-level statements (functions, methods, constructors, accessors, and static initializers) see
+    /// later globals; earlier top-level statements and field initializers do not.
+    /// @param syntax The lookup syntax node.
+    /// @returns `true` when a later top-level global can shadow the lookup.
+    internal func LaterGlobalCanHide(syntax SyntaxNode) bool {
+        if current.Value is not{} cut || cut.LaterOverloadsPossible || !cut.LaterDeclarationsPossible {
+            return false
+        }
+        let tree = syntax.SyntaxTree
+        var node SyntaxNode? = syntax
+        while node != nil {
+            if node is GlobalStatementSyntax || node is FieldDeclarationSyntax {
+                return false
+            }
+            if node is FunctionDeclarationSyntax ||
+                node is ConstructorDeclarationSyntax ||
+                node is PropertyAccessorSyntax ||
+                node is PropertyDeclarationSyntax ||
+                node is EventAccessorSyntax ||
+                node is EventDeclarationSyntax ||
+                node is StaticInitializerBlockSyntax {
+                return true
+            }
+            node = tree.GetParent(node)
+        }
+        return false
+    }
+
+    /// Returns a value that tells whether any type of [`type`](paramref)'s hierarchy before
+    /// [`stop`](paramref) can still receive members after the cut (#6179, #6229).
+    /// @param type The receiver or target type.
+    /// @param stop Optional ancestor type at which to stop walking.
+    /// @returns `true` when a later partial declaration or open type can add a member.
+    internal func CanHierarchyGrow(type TypeSymbol?, stop TypeSymbol? = nil) bool {
+        var currentType = type
+        while currentType is NullableTypeSymbol nullable {
+            currentType = nullable.UnderlyingType
+        }
+        if currentType is PlatformTypeSymbol platform {
+            currentType = platform.UnderlyingType
+        }
+        // Member lookup on a type parameter follows its constraints.
+        if currentType is TypeParameterSymbol parameter {
+            return CanHierarchyGrow(parameter.EffectiveClassConstraint, stop) ||
+                CanHierarchyGrow(parameter.InterfaceConstraint, stop) ||
+                CanHierarchyGrow(parameter.ClrInterfaceConstraint, stop)
+        }
+        if currentType is StructSymbol aggregate {
+            for level in aggregate.GetHierarchy() {
+                if stop != nil && object.ReferenceEquals(level, stop) {
+                    return false
+                }
+                if level is StructSymbol levelStruct &&
+                    levelStruct.Declaration is {} declaration &&
+                    IsIncompleteType(declaration) {
+                    return true
+                }
+                if level is InterfaceSymbol {
+                    return true
+                }
+            }
+            return false
+        }
+        return stop == nil && currentType is InterfaceSymbol
+    }
+
+    /// Returns a value that tells whether a top-level function declaration of [`name`](paramref) exists in
+    /// any tree of [`cut`](paramref)'s compilation, preventing a later top-level global of the same name
+    /// (#6229).
+    /// @param cut The prefix cut.
+    /// @param name The function name.
+    /// @returns `true` when a package-level function owns the name.
+    internal func HasTopLevelFunction(cut PrefixCut, name string) bool {
+        for tree in cut.ProvisionalTreeList() {
+            for member in tree.Root.Members {
+                if member is FunctionDeclarationSyntax fn && string.Equals(
+                    fn.Identifier.ValueText,
+                    name,
+                    StringComparison.Ordinal
+                ) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     /// Records that a later declaration can change the type of [`node`](paramref) (#6179).
@@ -554,15 +677,24 @@ internal shared class PrefixBindingContext {
     }
 
     // A report can be located on a part of a statement that does not contain the expression it checks: the
-    // pattern of an `is`, the `!!` of an assertion, an index argument converted to the indexer's parameter.
-    // So a report counts as provisional when the innermost statement that contains it uses a provisional
-    // expression outside its nested statements (#6179).
+    // pattern of an `is`, the `!!` of an assertion, an index argument converted to the indexer's parameter,
+    // or a statement inside a lambda/function literal whose signature comes from an enclosing call (#6179,
+    // #6229).
     private func StatementUsesProvisional(cut PrefixCut, location TextLocation) bool {
         if cut.ProvisionalTree(location.Text) is not{} tree {
             return false
         }
-        let span = location.Span
+        return StatementUsesProvisionalCore(cut, tree, location.Span, skipSubtree: nil)
+    }
+
+    private func StatementUsesProvisionalCore(
+        cut PrefixCut,
+        tree SyntaxTree,
+        span TextSpan,
+        skipSubtree SyntaxNode?
+    ) bool {
         var statement SyntaxNode? = nil
+        let enclosingLambdas = List[SyntaxNode]()
         var node SyntaxNode = tree.Root
         while true {
             var next SyntaxNode? = nil
@@ -575,18 +707,73 @@ internal shared class PrefixBindingContext {
             if next == nil {
                 break
             }
+            if next is LambdaExpressionSyntax || next is FunctionLiteralExpressionSyntax {
+                enclosingLambdas.Add(next)
+            }
             // A field or a property initializer has no statement; its declaration is the context.
             if next is StatementSyntax || next is FieldDeclarationSyntax || next is PropertyDeclarationSyntax {
                 statement = next
             }
             node = next
         }
-        return statement != nil &&
-            (
-            HeaderContainsProvisional(cut, statement, statement, false, false) ||
-                (cut.LaterOverloadsPossible && HeaderContainsUnproven(cut, statement, statement, false, span)) ||
-                HeaderUsesProvisionalName(cut, tree, statement, 4, HashSet[object](ReferenceEqualityComparer.Instance))
-        )
+        if statement is {} foundStatement {
+            var currentStatement = foundStatement
+            while currentStatement is LabeledStatementSyntax labeled {
+                currentStatement = labeled.Statement
+            }
+            if HeaderContainsProvisional(cut, currentStatement, currentStatement, false, false, span, skipSubtree) ||
+                (
+                cut.LaterOverloadsPossible &&
+                    HeaderContainsUnproven(cut, currentStatement, currentStatement, false, span, skipSubtree)
+            ) ||
+                HeaderUsesProvisionalName(
+                cut,
+                tree,
+                currentStatement,
+                4,
+                HashSet[object](ReferenceEqualityComparer.Instance),
+                skipSubtree,
+                span
+            ) {
+                return true
+            }
+        }
+        // A report inside a lambda or function literal without an explicit return type can depend on an
+        // enclosing call whose signature or receiver uses a provisional expression (#6229).
+        for var i = enclosingLambdas.Count - 1; i >= 0; i-- {
+            let lambda = enclosingLambdas[i]
+            if skipSubtree != nil && object.ReferenceEquals(lambda, skipSubtree) {
+                continue
+            }
+            if !(
+                lambda is LambdaExpressionSyntax ||
+                    (lambda is FunctionLiteralExpressionSyntax lit && lit.ReturnTypeClause == nil)
+            ) {
+                continue
+            }
+            if EnclosingCallOfArgument(tree, lambda) is {} enclosingCall {
+                if cut.ContainsProvisional(enclosingCall.Location) ||
+                    StatementUsesProvisionalCore(cut, tree, enclosingCall.Span, skipSubtree: lambda) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func EnclosingCallOfArgument(tree SyntaxTree, expression SyntaxNode) SyntaxNode? {
+        var current SyntaxNode = expression
+        while tree.GetParent(current) is {} parent {
+            if parent is ParenthesizedExpressionSyntax || parent is NamedArgumentExpressionSyntax {
+                current = parent
+                continue
+            }
+            if parent is CallExpressionSyntax || parent is BaseInterfaceCallExpressionSyntax {
+                return parent
+            }
+            return nil
+        }
+        return nil
     }
 
     // A statement can read a variable whose type an earlier statement inferred from a provisional
@@ -599,7 +786,9 @@ internal shared class PrefixBindingContext {
         tree SyntaxTree,
         statement SyntaxNode,
         depth int32,
-        visited HashSet[object]
+        visited HashSet[object],
+        skipSubtree SyntaxNode? = nil,
+        report TextSpan? = nil
     ) bool {
         // The search errs toward a provisional report when it runs out of depth.
         if depth < 0 {
@@ -609,7 +798,15 @@ internal shared class PrefixBindingContext {
             return false
         }
         let names = HashSet[string](StringComparer.Ordinal)
-        CollectHeaderNames(statement, statement, false, names, declared: false)
+        CollectHeaderNames(
+            statement,
+            statement,
+            false,
+            names,
+            declared: false,
+            skipSubtree: skipSubtree,
+            report: report
+        )
         if names.Count == 0 {
             return false
         }
@@ -643,17 +840,20 @@ internal shared class PrefixBindingContext {
             }
         }
         for entry in earlier {
-            let candidate SyntaxNode = if entry is GlobalStatementSyntax global {
+            var candidate SyntaxNode = if entry is GlobalStatementSyntax global {
                 global.Statement
             } else {
                 entry
             }
+            while candidate is LabeledStatementSyntax labeled {
+                candidate = labeled.Statement
+            }
             let declared = HashSet[string](StringComparer.Ordinal)
-            CollectHeaderNames(candidate, candidate, false, declared, declared: true)
+            CollectHeaderNames(candidate, candidate, false, declared, declared: true, skipSubtree: nil)
             if !declared.Overlaps(names) {
                 continue
             }
-            if HeaderContainsProvisional(cut, candidate, candidate, false, false) ||
+            if HeaderContainsProvisional(cut, candidate, candidate, false, false, nil, nil) ||
                 HeaderUsesProvisionalName(cut, tree, candidate, depth - 1, visited) {
                 return true
             }
@@ -671,8 +871,25 @@ internal shared class PrefixBindingContext {
         statement SyntaxNode,
         node SyntaxNode,
         inExpression bool,
-        report TextSpan
+        report TextSpan,
+        skipSubtree SyntaxNode? = nil
     ) bool {
+        if skipSubtree != nil && object.ReferenceEquals(node, skipSubtree) {
+            return false
+        }
+        if node is NameOfExpressionSyntax {
+            return false
+        }
+        if node is InterpolatedStringExpressionSyntax {
+            for child in node.GetChildren() {
+                if child is not SyntaxToken && child.Span.Start <= report.Start && report.End <= child.Span.End {
+                    if HeaderContainsUnproven(cut, statement, child, true, report, skipSubtree) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
         let containsReport = node.Span.Start <= report.Start && report.End <= node.Span.End
         if (node is CallExpressionSyntax || node is IndexExpressionSyntax || IsOutermostAccessor(node)) &&
             !containsReport &&
@@ -689,7 +906,14 @@ internal shared class PrefixBindingContext {
             if child is FunctionLiteralExpressionSyntax || child is LambdaExpressionSyntax {
                 continue
             }
-            if HeaderContainsUnproven(cut, statement, child, inExpression || child is ExpressionSyntax, report) {
+            if HeaderContainsUnproven(
+                cut,
+                statement,
+                child,
+                inExpression || child is ExpressionSyntax,
+                report,
+                skipSubtree
+            ) {
                 return true
             }
         }
@@ -708,11 +932,31 @@ internal shared class PrefixBindingContext {
         node SyntaxNode,
         inExpression bool,
         names HashSet[string],
-        declared bool
+        declared bool,
+        skipSubtree SyntaxNode? = nil,
+        report TextSpan? = nil
     ) {
+        if skipSubtree != nil && object.ReferenceEquals(node, skipSubtree) {
+            return
+        }
+        if !declared && node is NameOfExpressionSyntax {
+            return
+        }
+        if !declared && node is InterpolatedStringExpressionSyntax {
+            if report is {} reportSpan {
+                for child in node.GetChildren() {
+                    if child is not SyntaxToken &&
+                        child.Span.Start <= reportSpan.Start &&
+                        reportSpan.End <= child.Span.End {
+                        CollectHeaderNames(statement, child, true, names, declared, skipSubtree, report)
+                    }
+                }
+            }
+            return
+        }
         for child in node.GetChildren() {
             if child is SyntaxToken token {
-                if token.Kind == SyntaxKind.IdentifierToken && !token.IsMissing && IsNameOfKind(node, declared) {
+                if token.Kind == SyntaxKind.IdentifierToken && !token.IsMissing && IsNameOfKind(node, token, declared) {
                     names.Add(token.ValueText)
                 }
                 continue
@@ -723,15 +967,40 @@ internal shared class PrefixBindingContext {
             if child is FunctionLiteralExpressionSyntax {
                 continue
             }
-            CollectHeaderNames(statement, child, inExpression || child is ExpressionSyntax, names, declared)
+            CollectHeaderNames(
+                statement,
+                child,
+                inExpression || child is ExpressionSyntax,
+                names,
+                declared,
+                skipSubtree,
+                report
+            )
         }
     }
 
     // Whether an identifier whose parent is [`parent`](paramref) declares a name (with
     // [`declared`](paramref)) or reads a simple name.
-    private func IsNameOfKind(parent SyntaxNode, declared bool) bool {
+    private func IsNameOfKind(parent SyntaxNode, token SyntaxToken, declared bool) bool {
         if parent is AssignmentExpressionSyntax {
             return true
+        }
+        if parent is MultiAssignmentDeclarationExpressionSyntax multiDecl {
+            return declared && object.ReferenceEquals(token, multiDecl.Identifier)
+        }
+        if parent is IndexAssignmentExpressionSyntax indexAssign {
+            return !declared && object.ReferenceEquals(token, indexAssign.TargetIdentifier)
+        }
+        if parent is FieldAssignmentExpressionSyntax fieldAssign {
+            return !declared && object.ReferenceEquals(token, fieldAssign.Receiver)
+        }
+        if declared && parent is NameExpressionSyntax && parent.Parent is MultiAssignmentStatementSyntax multi {
+            for target in multi.Targets {
+                if object.ReferenceEquals(target, parent) {
+                    return true
+                }
+            }
+            return false
         }
         let read = (
             parent is NameExpressionSyntax || parent is CallExpressionSyntax || parent is GenericNameExpressionSyntax
@@ -769,7 +1038,7 @@ internal shared class PrefixBindingContext {
         }
         // A global can be read in another body, which can bind first or come from the body cache. Any call
         // in its declaration then counts (anyCall).
-        return HeaderContainsProvisional(cut, statement, statement, false, anyCall)
+        return HeaderContainsProvisional(cut, statement, statement, false, anyCall, nil, nil)
     }
 
     // The declaration part of [`statement`](paramref): the nested statements of a compound statement (the
@@ -780,8 +1049,30 @@ internal shared class PrefixBindingContext {
         statement SyntaxNode,
         node SyntaxNode,
         inExpression bool,
-        anyCall bool
+        anyCall bool,
+        report TextSpan?,
+        skipSubtree SyntaxNode?
     ) bool {
+        if skipSubtree != nil && object.ReferenceEquals(node, skipSubtree) {
+            return false
+        }
+        if node is NameOfExpressionSyntax {
+            return false
+        }
+        if node is InterpolatedStringExpressionSyntax {
+            if report is {} reportSpan {
+                for child in node.GetChildren() {
+                    if child is not SyntaxToken &&
+                        child.Span.Start <= reportSpan.Start &&
+                        reportSpan.End <= child.Span.End {
+                        if HeaderContainsProvisional(cut, statement, child, true, anyCall, report, skipSubtree) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
         if cut.IsProvisional(node) || (anyCall && node is CallExpressionSyntax) {
             return true
         }
@@ -796,7 +1087,15 @@ internal shared class PrefixBindingContext {
             if child is FunctionLiteralExpressionSyntax {
                 continue
             }
-            if HeaderContainsProvisional(cut, statement, child, inExpression || child is ExpressionSyntax, anyCall) {
+            if HeaderContainsProvisional(
+                cut,
+                statement,
+                child,
+                inExpression || child is ExpressionSyntax,
+                anyCall,
+                report,
+                skipSubtree
+            ) {
                 return true
             }
         }

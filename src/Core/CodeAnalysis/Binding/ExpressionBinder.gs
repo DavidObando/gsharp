@@ -1922,21 +1922,27 @@ internal partial class ExpressionBinder {
     }
 
     private func BindNameExpression(syntax NameExpressionSyntax) BoundExpression {
-        let bound = BindNameExpressionUnrecorded(syntax)
-        // #6179: a local whose type a later declaration can change gives its references that premise.
-        PrefixRetarget.NoteName(syntax, bound)
+        let bound = BindNameExpressionUnrecorded(syntax, out var isResolvedVariable)
+        // #6179, #6229: a local whose type a later declaration can change, or a non-variable name
+        // that a later local or global can hide, gives its references that premise.
+        PrefixRetarget.NoteName(syntax, bound, isResolvedVariable)
         return bound
     }
 
-    private func BindNameExpressionUnrecorded(syntax NameExpressionSyntax) BoundExpression {
+    private func BindNameExpressionUnrecorded(
+        syntax NameExpressionSyntax,
+        out isResolvedVariable bool
+    ) BoundExpression {
         let name = syntax.IdentifierToken.ValueText
         if syntax.IdentifierToken.IsMissing {
             // This means the token was inserted by the parser. We already
             // reported error so we can just return an error expression.
+            isResolvedVariable = false
             return BoundErrorExpression(nil)
         }
         if binderCtx.InConstructorInitializer && name == "this" {
             Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(syntax.IdentifierToken.Location, name)
+            isResolvedVariable = false
             return BoundErrorExpression(nil)
         }
         let variable VariableSymbol? = BindVariableReference(
@@ -1945,6 +1951,7 @@ internal partial class ExpressionBinder {
             suppressNotAVariable: true,
             suppressUndefinedVariable: true
         )
+        isResolvedVariable = variable != nil
         if variable == nil {
             if binderCtx.InConstructorInitializer &&
                 ($scope.TryLookupSymbol(name) is ImplicitFieldVariableSymbol or ImplicitPropertyVariableSymbol) {

@@ -113,16 +113,38 @@ internal shared class PrefixRetarget {
     }
 
     /// Records [`syntax`](paramref) when it names a variable whose inferred type a later declaration can
-    /// change.
+    /// change, or when a later local or top-level global can hide it (#6179, #6229).
     /// @param syntax The name.
     /// @param bound The bound name.
-    func NoteName(syntax SyntaxNode, bound BoundExpression) {
+    /// @param isResolvedVariable Whether the name resolved through a variable symbol.
+    func NoteName(syntax SyntaxNode, bound BoundExpression, isResolvedVariable bool = false) {
         if PrefixBindingContext.Current == nil {
             return
         }
         // A report in this tree can read a global of another tree by name.
         PrefixBindingContext.AddTree(syntax.SyntaxTree)
         if bound is BoundVariableExpression variable && PrefixBindingContext.IsProvisionalVariable(variable.Variable) {
+            PrefixBindingContext.AddProvisional(syntax)
+            return
+        }
+        if isResolvedVariable ||
+            bound is BoundErrorExpression ||
+            (syntax is NameExpressionSyntax name && name.IdentifierToken.ValueText == "null") {
+            return
+        }
+        if PrefixBindingContext.LaterLocalCanHide(syntax.Location) &&
+            (bound is BoundMethodGroupExpression || bound is BoundClrMethodGroupExpression) {
+            PrefixBindingContext.AddProvisional(syntax)
+            return
+        }
+        if PrefixBindingContext.LaterGlobalCanHide(syntax) {
+            if bound is BoundMethodGroupExpression group {
+                for candidate in group.Candidates {
+                    if candidate.ContainingType == nil && candidate.Package != nil {
+                        return
+                    }
+                }
+            }
             PrefixBindingContext.AddProvisional(syntax)
         }
     }
@@ -165,15 +187,20 @@ internal shared class PrefixRetarget {
         if kind == PrefixCallKind.Name && PrefixBindingContext.LaterLocalCanHide(syntax.Location) {
             return true
         }
-        // With the cut in the top-level statements, a later top-level global can hide a static member that a
-        // simple name resolved to through a type import (`Abs` with `import System.Math`).
-        if kind == PrefixCallKind.Name &&
-            cut.LaterDeclarationsPossible &&
-            (node is BoundImportedCallExpression || node is BoundClrStaticCallExpression) {
+        // With the cut in the top-level statements of KeepDeclarations, a later top-level global can hide a
+        // simple-name call in a member or function body unless it resolved to a variable or package function
+        // (#6229).
+        if kind == PrefixCallKind.Name && PrefixBindingContext.LaterGlobalCanHide(syntax) &&
+            CanBeShadowedByLaterGlobal(syntax, node) {
             return true
         }
         if !cut.LaterOverloadsPossible {
             return false
+        }
+        // In Nothing mode, a later declaration can hide a type-imported static call.
+        if kind == PrefixCallKind.Name &&
+            (node is BoundImportedCallExpression || node is BoundClrStaticCallExpression) {
+            return true
         }
         // A function value has a declared signature, and a constructor call has the type that it names,
         // whichever `init` a later part adds.
@@ -249,36 +276,33 @@ internal shared class PrefixRetarget {
         return OwnerCanGetMembers(function) && !IsExactMatch(function, arguments, syntax)
     }
 
+    private func CanBeShadowedByLaterGlobal(syntax SyntaxNode, node BoundExpression) bool {
+        if syntax is CallExpressionSyntax callSyntax &&
+            (
+            callSyntax.ConversionTypeClause != nil ||
+                callSyntax.Callee != nil ||
+                callSyntax.Identifier.ValueText == "cast"
+        ) {
+            return false
+        }
+        if node is BoundIndirectCallExpression ||
+            node is BoundFunctionPointerInvocationExpression ||
+            node is BoundTypeParameterConstructionExpression {
+            return false
+        }
+        if node is BoundCallExpression call {
+            return call.Function.ContainingType != nil
+        }
+        return true
+    }
+
     // Whether a type of [`type`](paramref)'s hierarchy, before [`stop`](paramref), can get members: a later
     // member of it overloads or hides what the lookup found further up. Without a stop, the whole hierarchy
     // counts.
-    private func HierarchyCanGrow(type TypeSymbol?, stop TypeSymbol?) bool {
-        var current = type
-        while current is NullableTypeSymbol nullable {
-            current = nullable.UnderlyingType
-        }
-        if current is PlatformTypeSymbol platform {
-            current = platform.UnderlyingType
-        }
-        // Member lookup on a type parameter follows its constraints.
-        if current is TypeParameterSymbol parameter {
-            return HierarchyCanGrow(parameter.EffectiveClassConstraint, stop) ||
-                HierarchyCanGrow(parameter.InterfaceConstraint, stop) ||
-                HierarchyCanGrow(parameter.ClrInterfaceConstraint, stop)
-        }
-        if current is StructSymbol aggregate {
-            for level in aggregate.GetHierarchy() {
-                if stop != nil && object.ReferenceEquals(level, stop) {
-                    return false
-                }
-                if TypeCanGetMembers(level) {
-                    return true
-                }
-            }
-            return false
-        }
-        return stop == nil && TypeCanGetMembers(current)
-    }
+    private func HierarchyCanGrow(type TypeSymbol?, stop TypeSymbol?) bool -> PrefixBindingContext.CanHierarchyGrow(
+        type,
+        stop
+    )
 
     // Whether a type that encloses [`syntax`](paramref) can get a later member that hides
     // [`function`](paramref), which a simple name resolved to: the function is not a member of that type.

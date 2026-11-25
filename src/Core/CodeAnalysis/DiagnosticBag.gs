@@ -565,10 +565,19 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 let argumentSpan = argument.Span
                 if argumentSpan.Start <= span.Start && span.End <= argumentSpan.End {
                     found = true
-                    let value = if argument is NamedArgumentExpressionSyntax named {
+                    var value = if argument is NamedArgumentExpressionSyntax named {
                         named.Expression
                     } else {
                         argument
+                    }
+                    while value is RefArgumentExpressionSyntax || value is ParenthesizedExpressionSyntax {
+                        if value is RefArgumentExpressionSyntax{Expression: {} refInner} {
+                            value = refInner
+                        } else if value is ParenthesizedExpressionSyntax paren {
+                            value = paren.Expression
+                        } else {
+                            break
+                        }
                     }
                     dependsOnCandidate = (argumentSpan.Start == span.Start && argumentSpan.End == span.End) ||
                         (value.Span.Start == span.Start && value.Span.End == span.End) ||
@@ -582,17 +591,20 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             if PrefixBindingContext.ClassifyCallResolution(location, frame.Kind) is {} premise {
                 return premise
             }
+            if PrefixBindingContext.ProvisionalPremise(frame.Syntax.Location) is {} framePremise {
+                return framePremise
+            }
             // A fixed callee does not change, but the call itself can be a typed argument of an outer call.
             span = frame.Syntax.Span
         }
         return nil
     }
 
-    // #6179: a report on the call itself, outside its arguments, while the binder resolves it (an obsolete
-    // or experimental candidate): a later, better candidate can remove it. The binder reports it before it
-    // knows whether the call can change, so any call whose callee can get a candidate counts.
+    // #6179, #6229: a report on the call itself, outside its arguments, while the binder resolves it (an
+    // obsolete or experimental candidate): a later, better candidate can remove it. The binder reports it
+    // before it knows whether the call can change, so any call whose callee can get a candidate counts.
     private func CalleePremise(location TextLocation) PrefixPremise? {
-        if PrefixBindingContext.Current is not{} cut || !cut.LaterOverloadsPossible {
+        if PrefixBindingContext.Current is not{} cut {
             return nil
         }
         let frames = callFrames!!
@@ -607,6 +619,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
         let arguments = if frame.Syntax is CallExpressionSyntax call {
             call.Arguments
+        } else if frame.Syntax is BaseClassCallExpressionSyntax baseClassCall {
+            baseClassCall.Call.Arguments
+        } else if frame.Syntax is BaseInterfaceCallExpressionSyntax baseInterfaceCall {
+            baseInterfaceCall.Arguments
         } else {
             return nil
         }
@@ -615,7 +631,24 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 return nil
             }
         }
-        return PrefixPremise.LaterOverload
+        if cut.LaterOverloadsPossible {
+            return PrefixPremise.LaterOverload
+        }
+        if frame.Kind == PrefixCallKind.Name {
+            if PrefixBindingContext.LaterLocalCanHide(location) {
+                return PrefixPremise.LaterOverload
+            }
+            if PrefixBindingContext.LaterGlobalCanHide(frame.Syntax) &&
+                !(
+                frame.Syntax is CallExpressionSyntax simpleCall && PrefixBindingContext.HasTopLevelFunction(
+                    cut,
+                    simpleCall.Identifier.ValueText
+                )
+            ) {
+                return PrefixPremise.LaterOverload
+            }
+        }
+        return nil
     }
 
     // ADR-0225: the premises of the reports in progress, innermost last. It is null outside a prefix bind.
@@ -742,7 +775,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         if frame.Kind == PrefixCallKind.Fixed && frame.Syntax is CallExpressionSyntax call {
             let span = location.Span
             for argument in call.Arguments {
-                let argumentSpan = argument.Span
+                let argumentSpan = if argument is NamedArgumentExpressionSyntax named {
+                    named.Expression.Span
+                } else {
+                    argument.Span
+                }
                 if argumentSpan.Start <= span.Start &&
                     span.End <= argumentSpan.End &&
                     (argumentSpan.Start != span.Start || argumentSpan.End != span.End) {
