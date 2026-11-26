@@ -12,6 +12,99 @@ import System.Text
 import Xunit
 
 class Issue6231ScopedSymbolsTests {
+    @Theory
+    @InlineData(`Omit(other.Read())`, "Read", false)
+    @InlineData(`Omit(other.Read())`, "Read", true)
+    @InlineData(`other.Next().Keep(1)`, "Next", false)
+    @InlineData(`other.Next().Keep(1)`, "Next", true)
+    func Driver_ImportedOmittedCallOperands_ValidateNestedProtectedReceivers(call string, member string, enabled bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = CompileProtectedParent(fixture)
+        let frozen = File.ReadAllBytes(library)
+        let source = "import System.Diagnostics\nimport Protected6231\n" +
+            (
+            if enabled {
+                "@file:DefineSymbol(\"A\")\n"
+            } else {
+                ""
+            }
+        ) +
+            `class Child : Parent {
+    @Conditional("A") func Omit(value int32) {}
+    func Bad(other Parent) { ` +
+            call +
+            ` }
+}`
+        let (code, output) = fixture.TryCompile(source, "NestedProtected6231", false, "/r:" + library)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0379", output)
+        let prefix = source.Substring(0, source.LastIndexOf(member + "(", StringComparison.Ordinal)).Split('\n')
+        let line = prefix.Length
+        let column = prefix.Last().Length + 1
+        Assert.Contains("(${line},${column},${line},${column + member.Length})", output)
+        Assert.Equal(frozen, File.ReadAllBytes(library))
+    }
+
+    @Theory
+    @InlineData(`Omit(other.Read())`, "Read", false)
+    @InlineData(`Omit(other.Read())`, "Read", true)
+    @InlineData(`other.Next().Keep(1)`, "Next", false)
+    @InlineData(`other.Next().Keep(1)`, "Next", true)
+    func NativeCSharp_OmittedCallOperands_StillRequireAccessibleProtectedReceivers(
+        call string,
+        member string,
+        enabled bool
+    ) {
+        let source = `using System.Diagnostics;
+public class Parent {
+    protected int Read() => 1;
+    protected Parent Next() => this;
+    [Conditional("A")] public void Keep(int value) {}
+}
+public class Child : Parent {
+    [Conditional("A")] void Omit(int value) {}
+    void Bad(Parent other) { ` + call + `; }
+}`
+        let parseOptions = Microsoft
+            .CodeAnalysis
+            .CSharp
+            .CSharpParseOptions
+            .Default
+            .WithPreprocessorSymbols(
+            if enabled {
+                []string{"A"}
+            } else {
+                []string{}
+            }
+        )
+        let tree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(source, parseOptions)
+        let references = cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!!)
+            .Split(Path.PathSeparator)
+            .Select((path string) -> Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(path))
+            .ToArray()
+        let compilation = Microsoft
+            .CodeAnalysis
+            .CSharp
+            .CSharpCompilation
+            .Create(
+            "ProtectedBaseline6231",
+            []Microsoft.CodeAnalysis.SyntaxTree{tree},
+            references,
+            Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary)
+        )
+        let diagnostic = Assert.Single(
+            compilation.GetDiagnostics().Where(
+                (d Microsoft.CodeAnalysis.Diagnostic) -> d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error
+            )
+        )
+        Assert.Equal("CS1540", diagnostic.Id)
+        Assert.Equal(source.LastIndexOf(member + "(", StringComparison.Ordinal), diagnostic.Location.SourceSpan.Start)
+        Assert.Equal(member.Length, diagnostic.Location.SourceSpan.Length)
+    }
+
     @Fact
     func Driver_ProtocolShape_IgnoresInactivePropertiesEventsAndStaticFields() {
         using let fixture = NativeSliceLanguageTests.Fixture()
@@ -128,6 +221,9 @@ using System.Diagnostics;
 namespace Protected6231 {
     public class Parent {
         [Conditional("A")] protected void Ping(int value) { Console.Write("m"); }
+        protected int Read() => 1;
+        protected Parent Next() => this;
+        [Conditional("A")] public void Keep(int value) {}
     }
 }`, "ProtectedParent6231")
 

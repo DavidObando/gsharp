@@ -18,6 +18,60 @@ import Xunit
 
 class Issue6231ConditionalCompilationTests {
     @Theory
+    @InlineData(`Omit(other.Read())`, "Read", false)
+    @InlineData(`Omit(other.Read())`, "Read", true)
+    @InlineData(`other.Next().Keep(1)`, "Next", false)
+    @InlineData(`other.Next().Keep(1)`, "Next", true)
+    func OmittedCallOperands_StillValidateNestedProtectedReceivers(call string, member string, enabled bool) {
+        let source = `import System.Diagnostics
+open class Parent {
+    protected func Read() int32 -> 1
+    protected func Next() Parent -> Parent()
+    @Conditional("A") func Keep(value int32) {}
+}
+class Child : Parent {
+    @Conditional("A") func Omit(value int32) {}
+    func Bad(other Parent) { ` + call + ` }
+}`
+        let compilation = Compilation(SyntaxTree.Parse(source)){
+            IsLibrary = true,
+            PreprocessorSymbols = if enabled {
+                ImmutableHashSet.Create("A")
+            } else {
+                ImmutableHashSet[string].Empty
+            }
+        }
+        let diagnostic = Assert.Single(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("GS0379", diagnostic.Id)
+        Assert.Equal(source.LastIndexOf(member + "(", StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal(member.Length, diagnostic.Location.Span.Length)
+    }
+
+    @Theory
+    @InlineData(64)
+    @InlineData(512)
+    func ConsecutiveDefinedStatements_ScanEachPredicateOnlyOnce(count int32) {
+        let source = string.Join("\n", Enumerable.Repeat(`@defined("A")`, count))
+        using let measurements = CompilationMeasurements.Start("test")
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        Assert.Equal(count, tree.Root.DescendantNodesAndSelf().OfType[DefinedExpressionSyntax]().Count())
+        Assert.InRange(measurements.GetCounter("parser.defined-lookahead.tokens"), int64(3 * count), int64(12 * count))
+    }
+
+    @Theory
+    @InlineData(`@defined("ordinary") @Other class Marked {}`, 0)
+    @InlineData(`@defined(("ordinary")) public open class Marked {}`, 0)
+    @InlineData(`@defined("ordinary") @defined("second") func Marked() {}`, 0)
+    @InlineData(`@defined("A(").ToString()`, 1)
+    @InlineData(`func F() { @defined("A") @defined("B") && true return }`, 2)
+    func DefinedLookahead_PreservesExpressionContinuationsAndOrdinaryAttributes(source string, queries int32) {
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        Assert.Equal(queries, tree.Root.DescendantNodesAndSelf().OfType[DefinedExpressionSyntax]().Count())
+    }
+
+    @Theory
     @InlineData(`@If(ENABLED) prop Value int32 { get; }`, false)
     @InlineData(`@If(ENABLED) prop Value int32 { get; }`, true)
     @InlineData(`@If(ENABLED) event Changed () -> void`, false)

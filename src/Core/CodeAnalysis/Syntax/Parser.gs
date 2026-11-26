@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
@@ -25,6 +26,8 @@ open partial class Parser {
 
     private var tokens ImmutableArray[SyntaxToken]
     private var position int32
+    // Token identities survive speculative resets and token-index shifts.
+    private var definedStatementLookahead Dictionary[SyntaxToken, bool]?
 
     // The token index, bag index, and diagnostic of the last GS0005 from MatchToken.
     // Other diagnostics can come between two failed matches at one token. The bag
@@ -487,14 +490,28 @@ open partial class Parser {
         ).Kind != SyntaxKind.OpenParenthesisToken {
             return false
         }
+        let cache = definedStatementLookahead ?? Dictionary[SyntaxToken, bool]()
+        definedStatementLookahead = cache
+        if cache.TryGetValue(Current, out var cached) {
+            return cached
+        }
+        let starts = List[SyntaxToken]()
+        let Remember = func (result bool) bool {
+            for token in starts {
+                cache[token] = result
+            }
+            return result
+        }
         var offset = 0
         while true {
+            starts.Add(Peek(offset))
             offset += 2
             var depth = 0
             while true {
+                CompilationMeasurements.Count("parser.defined-lookahead.tokens")
                 let kind = Peek(offset).Kind
                 if kind == SyntaxKind.EndOfFileToken {
-                    return true
+                    return Remember(true)
                 }
                 if kind == SyntaxKind.OpenParenthesisToken {
                     depth++
@@ -514,24 +531,31 @@ open partial class Parser {
         }
         let next = Peek(offset)
         // A declaration head keeps the ordinary attribute spelling; other continuations start an expression.
-        return !(
-            (
-                next.Kind is SyntaxKind.AtToken or
-                    SyntaxKind.OpenBraceToken or
-                    SyntaxKind.FuncKeyword or
-                    SyntaxKind.LetKeyword or
-                    SyntaxKind.VarKeyword or
-                    SyntaxKind.ConstKeyword or
-                    SyntaxKind.PublicKeyword or
-                    SyntaxKind.InternalKeyword or
-                    SyntaxKind.PrivateKeyword or
-                    SyntaxKind.ProtectedKeyword
-            ) ||
-                IsFunctionColorModifier(next.Kind) ||
-                TryDetectAggregateDeclarationHead(offset) ||
+        return Remember(
+            !(
                 (
-                next.Kind == SyntaxKind.IdentifierToken &&
-                    (next.Text == "type" || next.Text == "delegate" || next.Text == "partial" || next.Text == "unsafe")
+                    next.Kind is SyntaxKind.AtToken or
+                        SyntaxKind.OpenBraceToken or
+                        SyntaxKind.FuncKeyword or
+                        SyntaxKind.LetKeyword or
+                        SyntaxKind.VarKeyword or
+                        SyntaxKind.ConstKeyword or
+                        SyntaxKind.PublicKeyword or
+                        SyntaxKind.InternalKeyword or
+                        SyntaxKind.PrivateKeyword or
+                        SyntaxKind.ProtectedKeyword
+                ) ||
+                    IsFunctionColorModifier(next.Kind) ||
+                    TryDetectAggregateDeclarationHead(offset) ||
+                    (
+                    next.Kind == SyntaxKind.IdentifierToken &&
+                        (
+                        next.Text == "type" ||
+                            next.Text == "delegate" ||
+                            next.Text == "partial" ||
+                            next.Text == "unsafe"
+                    )
+                )
             )
         )
     }
