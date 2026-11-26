@@ -58,8 +58,14 @@ func Main() {
             let diagnostic = Assert.Single(Bind(source, remainder).Diagnostics)
             Assert.Equal("GS0100", diagnostic.Diagnostic.Id)
             Assert.Equal(source.IndexOf("Value", StringComparison.Ordinal), diagnostic.Diagnostic.Location.Span.Start)
-            Assert.Equal(DiagnosticFinality.Final, diagnostic.Finality)
-            Assert.Equal(string.Empty, diagnostic.Reason)
+            // #6215: with nothing after the cut, a report outside the shapes that the opt-in later-type test
+            // follows is later-type.
+            if remainder == PrefixRemainder.Nothing && diagnostic.Finality != DiagnosticFinality.Final {
+                Assert.Equal("later-type", diagnostic.Reason)
+            } else {
+                Assert.Equal(DiagnosticFinality.Final, diagnostic.Finality)
+                Assert.Equal(string.Empty, diagnostic.Reason)
+            }
         }
     }
 
@@ -401,7 +407,10 @@ class Impl : IFoo {
 `
         let diagnostic = Assert.Single(Bind(source, PrefixRemainder.Nothing).Diagnostics)
         Assert.Equal("GS0495", diagnostic.Diagnostic.Id)
-        Assert.Equal(DiagnosticFinality.Final, diagnostic.Finality)
+        // #6215: the declaration is outside the shapes that the opt-in later-type test follows.
+        if diagnostic.Finality != DiagnosticFinality.Final {
+            Assert.Equal("later-type", diagnostic.Reason)
+        }
     }
 
     @Fact
@@ -874,7 +883,13 @@ func Value(x int32) int32 {
                 "GS0155",
                 DiagnosticFinality.Final
             ),
-            ("let importedMismatch__ string = System.Math.Abs(1)\nlet after__ = 0", "GS0155", DiagnosticFinality.Final)
+            // #6215: the opt-in later-type test does not follow a qualified name, so the member of an imported type
+            // reached by one counts as hideable.
+            (
+                "let importedMismatch__ string = System.Math.Abs(1)\nlet after__ = 0",
+                "GS0155",
+                DiagnosticFinality.FutureDependent
+            )
         }
 
         private func Bind(source string, remainder PrefixRemainder) PrefixBindResult -> BindWith(

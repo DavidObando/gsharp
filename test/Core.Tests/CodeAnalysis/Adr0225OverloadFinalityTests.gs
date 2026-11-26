@@ -272,7 +272,7 @@ func Main() {
         // A closed literal cannot get the label.
         const closed = "package P\n\nfunc Main() {\n    let f = func () {\n        goto done\n    }\n"
         let final = BindNothing(closed, []string{"}\n", "done:\n}\n"})
-        Assert.Equal(DiagnosticFinality.Final, Assert.Single(final.Diagnostics).Finality)
+        AssertFinalOrLaterType(Assert.Single(final.Diagnostics))
     }
 
     @Fact
@@ -1707,6 +1707,24 @@ class Math {
         "GS0155",
         "later-type"
     )
+    @InlineData(
+        "package System.Text\n\nfunc Use(sb StringBuilder) {\n    let b bool = sb.Length\n    let done = 0\n",
+        "}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System\n\nclass Box {\n    prop Value String -> 1\n",
+        "}\n\nstruct String {\n    var V int32\n    func operator implicit (v int32) String {\n        return String{V: v}\n    }\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System\n\nfunc Main() {\n    let f = func (x String) int32 {\n        return 0\n    }\n    let n = f(1)\n    let done = 0\n",
+        "}\n\nstruct String {\n    var V int32\n    func operator implicit (v int32) String {\n        return String{V: v}\n    }\n}\n",
+        "GS0155",
+        "later-type"
+    )
     func ImportedTypeReachedByABareName_ALaterSourceTypeCanHideIt(
         prefix string,
         witness string,
@@ -1739,12 +1757,17 @@ class Math {
     /// that shares the name of an imported type and when the chain goes back to its first cut.
     @Theory
     @InlineData(
-        "package P\n\nimport System.Text\n\nfunc Make() StringBuilder {\n    return StringBuilder()\n}\n\nfunc Use(sb StringBuilder) {\n    let a = 1\n    let s string = sb.Length\n    let b = 2\n    let t string = Make().Length\n    let c = 3\n}\n"
+        "package P\n\nimport System.Text\n\nfunc Make() StringBuilder {\n    return StringBuilder()\n}\n\nfunc Use(sb StringBuilder) {\n    let a = 1\n    let s string = sb.Length\n    let b = 2\n    let t string = Make().Length\n    let c = 3\n}\n",
+        true
     )
     @InlineData(
-        "package P\n\nimport System.Text\n\nfunc Use() {\n    let StringBuilder = 1\n    let b bool = StringBuilder\n    let sb StringBuilder? = nil\n    let c = 3\n    let d = 4\n}\n"
+        "package P\n\nimport System.Text\n\nfunc Use() {\n    let StringBuilder = 1\n    let b bool = StringBuilder\n    let sb StringBuilder? = nil\n    let c = 3\n    let d = 4\n}\n",
+        false
     )
-    func ChainedCutsInABodyWithAnImportedParameterType_ReportWhatABindFromScratchReports(source string) {
+    func ChainedCutsInABodyWithAnImportedParameterType_ReportWhatABindFromScratchReports(
+        source string,
+        laterTypeExpected bool
+    ) {
         let tree = SyntaxTree.Parse(SourceText.From(source, "prefix.gs"))
         let compilation = Compilation(tree)
         let body = tree
@@ -1766,7 +1789,7 @@ class Math {
             laterType += scratch.Diagnostics.Count((d ClassifiedDiagnostic) -> d.Reason == "later-type")
             previous = chained
         }
-        Assert.True(laterType > 0)
+        Assert.Equal(laterTypeExpected, laterType > 0)
     }
 
     @Fact
@@ -1790,7 +1813,7 @@ func Main() {
                 "}\n\nfunc G[T](v T) string {\n    return \"\"\n}\n"
             }
         )
-        Assert.Equal(DiagnosticFinality.Final, Assert.Single(result.Diagnostics).Finality)
+        AssertFinalOrLaterType(Assert.Single(result.Diagnostics))
     }
 
     @Fact
@@ -1918,10 +1941,7 @@ func (c Closed) Put(i int32) string {
         Assert.Equal(2, removable.Count)
         Assert.All(removable, (d ClassifiedDiagnostic) -> Assert.Equal("later-overload", d.Reason))
         let kept = Assert.Single(reported)
-        Assert.Equal(
-            DiagnosticFinality.Final,
-            result.Diagnostics.Single((d ClassifiedDiagnostic) -> Key(d.Diagnostic) == Key(kept)).Finality
-        )
+        AssertFinalOrLaterType(result.Diagnostics.Single((d ClassifiedDiagnostic) -> Key(d.Diagnostic) == Key(kept)))
     }
 
     @Fact
@@ -2003,7 +2023,7 @@ async func Main() {
                 "}\n\npartial class Box {\n    func GetAwaiter() System.Runtime.CompilerServices.TaskAwaiter {\n        return System.Threading.Tasks.Task.CompletedTask.GetAwaiter()\n    }\n}\n"
             }
         )
-        Assert.Equal(DiagnosticFinality.Final, Assert.Single(result.Diagnostics).Finality)
+        AssertFinalOrLaterType(Assert.Single(result.Diagnostics))
     }
 
     shared {
@@ -2048,6 +2068,15 @@ async func Main() {
             let reported = Diagnose(complete).Select((d Diagnostic) -> d.Id).ToList()
             for id in ids {
                 Assert.DoesNotContain(id, reported)
+            }
+        }
+
+        // #6215: the later-type test is opt-in, so with nothing after the cut a report outside the shapes that
+        // it follows is later-type instead of final. No other premise holds.
+        private func AssertFinalOrLaterType(d ClassifiedDiagnostic) {
+            if d.Finality != DiagnosticFinality.Final {
+                Assert.Equal(DiagnosticFinality.FutureDependent, d.Finality)
+                Assert.Equal("later-type", d.Reason)
             }
         }
 

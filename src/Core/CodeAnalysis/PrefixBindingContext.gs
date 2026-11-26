@@ -218,98 +218,6 @@ internal sealed class PrefixCut {
         }
     }
 
-    /// Gets or sets the test that tells whether a simple name resolves to an imported type in a tree, which a
-    /// later source type of the same name hides when nothing follows the cut (#6215). The prefix bind sets it
-    /// before it classifies, so the answer depends only on the trees and their imports, not on what the
-    /// bind bound again.
-    internal prop HideableNameResolver Func[SyntaxTree, string, bool]? {
-        get;
-        set;
-    }
-
-    /// Returns a value that tells whether [`node`](paramref) is recorded in the registry of
-    /// [`hideable`](paramref): a bare name of an imported type that a later type can hide (#6215), or an
-    /// expression that a later overload can change (#6179).
-    /// @param node A syntax node.
-    /// @param hideable Which registry.
-    /// @returns `true` for a recorded node.
-    internal func IsMarked(node SyntaxNode, hideable bool) bool {
-        if !hideable {
-            return IsProvisional(node)
-        }
-        return HideableIdentifier(node) is {} identifier && IsHideableName(node.SyntaxTree, identifier.ValueText)
-    }
-
-    /// Gets a value that tells whether a later source type can hide an imported one (#6215).
-    internal prop HasHideable bool -> LaterOverloadsPossible && HideableNameResolver != nil
-
-    /// Returns a value that tells whether [`location`](paramref) overlaps a bare name of an imported type
-    /// that a later type can hide (#6215).
-    /// @param location A diagnostic location.
-    /// @returns `true` when such a name overlaps the location.
-    internal func ContainsHideable(location TextLocation) bool {
-        if !HasHideable || ProvisionalTree(location.Text) is not{} tree {
-            return false
-        }
-        return OverlapsHideable(tree.Root, location.Span)
-    }
-
-    private func IsHideableName(tree SyntaxTree, name string) bool -> HideableNameResolver is {} resolver &&
-        !string.IsNullOrEmpty(name) && resolver(tree, name)
-
-    private func OverlapsHideable(node SyntaxNode, span TextSpan) bool {
-        if HideableIdentifier(node) is {} identifier &&
-            Overlap(identifier.Span, span) &&
-            IsHideableName(node.SyntaxTree, identifier.ValueText) {
-            return true
-        }
-        for child in node.GetChildren() {
-            if child is not SyntaxToken && Overlap(child.Span, span) && OverlapsHideable(child, span) {
-                return true
-            }
-        }
-        return false
-    }
-
-    // Whether two spans share a position; an empty span counts where it stands.
-    private func Overlap(left TextSpan, right TextSpan) bool {
-        if left.Length == 0 {
-            return right.Start <= left.Start && left.Start <= right.End
-        }
-        if right.Length == 0 {
-            return left.Start <= right.Start && right.Start <= left.End
-        }
-        return left.Start < right.End && right.Start < left.End
-    }
-
-    // The identifier of a bare name that can name a type: the first segment of a type clause (`List` of
-    // `List[int32].Enumerator`, `System` of `System.Text.StringBuilder`), and a name, a generic name or a
-    // call that is not a member of a qualifier (`Console` of `Console.Title`, not `Math` of
-    // `System.Math.Abs(1)` nor `Title`).
-    private func HideableIdentifier(node SyntaxNode) SyntaxToken? {
-        return if node is TypeClauseSyntax clause {
-            clause.Identifier
-        } else if node is NameExpressionSyntax name && !IsQualifiedMember(name) {
-            name.IdentifierToken
-        } else if node is GenericNameExpressionSyntax generic && !IsQualifiedMember(generic) {
-            generic.Identifier
-        } else if node is CallExpressionSyntax call && !IsQualifiedMember(call) {
-            call.Identifier
-        } else {
-            default(SyntaxToken?)
-        }
-    }
-
-    private func IsQualifiedMember(node SyntaxNode) bool {
-        if node.Parent is not AccessorExpressionSyntax accessor {
-            return false
-        }
-        if object.ReferenceEquals(accessor.RightPart, node) {
-            return true
-        }
-        return accessor.Parent is AccessorExpressionSyntax outer && object.ReferenceEquals(outer.RightPart, accessor)
-    }
-
     /// Returns a value that tells whether [`node`](paramref) is an expression whose type a later
     /// declaration can change (#6179).
     /// @param node A syntax node.
@@ -454,8 +362,8 @@ internal sealed class PrefixPremise {
         /// overload, member or receiver function can retarget, or a local whose type such a call infers (#6179).
         internal let LaterOverload PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "later-overload")
 
-        /// Gets the premise of an expression that a later source type can change by hiding the imported type
-        /// that it names or that types it (#6215). It holds only when nothing follows the cut.
+        /// Gets the premise of a report that a later source type can change by hiding an imported type (#6215).
+        /// It holds only when nothing follows the cut.
         internal let LaterType PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "later-type")
 
         /// Gets the premise of a check at the end of an open body.
@@ -642,38 +550,23 @@ internal shared class PrefixBindingContext {
         if current.Value is not{} cut || (!cut.HasProvisional && !cut.LaterOverloadsPossible) {
             return nil
         }
-        return if cut.ContainsProvisional(location) || StatementUsesProvisional(cut, location, false) {
+        return if cut.ContainsProvisional(location) || StatementUsesProvisional(cut, location) {
             PrefixPremise.LaterOverload
         } else {
             default(PrefixPremise?)
         }
     }
 
-    /// Returns a value that tells whether a later source type can hide an imported type that the report at
-    /// [`location`](paramref) depends on (#6215): the report overlaps a bare name of the type, or its
-    /// statement uses one, directly, through a name that an earlier statement or a parameter declares, or
-    /// through the return type of the function that a `return` leaves.
-    /// @param cut The prefix cut, with its (cref:PrefixCut.HideableNameResolver).
-    /// @param location The location of the report.
-    /// @returns `true` when the report is not final.
-    internal func UsesHideableType(cut PrefixCut, location TextLocation) bool {
-        if !cut.HasHideable {
-            return false
-        }
-        return cut.ContainsHideable(location) || StatementUsesProvisional(cut, location, true)
-    }
-
     // A report can be located on a part of a statement that does not contain the expression it checks: the
     // pattern of an `is`, the `!!` of an assertion, an index argument converted to the indexer's parameter.
     // So a report counts as provisional when the innermost statement that contains it uses a provisional
     // expression outside its nested statements (#6179).
-    private func StatementUsesProvisional(cut PrefixCut, location TextLocation, hideable bool) bool {
+    private func StatementUsesProvisional(cut PrefixCut, location TextLocation) bool {
         if cut.ProvisionalTree(location.Text) is not{} tree {
             return false
         }
         let span = location.Span
         var statement SyntaxNode? = nil
-        var function SyntaxNode? = nil
         var node SyntaxNode = tree.Root
         while true {
             var next SyntaxNode? = nil
@@ -690,42 +583,13 @@ internal shared class PrefixBindingContext {
             if next is StatementSyntax || next is FieldDeclarationSyntax || next is PropertyDeclarationSyntax {
                 statement = next
             }
-            if next is FunctionDeclarationSyntax || next is FunctionLiteralExpressionSyntax {
-                function = next
-                statement = nil
-            }
             node = next
-        }
-        // #6215: a returned value converts to the return type of the function that it leaves, also in an
-        // expression body.
-        if hideable && (statement == nil || statement is ReturnStatementSyntax) && function != nil {
-            let returnType = if function is FunctionDeclarationSyntax declaration {
-                declaration.Type
-            } else {
-                cast[FunctionLiteralExpressionSyntax](function).ReturnTypeClause
-            }
-            if returnType != nil &&
-                span.Start >= returnType.Span.End &&
-                HeaderContainsProvisional(cut, returnType, returnType, false, false, true) {
-                return true
-            }
         }
         return statement != nil &&
             (
-            HeaderContainsProvisional(cut, statement, statement, false, false, hideable) ||
-                (
-                !hideable &&
-                    cut.LaterOverloadsPossible &&
-                    HeaderContainsUnproven(cut, statement, statement, false, span)
-            ) ||
-                HeaderUsesProvisionalName(
-                cut,
-                tree,
-                statement,
-                4,
-                HashSet[object](ReferenceEqualityComparer.Instance),
-                hideable
-            )
+            HeaderContainsProvisional(cut, statement, statement, false, false) ||
+                (cut.LaterOverloadsPossible && HeaderContainsUnproven(cut, statement, statement, false, span)) ||
+                HeaderUsesProvisionalName(cut, tree, statement, 4, HashSet[object](ReferenceEqualityComparer.Instance))
         )
     }
 
@@ -739,8 +603,7 @@ internal shared class PrefixBindingContext {
         tree SyntaxTree,
         statement SyntaxNode,
         depth int32,
-        visited HashSet[object],
-        hideable bool
+        visited HashSet[object]
     ) bool {
         // The search errs toward a provisional report when it runs out of depth.
         if depth < 0 {
@@ -759,15 +622,6 @@ internal shared class PrefixBindingContext {
         while tree.GetParent(current) is {} parent {
             if parent is StatementSyntax && parent is not BlockStatementSyntax {
                 earlier.Add(parent)
-            }
-            // A parameter declares a name that the body reads, typed by its clause (#6215).
-            if parent is ParameterSyntax {
-                earlier.Add(parent)
-            }
-            for child in parent.GetChildren() {
-                if child is ParameterSyntax {
-                    CollectParameters(child, earlier)
-                }
             }
             for sibling in parent.GetChildren() {
                 if sibling.Span.End <= statement.Span.Start &&
@@ -803,8 +657,8 @@ internal shared class PrefixBindingContext {
             if !declared.Overlaps(names) {
                 continue
             }
-            if HeaderContainsProvisional(cut, candidate, candidate, false, false, hideable) ||
-                HeaderUsesProvisionalName(cut, tree, candidate, depth - 1, visited, hideable) {
+            if HeaderContainsProvisional(cut, candidate, candidate, false, false) ||
+                HeaderUsesProvisionalName(cut, tree, candidate, depth - 1, visited) {
                 return true
             }
         }
@@ -848,18 +702,6 @@ internal shared class PrefixBindingContext {
 
     private func IsOutermostAccessor(node SyntaxNode) bool -> node is AccessorExpressionSyntax &&
         !(node.Parent is AccessorExpressionSyntax parent && object.ReferenceEquals(parent.RightPart, node))
-
-    private func CollectParameters(node SyntaxNode, parameters List[SyntaxNode]) {
-        if node is ParameterSyntax {
-            parameters.Add(node)
-            return
-        }
-        for child in node.GetChildren() {
-            if child is not SyntaxToken {
-                CollectParameters(child, parameters)
-            }
-        }
-    }
 
     // The identifiers of a statement's header, not those of its nested statements or of a function
     // literal's body. With [`declared`](paramref), the names that it declares or writes (an identifier that
@@ -909,6 +751,269 @@ internal shared class PrefixBindingContext {
     private func IsMemberName(node SyntaxNode) bool -> node.Parent is AccessorExpressionSyntax accessor &&
         object.ReferenceEquals(accessor.RightPart, node)
 
+    /// Returns a value that tells whether a later source type can change the report at
+    /// [`location`](paramref) by hiding an imported type, when nothing follows the cut (#6215).
+    /// @remarks The test is opt-in: a report counts as independent of later types only in a shape that it
+    /// can follow. The report is in a statement of a function body, outside function literals, and that
+    /// statement, the statements that declare the names it reads and the parameters it reads use only
+    /// keyword types in their type clauses, locals and parameters as bare names, and members of those.
+    /// Every other report, such as one that names a type, calls a function or reads a global, can depend
+    /// on a type that a later declaration hides.
+    /// @param cut The prefix cut.
+    /// @param location The location of the report.
+    /// @returns `true` when the report is not final.
+    internal func MayDependOnLaterType(cut PrefixCut, location TextLocation) bool {
+        if !cut.LaterOverloadsPossible {
+            return false
+        }
+        if cut.ProvisionalTree(location.Text) is not{} tree {
+            return true
+        }
+        let span = location.Span
+        var statement StatementSyntax? = nil
+        var function FunctionDeclarationSyntax? = nil
+        var supported = false
+        var node SyntaxNode = tree.Root
+        while true {
+            var next SyntaxNode? = nil
+            for child in node.GetChildren() {
+                if child.Span.Start <= span.Start && span.End <= child.Span.End && child.Span.Length > 0 {
+                    next = child
+                    break
+                }
+            }
+            if next == nil {
+                break
+            }
+            if next is FunctionDeclarationSyntax declaration {
+                function = declaration
+                statement = nil
+                supported = false
+            } else if function != nil && object.ReferenceEquals(next, function.Body) {
+                supported = true
+            } else if next is FunctionLiteralExpressionSyntax ||
+                next is LambdaExpressionSyntax ||
+                next is AnonymousClassExpressionSyntax ||
+                next is TypeClauseSyntax {
+                supported = false
+            } else if supported && next is StatementSyntax inner {
+                statement = inner
+            }
+            node = next
+        }
+        if !supported || statement == nil || function == nil {
+            return true
+        }
+        return !IsIndependentOfLaterTypes(statement, function, 4, HashSet[object](ReferenceEqualityComparer.Instance))
+    }
+
+    // Whether the header of [`statement`](paramref) and what it reads can be shown not to depend on a type
+    // that a later declaration can hide.
+    private func IsIndependentOfLaterTypes(
+        statement StatementSyntax,
+        function FunctionDeclarationSyntax,
+        depth int32,
+        visited HashSet[object]
+    ) bool {
+        if depth < 0 {
+            return false
+        }
+        if !visited.Add(statement) {
+            return true
+        }
+        if statement is ReturnStatementSyntax && function.Type is {} returnType && !IsKeywordTypeClause(returnType) {
+            return false
+        }
+        let reads = HashSet[string](StringComparer.Ordinal)
+        if !HeaderIsIndependent(statement, statement, false, reads) {
+            return false
+        }
+        for name in reads {
+            if !NameIsIndependent(name, statement, function, depth, visited) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // Walks the header of [`statement`](paramref) and collects the bare names that it reads. A shape that
+    // the walk does not know makes the header dependent.
+    private func HeaderIsIndependent(
+        statement StatementSyntax,
+        node SyntaxNode,
+        inExpression bool,
+        reads HashSet[string]
+    ) bool {
+        for child in node.GetChildren() {
+            if child is SyntaxToken token {
+                if token.Kind != SyntaxKind.IdentifierToken || token.IsMissing {
+                    continue
+                }
+                if node is NameExpressionSyntax || node is CallExpressionSyntax {
+                    if !IsMemberOfQualifier(node) {
+                        reads.Add(token.ValueText)
+                    }
+                } else if node is AssignmentExpressionSyntax {
+                    reads.Add(token.ValueText)
+                } else if node is not VariableDeclarationSyntax {
+                    return false
+                }
+                continue
+            }
+            if !inExpression && child is StatementSyntax && !object.ReferenceEquals(child, statement) {
+                continue
+            }
+            // A function literal that states keyword types for its parameters and its result has a type that
+            // no later declaration changes, whatever its body does.
+            if child is FunctionLiteralExpressionSyntax literal {
+                if !HasKeywordSignature(literal) {
+                    return false
+                }
+                continue
+            }
+            if child is LambdaExpressionSyntax ||
+                child is AnonymousClassExpressionSyntax ||
+                child is GenericNameExpressionSyntax {
+                return false
+            }
+            if child is TypeClauseSyntax clause {
+                if !IsKeywordTypeClause(clause) {
+                    return false
+                }
+                continue
+            }
+            if !HeaderIsIndependent(statement, child, inExpression || child is ExpressionSyntax, reads) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // A bare name is independent when a parameter with a keyword type, or an earlier statement of the same
+    // function whose header is independent, declares it.
+    private func NameIsIndependent(
+        name string,
+        statement StatementSyntax,
+        function FunctionDeclarationSyntax,
+        depth int32,
+        visited HashSet[object]
+    ) bool {
+        let tree = statement.SyntaxTree
+        let earlier = List[StatementSyntax]()
+        var current SyntaxNode = statement
+        while !object.ReferenceEquals(current, function.Body) && tree.GetParent(current) is {} parent {
+            if parent is StatementSyntax enclosing && parent is not BlockStatementSyntax {
+                earlier.Add(enclosing)
+            }
+            for sibling in parent.GetChildren() {
+                if sibling.Span.End <= statement.Span.Start && sibling is StatementSyntax before {
+                    earlier.Add(before)
+                }
+            }
+            current = parent
+        }
+        var found = false
+        for candidate in earlier {
+            let declared = HashSet[string](StringComparer.Ordinal)
+            CollectHeaderNames(candidate, candidate, false, declared, declared: true)
+            if !declared.Contains(name) {
+                continue
+            }
+            found = true
+            if !IsIndependentOfLaterTypes(candidate, function, depth - 1, visited) {
+                return false
+            }
+        }
+        if found {
+            return true
+        }
+        for parameter in function.Parameters {
+            if parameter.Identifier?.ValueText == name {
+                return parameter.Type is {} type && IsKeywordTypeClause(type)
+            }
+        }
+        return false
+    }
+
+    private func HasKeywordSignature(literal FunctionLiteralExpressionSyntax) bool {
+        if literal.ReturnTypeClause is not{} returnType || !IsKeywordTypeClause(returnType) {
+            return false
+        }
+        for parameter in literal.Parameters {
+            if parameter.Type is not{} type || !IsKeywordTypeClause(type) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // A type clause whose identifiers are all keyword types, without type arguments: `int32`, `[]string`,
+    // `bool?`. No source type can hide one.
+    private func IsKeywordTypeClause(clause TypeClauseSyntax) bool {
+        if clause.TypeArguments != nil || clause.HasQualifier {
+            return false
+        }
+        for child in clause.GetChildren() {
+            if child is SyntaxToken token {
+                if token.Kind == SyntaxKind.IdentifierToken && !IsKeywordTypeName(token.ValueText) {
+                    return false
+                }
+            } else if child is TypeClauseSyntax nested {
+                if !IsKeywordTypeClause(nested) {
+                    return false
+                }
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func IsKeywordTypeName(name string) bool {
+        switch name {
+            case "bool",
+            "uint8",
+            "byte",
+            "int8",
+            "sbyte",
+            "int16",
+            "short",
+            "uint16",
+            "ushort",
+            "int32",
+            "int",
+            "uint32",
+            "uint",
+            "int64",
+            "long",
+            "uint64",
+            "ulong",
+            "nint",
+            "nuint",
+            "float32",
+            "float",
+            "float64",
+            "double",
+            "decimal",
+            "char",
+            "string",
+            "object" {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func IsMemberOfQualifier(node SyntaxNode) bool {
+        if node.Parent is not AccessorExpressionSyntax accessor {
+            return false
+        }
+        if object.ReferenceEquals(accessor.RightPart, node) {
+            return true
+        }
+        return accessor.Parent is AccessorExpressionSyntax outer && object.ReferenceEquals(outer.RightPart, accessor)
+    }
+
     /// Returns a value that tells whether a later declaration can change the type of
     /// [`variable`](paramref): the type is inferred from an expression whose type can change (#6179).
     /// @param variable A local or a global that a name refers to.
@@ -931,7 +1036,7 @@ internal shared class PrefixBindingContext {
         }
         // A global can be read in another body, which can bind first or come from the body cache. Any call
         // in its declaration then counts (anyCall).
-        return HeaderContainsProvisional(cut, statement, statement, false, anyCall, false)
+        return HeaderContainsProvisional(cut, statement, statement, false, anyCall)
     }
 
     // The declaration part of [`statement`](paramref): the nested statements of a compound statement (the
@@ -942,10 +1047,9 @@ internal shared class PrefixBindingContext {
         statement SyntaxNode,
         node SyntaxNode,
         inExpression bool,
-        anyCall bool,
-        hideable bool
+        anyCall bool
     ) bool {
-        if cut.IsMarked(node, hideable) || (anyCall && node is CallExpressionSyntax) {
+        if cut.IsProvisional(node) || (anyCall && node is CallExpressionSyntax) {
             return true
         }
         for child in node.GetChildren() {
@@ -959,14 +1063,7 @@ internal shared class PrefixBindingContext {
             if child is FunctionLiteralExpressionSyntax {
                 continue
             }
-            if HeaderContainsProvisional(
-                cut,
-                statement,
-                child,
-                inExpression || child is ExpressionSyntax,
-                anyCall,
-                hideable
-            ) {
+            if HeaderContainsProvisional(cut, statement, child, inExpression || child is ExpressionSyntax, anyCall) {
                 return true
             }
         }

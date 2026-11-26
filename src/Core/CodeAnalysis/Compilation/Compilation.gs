@@ -986,10 +986,6 @@ open class Compilation {
         let diagnostics = successor.GetDiagnostics(cancellationToken)
         let classified = ImmutableArray.CreateBuilder[ClassifiedDiagnostic](diagnostics.Length)
         let model = successor.GetSemanticModel(prefixTree)
-        if prefixCut.LaterOverloadsPossible {
-            // #6215: whether a bare name resolves to an imported type, which a later source type can hide.
-            prefixCut.HideableNameResolver = ImportedTypeNames(successor).Resolves
-        }
         let classifier = PrefixDiagnosticClassifier(this, tree, prefixTree, prefixCut, cancellationToken)
         for diagnostic in diagnostics {
             classified.Add(classifier.Classify(diagnostic))
