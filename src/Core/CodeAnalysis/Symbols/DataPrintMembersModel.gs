@@ -173,7 +173,7 @@ internal shared class DataPrintMembersModel {
     /// @returns `true` when the base slot has no body.
     internal func IsBaseSlotAbstract(owner StructSymbol) bool -> switch GetBase(owner, out var importedMethod) {
         case nil: false
-        case _ when importedMethod != nil: importedMethod!!.IsAbstract
+        case _ when importedMethod != nil: importedMethod.IsAbstract
         case baseOwner is StructSymbol: FindDeclared(baseOwner)?.IsAbstract == true
         default: false
     }

@@ -372,6 +372,16 @@ class SemanticModel {
   through `SymbolDisplay` and `AssemblyDocumentationProvider.Resolve`. The
   server's `MemberInfo`-returning `GetImportedMember` goes; the residual
   `ClrType` reads in the server go with ADR-0209 stage 6.
+- `GetSymbolInfo` of the call of an imported constructor (`StringBuilder(16)`)
+  returns an `ImportedConstructorSymbol` (`SymbolKind.ImportedConstructor`,
+  named `.ctor`) that holds the chosen `ConstructorInfo` and the constructed
+  type, as the call of a source `init` returns the chosen constructor's
+  function (#6177).
+- The name node of a member access answers as its identifier token does: the
+  member, and the type of the access up to that name, also for a middle name
+  of a chain (`B` in `A.B.C`, which G# nests to the right as `A.(B.C)`). An
+  inner accessor (`B.C`) answers as its terminal, the value of the whole
+  chain (#6217).
 - `GetTypeInfo(node).Type` is the bound expression's type, narrowed; the
   declared type of a variable is `GetDeclaredSymbol(declaration)` as a
   `VariableSymbol`'s `.Type`. `TypeInfo` gains no field.
@@ -413,7 +423,12 @@ class SemanticModel {
   members only for a base-class constraint, each member listed once). Extension
   members in scope follow the type's own members (question 12, resolved in
   #5440): source extension functions by file path then start, then imported
-  extension methods by holder class then metadata token.
+  extension methods by holder class then metadata token. The model caches the
+  extension members per receiver type, name and declaring package (#6177): the
+  scan of the imported extension methods dominates a query. A model belongs to
+  one compilation and one tree, so the file's imports and references are fixed,
+  and a successor compilation has models of its own; the cache needs no
+  invalidation.
 - `GetMemberGroup(node)` returns the candidates a call or member-access name
   resolved among, in declaration order (extension calls included, issue #5480;
   `base.M(...)` and `base[T].M(...)` calls, constrained static `T.M(...)` calls,

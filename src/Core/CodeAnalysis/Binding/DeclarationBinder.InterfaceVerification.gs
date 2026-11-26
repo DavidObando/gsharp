@@ -3570,7 +3570,7 @@ internal partial class DeclarationBinder {
                     return TryFindInstanceMemberReference(
                         catchClause.Body,
                         forbiddenNames,
-                        WithShadowed(shadowedNames, []string{catchClause.Identifier!!.ValueText}),
+                        WithShadowed(shadowedNames, []string{catchClause.Identifier.ValueText}),
                         out offendingName,
                         out offendingLocation
                     )
@@ -3820,13 +3820,13 @@ internal partial class DeclarationBinder {
                     captures.Add(typePattern.BindingIdentifier!!.ValueText)
                 }
                 case propertyPattern is PropertyPatternSyntax when propertyPattern.Designation != nil {
-                    captures.Add(propertyPattern.Designation!!.Text)
+                    captures.Add(propertyPattern.Designation.Text)
                 }
                 case varPattern is VarPatternSyntax when varPattern.Designation.Text != "_" {
                     captures.Add(varPattern.Designation.Text)
                 }
                 case slicePattern is SlicePatternSyntax when slicePattern.CaptureIdentifier != nil {
-                    captures.Add(slicePattern.CaptureIdentifier!!.ValueText)
+                    captures.Add(slicePattern.CaptureIdentifier.ValueText)
                 }
             }
             for child in node.GetChildren() {

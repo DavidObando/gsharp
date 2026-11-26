@@ -1379,6 +1379,7 @@ partial class CSharpToGSharpTranslator {
                             }
                             var guard_ GExpression?
                             var patternBody BlockStatement
+                            this.state.SwitchSectionActiveLabels.Push((section, patternLabel))
                             try {
                                 // Issue #991: C# `when` guards now have a canonical G# form.
                                 // Issue #1943: see the switch-EXPRESSION arm above —
@@ -1399,6 +1400,7 @@ partial class CSharpToGSharpTranslator {
                                     prepared.BodyDeclarations
                                 )
                             } finally {
+                                this.state.SwitchSectionActiveLabels.Pop()
                                 for (symbol, _) in bindings {
                                     this.state.PatternBindings.Remove(symbol)
                                 }
@@ -1409,36 +1411,42 @@ partial class CSharpToGSharpTranslator {
                             cases.Add(SwitchStatementCase(pattern, patternBody, guard_))
                         }
                         case valueLabel is CaseSwitchLabelSyntax {
-                            cases.Add(
-                                SwitchStatementCase(
-                                    ConstantPattern(this.TranslateExpression(valueLabel.Value)),
-                                    this.TranslateSwitchSectionBody(
-                                        section,
-                                        orderedBySection[section],
-                                        if gotoTargets.Contains(valueLabel) {
-                                            this.GotoCaseOrDefaultLabelName(valueLabel)
-                                        } else {
-                                            default(string?)
-                                        }
-                                    )
+                            this.state.SwitchSectionActiveLabels.Push((section, valueLabel))
+                            var body BlockStatement
+                            try {
+                                body = this.TranslateSwitchSectionBody(
+                                    section,
+                                    orderedBySection[section],
+                                    if gotoTargets.Contains(valueLabel) {
+                                        this.GotoCaseOrDefaultLabelName(valueLabel)
+                                    } else {
+                                        default(string?)
+                                    }
                                 )
+                            } finally {
+                                this.state.SwitchSectionActiveLabels.Pop()
+                            }
+                            cases.Add(
+                                SwitchStatementCase(ConstantPattern(this.TranslateExpression(valueLabel.Value)), body)
                             )
                         }
                         case defaultLabel is DefaultSwitchLabelSyntax {
-                            cases.Add(
-                                SwitchStatementCase(
-                                    nil,
-                                    this.TranslateSwitchSectionBody(
-                                        section,
-                                        orderedBySection[section],
-                                        if gotoTargets.Contains(defaultLabel) {
-                                            this.GotoCaseOrDefaultLabelName(defaultLabel)
-                                        } else {
-                                            default(string?)
-                                        }
-                                    )
+                            this.state.SwitchSectionActiveLabels.Push((section, defaultLabel))
+                            var body BlockStatement
+                            try {
+                                body = this.TranslateSwitchSectionBody(
+                                    section,
+                                    orderedBySection[section],
+                                    if gotoTargets.Contains(defaultLabel) {
+                                        this.GotoCaseOrDefaultLabelName(defaultLabel)
+                                    } else {
+                                        default(string?)
+                                    }
                                 )
-                            )
+                            } finally {
+                                this.state.SwitchSectionActiveLabels.Pop()
+                            }
+                            cases.Add(SwitchStatementCase(nil, body))
                         }
                         default {
                             this.context.ReportUnsupported(

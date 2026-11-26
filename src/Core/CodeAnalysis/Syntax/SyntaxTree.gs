@@ -103,6 +103,8 @@ open class SyntaxTree {
         documentationTokens ImmutableArray[SyntaxToken]
     ) {
         this.root = root
+        // #6177: the lexer and the parser report these.
+        Diagnostic.StampPhase(diagnostics, DiagnosticPhase.Parse)
         Diagnostics = diagnostics
         DocumentationTokens = documentationTokens
     }

@@ -1432,16 +1432,16 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=6 sha256=5EE736D8DCAFAB63"
+      "rows=6 sha256=D26430212CE9D3AD"
     ],
     "FieldDef": [
       "rows=4 sha256=6EE6139831FBD66B"
     ],
     "MemberRef": [
-      "rows=14 sha256=A9DBA98A1A63E084"
+      "rows=15 sha256=36DA3A48E36AF7EC"
     ],
     "MethodBodies": [
-      "rows=5 sha256=8910BE33B3AAF965"
+      "rows=5 sha256=E10F627A7610CBC1"
     ],
     "MethodDef": [
       "rows=5 sha256=660F140E0C8C847A"
@@ -1450,7 +1450,7 @@
       "rows=2 sha256=DC27A84C16CDCFA6"
     ],
     "TypeRef": [
-      "rows=10 sha256=695AD7A8FB0EB332"
+      "rows=8 sha256=6D92F3E13FFE8469"
     ]
   },
   "samples/GetOnlyCollectionInit.gs": {
@@ -3822,7 +3822,7 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "Gsharp.Runtime.Values, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Extensions, 0.5.793.0, , flags=0, culture=, hash="
+      "Gsharp.Extensions, 0.5.803.0, , flags=0, culture=, hash="
     ],
     "CustomAttribute": [
       "rows=9 sha256=6EDF591863770451"

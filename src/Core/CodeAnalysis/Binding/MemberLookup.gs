@@ -921,6 +921,8 @@ internal class MemberLookup {
         public var Exact TypeSymbol?
         public var Lower TypeSymbol?
         public let Upper List[TypeSymbol] = List[TypeSymbol]()
+        public let AllExact List[TypeSymbol] = List[TypeSymbol]()
+        public let AllLower List[TypeSymbol] = List[TypeSymbol]()
     }
 
     private class SourceInferenceState {
@@ -935,6 +937,8 @@ internal class MemberLookup {
             for pair in source.Bounds {
                 let bounds = SourceInferenceBounds(){Exact = pair.Value.Exact, Lower = pair.Value.Lower}
                 bounds.Upper.AddRange(pair.Value.Upper)
+                bounds.AllExact.AddRange(pair.Value.AllExact)
+                bounds.AllLower.AddRange(pair.Value.AllLower)
                 this.Bounds[pair.Key] = bounds
             }
         }
@@ -6917,6 +6921,7 @@ internal class MemberLookup {
             }
             switch kind {
                 case SymbolicInferenceBoundKind.Exact {
+                    bounds.AllExact.Add(argument)
                     bounds.Exact = MergeRecoveredTypeArgument(bounds.Exact, argument, allowBaseWidening: false)
                 }
                 case SymbolicInferenceBoundKind.Upper {
@@ -6926,6 +6931,7 @@ internal class MemberLookup {
                     return
                 }
                 default {
+                    bounds.AllLower.Add(argument)
                     bounds.Lower = MergeRecoveredTypeArgument(bounds.Lower, argument)
                 }
             }
@@ -6946,6 +6952,56 @@ internal class MemberLookup {
             if fixedType != nil {
                 substitution[parameter] = fixedType
             }
+        }
+
+        /// Resolves [`parameter`](paramref) from all exact, lower, and upper bounds recorded on
+        /// [`substitution`](paramref) across source inference sites, returning `false` when any
+        /// contributed bounds conflict (#6223).
+        internal func TryResolveExpectedSourceTypeArgument(
+            substitution Dictionary[TypeParameterSymbol, TypeSymbol],
+            parameter TypeParameterSymbol,
+            out resolved TypeSymbol?
+        ) bool {
+            resolved = nil
+            if !sourceInferenceBounds.TryGetValue(substitution, out var state) || !state.Bounds.TryGetValue(
+                parameter,
+                out var bounds
+            ) {
+                if substitution.TryGetValue(parameter, out var fixedValue) {
+                    resolved = fixedValue
+                }
+                return true
+            }
+            if state.FixedParameters.Contains(parameter) {
+                if substitution.TryGetValue(parameter, out var fixedValue) {
+                    resolved = fixedValue
+                }
+                return true
+            }
+            if bounds.AllExact.Count > 0 {
+                var candidate = bounds.AllExact[0]
+                for var i = 1; i < bounds.AllExact.Count; i++ {
+                    if !DeclarationBinder.TypeSignaturesEquivalent(candidate, bounds.AllExact[i]) &&
+                        !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(candidate, bounds.AllExact[i]) {
+                        return false
+                    }
+                    candidate = MergeRecoveredTypeArgument(candidate, bounds.AllExact[i], allowBaseWidening: false)!!
+                }
+                if !SatisfiesSymbolicInferenceBounds(candidate, bounds.AllLower, bounds.Upper) {
+                    return false
+                }
+                resolved = candidate
+                return true
+            }
+            if bounds.AllLower.Count > 0 || bounds.Upper.Count > 0 {
+                let candidate = FindSymbolicInferenceCandidate(bounds.AllLower, bounds.Upper)
+                if candidate == nil || !SatisfiesSymbolicInferenceBounds(candidate, bounds.AllLower, bounds.Upper) {
+                    return false
+                }
+                resolved = candidate
+                return true
+            }
+            return true
         }
 
         internal func IsSymbolicInferenceConflict(type TypeSymbol?) bool -> object.ReferenceEquals(
@@ -7785,8 +7841,8 @@ internal class MemberLookup {
                 }
                 case imp is ImportedTypeSymbol when imp.OpenDefinition != nil && !imp.TypeArguments.IsDefaultOrEmpty {
                     return TryBuildErasedClosedGeneric(
-                        imp.OpenDefinition!!,
-                        imp.OpenDefinition!!.GetGenericArguments(),
+                        imp.OpenDefinition,
+                        imp.OpenDefinition.GetGenericArguments(),
                         imp.TypeArguments,
                         contextObject
                     )

@@ -248,7 +248,7 @@ partial class SemanticModel {
             } else if segments[depth] is IndexExpressionSyntax {
                 PeelConversions(IndexTargetOf(member), receiverSyntax)
             } else {
-                PeelConversions(ReceiverOf(member), receiverSyntax)
+                PeelConversions(ReceiverOf(member, captures), receiverSyntax)
             }
             if node is BoundVariableExpression read && captures.TryGetValue(read.Variable, out var captured) {
                 node = PeelConversions(captured, receiverSyntax)
@@ -681,9 +681,38 @@ partial class SemanticModel {
     }
 
     /// Gets a bound member's receiver, or null when it has none.
-    private func ReceiverOf(node BoundExpression) BoundExpression? -> switch node {
+    private func ReceiverOf(
+        node BoundExpression,
+        captures Dictionary[VariableSymbol, BoundExpression]? = nil
+    ) BoundExpression? -> switch node {
         case userCall is BoundUserInstanceCallExpression: userCall.Receiver
-        case importedCall is BoundImportedInstanceCallExpression: importedCall.Receiver
+        case importedCall is BoundImportedInstanceCallExpression: if TrySkipCalleeMember(
+            importedCall.Receiver,
+            captures,
+            out var skippedImportedReceiver
+        ) {
+            skippedImportedReceiver
+        } else {
+            importedCall.Receiver
+        }
+        case indirect is BoundIndirectCallExpression: if TrySkipCalleeMember(
+            indirect.Target,
+            captures,
+            out var skippedIndirectReceiver
+        ) {
+            skippedIndirectReceiver
+        } else {
+            UnwrapCalleeTarget(indirect.Target, captures, out _)
+        }
+        case fnPtr is BoundFunctionPointerInvocationExpression: if TrySkipCalleeMember(
+            fnPtr.Pointer,
+            captures,
+            out var skippedPtrReceiver
+        ) {
+            skippedPtrReceiver
+        } else {
+            UnwrapCalleeTarget(fnPtr.Pointer, captures, out _)
+        }
         case property is BoundPropertyReferenceOperationExpression: property.Instance
         case field is BoundFieldAccessExpression: field.Receiver
         case tuple is BoundTupleElementAccessExpression: tuple.Receiver
@@ -738,14 +767,58 @@ partial class SemanticModel {
         return current
     }
 
+    private func TrySkipCalleeMember(
+        target BoundExpression,
+        captures Dictionary[VariableSymbol, BoundExpression]?,
+        out receiver BoundExpression?
+    ) bool {
+        receiver = nil
+        if UnwrapCalleeTarget(target, captures, out var calleeMarked) is {} unwrapped {
+            if calleeMarked {
+                receiver = ReceiverOf(unwrapped, captures)
+                return true
+            }
+            if IndexedCalleeTargetOf(unwrapped) is {} indexedTarget &&
+                UnwrapCalleeTarget(indexedTarget, captures, out var indexedCalleeMarked) is {} indexedBase &&
+                indexedCalleeMarked {
+                receiver = ReceiverOf(indexedBase, captures)
+                return true
+            }
+        }
+        return false
+    }
+
+    private func IndexedCalleeTargetOf(node BoundExpression) BoundExpression? -> switch node {
+        case idx is BoundIndexExpression: idx.Target
+        case idx is BoundClrIndexExpression: idx.Target
+        case dereference is BoundDereferenceExpression when dereference.Operand.Type is ByRefTypeSymbol &&
+            IsSynthesizedWrapper(dereference, dereference.Operand): IndexedCalleeTargetOf(dereference.Operand)
+        case userCall is BoundUserInstanceCallExpression when userCall.Method.IsSpecialName &&
+            userCall.Method.Name.StartsWith("get_", StringComparison.Ordinal): userCall.Receiver
+        case importedCall is BoundImportedInstanceCallExpression when importedCall.Method.IsSpecialName &&
+            importedCall.Method.Name.StartsWith("get_", StringComparison.Ordinal): importedCall.Receiver
+        case block is BoundBlockExpression: CapturedIndexTarget(block)
+        default: default(BoundExpression?)
+    }
+
     /// Removes the conversions and nil-unwraps the binder adds around a read
     /// without user syntax of their own, so the node reached is the read itself.
     private func Unwrap(
         node BoundExpression?,
         captures Dictionary[VariableSymbol, BoundExpression]? = nil
+    ) BoundExpression? -> UnwrapCalleeTarget(node, captures, out _)
+
+    private func UnwrapCalleeTarget(
+        node BoundExpression?,
+        captures Dictionary[VariableSymbol, BoundExpression]?,
+        out hasCalleeIdentifier bool
     ) BoundExpression? {
+        hasCalleeIdentifier = false
         var current = node
         while current != nil {
+            if current.CalleeIdentifier != nil {
+                hasCalleeIdentifier = true
+            }
             if current.LogicalCompletionOperand is {} operand {
                 current = operand
             } else if current is BoundConversionExpression conversion &&

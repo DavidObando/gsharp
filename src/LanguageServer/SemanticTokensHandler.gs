@@ -339,7 +339,7 @@ shared class SemanticTokensComputer {
                 positions.Add(propertyDesignation.Span.Start)
             }
             case slicePattern is SlicePatternSyntax when slicePattern.CaptureIdentifier != nil {
-                positions.Add(slicePattern.CaptureIdentifier!!.Span.Start)
+                positions.Add(slicePattern.CaptureIdentifier.Span.Start)
             }
         }
         for child in node.GetChildren() {

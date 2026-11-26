@@ -1372,7 +1372,7 @@ shared class RefInitializationHoister {
                 }
                 case clrProp is BoundClrPropertyAccessExpression when clrProp.Receiver != nil {
                     {
-                        let owner = clrProp.Receiver!!
+                        let owner = clrProp.Receiver
                         let receiver = if clrProp.Member is FieldInfo && !Binder.IsReferenceTypeForConstraint(
                             owner.Type
                         ) &&

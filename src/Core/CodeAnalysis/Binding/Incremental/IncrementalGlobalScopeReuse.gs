@@ -632,7 +632,7 @@ internal shared class IncrementalGlobalScopeReuse {
         for node in Descendants(tree.Root) {
             switch node {
                 case function is FunctionDeclarationSyntax when function.Body != nil {
-                    spans.Add(function.Body!!.Span)
+                    spans.Add(function.Body.Span)
                 }
                 case ctor is ConstructorDeclarationSyntax when ctor.Body != nil {
                     spans.Add(ctor.Body.Span)
@@ -641,10 +641,10 @@ internal shared class IncrementalGlobalScopeReuse {
                     spans.Add(deinit.Body.Span)
                 }
                 case propAccessor is PropertyAccessorSyntax when propAccessor.Body != nil {
-                    spans.Add(propAccessor.Body!!.Span)
+                    spans.Add(propAccessor.Body.Span)
                 }
                 case eventAccessor is EventAccessorSyntax when eventAccessor.Body != nil {
-                    spans.Add(eventAccessor.Body!!.Span)
+                    spans.Add(eventAccessor.Body.Span)
                 }
             }
         }
