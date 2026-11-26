@@ -11884,6 +11884,17 @@ partial class Binder {
             }
         }
 
+        /// Creates a scope with the imports, packages and declarations of [`globalScope`](paramref), in which a
+        /// prefix bind asks whether a simple name resolves to an imported type (#6215).
+        /// @param globalScope The global scope of the compilation.
+        /// @returns The scope.
+        internal func CreateImportLookupScope(globalScope BoundGlobalScope) BoundScope -> CreateParentScope(
+            globalScope,
+            globalScope.References,
+            preprocessorSymbols: globalScope.PreprocessorSymbols,
+            preserveLatestImportSyntaxTrees: true
+        )
+
         private func CreateParentScope(
             globalScope BoundGlobalScope,
             references ReferenceResolver?,

@@ -1695,6 +1695,18 @@ class Math {
         "GS0155",
         "later-type"
     )
+    @InlineData(
+        "package P\n\nimport System.Collections.Generic\n\nfunc Use(e List[int32].Enumerator) {\n    let s string = e.Current\n    let done = 0\n",
+        "}\n\nclass List[T] {\n    class Enumerator {\n        prop Current string -> \"\"\n    }\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System\n\nfunc F() String {\n    return 1\n",
+        "}\n\nstruct String {\n    var V int32\n    func operator implicit (v int32) String {\n        return String{V: v}\n    }\n}\n",
+        "GS0155",
+        "later-type"
+    )
     func ImportedTypeReachedByABareName_ALaterSourceTypeCanHideIt(
         prefix string,
         witness string,
@@ -1723,10 +1735,16 @@ class Math {
     }
 
     /// #6215: successive cuts under `Nothing` that reuse the declarations keep the imported type of a
-    /// parameter clause and a return type, and report what a bind from scratch reports.
-    @Fact
-    func ChainedCutsInABodyWithAnImportedParameterType_ReportWhatABindFromScratchReports() {
-        const source = "package P\n\nimport System.Text\n\nfunc Make() StringBuilder {\n    return StringBuilder()\n}\n\nfunc Use(sb StringBuilder) {\n    let a = 1\n    let s string = sb.Length\n    let b = 2\n    let t string = Make().Length\n    let c = 3\n}\n"
+    /// parameter clause and a return type, and report what a bind from scratch reports, also for a local
+    /// that shares the name of an imported type and when the chain goes back to its first cut.
+    @Theory
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc Make() StringBuilder {\n    return StringBuilder()\n}\n\nfunc Use(sb StringBuilder) {\n    let a = 1\n    let s string = sb.Length\n    let b = 2\n    let t string = Make().Length\n    let c = 3\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc Use() {\n    let StringBuilder = 1\n    let b bool = StringBuilder\n    let sb StringBuilder? = nil\n    let c = 3\n    let d = 4\n}\n"
+    )
+    func ChainedCutsInABodyWithAnImportedParameterType_ReportWhatABindFromScratchReports(source string) {
         let tree = SyntaxTree.Parse(SourceText.From(source, "prefix.gs"))
         let compilation = Compilation(tree)
         let body = tree
@@ -1738,9 +1756,12 @@ class Math {
         let options = PrefixBindOptions(PrefixRemainder.Nothing, includeScope: false)
         var previous PrefixBindResult? = nil
         var laterType = 0
-        for statement in body.Statements {
-            let scratch = compilation.BindPrefix(tree, statement.Span.End, options)
-            let chained = compilation.BindPrefix(tree, statement.Span.End, options, previous)
+        let cuts = body.Statements.Select((s StatementSyntax) -> s.Span.End).ToList()
+        // Forward, then back to the first cut.
+        cuts.Add(cuts[0])
+        for cut in cuts {
+            let scratch = compilation.BindPrefix(tree, cut, options)
+            let chained = compilation.BindPrefix(tree, cut, options, previous)
             Assert.Equal(Classify(scratch), Classify(chained))
             laterType += scratch.Diagnostics.Count((d ClassifiedDiagnostic) -> d.Reason == "later-type")
             previous = chained

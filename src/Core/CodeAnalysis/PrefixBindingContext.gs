@@ -218,35 +218,13 @@ internal sealed class PrefixCut {
         }
     }
 
-    // #6215: the simple names that a lookup resolved to an imported type. A later source type of the same
-    // name hides the imported one when nothing follows the cut.
-    private let hiddenNames HashSet[string] = HashSet[string](StringComparer.Ordinal)
-
-    /// Records that a lookup resolved [`name`](paramref) to an imported type (#6215).
-    /// @param name The simple name.
-    internal func AddHideableName(name string) {
-        lock provisionalGate {
-            hiddenNames.Add(name)
-        }
-    }
-
-    /// Takes the hideable names of [`previous`](paramref), whose declarations a reusing bind does not bind
-    /// again (#6215).
-    /// @param previous The cut of the previous bind of a chain.
-    internal func InheritHideableNames(previous PrefixCut) {
-        if object.ReferenceEquals(previous, this) {
-            return
-        }
-        let names = previous.HideableNameList()
-        lock provisionalGate {
-            hiddenNames.UnionWith(names)
-        }
-    }
-
-    private func HideableNameList() List[string] {
-        lock provisionalGate {
-            return List[string](hiddenNames)
-        }
+    /// Gets or sets the test that tells whether a simple name resolves to an imported type in a tree, which a
+    /// later source type of the same name hides when nothing follows the cut (#6215). The prefix bind sets it
+    /// before it classifies, so the answer depends only on the trees and their imports, not on what the
+    /// bind bound again.
+    internal prop HideableNameResolver Func[SyntaxTree, string, bool]? {
+        get;
+        set;
     }
 
     /// Returns a value that tells whether [`node`](paramref) is recorded in the registry of
@@ -259,22 +237,16 @@ internal sealed class PrefixCut {
         if !hideable {
             return IsProvisional(node)
         }
-        return HideableIdentifier(node) is {} identifier && IsHideableName(identifier.ValueText)
+        return HideableIdentifier(node) is {} identifier && IsHideableName(node.SyntaxTree, identifier.ValueText)
     }
 
-    /// Gets a value that tells whether the bind resolved a name to an imported type (#6215).
-    internal prop HasHideable bool {
-        get {
-            lock provisionalGate {
-                return hiddenNames.Count > 0
-            }
-        }
-    }
+    /// Gets a value that tells whether a later source type can hide an imported one (#6215).
+    internal prop HasHideable bool -> LaterOverloadsPossible && HideableNameResolver != nil
 
     /// Returns a value that tells whether [`location`](paramref) overlaps a bare name of an imported type
     /// that a later type can hide (#6215).
     /// @param location A diagnostic location.
-    /// @returns `true` when a recorded name overlaps the location.
+    /// @returns `true` when such a name overlaps the location.
     internal func ContainsHideable(location TextLocation) bool {
         if !HasHideable || ProvisionalTree(location.Text) is not{} tree {
             return false
@@ -282,16 +254,13 @@ internal sealed class PrefixCut {
         return OverlapsHideable(tree.Root, location.Span)
     }
 
-    private func IsHideableName(name string) bool {
-        lock provisionalGate {
-            return hiddenNames.Contains(name)
-        }
-    }
+    private func IsHideableName(tree SyntaxTree, name string) bool -> HideableNameResolver is {} resolver &&
+        !string.IsNullOrEmpty(name) && resolver(tree, name)
 
     private func OverlapsHideable(node SyntaxNode, span TextSpan) bool {
         if HideableIdentifier(node) is {} identifier &&
             Overlap(identifier.Span, span) &&
-            IsHideableName(identifier.ValueText) {
+            IsHideableName(node.SyntaxTree, identifier.ValueText) {
             return true
         }
         for child in node.GetChildren() {
@@ -313,16 +282,13 @@ internal sealed class PrefixCut {
         return left.Start < right.End && right.Start < left.End
     }
 
-    // The identifier of a bare name that can name a type: the name of a type clause without a qualifier,
-    // and a name, a generic name or a call that is not a member of a qualifier (`Console` of
-    // `Console.Title`, not `Math` of `System.Math.Abs(1)` nor `Title`).
+    // The identifier of a bare name that can name a type: the first segment of a type clause (`List` of
+    // `List[int32].Enumerator`, `System` of `System.Text.StringBuilder`), and a name, a generic name or a
+    // call that is not a member of a qualifier (`Console` of `Console.Title`, not `Math` of
+    // `System.Math.Abs(1)` nor `Title`).
     private func HideableIdentifier(node SyntaxNode) SyntaxToken? {
         return if node is TypeClauseSyntax clause {
-            if clause.HasQualifier {
-                default(SyntaxToken?)
-            } else {
-                clause.Identifier
-            }
+            clause.Identifier
         } else if node is NameExpressionSyntax name && !IsQualifiedMember(name) {
             name.IdentifierToken
         } else if node is GenericNameExpressionSyntax generic && !IsQualifiedMember(generic) {
@@ -643,15 +609,6 @@ internal shared class PrefixBindingContext {
         }
     }
 
-    /// Records that a lookup resolved [`name`](paramref) to an imported type, which a later source type of
-    /// the same name hides when nothing follows the cut (#6215).
-    /// @param name The simple name.
-    internal func AddHideableName(name string?) {
-        if !string.IsNullOrEmpty(name) && current.Value is {} cut && cut.LaterOverloadsPossible {
-            cut.AddHideableName(name)
-        }
-    }
-
     /// Records that the binder showed [`node`](paramref) to be fixed (#6179).
     /// @param node A call, a member access or an index expression.
     internal func AddFixed(node SyntaxNode?) {
@@ -682,18 +639,28 @@ internal shared class PrefixBindingContext {
     /// @param location The location of the report.
     /// @returns (cref:PrefixPremise.LaterOverload) or `null`.
     internal func ProvisionalPremise(location TextLocation) PrefixPremise? {
-        if current.Value is not{} cut || (!cut.HasProvisional && !cut.HasHideable && !cut.LaterOverloadsPossible) {
+        if current.Value is not{} cut || (!cut.HasProvisional && !cut.LaterOverloadsPossible) {
             return nil
         }
-        if cut.ContainsProvisional(location) || StatementUsesProvisional(cut, location, false) {
-            return PrefixPremise.LaterOverload
-        }
-        // #6215: a later source type can hide an imported type that the report depends on.
-        return if cut.HasHideable && (cut.ContainsHideable(location) || StatementUsesProvisional(cut, location, true)) {
-            PrefixPremise.LaterType
+        return if cut.ContainsProvisional(location) || StatementUsesProvisional(cut, location, false) {
+            PrefixPremise.LaterOverload
         } else {
             default(PrefixPremise?)
         }
+    }
+
+    /// Returns a value that tells whether a later source type can hide an imported type that the report at
+    /// [`location`](paramref) depends on (#6215): the report overlaps a bare name of the type, or its
+    /// statement uses one, directly, through a name that an earlier statement or a parameter declares, or
+    /// through the return type of the function that a `return` leaves.
+    /// @param cut The prefix cut, with its (cref:PrefixCut.HideableNameResolver).
+    /// @param location The location of the report.
+    /// @returns `true` when the report is not final.
+    internal func UsesHideableType(cut PrefixCut, location TextLocation) bool {
+        if !cut.HasHideable {
+            return false
+        }
+        return cut.ContainsHideable(location) || StatementUsesProvisional(cut, location, true)
     }
 
     // A report can be located on a part of a statement that does not contain the expression it checks: the
@@ -706,6 +673,7 @@ internal shared class PrefixBindingContext {
         }
         let span = location.Span
         var statement SyntaxNode? = nil
+        var function SyntaxNode? = nil
         var node SyntaxNode = tree.Root
         while true {
             var next SyntaxNode? = nil
@@ -722,7 +690,25 @@ internal shared class PrefixBindingContext {
             if next is StatementSyntax || next is FieldDeclarationSyntax || next is PropertyDeclarationSyntax {
                 statement = next
             }
+            if next is FunctionDeclarationSyntax || next is FunctionLiteralExpressionSyntax {
+                function = next
+                statement = nil
+            }
             node = next
+        }
+        // #6215: a returned value converts to the return type of the function that it leaves, also in an
+        // expression body.
+        if hideable && (statement == nil || statement is ReturnStatementSyntax) && function != nil {
+            let returnType = if function is FunctionDeclarationSyntax declaration {
+                declaration.Type
+            } else {
+                cast[FunctionLiteralExpressionSyntax](function).ReturnTypeClause
+            }
+            if returnType != nil &&
+                span.Start >= returnType.Span.End &&
+                HeaderContainsProvisional(cut, returnType, returnType, false, false, true) {
+                return true
+            }
         }
         return statement != nil &&
             (

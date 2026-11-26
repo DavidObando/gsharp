@@ -749,20 +749,6 @@ partial class BoundScope {
         @NotNullWhen(true) out type Type?,
         out ambiguity ImportedTypeAmbiguity?
     ) bool {
-        let found = TryLookupImportedGenericClassUnrecorded(name, arity, out type, out ambiguity)
-        if found {
-            // #6215: a later source type of the same name can hide the imported one.
-            PrefixBindingContext.AddHideableName(name)
-        }
-        return found
-    }
-
-    private func TryLookupImportedGenericClassUnrecorded(
-        name string,
-        arity int32,
-        @NotNullWhen(true) out type Type?,
-        out ambiguity ImportedTypeAmbiguity?
-    ) bool {
         type = nil
         ambiguity = nil
         if arity <= 0 {
@@ -829,27 +815,6 @@ partial class BoundScope {
     /// `null`.
     /// @returns Whether a class was found or not.
     func TryLookupImportedClassByArity(
-        name string,
-        preferredArity int32,
-        declaration ExpressionSyntax?,
-        @NotNullWhen(true) out importedClass ImportedClassSymbol?,
-        out ambiguity ImportedTypeAmbiguity?
-    ) bool {
-        let found = TryLookupImportedClassByArityUnrecorded(
-            name,
-            preferredArity,
-            declaration,
-            out importedClass,
-            out ambiguity
-        )
-        if found {
-            // #6215: a later source type of the same name can hide the imported one.
-            PrefixBindingContext.AddHideableName(name)
-        }
-        return found
-    }
-
-    private func TryLookupImportedClassByArityUnrecorded(
         name string,
         preferredArity int32,
         declaration ExpressionSyntax?,
