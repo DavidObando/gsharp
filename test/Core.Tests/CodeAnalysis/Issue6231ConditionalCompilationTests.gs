@@ -18,6 +18,37 @@ import Xunit
 
 class Issue6231ConditionalCompilationTests {
     @Theory
+    @InlineData(`@If(ENABLED) prop Value int32 { get; }`, false)
+    @InlineData(`@If(ENABLED) prop Value int32 { get; }`, true)
+    @InlineData(`@If(ENABLED) event Changed () -> void`, false)
+    @InlineData(`@If(ENABLED) event Changed () -> void`, true)
+    @InlineData(`shared { @If(ENABLED) public var Saved int32 }`, false)
+    @InlineData(`shared { @If(ENABLED) public var Saved int32 }`, true)
+    func ProtocolShapeRestrictions_InspectOnlyActiveMembers(member string, enabled bool) {
+        let source = "protocol P { " + member.Replace(
+            "ENABLED",
+            if enabled {
+                "true"
+            } else {
+                "false"
+            },
+            StringComparison.Ordinal
+        ) +
+            " }"
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        let errors = Compilation(tree){IsLibrary = true}.GetDiagnostics().Where((d Diagnostic) -> d.IsError).ToArray()
+        if enabled {
+            let diagnostic = Assert.Single(errors)
+            Assert.Equal("GS0629", diagnostic.Id)
+            Assert.Equal(9, diagnostic.Location.Span.Start)
+            Assert.Equal(1, diagnostic.Location.Span.Length)
+        } else {
+            Assert.Empty(errors)
+        }
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func ConditionalProtectedCalls_AlwaysValidateTheReceiverAtTheMemberSpan(enabled bool) {

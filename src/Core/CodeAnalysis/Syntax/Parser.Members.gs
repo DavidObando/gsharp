@@ -729,6 +729,7 @@ open partial class Parser {
         let openBrace = MatchToken(SyntaxKind.OpenBraceToken)
         while Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken {
             let startToken = Current
+            let annotations = ParseAnnotations()
             // ADR-0192 / issue #4301 (Copilot review round 4): skip a
             // partial-bearing run so `private partial func F();` is still
             // recognized as `private`-led — the plain `Peek(1) ==
@@ -744,16 +745,24 @@ open partial class Parser {
                 TryRejectMisplacedPartialModifier()
             }
             if Current.Kind == SyntaxKind.FuncKeyword {
-                methods.Add(ParseInterfaceMethodSignatureCore(accessibilityModifier, sharedKeyword))
+                methods.Add(
+                    cast[FunctionDeclarationSyntax](
+                        ParseInterfaceMethodSignatureCore(accessibilityModifier, sharedKeyword).WithAnnotations(
+                            annotations
+                        )
+                    )
+                )
             } else if Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop" {
                 // ADR-0089 / issue #1019: a `prop` inside an interface shared
                 // block is a static-virtual interface property. Mark it with
                 // the `shared` keyword as its static modifier so the binder
                 // routes it onto InterfaceSymbol static-property accessors.
-                let propDecl = ParsePropertyDeclaration(
-                    accessibilityModifier: nil,
-                    openModifier: nil,
-                    overrideModifier: nil
+                let propDecl = cast[PropertyDeclarationSyntax](
+                    ParsePropertyDeclaration(
+                        accessibilityModifier: nil,
+                        openModifier: nil,
+                        overrideModifier: nil
+                    ).WithAnnotations(annotations)
                 )
                 propDecl.StaticModifier = sharedKeyword
                 properties.Add(propDecl)
@@ -781,7 +790,7 @@ open partial class Parser {
                 // ADR-0089 / issue #1030: interface static *state*. A `var` /
                 // `let` / `const` member inside an interface `shared { … }`
                 // block declares a CLR static field on the interface TypeDef.
-                fields.Add(ParseFieldDeclaration())
+                fields.Add(cast[FieldDeclarationSyntax](ParseFieldDeclaration().WithAnnotations(annotations)))
             } else {
                 // Only `func` (static-virtual) members, `prop` (static-virtual
                 // properties, ADR-0089/issue #1019) and `var`/`let`/`const`

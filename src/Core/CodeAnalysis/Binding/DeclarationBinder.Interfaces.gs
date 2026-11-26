@@ -78,9 +78,9 @@ internal partial class DeclarationBinder {
             if interfaceSymbol.ContainingType != nil ||
                 syntax.TypeParameterList != nil ||
                 syntax.HasBaseInterfaces ||
-                !syntax.Properties.IsDefaultOrEmpty ||
-                !syntax.Events.IsDefaultOrEmpty ||
-                !syntax.StaticFields.IsDefaultOrEmpty {
+                !$scope.ConditionalCompilation.Filter(syntax.Properties).IsDefaultOrEmpty ||
+                !$scope.ConditionalCompilation.Filter(syntax.Events).IsDefaultOrEmpty ||
+                !$scope.ConditionalCompilation.Filter(syntax.StaticFields).IsDefaultOrEmpty {
                 Diagnostics.ReportNativeProtocol(
                     syntax.Identifier.Location,
                     "only nongeneric protocols with synchronous by-value method slots are supported"
@@ -913,6 +913,13 @@ internal partial class DeclarationBinder {
                     continue
                 }
                 let fieldAccessibility = resolveAccessibility(fieldSyntax.AccessibilityModifier)
+                let fieldAttributes = BindAttributes(
+                    fieldSyntax.Annotations,
+                    AttributeTargetKind.Field,
+                    Binder.FieldDeclarationAllowedTargets,
+                    "a field declaration",
+                    AttributeTargets.Field
+                )
                 // const → compile-time literal field (reads inlined).
                 if fieldSyntax.IsConst {
                     if fieldType == TypeSymbol.NInt || fieldType == TypeSymbol.NUInt {
@@ -932,6 +939,7 @@ internal partial class DeclarationBinder {
                         isConst: true,
                         declaration: fieldSyntax
                     )
+                    constField.SetAttributes(fieldAttributes)
                     Binder.AttachDocumentation(constField, fieldSyntax)
                     if fieldSyntax.Initializer == nil {
                         Diagnostics.ReportConstFieldRequiresInitializer(fieldSyntax.Identifier.Location, fieldName)
@@ -949,6 +957,7 @@ internal partial class DeclarationBinder {
                     isStatic: true,
                     declaration: fieldSyntax
                 )
+                fieldSymbol.SetAttributes(fieldAttributes)
                 Binder.AttachDocumentation(fieldSymbol, fieldSyntax)
                 if fieldSyntax.Initializer is {} staticInitializer {
                     pendingStaticInitializers.Add((fieldSymbol, staticInitializer, fieldType))

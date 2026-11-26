@@ -12,6 +12,34 @@ import System.Text
 import Xunit
 
 class Issue6231ScopedSymbolsTests {
+    @Fact
+    func Driver_ProtocolShape_IgnoresInactivePropertiesEventsAndStaticFields() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let program = fixture.Compile(`import System
+protocol P {
+    @If(false) prop Value Missing { get; }
+    @If(false) event Changed Missing
+    shared {
+        @If(false) public var Saved Missing
+        @If(false) func Forbidden(value Missing);
+        @If(false) prop Other Missing { get; }
+    }
+    func Read() int32;
+}
+interface State { shared {
+    @Obsolete("field") public var Count int32
+    @Obsolete("constant") public const Limit int32 = 3
+} }
+struct Payload { public func Read() int32 -> 7 }
+func Observe(value P) int32 -> value.Read()
+Console.Write(Observe(Payload{}))
+Console.Write(typeof(State).GetField("Count")!!.IsDefined(typeof(ObsoleteAttribute), false))
+Console.Write(typeof(State).GetField("Limit")!!.IsDefined(typeof(ObsoleteAttribute), false))
+`, "ProtocolShape6231", true)
+        IlVerifier.Verify(program)
+        Assert.Equal(Encoding.UTF8.GetBytes("7TrueTrue"), fixture.RunBytes(program))
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)
