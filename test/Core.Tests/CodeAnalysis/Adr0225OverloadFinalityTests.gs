@@ -1742,9 +1742,10 @@ class Math {
         }
     }
 
-    /// #6215: a `yield`, a method group of a source receiver function, a condition that narrows a name, and a
-    /// type parameter that takes a keyword spelling are outside the shapes that the opt-in test follows, so
-    /// a report that a later type can remove is later-type.
+    /// #6215: a `yield`, a method group of a source receiver function, a condition that narrows a name (also
+    /// inside a block or branch of an earlier statement), and a type parameter that takes a keyword spelling
+    /// are outside the shapes that the opt-in test follows, so a report that a later type can remove is
+    /// later-type.
     @Theory
     @InlineData(
         "package P\n\nimport System\nimport System.Collections.Generic\n\nfunc Values() IEnumerable[String] {\n    yield 1\n",
@@ -1765,6 +1766,26 @@ class Math {
         "package P\n\nimport System.IO\n\nfunc Use[string Stream](s string) {\n    let b bool = s.Length\n    let done = 0\n",
         "}\n",
         "}\n\nopen class Stream {\n    prop Length bool -> false\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc M(x object) {\n    {\n        if x is not StringBuilder {\n            return\n        }\n    }\n    let s bool = x.Length\n    let done = 0\n",
+        "}\n",
+        "}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc M(x object) {\n    {\n        if x is not StringBuilder {\n            return\n        }\n    }\n    if x.Length {\n    }\n    let done = 0\n",
+        "}\n",
+        "}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc M(x object) bool {\n    {\n        if x is not StringBuilder {\n            return\n        }\n    }\n    return x.Length\n",
+        "}\n",
+        "}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc M(x object, b bool) {\n    if b {\n        if x is not StringBuilder {\n            return\n        }\n    } else {\n        if x is not StringBuilder {\n            return\n        }\n    }\n    let s bool = x.Length\n    let done = 0\n",
+        "}\n",
+        "}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n"
     )
     func ShapeThatTheTestDoesNotFollow_IsLaterType(prefix string, closer string, witness string) {
         let result = BindNothing(prefix, []string{closer, witness})

@@ -971,6 +971,13 @@ internal shared class PrefixBindingContext {
         }
         var found = false
         for candidate in earlier {
+            // A narrowing or an assignment of the name inside a nested statement of an earlier statement (a
+            // block, a branch, a loop body) changes its type after that statement, and the header test does
+            // not see it.
+            let encloses = candidate.Span.Start <= statement.Span.Start && statement.Span.End <= candidate.Span.End
+            if !encloses && MentionsInNestedStatement(candidate, candidate, name) {
+                return false
+            }
             let declared = HashSet[string](StringComparer.Ordinal)
             CollectHeaderNames(candidate, candidate, false, declared, declared: true)
             let read = HashSet[string](StringComparer.Ordinal)
@@ -989,6 +996,39 @@ internal shared class PrefixBindingContext {
         for parameter in function.Parameters {
             if parameter.Identifier?.ValueText == name {
                 return parameter.Type is {} type && IsKeywordTypeClause(type)
+            }
+        }
+        return false
+    }
+
+    // Whether an identifier [`name`](paramref) occurs in a nested statement or function literal of
+    // [`statement`](paramref), at any depth.
+    private func MentionsInNestedStatement(statement StatementSyntax, node SyntaxNode, name string) bool {
+        for child in node.GetChildren() {
+            if child is SyntaxToken {
+                continue
+            }
+            if (
+                child is StatementSyntax || child is FunctionLiteralExpressionSyntax || child is LambdaExpressionSyntax
+            ) &&
+                !object.ReferenceEquals(child, statement) && MentionsName(child, name) {
+                return true
+            }
+            if MentionsInNestedStatement(statement, child, name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func MentionsName(node SyntaxNode, name string) bool {
+        for child in node.GetChildren() {
+            if child is SyntaxToken token {
+                if token.Kind == SyntaxKind.IdentifierToken && token.ValueText == name {
+                    return true
+                }
+            } else if MentionsName(child, name) {
+                return true
             }
         }
         return false
