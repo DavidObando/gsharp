@@ -1803,7 +1803,6 @@ open partial class Parser {
         private func CanStartTypeClause(token SyntaxToken) bool {
             switch token.Kind {
                 case SyntaxKind.IdentifierToken,
-                SyntaxKind.AtToken,
                 SyntaxKind.FuncKeyword,
                 SyntaxKind.OpenParenthesisToken,
                 SyntaxKind.OpenSquareBracketToken,

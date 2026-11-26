@@ -14,7 +14,7 @@ import System.Reflection
 
 /// Reports unresolved method groups and unsupported function-pointer targets.
 internal shared class MethodGroupDiagnostics {
-    private class FunctionPointerWalker : BoundTreeWalker {
+    private class FunctionPointerWalker : BoundSemanticTreeWalker {
         private let diagnostics DiagnosticBag
 
         init(diagnostics DiagnosticBag) {
@@ -36,7 +36,7 @@ internal shared class MethodGroupDiagnostics {
         }
     }
 
-    private class Walker : BoundTreeWalker {
+    private class Walker : BoundSemanticTreeWalker {
         private let diagnostics DiagnosticBag
         private var callArgumentDepth int32
 

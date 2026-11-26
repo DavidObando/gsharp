@@ -20,6 +20,85 @@ import Xunit
 
 class Issue6231ConditionalCompilationTests {
     @Theory
+    @InlineData("sink.Log(&first)", false)
+    @InlineData("sink.Log(&first)", true)
+    @InlineData("Make(&first)?.Log(nil)", false)
+    @InlineData("Make(&first)?.Log(nil)", true)
+    @InlineData("Build(&first).LogSlice()", false)
+    @InlineData("Build(&first).LogSlice()", true)
+    func ConditionalFunctionPointers_ValidateFinalCapturesInRetainedSource(call string, enabled bool) {
+        let source = `import System.Diagnostics
+class Sink { @Conditional("A") unsafe func Log(pointer *func(int32) int32) {} }
+unsafe func Make(pointer *func(int32) int32) Sink? -> Sink()
+unsafe func Build(pointer *func(int32) int32) slice[int32] -> slice[int32]{1}
+@Conditional("A") func (self slice[int32]) LogSlice() {}
+unsafe func Run(sink Sink) {
+    var outer = 41
+    let first = func(n int32) int32 { return n == 0 ? outer : second(n - 1) }
+    let second = func(n int32) int32 { return first(n) }
+    ` + call + `
+}`
+        let compilation = Compilation(SyntaxTree.Parse(source)){
+            IsLibrary = true,
+            PreprocessorSymbols = if enabled {
+                ImmutableHashSet.Create("A")
+            } else {
+                nil
+            }
+        }
+        let error = Assert.Single(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("GS0405", error.Id)
+        Assert.Equal(TextSpan(source.LastIndexOf("&first", StringComparison.Ordinal), 1), error.Location.Span)
+        let inactive = source.Replace(call, "@If(false) { " + call + " }", StringComparison.Ordinal)
+        Assert.Empty(
+            Compilation(SyntaxTree.Parse(inactive)){IsLibrary = true}.GetDiagnostics().Where(
+                (d Diagnostic) -> d.IsError
+            )
+        )
+    }
+
+    @Theory
+    @InlineData("*func()", "@If(false) let hidden = Missing()", false)
+    @InlineData("*func()", "@DefineSymbol(\"A\") let selected = @defined(\"A\")", true)
+    @InlineData("*func() int32", "@If(false) let hidden = Missing()", false)
+    @InlineData("*func() int32", "@DefineSymbol(\"A\") let selected = @defined(\"A\")", true)
+    func FunctionPointerType_DoesNotConsumeFollowingAnnotations(type string, following string, definition bool) {
+        let source = "unsafe func Run() {\nvar callback " + type + "\n" + following + "\n}"
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let function = tree.Root.Members.OfType[FunctionDeclarationSyntax]().Single()
+        let declarations = function.Body!!.Statements.OfType[VariableDeclarationSyntax]().ToArray()
+        Assert.Equal(2, declarations.Length)
+        Assert.Empty(declarations[0].Annotations)
+        Assert.Single(declarations[1].Annotations)
+        let clause = declarations[0].TypeClause!!
+        Assert.Equal(type, source.Substring(clause.Span.Start, clause.Span.Length))
+        let compilation = Compilation(tree){IsLibrary = true}
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let model = compilation.GetSemanticModel(tree)
+        if definition {
+            let query = declarations[1].DescendantNodes().OfType[DefinedExpressionSyntax]().Single()
+            Assert.True(cast[bool](Assert.IsType[BoundLiteralExpression](model.GetBoundNode(query)).Value))
+        } else {
+            Assert.Null(model.GetDeclaredSymbol(declarations[1]))
+        }
+    }
+
+    @Fact
+    func VoidFunctionPointerField_PreservesTheNextMembersOrdinaryAnnotation() {
+        const source = `unsafe class Holder {
+    var callback *func()
+    @System.Obsolete func Next() {}
+}`
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        let declaration = tree.Root.Members.OfType[StructDeclarationSyntax]().Single()
+        Assert.Empty(declaration.Fields.Single().Annotations)
+        Assert.Single(declaration.Methods.Single().Annotations)
+        Assert.Empty(Compilation(tree){IsLibrary = true}.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+    }
+
+    @Theory
     @InlineData(64)
     @InlineData(512)
     func OrdinaryCalls_CheckConditionalStateOnceWithoutSymbolQueries(count int32) {

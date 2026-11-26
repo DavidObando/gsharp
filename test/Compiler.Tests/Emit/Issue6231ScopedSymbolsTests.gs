@@ -14,6 +14,125 @@ import Xunit
 
 class Issue6231ScopedSymbolsTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Driver_ConditionalFunctionPointerCaptures_ReportTheActiveSourceSpan(enabled bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = "import System.Diagnostics\n" +
+            (
+            if enabled {
+                "@file:DefineSymbol(\"A\")\n"
+            } else {
+                ""
+            }
+        ) +
+            `class Sink { @Conditional("A") unsafe func Log(pointer *func(int32) int32) {} }
+unsafe func Run(sink Sink) {
+    var outer = 41
+    let first = func(n int32) int32 { return n == 0 ? outer : second(n - 1) }
+    let second = func(n int32) int32 { return first(n) }
+    sink.Log(&first)
+}`
+        let (code, output) = fixture.TryCompile(source, "ConditionalFunctionPointer6231", false)
+        Assert.NotEqual(0, code)
+        let error = Assert.Single(
+            output.Split('\n').Where((line string) -> line.Contains(": error ", StringComparison.Ordinal))
+        )
+        Assert.Contains("error GS0405:", error)
+        let before = source.Substring(0, source.IndexOf("&first", StringComparison.Ordinal)).Split('\n')
+        let line = before.Length
+        let column = before.Last().Length + 1
+        Assert.Contains("(${line},${column},${line},${column + 1})", error)
+    }
+
+    @Theory
+    @InlineData("argument", false)
+    @InlineData("argument", true)
+    @InlineData("nullable", false)
+    @InlineData("nullable", true)
+    @InlineData("slice", false)
+    @InlineData("slice", true)
+    func Driver_ConditionalNoncapturingPointers_PreserveEffectsAndLayouts(shape string, enabled bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = "import System\nimport System.Diagnostics\n" +
+            (
+            if enabled {
+                "@file:DefineSymbol(\"A\")\n"
+            } else {
+                ""
+            }
+        ) +
+            `class Sink {
+    @Conditional("A") unsafe func Log(pointer *func(int32) int32) {
+        Console.Write("l")
+        if pointer != nil { Console.Write(pointer != nil) }
+    }
+}
+unsafe func Make(pointer *func(int32) int32) Sink? {
+    Console.Write("r")
+    Console.Write(pointer != nil)
+    return Sink()
+}
+unsafe func Build(pointer *func(int32) int32) slice[int32] {
+    Console.Write("r")
+    Console.Write(pointer != nil)
+    return slice[int32]{1}
+}
+@Conditional("A") func (self slice[int32]) LogSlice() { Console.Write("l") }
+class Consumer { shared {
+    unsafe func Run() {
+        let first = func(n int32) int32 { return n == 0 ? 40 : second(n - 1) }
+        let second = func(n int32) int32 { return first(n) }
+        let pointer = &first
+        var sink = Sink()
+        // CALL
+        Console.Write("z")
+    }
+} }
+Consumer.Run()`
+        let baseline = fixture.Compile(
+            source.Replace("// CALL", "", StringComparison.Ordinal),
+            "NoncapturingPointer6231",
+            true
+        )
+        IlVerifier.Verify(baseline)
+        let expected = CaptureLayout(baseline)
+        Assert.Equal(Encoding.UTF8.GetBytes("z"), fixture.RunBytes(baseline))
+        let call = if shape == "argument" {
+            "sink.Log(&first)"
+        } else if shape == "nullable" {
+            "Make(&first)?.Log(nil)"
+        } else {
+            "Build(&first).LogSlice()"
+        }
+        let program = fixture.Compile(
+            source.Replace("// CALL", call, StringComparison.Ordinal),
+            "NoncapturingPointer6231",
+            true
+        )
+        IlVerifier.Verify(program)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                if enabled {
+                    if shape == "argument" {
+                        "lTruez"
+                    } else {
+                        "rTruelz"
+                    }
+                } else {
+                    "z"
+                }
+            ),
+            fixture.RunBytes(program)
+        )
+        if !enabled {
+            let actual = CaptureLayout(program)
+            Assert.Equal(expected.Types, actual.Types)
+            Assert.Equal(expected.Locals, actual.Locals)
+        }
+    }
+
+    @Theory
     @InlineData(`Omit(other.Read())`, "Read", false)
     @InlineData(`Omit(other.Read())`, "Read", true)
     @InlineData(`other.Next().Keep(1)`, "Next", false)

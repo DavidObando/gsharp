@@ -7,6 +7,11 @@ package GSharp.Core.CodeAnalysis.Binding
 import System
 import System.Collections.Immutable
 
+/// Visits retained active source, including operands that conditional calls do not execute.
+internal abstract class BoundSemanticTreeWalker : BoundTreeWalker {
+    internal override prop VisitElidedConditionalCallOperands bool -> true
+}
+
 /// Abstract bound-tree visitor that, by default, recurses into every child of
 /// every node — mirroring the coverage of (cref:BoundTreeRewriter).
 /// Subclasses override `VisitX` methods to observe nodes of interest;

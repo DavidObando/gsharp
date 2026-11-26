@@ -542,9 +542,7 @@ partial class SemanticModel {
     /// Records the outermost bound node per syntax node (first-win in a
     /// pre-order walk) and harvests local/pattern variable declarations from
     /// symbol-valued bound-node properties.
-    private class IndexingWalker : BoundTreeWalker {
-        internal override prop VisitElidedConditionalCallOperands bool -> true
-
+    private class IndexingWalker : BoundSemanticTreeWalker {
         private let tree SyntaxTree
         private let boundBySyntax Dictionary[SyntaxNode, BoundNode]
         private let declaredBySyntax Dictionary[SyntaxNode, Symbol]
