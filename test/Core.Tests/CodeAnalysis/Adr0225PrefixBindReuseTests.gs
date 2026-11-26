@@ -208,6 +208,47 @@ open class Adr0225PrefixBindReuseTests {
         }
     }
 
+    /// #6178: a chain that moves from the top-level statements into a member body, a global of another tree
+    /// that reads a missing name, and an async iterator whose first `yield` arrives between cuts all bind as
+    /// from scratch. Each cut ends after a marker of the `|`-separated list.
+    @Theory
+    @InlineData(
+        "package P\n\nlet bad = missing\n\n\n\nfunc F() {\n    let a = 1\n    let b = 2\n}\n",
+        "",
+        "missing\n\n|missing\n\n\n|let a = 1|let b = 2"
+    )
+    @InlineData(
+        "package P\n\nlet x = 1\n\n\n\nfunc F() {\n    let a = 1\n    let b = 2\n}\n",
+        "package P\n\nlet bad = missing\n",
+        "x = 1\n\n|x = 1\n\n\n|let a = 1|let b = 2"
+    )
+    @InlineData(
+        "package P\n\nimport System.Collections.Generic\nimport System.IO\n\nlet unrelated = 1\n\nfunc Items() IAsyncEnumerable[int32] {\n    await using let s = MemoryStream()\n    let a = 1\n    yield a\n    let b = 2\n}\n",
+        "",
+        "int32] {|MemoryStream()|let a = 1|yield a|let b = 2"
+    )
+    func ChainedCutsOfAScriptAcrossItsParts_ReportWhatABindFromScratchReports(
+        source string,
+        other string,
+        markers string
+    ) {
+        let tree = SyntaxTree.Parse(SourceText.From(source, "script.gs"))
+        let compilation = if other.Length == 0 {
+            Compilation(tree)
+        } else {
+            Compilation(SyntaxTree.Parse(SourceText.From(other, "other.gs")), tree)
+        }
+        var previous PrefixBindResult? = nil
+        for marker in markers.Split('|') {
+            let cut = source.IndexOf(marker, StringComparison.Ordinal) + marker.Length
+            let options = PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+            let scratch = compilation.BindPrefix(tree, cut, options)
+            let reused = compilation.BindPrefix(tree, cut, options, previous)
+            Assert.Equal(Describe(scratch), Describe(reused))
+            previous = reused
+        }
+    }
+
     /// #6178: a reused global of a script points at the new prefix tree, so the semantic model of the result
     /// answers its declaration.
     @Fact

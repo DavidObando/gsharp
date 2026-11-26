@@ -578,11 +578,9 @@ internal shared class IncrementalGlobalScopeReuse {
         updatedTree SyntaxTree
     ) bool {
         // A later declaration or overload can still change what a retained statement resolved to, and only a
-        // bind records that (the cut in the top-level statements, or nothing kept).
-        if updatedTree.Prefix is not{} cut ||
-            cut.Remainder != PrefixRemainder.KeepDeclarations ||
-            cut.LaterDeclarationsPossible ||
-            cut.LaterOverloadsPossible {
+        // bind records that (the cut in the top-level statements, or nothing kept). The reused statements carry
+        // the finality of the previous cut, so both cuts must rule it out.
+        if !KeepsEveryLaterDeclaration(previousTree) || !KeepsEveryLaterDeclaration(updatedTree) {
             return false
         }
         // A return type that a body infers can change with the open body.
@@ -596,8 +594,16 @@ internal shared class IncrementalGlobalScopeReuse {
         if InfersAnonymousReturn(previousTree) || InfersAnonymousReturn(updatedTree) {
             return false
         }
+        // A function becomes an async iterator with its first `yield`, and the reused symbol keeps
+        // the earlier classification, so neither tree may have one.
+        for node in Descendants(previousTree.Root) {
+            if node.Kind == SyntaxKind.YieldStatement {
+                return false
+            }
+        }
         for node in Descendants(updatedTree.Root) {
-            if node.Kind == SyntaxKind.LeftArrowToken ||
+            if node.Kind == SyntaxKind.YieldStatement ||
+                node.Kind == SyntaxKind.LeftArrowToken ||
                 node.Kind == SyntaxKind.GoStatement ||
                 node.Kind == SyntaxKind.ChannelReceiveExpression ||
                 node.Kind == SyntaxKind.ChannelSendStatement ||
@@ -607,6 +613,13 @@ internal shared class IncrementalGlobalScopeReuse {
             }
         }
         return true
+    }
+
+    private func KeepsEveryLaterDeclaration(tree SyntaxTree) bool {
+        return tree.Prefix is {} cut &&
+            cut.Remainder == PrefixRemainder.KeepDeclarations &&
+            !cut.LaterDeclarationsPossible &&
+            !cut.LaterOverloadsPossible
     }
 
     private func InfersAnonymousReturn(tree SyntaxTree) bool {
