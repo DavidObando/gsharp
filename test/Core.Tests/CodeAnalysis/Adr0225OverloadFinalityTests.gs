@@ -277,7 +277,7 @@ func Main() {
         // A closed literal cannot get the label.
         const closed = "package P\n\nfunc Main() {\n    let f = func () {\n        goto done\n    }\n"
         let final = BindNothing(closed, []string{"}\n", "done:\n}\n"})
-        Assert.Equal(DiagnosticFinality.Final, Assert.Single(final.Diagnostics).Finality)
+        AssertFinalOrLaterType(Assert.Single(final.Diagnostics))
     }
 
     @Fact
@@ -1551,6 +1551,304 @@ partial class Box {
     }
 
     @Fact
+    func StaticMemberOfAnImportedType_ALaterSourceTypeCanHideIt() {
+        const prefix = `package P
+
+import System
+
+func Main() {
+    let x int32 = Console.Title
+    let done = 0
+`
+        const witness = `}
+
+class Console {
+    shared {
+        let Title int32 = 0
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-type")
+        // Every later declaration is kept, so no later type can hide the imported one (#6215).
+        for d in BindKeep(prefix + "/*CUT*/" + witness).Diagnostics.Where(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"
+        ) {
+            Assert.NotEqual("later-type", d.Reason)
+        }
+    }
+
+    @Fact
+    func ImportedConstruction_ALaterSourceTypeCanHideIt() {
+        const prefix = `package P
+
+import System.Text
+
+func Main() {
+    let sb = StringBuilder()
+    let s string = sb.Length
+    let done = 0
+`
+        const witness = `}
+
+class StringBuilder {
+    prop Length string -> ""
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-type")
+        // Every later declaration is kept, so no later type can hide the imported one (#6215).
+        for d in BindKeep(prefix + "/*CUT*/" + witness).Diagnostics.Where(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"
+        ) {
+            Assert.NotEqual("later-type", d.Reason)
+        }
+    }
+
+    @Fact
+    func ParameterOfAnImportedType_ALaterSourceTypeCanHideIt() {
+        const prefix = `package P
+
+import System.Text
+
+func Use(sb StringBuilder) {
+    let s string = sb.Length
+    let done = 0
+`
+        const witness = `}
+
+class StringBuilder {
+    prop Length string -> ""
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-type")
+        // Every later declaration is kept, so no later type can hide the imported one (#6215).
+        for d in BindKeep(prefix + "/*CUT*/" + witness).Diagnostics.Where(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"
+        ) {
+            Assert.NotEqual("later-type", d.Reason)
+        }
+    }
+
+    @Fact
+    func StaticCallOfAnImportedType_ALaterSourceTypeCanHideIt() {
+        const prefix = `package P
+
+import System
+
+func Main() {
+    let x string = Math.Max(1, 2)
+    let done = 0
+`
+        const witness = `}
+
+class Math {
+    shared {
+        func Max(a int32, b int32) string {
+            return ""
+        }
+    }
+}
+`
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-type")
+        // Every later declaration is kept, so no later type can hide the imported one (#6215).
+        for d in BindKeep(prefix + "/*CUT*/" + witness).Diagnostics.Where(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"
+        ) {
+            Assert.NotEqual("later-type", d.Reason)
+        }
+    }
+
+    /// #6215: an imported type that a bare name reaches through a lookup that reports, a folded constant, a
+    /// built-in mapping, a constructed generic qualifier or an array clause can be hidden by a later source
+    /// type, and the report that depends on it is not final. A constructed generic qualifier is already
+    /// reported as depending on a later declaration, which takes precedence.
+    @Theory
+    @InlineData(
+        "package P\n\nimport System.Threading\nimport System.Timers\n\nfunc Use(t Timer) {\n    let done = 0\n",
+        "}\n\nclass Timer {\n}\n",
+        "GS0547",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System\n\nfunc Main() {\n    let s string = Math.PI\n    let done = 0\n",
+        "}\n\nclass Math {\n    shared {\n        let PI string = \"\"\n    }\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System\n\nfunc Use(s String) {\n    let b bool = s.Length\n    let done = 0\n",
+        "}\n\nclass String {\n    prop Length bool -> false\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System.Collections.Generic\n\nfunc Main() {\n    let n int32 = Comparer[int32].Default\n    let done = 0\n",
+        "}\n\nclass Comparer[T] {\n    shared {\n        let Default int32 = 0\n    }\n}\n",
+        "GS0155",
+        "later-declaration"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc Use(sb []StringBuilder) {\n    let first = sb[0]\n    let s string = first.Length\n    let done = 0\n",
+        "}\n\nclass StringBuilder {\n    prop Length string -> \"\"\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System.Collections.Generic\n\nfunc Use(e List[int32].Enumerator) {\n    let s string = e.Current\n    let done = 0\n",
+        "}\n\nclass List[T] {\n    class Enumerator {\n        prop Current string -> \"\"\n    }\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System\n\nfunc F() String {\n    return 1\n",
+        "}\n\nstruct String {\n    var V int32\n    func operator implicit (v int32) String {\n        return String{V: v}\n    }\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package System.Text\n\nfunc Use(sb StringBuilder) {\n    let b bool = sb.Length\n    let done = 0\n",
+        "}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System\n\nclass Box {\n    prop Value String -> 1\n",
+        "}\n\nstruct String {\n    var V int32\n    func operator implicit (v int32) String {\n        return String{V: v}\n    }\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System\n\nfunc Main() {\n    let f = func (x String) int32 {\n        return 0\n    }\n    let n = f(1)\n    let done = 0\n",
+        "}\n\nstruct String {\n    var V int32\n    func operator implicit (v int32) String {\n        return String{V: v}\n    }\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    func ImportedTypeReachedByABareName_ALaterSourceTypeCanHideIt(
+        prefix string,
+        witness string,
+        id string,
+        reason string
+    ) {
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, id)
+        AssertFutureDependent(result, id, reason)
+        // Every later declaration is kept, so no later type can hide the imported one (#6215).
+        for d in BindKeep(prefix + "/*CUT*/" + witness).Diagnostics.Where(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == id
+        ) {
+            Assert.NotEqual("later-type", d.Reason)
+        }
+    }
+
+    /// #6215: a `yield`, a method group of a source receiver function, a condition that narrows a name (also
+    /// inside a block or branch of an earlier statement), and a type parameter that takes a keyword spelling
+    /// are outside the shapes that the opt-in test follows, so a report that a later type can remove is
+    /// later-type.
+    @Theory
+    @InlineData(
+        "package P\n\nimport System\nimport System.Collections.Generic\n\nfunc Values() IEnumerable[String] {\n    yield 1\n",
+        "}\n",
+        "}\n\nstruct String {\n    var V int32\n    func operator implicit (v int32) String {\n        return String{V: v}\n    }\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc (s string) Make() StringBuilder {\n    return StringBuilder()\n}\n\nfunc Main() {\n    let s = \"a\"\n    let f = s.Make\n    let text string = f().Length\n    let done = 0\n",
+        "}\n",
+        "}\n\nclass StringBuilder {\n    prop Length string -> \"\"\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc Use(x object) {\n    if x is StringBuilder {\n        let b bool = x.Length\n        let done = 0\n",
+        "    }\n}\n",
+        "    }\n}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.IO\n\nfunc Use[string Stream](s string) {\n    let b bool = s.Length\n    let done = 0\n",
+        "}\n",
+        "}\n\nopen class Stream {\n    prop Length bool -> false\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc M(x object) {\n    {\n        if x is not StringBuilder {\n            return\n        }\n    }\n    let s bool = x.Length\n    let done = 0\n",
+        "}\n",
+        "}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc M(x object) {\n    {\n        if x is not StringBuilder {\n            return\n        }\n    }\n    if x.Length {\n    }\n    let done = 0\n",
+        "}\n",
+        "}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc M(x object) bool {\n    {\n        if x is not StringBuilder {\n            return\n        }\n    }\n    return x.Length\n",
+        "}\n",
+        "}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc M(x object, b bool) {\n    if b {\n        if x is not StringBuilder {\n            return\n        }\n    } else {\n        if x is not StringBuilder {\n            return\n        }\n    }\n    let s bool = x.Length\n    let done = 0\n",
+        "}\n",
+        "}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n"
+    )
+    func ShapeThatTheTestDoesNotFollow_IsLaterType(prefix string, closer string, witness string) {
+        let result = BindNothing(prefix, []string{closer, witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-type")
+    }
+
+    /// #6215: the keyword `string` names the built-in type, which no source type can hide.
+    @Fact
+    func BuiltInKeywordType_NoLaterSourceTypeCanHideIt() {
+        const prefix = "package P\n\nfunc Use(s string) {\n    let b bool = s.Length\n    let done = 0\n"
+        let result = BindNothing(prefix, []string{"}\n"})
+        let matching = result.Diagnostics.Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").ToList()
+        Assert.NotEmpty(matching)
+        Assert.All(matching, (d ClassifiedDiagnostic) -> Assert.NotEqual("later-type", d.Reason))
+    }
+
+    /// #6215: successive cuts under `Nothing` that reuse the declarations keep the imported type of a
+    /// parameter clause and a return type, and report what a bind from scratch reports, also for a local
+    /// that shares the name of an imported type and when the chain goes back to its first cut.
+    @Theory
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc Make() StringBuilder {\n    return StringBuilder()\n}\n\nfunc Use(sb StringBuilder) {\n    let a = 1\n    let s string = sb.Length\n    let b = 2\n    let t string = Make().Length\n    let c = 3\n}\n",
+        true
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc Use() {\n    let StringBuilder = 1\n    let b bool = StringBuilder\n    let sb StringBuilder? = nil\n    let c = 3\n    let d = 4\n}\n",
+        false
+    )
+    func ChainedCutsInABodyWithAnImportedParameterType_ReportWhatABindFromScratchReports(
+        source string,
+        laterTypeExpected bool
+    ) {
+        let tree = SyntaxTree.Parse(SourceText.From(source, "prefix.gs"))
+        let compilation = Compilation(tree)
+        let body = tree
+            .Root
+            .DescendantNodes()
+            .OfType[FunctionDeclarationSyntax]()
+            .First((f FunctionDeclarationSyntax) -> f.Identifier.ValueText == "Use")
+            .Body!!
+        let options = PrefixBindOptions(PrefixRemainder.Nothing, includeScope: false)
+        var previous PrefixBindResult? = nil
+        var laterType = 0
+        let cuts = body.Statements.Select((s StatementSyntax) -> s.Span.End).ToList()
+        // Forward, then back to the first cut.
+        cuts.Add(cuts[0])
+        for cut in cuts {
+            let scratch = compilation.BindPrefix(tree, cut, options)
+            let chained = compilation.BindPrefix(tree, cut, options, previous)
+            Assert.Equal(Classify(scratch), Classify(chained))
+            laterType += scratch.Diagnostics.Count((d ClassifiedDiagnostic) -> d.Reason == "later-type")
+            previous = chained
+        }
+        Assert.Equal(laterTypeExpected, laterType > 0)
+    }
+
+    @Fact
     func ResolvedCall_AnExactNonGenericMatchCannotBeBeaten() {
         const prefix = `package P
 
@@ -1571,7 +1869,7 @@ func Main() {
                 "}\n\nfunc G[T](v T) string {\n    return \"\"\n}\n"
             }
         )
-        Assert.Equal(DiagnosticFinality.Final, Assert.Single(result.Diagnostics).Finality)
+        AssertFinalOrLaterType(Assert.Single(result.Diagnostics))
     }
 
     @Fact
@@ -1699,10 +1997,7 @@ func (c Closed) Put(i int32) string {
         Assert.Equal(2, removable.Count)
         Assert.All(removable, (d ClassifiedDiagnostic) -> Assert.Equal("later-overload", d.Reason))
         let kept = Assert.Single(reported)
-        Assert.Equal(
-            DiagnosticFinality.Final,
-            result.Diagnostics.Single((d ClassifiedDiagnostic) -> Key(d.Diagnostic) == Key(kept)).Finality
-        )
+        AssertFinalOrLaterType(result.Diagnostics.Single((d ClassifiedDiagnostic) -> Key(d.Diagnostic) == Key(kept)))
     }
 
     @Fact
@@ -1875,7 +2170,7 @@ func Main() {
             .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
             .ToList()
         Assert.Equal(2, mismatches.Count)
-        Assert.All(mismatches, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+        Assert.All(mismatches, AssertFinalOrLaterType)
     }
 
     @Fact
@@ -2264,9 +2559,8 @@ func Main() {
     let done = 0
 `
         let fixedNamedResult = BindNothing(fixedNamedPrefix, []string{"}\n"})
-        Assert.Equal(
-            DiagnosticFinality.Final,
-            fixedNamedResult.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0246").Finality
+        AssertFinalOrLaterType(
+            fixedNamedResult.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0246")
         )
     }
 
@@ -2436,10 +2730,7 @@ func Main(cb ClosedBox, s S) {
             controlsResult.Diagnostics.Length == 9,
             string.Join("; ", controlsResult.Diagnostics.Select((d ClassifiedDiagnostic) -> d.ToString()))
         )
-        Assert.All(
-            controlsResult.Diagnostics,
-            (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality)
-        )
+        Assert.All(controlsResult.Diagnostics, AssertFinalOrLaterType)
     }
 
     // #6229 review follow-ups: fallback lookup shadowing premise (GS0472), fixed outer call excluding
@@ -2517,10 +2808,7 @@ func Main() {
     let done = 0
 `
         let nestedResult = BindNothing(nestedInterpPrefix, []string{"}\n"})
-        Assert.Equal(
-            DiagnosticFinality.Final,
-            nestedResult.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
-        )
+        AssertFinalOrLaterType(nestedResult.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"))
 
         // 4. Handler-targeted interpolation depends on its holes (GS0221 becomes FutureDependent when a hole changes).
         const csharpHandler = `
@@ -2793,9 +3081,8 @@ func Main(v float64) {
     let done = 0
 `
         let castControlResult = BindNothing(castControlPrefix, []string{"}\n"})
-        Assert.Equal(
-            DiagnosticFinality.Final,
-            castControlResult.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        AssertFinalOrLaterType(
+            castControlResult.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
         )
 
         // 11. Parameter read inside a lambda whose body also has an unrelated provisional call stays Final.
@@ -3182,12 +3469,10 @@ import System.Math
 
 let s string = PI
 `
-        Assert.Equal(
-            DiagnosticFinality.Final,
-            BindNothing(bareNameTopControlPrefix, []string{string.Empty, bareNameShadowWitness})
-                .Diagnostics
-                .Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
-                .Finality
+        AssertFinalOrLaterType(
+            BindNothing(bareNameTopControlPrefix, []string{string.Empty, bareNameShadowWitness}).Diagnostics.Single(
+                (d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155"
+            )
         )
 
         // 22. Compound return statements inside a sibling block lambda propagate narrowed variable dependencies.
@@ -3552,7 +3837,7 @@ async func Main() {
                 "}\n\npartial class Box {\n    func GetAwaiter() System.Runtime.CompilerServices.TaskAwaiter {\n        return System.Threading.Tasks.Task.CompletedTask.GetAwaiter()\n    }\n}\n"
             }
         )
-        Assert.Equal(DiagnosticFinality.Final, Assert.Single(result.Diagnostics).Finality)
+        AssertFinalOrLaterType(Assert.Single(result.Diagnostics))
     }
 
     shared {
@@ -3600,6 +3885,15 @@ async func Main() {
             }
         }
 
+        // #6215: the later-type test is opt-in, so with nothing after the cut a report outside the shapes that
+        // it follows is later-type instead of final. No other premise holds.
+        private func AssertFinalOrLaterType(d ClassifiedDiagnostic) {
+            if d.Finality != DiagnosticFinality.Final {
+                Assert.Equal(DiagnosticFinality.FutureDependent, d.Finality)
+                Assert.Equal("later-type", d.Reason)
+            }
+        }
+
         private func AssertFutureDependent(result PrefixBindResult, id string, reason string) {
             let matching = result.Diagnostics.Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == id).ToList()
             Assert.NotEmpty(matching)
@@ -3612,6 +3906,13 @@ async func Main() {
         private func Diagnose(text string) ImmutableArray[Diagnostic] -> Compilation(
             SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))
         ).GetDiagnostics()
+
+        private func Classify(result PrefixBindResult) string -> string.Join(
+            "\n",
+            result.Diagnostics.Select(
+                (d ClassifiedDiagnostic) -> "${d.Diagnostic.Id}@${d.Diagnostic.Location.Span} ${d.Finality} ${d.Reason}"
+            )
+        )
 
         private func Key(d Diagnostic) string -> "${d.Id}@${d.Location.Span.Start}:${d.Location.Span.Length}"
     }
