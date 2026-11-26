@@ -477,7 +477,7 @@ open class Program {
                         // preserving the historical evaluate-mode driver protocol.
                         return ExecuteInMemory(compilation, parsed, referencePaths)
                     }
-                    return Emit(compilation, parsed, outputPath)
+                    return Emit(compilation, parsed, outputPath, referencePaths)
                 } finally {
                     (logger as IDisposable)?.Dispose()
                 }
@@ -620,12 +620,25 @@ open class Program {
         /// runtime assemblies. Under the SDK, MSBuild's copy-local puts those
         /// assemblies beside the app; a direct `gsc /out:` invocation has no
         /// such step, so gsc copies each transitively referenced runtime itself.
+        /// Explicit `/reference:` overrides take precedence over SDK-bundled
+        /// runtimes so override-only APIs are preserved at run time.
         /// A program whose PE has no corresponding AssemblyRef gets nothing extra.
-        /// A destination copy is refreshed only when the bundled runtime is newer.
+        /// A destination copy is refreshed only when the source runtime is newer.
         /// @param outputPath The emitted assembly.
         /// @param runtimeDirectory The bundled runtime directory from (cref:ResolveRuntimeDirectory).
-        private func CopyBundledRuntimesBeside(outputPath string, runtimeDirectory string?) {
+        /// @param referencePaths The resolved compilation reference paths (explicit `/r:` first).
+        private func CopyBundledRuntimesBeside(
+            outputPath string,
+            runtimeDirectory string?,
+            referencePaths IReadOnlyList[string]
+        ) {
             let candidates = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
+            for refPath in referencePaths {
+                AddRuntimeOverrideCandidate(candidates, refPath)
+                if candidates.Count == 3 {
+                    break
+                }
+            }
             AddBundledCandidate(
                 candidates,
                 ReferenceResolver.FindBundledExtensionPath(AppContext.BaseDirectory, runtimeDirectory, false)
@@ -659,12 +672,12 @@ open class Program {
                     let reader = pe.GetMetadataReader()
                     for handle in reader.AssemblyReferences {
                         let refName = reader.GetString(reader.GetAssemblyReference(handle).Name)
-                        if copied.Contains(refName) || !candidates.TryGetValue(refName, out var bundled) {
+                        if copied.Contains(refName) || !candidates.TryGetValue(refName, out var runtimePath) {
                             continue
                         }
                         copied.Add(refName)
-                        queue.Enqueue(bundled)
-                        CopyBundledFileIfNewer(bundled, outputDir)
+                        queue.Enqueue(runtimePath)
+                        CopyBundledFileIfNewer(runtimePath, outputDir, refName + ".dll")
                     }
                 }
             } catch (IOException) {
@@ -684,6 +697,35 @@ open class Program {
         private func ResolveRuntimeDirectory(parsed CommandLineArgs) string? ->
         parsed.SdkToolsDir ?? Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
 
+        private func IsKnownBundledRuntimeName(name string) bool ->
+        string.Equals(name, "Gsharp.Extensions", StringComparison.OrdinalIgnoreCase) || string.Equals(
+            name,
+            "Gsharp.Runtime.Channels",
+            StringComparison.OrdinalIgnoreCase
+        ) ||
+            string.Equals(name, "Gsharp.Runtime.Values", StringComparison.OrdinalIgnoreCase)
+
+        private func AddRuntimeOverrideCandidate(candidates Dictionary[string, string], candidatePath string) {
+            if string.IsNullOrEmpty(candidatePath) || !File.Exists(candidatePath) {
+                return
+            }
+            try {
+                using let peStream = File.OpenRead(candidatePath)
+                using let pe = PEReader(peStream)
+                if !pe.HasMetadata {
+                    return
+                }
+                let reader = pe.GetMetadataReader()
+                if !reader.IsAssembly {
+                    return
+                }
+                let asmName = reader.GetString(reader.GetAssemblyDefinition().Name)
+                if IsKnownBundledRuntimeName(asmName) && !candidates.ContainsKey(asmName) {
+                    candidates[asmName] = candidatePath
+                }
+            } catch (IOException) { } catch (BadImageFormatException) { } catch (UnauthorizedAccessException) { }
+        }
+
         private func AddBundledCandidate(candidates Dictionary[string, string], bundled string?) {
             if bundled == nil {
                 return
@@ -694,8 +736,8 @@ open class Program {
             }
         }
 
-        private func CopyBundledFileIfNewer(bundled string, outputDir string) {
-            let destination = Path.Combine(outputDir, Path.GetFileName(bundled))
+        private func CopyBundledFileIfNewer(bundled string, outputDir string, targetFileName string) {
+            let destination = Path.Combine(outputDir, targetFileName)
             if string.Equals(Path.GetFullPath(bundled), destination, StringComparison.OrdinalIgnoreCase) {
                 return
             }
@@ -708,7 +750,12 @@ open class Program {
             File.Copy(bundled, destination, overwrite: true)
         }
 
-        private func Emit(compilation Compilation, args CommandLineArgs, outputPath string) int32 {
+        private func Emit(
+            compilation Compilation,
+            args CommandLineArgs,
+            outputPath string,
+            referencePaths IReadOnlyList[string]
+        ) int32 {
             let outputDir = Path.GetDirectoryName(outputPath)
             if !string.IsNullOrEmpty(outputDir) {
                 Directory.CreateDirectory(outputDir)
@@ -829,7 +876,7 @@ open class Program {
             if args.Target == OutputTarget.Exe {
                 WriteRuntimeConfig(outputPath, args.TargetFramework)
             }
-            CopyBundledRuntimesBeside(outputPath, ResolveRuntimeDirectory(args))
+            CopyBundledRuntimesBeside(outputPath, ResolveRuntimeDirectory(args), referencePaths)
             Console.WriteLine("Wrote $outputPath")
             if !string.IsNullOrEmpty(refOutputPath) {
                 Console.WriteLine("Wrote $refOutputPath")
