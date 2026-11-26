@@ -40,7 +40,20 @@ open class Issue6231DefineCommandLineTests {
     @InlineData("/d:")
     @InlineData("/define: ")
     func MissingDefineValueIsACommandLineError(option string) {
-        Assert.NotEqual(0, Program.Main([]string{option}))
+        let directory = Path.Combine(Path.GetTempPath(), "gsharp-symbol-driver-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let source = Path.Combine(directory, "Program.gs")
+            let output = Path.Combine(directory, "Probe.dll")
+            File.WriteAllText(source, "shared class Probe { func Value() bool -> true }\n")
+            Assert.Equal(0, Program.Main([]string{source, "/target:library", "/out:" + output}))
+            Assert.True(File.Exists(output))
+            File.Delete(output)
+            Assert.NotEqual(0, Program.Main([]string{source, "/target:library", "/out:" + output, option}))
+            Assert.False(File.Exists(output))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
     }
 
     @Fact

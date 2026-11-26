@@ -21,11 +21,11 @@ open class SemanticTokensHandlerTests {
         let hidden = FindToken(tokens, 1, 5, 6)
         Assert.NotNull(hidden)
         Assert.Equal(TokenTypeIndex("Comment"), hidden!!.TokenType)
-        Assert.True((hidden.TokenModifiers & ModifierBit("Inactive")) != 0)
+        Assert.True((hidden!!.TokenModifiers & ModifierBit("Inactive")) != 0)
         let visible = FindToken(tokens, 2, 5, 7)
         Assert.NotNull(visible)
         Assert.Equal(TokenTypeIndex("Function"), visible!!.TokenType)
-        Assert.Equal(0, visible.TokenModifiers & ModifierBit("Inactive"))
+        Assert.Equal(0, visible!!.TokenModifiers & ModifierBit("Inactive"))
     }
 
     @Theory

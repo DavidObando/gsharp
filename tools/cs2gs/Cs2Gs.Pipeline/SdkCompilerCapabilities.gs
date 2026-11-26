@@ -24,7 +24,7 @@ internal shared class SdkCompilerCapabilities {
                 let compiler = Path.Combine(
                     packageRoot,
                     "gsharp.net.sdk",
-                    version!!,
+                    version,
                     "tools",
                     "compiler",
                     "GSharp.Core.dll"
@@ -37,7 +37,7 @@ internal shared class SdkCompilerCapabilities {
             let packagePath = GsharpTestProjectRunner.FindLocalPackageVersion(
                 GsharpTestProjectRunner.TryFindRepoRoot(),
                 "Gsharp.NET.Sdk",
-                version!!,
+                version,
                 config
             )
             if packagePath == nil {
