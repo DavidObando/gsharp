@@ -634,12 +634,6 @@ open class Program {
             referencePaths IReadOnlyList[string]
         ) {
             let candidates = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
-            for refPath in referencePaths {
-                AddRuntimeOverrideCandidate(candidates, refPath)
-                if candidates.Count == 3 {
-                    break
-                }
-            }
             AddBundledCandidate(
                 candidates,
                 ReferenceResolver.FindBundledExtensionPath(AppContext.BaseDirectory, runtimeDirectory, false)
@@ -654,6 +648,13 @@ open class Program {
             )
             if candidates.Count == 0 {
                 return
+            }
+            let overridden = HashSet[string](StringComparer.OrdinalIgnoreCase)
+            for refPath in referencePaths {
+                OverrideBundledCandidate(candidates, overridden, refPath)
+                if overridden.Count == candidates.Count {
+                    break
+                }
             }
             try {
                 let outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath))
@@ -698,14 +699,6 @@ open class Program {
         private func ResolveRuntimeDirectory(parsed CommandLineArgs) string? ->
         parsed.SdkToolsDir ?? Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
 
-        private func IsKnownBundledRuntimeName(name string) bool ->
-        string.Equals(name, "Gsharp.Extensions", StringComparison.OrdinalIgnoreCase) || string.Equals(
-            name,
-            "Gsharp.Runtime.Channels",
-            StringComparison.OrdinalIgnoreCase
-        ) ||
-            string.Equals(name, "Gsharp.Runtime.Values", StringComparison.OrdinalIgnoreCase)
-
         private func IsReferenceAssembly(reader MetadataReader) bool {
             for attrHandle in reader.GetAssemblyDefinition().GetCustomAttributes() {
                 let attr = reader.GetCustomAttribute(attrHandle)
@@ -731,7 +724,11 @@ open class Program {
             return false
         }
 
-        private func AddRuntimeOverrideCandidate(candidates Dictionary[string, string], candidatePath string) {
+        private func OverrideBundledCandidate(
+            candidates Dictionary[string, string],
+            overridden HashSet[string],
+            candidatePath string
+        ) {
             if string.IsNullOrEmpty(candidatePath) || !File.Exists(candidatePath) {
                 return
             }
@@ -746,8 +743,9 @@ open class Program {
                     return
                 }
                 let asmName = reader.GetString(reader.GetAssemblyDefinition().Name)
-                if IsKnownBundledRuntimeName(asmName) && !candidates.ContainsKey(asmName) {
+                if candidates.ContainsKey(asmName) && !overridden.Contains(asmName) {
                     candidates[asmName] = candidatePath
+                    overridden.Add(asmName)
                 }
             } catch (IOException) { } catch (BadImageFormatException) { } catch (UnauthorizedAccessException) { }
         }
