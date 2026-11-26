@@ -29,14 +29,18 @@ internal partial class ExpressionBinder {
         while target is BoundBlockExpression block {
             target = block.Expression
         }
-        if target is BoundCallOperationExpression call &&
-            (
-            call.IsElidedConditionalCall || KnownAttributes.IsConditionallyElided(
-                call.CalledFunction,
-                $scope.ConditionalCompilation.SymbolsAt(call.Syntax)
-            )
-        ) {
-            call.IsElidedConditionalCall = true
+        if target is BoundCallOperationExpression call {
+            if !call.ConditionalElisionChecked {
+                call.IsElidedConditionalCall = call.IsElidedConditionalCall || KnownAttributes.IsConditionallyElided(
+                    call.CalledFunction,
+                    $scope.ConditionalCompilation,
+                    call.Syntax
+                )
+                call.ConditionalElisionChecked = true
+            }
+            if !call.IsElidedConditionalCall {
+                return expression
+            }
             if expression is BoundBlockExpression {
                 let sourceStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                 var current BoundExpression = expression

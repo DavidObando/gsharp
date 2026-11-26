@@ -69,6 +69,12 @@ abstract class BoundCallOperationExpression : BoundExpression {
         set;
     }
 
+    /// Gets whether binding has finalized this call's lexical conditional decision.
+    internal prop ConditionalElisionChecked bool {
+        get;
+        set;
+    }
+
     /// Gets discarded receiver-initialization statements for semantic traversal only.
     internal prop ElidedSourceStatements ImmutableArray[BoundStatement] {
         get;

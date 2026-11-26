@@ -7,11 +7,12 @@ import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Runtime.CompilerServices
 
 /// Owns syntax-derived symbol environments and inclusion for one compilation.
 internal class ConditionalCompilationMap {
     private let symbols ImmutableHashSet[string]
-    private let trees Dictionary[SyntaxTree, TreeMap] = Dictionary[SyntaxTree, TreeMap]()
+    private let trees ConditionalWeakTable[SyntaxTree, TreeMap] = ConditionalWeakTable[SyntaxTree, TreeMap]()
 
     internal init(symbols ImmutableHashSet[string]?) {
         this.symbols = (symbols ?? ImmutableHashSet[string].Empty).WithComparer(StringComparer.Ordinal)
@@ -104,11 +105,13 @@ internal class ConditionalCompilationMap {
         return result?.ToImmutable() ?? nodes
     }
 
-    internal func SymbolsAt(node SyntaxNode?) ImmutableHashSet[string] ->
-    if node == nil {
-        symbols
-    } else {
-        FindRegion(node).Symbols
+    internal func SymbolsAt(node SyntaxNode?) ImmutableHashSet[string] {
+        CompilationMeasurements.Count("conditional.symbols.queried")
+        return if node == nil {
+            symbols
+        } else {
+            FindRegion(node).Symbols
+        }
     }
 
     internal func Validate(tree SyntaxTree, diagnostics DiagnosticBag) {
@@ -166,135 +169,140 @@ internal class ConditionalCompilationMap {
     }
 
     private func GetTree(tree SyntaxTree) TreeMap {
-        lock trees {
-            if trees.TryGetValue(tree, out var cached) {
-                return cached
-            }
-            let treeMap = TreeMap()
-            let pending = Stack[(Node SyntaxNode, Symbols ImmutableHashSet[string], Active bool)]()
-            pending.Push((tree.Root, symbols, true))
-            while pending.Count > 0 {
-                let (node, inherited, ancestorActive) = pending.Pop()
-                let annotations = if node is CompilationUnitSyntax unit {
-                    unit.FileAttributes
-                } else {
-                    DiagnosticSuppressionMap.GetAnnotations(node)
-                }
-                var active = ancestorActive
-                var effective = inherited
-                var count = 0
-                var hasConditionalAnnotation = false
-                let definitions = Dictionary[string, bool](StringComparer.Ordinal)
-                for annotation in annotations {
-                    if node is CompilationUnitSyntax &&
-                        annotation.Target?.KindIdentifier.ValueText == "file" &&
-                        !IsIntrinsic(annotation) {
-                        treeMap.Diagnostics.ReportScopedSymbolInvalid(
-                            annotation.Location,
-                            "the file target accepts only DefineSymbol, UndefineSymbol and If"
-                        )
-                    }
-                    if IsIf(annotation) {
-                        hasConditionalAnnotation = true
-                        count++
-                        if count > 1 {
-                            treeMap.Diagnostics.ReportConditionalInclusionInvalid(
-                                annotation.Location,
-                                "only one @If is allowed per owner"
-                            )
-                        }
-                        let allowed = IsAllowedOwner(node, annotation, inclusion: true)
-                        if !allowed {
-                            treeMap.Diagnostics.ReportConditionalInclusionInvalid(
-                                annotation.Location,
-                                "this target cannot be conditionally included"
-                            )
-                        }
-                        if annotation.Arguments.Count != 1 || annotation.HasTypeArgumentList {
-                            treeMap.Diagnostics.ReportConditionalInclusionInvalid(
-                                annotation.Location,
-                                "exactly one predicate is required"
-                            )
-                            if allowed {
-                                active = false
-                            }
-                        } else {
-                            // Validate both operands, including below an inactive ancestor.
-                            let included = EvaluatePredicate(annotation.Arguments[0], inherited, treeMap.Diagnostics)
-                            if allowed {
-                                active = active && included
-                            }
-                        }
-                    }
-                }
-                for annotation in annotations {
-                    if active &&
-                        (
-                        node is TupleDeconstructionStatementSyntax or
-                            NamedDeconstructionStatementSyntax or
-                            MultiAssignmentStatementSyntax or
-                            PropertyAccessorSyntax or
-                            EventAccessorSyntax
-                    ) &&
-                        !IsIntrinsic(annotation) {
-                        treeMap.Diagnostics.ReportAnnotationsNotAllowedOnStatement(annotation.Location)
-                    }
-                    if !IsDefinition(annotation) {
-                        continue
-                    }
-                    hasConditionalAnnotation = true
-                    if !IsAllowedOwner(node, annotation, inclusion: false) {
-                        treeMap.Diagnostics.ReportScopedSymbolInvalid(
-                            annotation.Location,
-                            "this target cannot define or undefine symbols"
-                        )
-                        continue
-                    }
-                    if annotation.Arguments.Count == 0 || annotation.HasTypeArgumentList {
-                        treeMap.Diagnostics.ReportScopedSymbolInvalid(
-                            annotation.Location,
-                            "one or more literal symbol names are required"
-                        )
-                    }
-                    let defined = HasName(annotation, "DefineSymbol")
-                    for argument in annotation.Arguments {
-                        if !TryName(argument, out var name) {
-                            treeMap.Diagnostics.ReportScopedSymbolInvalid(
-                                argument.Location,
-                                "a literal valid symbol name is required"
-                            )
-                            continue
-                        }
-                        if definitions.TryGetValue(name, out var previous) && previous != defined {
-                            treeMap.Diagnostics.ReportScopedSymbolInvalid(
-                                argument.Location,
-                                "the same owner cannot define and undefine '" + name + "'"
-                            )
-                        }
-                        definitions[name] = defined
-                        if active {
-                            effective = if defined {
-                                effective.Add(name)
-                            } else {
-                                effective.Remove(name)
-                            }
-                        }
-                    }
-                }
-                if node is CompilationUnitSyntax || hasConditionalAnnotation {
-                    treeMap.Regions.Add(Region(node, effective, active, treeMap.Regions.Count))
-                }
-                for var i = node.ChildCount - 1; i >= 0; i-- {
-                    let child = node.GetChild(i)
-                    if child is not(AnnotationSyntax or SyntaxToken) {
-                        pending.Push((child, effective, active))
-                    }
-                }
-            }
-            treeMap.IndexRegions()
-            trees[tree] = treeMap
-            return treeMap
+        if trees.TryGetValue(tree, out var cached) {
+            return cached
         }
+        return trees.GetValue(tree, (key SyntaxTree) -> BuildTree(key))
+    }
+
+    private func BuildTree(tree SyntaxTree) TreeMap {
+        let treeMap = TreeMap()
+        let pending = Stack[(Node SyntaxNode, Symbols ImmutableHashSet[string], Active bool)]()
+        pending.Push((tree.Root, symbols, true))
+        while pending.Count > 0 {
+            let (node, inherited, ancestorActive) = pending.Pop()
+            let annotations = if node is CompilationUnitSyntax unit {
+                unit.FileAttributes
+            } else {
+                DiagnosticSuppressionMap.GetAnnotations(node)
+            }
+            var active = ancestorActive
+            var effective = inherited
+            var count = 0
+            var hasConditionalAnnotation = false
+            var definitions Dictionary[string, bool]? = nil
+            for annotation in annotations {
+                if node is CompilationUnitSyntax &&
+                    annotation.Target?.KindIdentifier.ValueText == "file" &&
+                    !IsIntrinsic(annotation) {
+                    treeMap.Diagnostics.ReportScopedSymbolInvalid(
+                        annotation.Location,
+                        "the file target accepts only DefineSymbol, UndefineSymbol and If"
+                    )
+                }
+                if IsIf(annotation) {
+                    hasConditionalAnnotation = true
+                    count++
+                    if count > 1 {
+                        treeMap.Diagnostics.ReportConditionalInclusionInvalid(
+                            annotation.Location,
+                            "only one @If is allowed per owner"
+                        )
+                    }
+                    let allowed = IsAllowedOwner(node, annotation, inclusion: true)
+                    if !allowed {
+                        treeMap.Diagnostics.ReportConditionalInclusionInvalid(
+                            annotation.Location,
+                            "this target cannot be conditionally included"
+                        )
+                    }
+                    if annotation.Arguments.Count != 1 || annotation.HasTypeArgumentList {
+                        treeMap.Diagnostics.ReportConditionalInclusionInvalid(
+                            annotation.Location,
+                            "exactly one predicate is required"
+                        )
+                        if allowed {
+                            active = false
+                        }
+                    } else {
+                        // Validate both operands, including below an inactive ancestor.
+                        let included = EvaluatePredicate(annotation.Arguments[0], inherited, treeMap.Diagnostics)
+                        if allowed {
+                            active = active && included
+                        }
+                    }
+                }
+            }
+            for annotation in annotations {
+                if active &&
+                    (
+                    node is TupleDeconstructionStatementSyntax or
+                        NamedDeconstructionStatementSyntax or
+                        MultiAssignmentStatementSyntax or
+                        PropertyAccessorSyntax or
+                        EventAccessorSyntax
+                ) &&
+                    !IsIntrinsic(annotation) {
+                    treeMap.Diagnostics.ReportAnnotationsNotAllowedOnStatement(annotation.Location)
+                }
+                if !IsDefinition(annotation) {
+                    continue
+                }
+                hasConditionalAnnotation = true
+                if !IsAllowedOwner(node, annotation, inclusion: false) {
+                    treeMap.Diagnostics.ReportScopedSymbolInvalid(
+                        annotation.Location,
+                        "this target cannot define or undefine symbols"
+                    )
+                    continue
+                }
+                if annotation.Arguments.Count == 0 || annotation.HasTypeArgumentList {
+                    treeMap.Diagnostics.ReportScopedSymbolInvalid(
+                        annotation.Location,
+                        "one or more literal symbol names are required"
+                    )
+                }
+                let defined = HasName(annotation, "DefineSymbol")
+                for argument in annotation.Arguments {
+                    if !TryName(argument, out var name) {
+                        treeMap.Diagnostics.ReportScopedSymbolInvalid(
+                            argument.Location,
+                            "a literal valid symbol name is required"
+                        )
+                        continue
+                    }
+                    if definitions == nil {
+                        definitions = Dictionary[string, bool](StringComparer.Ordinal)
+                        CompilationMeasurements.Count("conditional.definition.maps.allocated")
+                    }
+                    if definitions.TryGetValue(name, out var previous) && previous != defined {
+                        treeMap.Diagnostics.ReportScopedSymbolInvalid(
+                            argument.Location,
+                            "the same owner cannot define and undefine '" + name + "'"
+                        )
+                    }
+                    definitions[name] = defined
+                    if active {
+                        effective = if defined {
+                            effective.Add(name)
+                        } else {
+                            effective.Remove(name)
+                        }
+                    }
+                }
+            }
+            if node is CompilationUnitSyntax || hasConditionalAnnotation {
+                treeMap.Regions.Add(Region(node, effective, active, treeMap.Regions.Count))
+            }
+            for var i = node.ChildCount - 1; i >= 0; i-- {
+                let child = node.GetChild(i)
+                if child is not(AnnotationSyntax or SyntaxToken) {
+                    pending.Push((child, effective, active))
+                }
+            }
+        }
+        treeMap.IndexRegions()
+        return treeMap
     }
 
     shared {

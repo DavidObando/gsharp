@@ -10,13 +10,142 @@ import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Immutable
 import System.Linq
+import System.IO
 import System.Reflection
 import System.Reflection.Emit
+import System.Runtime.CompilerServices
 import System.Threading
 import System.Text
 import Xunit
 
 class Issue6231ConditionalCompilationTests {
+    @Theory
+    @InlineData(64)
+    @InlineData(512)
+    func OrdinaryCalls_CheckConditionalStateOnceWithoutSymbolQueries(count int32) {
+        let source = "func Keep(value int32) {}\nfunc Run() {\n" + string.Join(
+            "\n",
+            Enumerable.Repeat("Keep(1)", count)
+        ) +
+            "\n}"
+        let compilation = Compilation(SyntaxTree.Parse(source)){IsLibrary = true}
+        using let measurements = CompilationMeasurements.Start("test")
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(int64(count), measurements.GetCounter("conditional.calls.checked"))
+        Assert.Equal(int64(0), measurements.GetCounter("conditional.symbols.queried"))
+    }
+
+    @Theory
+    @InlineData(64)
+    @InlineData(512)
+    func ScopedDefinitionMaps_AllocateOnlyForValidDefinitions(count int32) {
+        let source = "func Run() {\n" + string.Join(
+            "\n",
+            Enumerable.Range(0, count).Select((i int32) -> "let value" + i.ToString() + " = 1")
+        ) +
+            "\n}"
+        let activity = ConditionalCompilationMap(nil)
+        let diagnostics = DiagnosticBag()
+        using let measurements = CompilationMeasurements.Start("test")
+        activity.Validate(SyntaxTree.Parse(source), diagnostics)
+        Assert.Empty(diagnostics)
+        Assert.Equal(int64(0), measurements.GetCounter("conditional.definition.maps.allocated"))
+        activity.Validate(SyntaxTree.Parse(`@file:DefineSymbol("A", "A") func Run() {}`), diagnostics)
+        Assert.Empty(diagnostics)
+        Assert.Equal(int64(1), measurements.GetCounter("conditional.definition.maps.allocated"))
+    }
+
+    @Theory
+    @InlineData(64)
+    @InlineData(512)
+    func NarrowedPlainAccessors_DoNotCaptureConditionalRollbackSnapshots(count int32) {
+        let source = "class C { var Value int32 }\nfunc Read(value C?) int32 {\nif value != nil {\n" + string.Join(
+            "\n",
+            Enumerable.Range(0, count).Select((i int32) -> "let field" + i.ToString() + " = value.Value")
+        ) +
+            "\nreturn value.Value\n}\nreturn 0\n}"
+        let compilation = Compilation(SyntaxTree.Parse(source)){IsLibrary = true}
+        using let measurements = CompilationMeasurements.Start("test")
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(int64(0), measurements.GetCounter("conditional.rollback.snapshots"))
+    }
+
+    private open class ConditionalMetadataBase {
+        @System.Diagnostics.Conditional("A")
+        open func Log() { }
+    }
+
+    private class ConditionalMetadataDerived : ConditionalMetadataBase {
+        override func Log() { }
+
+        override func ToString() string -> "metadata"
+    }
+
+    @Theory
+    @InlineData("ToString")
+    @InlineData("Log")
+    func ImportedConditionalMetadata_IsReadOncePerMethodWithoutCachingLexicalState(member string) {
+        let paths = cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!!).Split(Path.PathSeparator).Concat(
+            []string{typeof(ConditionalMetadataDerived).Assembly.Location}
+        )
+        using let metadata = MetadataLoadContext(PathAssemblyResolver(paths))
+        let owner = metadata.LoadFromAssemblyPath(typeof(ConditionalMetadataDerived).Assembly.Location).GetType(
+            typeof(ConditionalMetadataDerived).FullName!!
+        )!!
+        let method = owner.GetMethod(member)!!
+        let imported = ImportedFunctionSymbol(member, ImportedClassSymbol(owner, nil), method, nil)
+        let tree = SyntaxTree.Parse("")
+        let absent = ConditionalCompilationMap(nil)
+        let present = ConditionalCompilationMap(ImmutableHashSet.Create("A"))
+        using let measurements = CompilationMeasurements.Start("test")
+        for var i = 0; i < 128; i++ {
+            Assert.Equal(member == "Log", KnownAttributes.IsConditionallyElided(imported, absent, tree.Root))
+        }
+        Assert.Equal(int64(2), measurements.GetCounter("conditional.metadata.reads"))
+        Assert.InRange(measurements.GetCounter("conditional.metadata.base-scans"), int64(1), int64(2))
+        Assert.Equal(
+            int64(
+                if member == "Log" {
+                    128
+                } else {
+                    0
+                }
+            ),
+            measurements.GetCounter("conditional.symbols.queried")
+        )
+        Assert.False(KnownAttributes.IsConditionallyElided(imported, present, tree.Root))
+        Assert.Equal(int64(2), measurements.GetCounter("conditional.metadata.reads"))
+    }
+
+    @Fact
+    func ReusedDeclarations_DoNotKeepRetiredActivityTreesAlive() {
+        let chain = MakeRetiredActivityTrees()
+        GC.Collect()
+        GC.WaitForPendingFinalizers()
+        GC.Collect()
+        Assert.All(chain.Retired, (weak WeakReference) -> Assert.False(weak.IsAlive))
+        Assert.Empty(chain.Current.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        GC.KeepAlive(chain.Current)
+    }
+
+    @MethodImpl(MethodImplOptions.NoInlining)
+    private func MakeRetiredActivityTrees()(Current Compilation, Retired[]WeakReference) {
+        var tree = SyntaxTree.Parse("func F(value int32) int32 { return value + 0 }")
+        var current = Compilation(tree){IsLibrary = true}
+        Assert.Empty(current.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let declarations = current.GlobalScope
+        let retired = [12]WeakReference
+        for var i = 0; i < retired.Length; i++ {
+            retired[i] = WeakReference(tree)
+            let next = SyntaxTree.Parse("func F(value int32) int32 { return value + " + (i + 1).ToString() + " }")
+            current = current.ReplaceSyntaxTree(tree, next)
+            Assert.Empty(current.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+            Assert.Same(declarations, current.GlobalScope)
+            tree = next
+        }
+        return (current, retired)
+    }
+
     @Theory
     @InlineData(`c?.Log(value)`, false)
     @InlineData(`c?.Log(value)`, true)

@@ -3550,11 +3550,8 @@ internal partial class OverloadResolver {
             function,
             arguments,
             returnType,
-            isConditionalElided: KnownAttributes.IsConditionallyElided(
-                function,
-                Scope.ConditionalCompilation.SymbolsAt(syntax)
-            )
-        ){MethodTypeArguments = methodTypeArguments}
+            isConditionalElided: KnownAttributes.IsConditionallyElided(function, Scope.ConditionalCompilation, syntax)
+        ){MethodTypeArguments = methodTypeArguments, ConditionalElisionChecked = true}
     }
 
     /// Issue #3760: resolves a user method group against a fully closed input

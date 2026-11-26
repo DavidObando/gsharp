@@ -4,7 +4,9 @@
 
 package GSharp.Core.CodeAnalysis.Binding
 
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -485,10 +487,37 @@ internal shared class KnownAttributes {
 
     /// Checks conditional symbols on a source or imported method, including inherited attributes.
     /// @param function The called function.
-    /// @param preprocessorSymbols The active compilation symbols.
+    /// @param environments The syntax-derived environments.
+    /// @param syntax The call's lexical location.
     /// @returns Whether no conditional symbol keeps the call.
-    internal func IsConditionallyElided(function Symbol, preprocessorSymbols ICollection[string]?) bool ->
-    IsConditionallyElided(ConditionalSymbols(function), preprocessorSymbols)
+    internal func IsConditionallyElided(
+        function Symbol,
+        environments ConditionalCompilationMap,
+        syntax SyntaxNode?
+    ) bool {
+        CompilationMeasurements.Count("conditional.calls.checked")
+        if function is FunctionSymbol source &&
+            source.Attributes.IsDefaultOrEmpty &&
+            source.OverriddenMethod == nil &&
+            source.ExternalOverriddenMethod == nil {
+            return false
+        }
+        if function is ImportedFunctionSymbol imported && ConditionalSymbols(imported.Method).IsDefaultOrEmpty {
+            return false
+        }
+        var active ImmutableHashSet[string]? = nil
+        var sawConditional = false
+        for symbol in ConditionalSymbols(function) {
+            sawConditional = true
+            if symbol != nil {
+                active ??= environments.SymbolsAt(syntax)
+                if active.Contains(symbol) {
+                    return false
+                }
+            }
+        }
+        return sawConditional
+    }
 
     private func ConditionalSymbols(function Symbol) sequence[string?] {
         if function is ImportedFunctionSymbol imported {
@@ -521,24 +550,49 @@ internal shared class KnownAttributes {
         }
     }
 
-    private func ConditionalSymbols(method MethodInfo) sequence[string?] {
+    private class ConditionalMetadata {
+        internal init(symbols ImmutableArray[string?]) {
+            Symbols = symbols
+        }
+        internal prop Symbols ImmutableArray[string?] {
+            get;
+        }
+    }
+
+    private let conditionalMetadata ConditionalWeakTable[MethodInfo, ConditionalMetadata] =
+    ConditionalWeakTable[MethodInfo, ConditionalMetadata]()
+
+    private func ConditionalSymbols(method MethodInfo) ImmutableArray[string?] {
         var method = method
         if method.IsGenericMethod && !method.IsGenericMethodDefinition {
             method = method.GetGenericMethodDefinition()
         }
+        return conditionalMetadata.GetValue(
+            method,
+            (key MethodInfo) -> ConditionalMetadata(ReadConditionalSymbols(key))
+        )
+            .Symbols
+    }
+
+    private func ReadConditionalSymbols(method MethodInfo) ImmutableArray[string?] {
+        let symbols = ImmutableArray.CreateBuilder[string?]()
         var current MethodInfo? = method
         while current is {} declaration {
+            CompilationMeasurements.Count("conditional.metadata.reads")
             for attribute in declaration.GetCustomAttributesData() {
                 if IsConditional(attribute.AttributeType) {
-                    yield if attribute.ConstructorArguments.Count == 1 {
-                        attribute.ConstructorArguments[0].Value as string
-                    } else {
-                        nil
-                    }
+                    symbols.Add(
+                        if attribute.ConstructorArguments.Count == 1 {
+                            attribute.ConstructorArguments[0].Value as string
+                        } else {
+                            nil
+                        }
+                    )
                 }
             }
             current = FindOverriddenConditionalMethod(declaration)
         }
+        return symbols.ToImmutable()
     }
 
     private func FindOverriddenConditionalMethod(method MethodInfo) MethodInfo? {
@@ -547,12 +601,14 @@ internal shared class KnownAttributes {
         }
         // MetadataLoadContext does not implement GetBaseDefinition. Match the inherited virtual slot instead.
         var owner = method.DeclaringType?.BaseType
+        let signature = []MethodInfo{method}
         while owner != nil {
+            CompilationMeasurements.Count("conditional.metadata.base-scans")
             for candidate in ClrTypeUtilities.SafeGetMethods(
                 owner,
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
             ) {
-                if candidate.IsVirtual && MemberLookup.HasSameSignature([]MethodInfo{method}, candidate) {
+                if candidate.IsVirtual && MemberLookup.HasSameSignature(signature, candidate) {
                     return candidate
                 }
             }

@@ -1676,11 +1676,12 @@ internal partial class ExpressionBinder {
     }
 
     private func BindExpressionWithConditionalElision(syntax ExpressionSyntax, canBeVoid bool) BoundExpression {
-        if syntax is not(
-            CallExpressionSyntax or
-                AccessorExpressionSyntax or
-                BaseClassCallExpressionSyntax or
-                BaseInterfaceCallExpressionSyntax
+        var callSyntax = syntax
+        while callSyntax is AccessorExpressionSyntax accessor {
+            callSyntax = accessor.RightPart
+        }
+        if callSyntax is not(
+            CallExpressionSyntax or BaseClassCallExpressionSyntax or BaseInterfaceCallExpressionSyntax
         ) {
             let result = BindExpressionpublic(syntax, canBeVoid)
             return if result is BoundCallOperationExpression {
@@ -1691,6 +1692,7 @@ internal partial class ExpressionBinder {
         }
         let narrowingSnapshot = CaptureNarrowingBindSnapshot()
         let expressionSnapshot = CaptureExpressionNarrowingFrames(recordSiblingCount: false)
+        CompilationMeasurements.Count("conditional.rollback.snapshots", 2)
         let siblingCount = boundSiblingExpressions.Count
         let result = ApplyConditionalCallElision(BindExpressionpublic(syntax, canBeVoid))
         if result is BoundCallOperationExpression{IsElidedConditionalCall: true} {

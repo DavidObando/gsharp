@@ -2400,7 +2400,7 @@ internal partial class OverloadResolver {
             convertedArgs.ToImmutable(),
             callableParameterNameAt
         )
-        let isElided = KnownAttributes.IsConditionallyElided(method, Scope.ConditionalCompilation.SymbolsAt(ce))
+        let isElided = KnownAttributes.IsConditionallyElided(method, Scope.ConditionalCompilation, ce)
         let MakeCall = func (returnTypeOverride TypeSymbol?) BoundUserInstanceCallExpression {
             let result = BoundUserInstanceCallExpression(
                 ce,
@@ -2413,6 +2413,7 @@ internal partial class OverloadResolver {
             )
             result.MethodTypeArguments = methodTypeArguments
             result.IsElidedConditionalCall = isElided
+            result.ConditionalElisionChecked = true
             return result
         }
         if isElided {
