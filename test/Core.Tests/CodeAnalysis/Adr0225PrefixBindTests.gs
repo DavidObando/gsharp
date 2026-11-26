@@ -58,8 +58,14 @@ func Main() {
             let diagnostic = Assert.Single(Bind(source, remainder).Diagnostics)
             Assert.Equal("GS0100", diagnostic.Diagnostic.Id)
             Assert.Equal(source.IndexOf("Value", StringComparison.Ordinal), diagnostic.Diagnostic.Location.Span.Start)
-            Assert.Equal(DiagnosticFinality.Final, diagnostic.Finality)
-            Assert.Equal(string.Empty, diagnostic.Reason)
+            // #6215: with nothing after the cut, a report outside the shapes that the opt-in later-type test
+            // follows is later-type.
+            if remainder == PrefixRemainder.Nothing && diagnostic.Finality != DiagnosticFinality.Final {
+                Assert.Equal("later-type", diagnostic.Reason)
+            } else {
+                Assert.Equal(DiagnosticFinality.Final, diagnostic.Finality)
+                Assert.Equal(string.Empty, diagnostic.Reason)
+            }
         }
     }
 
@@ -401,7 +407,10 @@ class Impl : IFoo {
 `
         let diagnostic = Assert.Single(Bind(source, PrefixRemainder.Nothing).Diagnostics)
         Assert.Equal("GS0495", diagnostic.Diagnostic.Id)
-        Assert.Equal(DiagnosticFinality.Final, diagnostic.Finality)
+        // #6215: the declaration is outside the shapes that the opt-in later-type test follows.
+        if diagnostic.Finality != DiagnosticFinality.Final {
+            Assert.Equal("later-type", diagnostic.Reason)
+        }
     }
 
     @Fact
@@ -834,7 +843,15 @@ func Value(x int32) int32 {
                         } else {
                             DiagnosticFinality.Final
                         }
-                        if found.Count != 1 || found[0].Finality != finality {
+                        // #6215: the later-type test is opt-in, so a report outside the shapes that it follows
+                        // (in a generic function or type, or behind a qualified name) is later-type instead of
+                        // final.
+                        let laterType = remainder == PrefixRemainder.Nothing &&
+                            finality == DiagnosticFinality.Final &&
+                            found.Count == 1 &&
+                            found[0].Finality == DiagnosticFinality.FutureDependent &&
+                            found[0].Reason == "later-type"
+                        if found.Count != 1 || (found[0].Finality != finality && !laterType) {
                             wrong.Add(
                                 "${Path.GetFileName(file)} cut ${cut} ${remainder} ${mutation.Id}: expected ${finality}, got ${string.Join("; ", result.Diagnostics)}"
                             )
