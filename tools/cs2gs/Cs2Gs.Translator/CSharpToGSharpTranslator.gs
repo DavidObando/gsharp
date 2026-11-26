@@ -616,7 +616,7 @@ partial class CSharpToGSharpTranslator {
             allImports,
             members,
             leadingComments: FileHeader.GetLines(root),
-            fileAttributes: this.PreserveConditionalSymbols(contributingTrees, context, fileAttributes)
+            fileAttributes: this.PreserveConditionalSymbols(visitor.ConditionalInvocations, context, fileAttributes)
         )
     }
 

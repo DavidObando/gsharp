@@ -15,6 +15,122 @@ import Xunit
 
 open class Issue6231ConditionalSymbolPreservationTests {
     @Fact
+    func MergedOutputIgnoresUnrelatedCallsInAContributingFile() {
+        let project = CSharpProjectLoader.LoadInMemory([](string, source string){("A.cs", `
+#define ACTIVE
+using System.Diagnostics;
+public static partial class P {
+    [Conditional("ACTIVE")] public static void Report() { }
+    public static void A() { Report(); }
+}
+`), ("B.cs", `
+#undef ACTIVE
+public static partial class P { public static void B() { } }
+public static class Q { public static void Run() { P.Report(); } }
+`)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        Assert.Equal(2, project.Documents.Count)
+        for document in project.Documents {
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator(preservePartialParts: false){
+                    SupportsScopedConditionalSymbols = true
+                }.TranslateDocument(document, context)
+            )
+            Assert.Empty(
+                context.Diagnostics.Where(
+                    (diagnostic TranslationDiagnostic) -> diagnostic.Severity != TranslationSeverity.Info
+                )
+            )
+            if document.FilePath.EndsWith("A.cs", StringComparison.Ordinal) {
+                Assert.Contains("@file:DefineSymbol(\"ACTIVE\")", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("class Q", printed, StringComparison.Ordinal)
+            } else {
+                Assert.Contains("@file:UndefineSymbol(\"ACTIVE\")", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("class P", printed, StringComparison.Ordinal)
+            }
+        }
+    }
+
+    @Fact
+    func PackageOutputIgnoresCallsInAnotherNamespace() {
+        let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Split.cs", `
+#define ACTIVE
+using System.Diagnostics;
+namespace First { public static class P { public static int Value() => 1; } }
+namespace Second {
+    public static class Q {
+        [Conditional("ACTIVE")] static void Report() { }
+        public static void Run() { Report(); }
+    }
+}
+`)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        for packageName in[]string{"First", "Second"} {
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator(packageFilter: packageName, includeGlobalNamespace: false){
+                    SupportsScopedConditionalSymbols = packageName == "Second"
+                }.TranslateDocument(document, context)
+            )
+            Assert.Empty(
+                context.Diagnostics.Where(
+                    (diagnostic TranslationDiagnostic) -> diagnostic.Severity != TranslationSeverity.Info
+                )
+            )
+            if packageName == "Second" {
+                Assert.Contains("@file:DefineSymbol(\"ACTIVE\")", printed, StringComparison.Ordinal)
+            } else {
+                Assert.Contains("class P", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("@file:DefineSymbol", printed, StringComparison.Ordinal)
+                Assert.DoesNotContain("class Q", printed, StringComparison.Ordinal)
+            }
+        }
+    }
+
+    @Fact
+    func OwnedExtensionSymbolsFollowTheEmittedBody() {
+        let project = CSharpProjectLoader.LoadInMemory([](string, source string){("A.cs", `
+#undef ACTIVE
+public class P { }
+`), ("B.cs", `
+#define ACTIVE
+using System.Diagnostics;
+public static class Extensions {
+    [Conditional("ACTIVE")] public static void Report() { }
+    public static void Log(this P receiver) { Report(); }
+}
+`)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        Assert.Equal(2, project.Documents.Count)
+        var emittedBodies = 0
+        var symbolHeaders = 0
+        for document in project.Documents {
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator(){SupportsScopedConditionalSymbols = true}.TranslateDocument(document, context)
+            )
+            Assert.Empty(
+                context.Diagnostics.Where(
+                    (diagnostic TranslationDiagnostic) -> diagnostic.Severity != TranslationSeverity.Info
+                )
+            )
+            let ownsBody = printed.Contains(" Log(", StringComparison.Ordinal)
+            let definesSymbol = printed.Contains("@file:DefineSymbol(\"ACTIVE\")", StringComparison.Ordinal)
+            Assert.Equal(ownsBody, definesSymbol)
+            if ownsBody {
+                emittedBodies++
+            }
+            if definesSymbol {
+                symbolHeaders++
+            }
+        }
+        Assert.Equal(1, emittedBodies)
+        Assert.Equal(1, symbolHeaders)
+    }
+
+    @Fact
     func ConditionalCallsPreserveDefinedAndUndefinedSymbolsInSortedFileAnnotations() {
         let result = Translate(true)
         Assert.Empty(

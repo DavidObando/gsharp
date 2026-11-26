@@ -17,6 +17,21 @@ partial class CSharpToGSharpTranslator {
     /// Gets or sets whether the destination compiler supports ADR-0230 symbol annotations.
     prop SupportsScopedConditionalSymbols bool
 
+    private partial class DeclarationVisitor {
+        let ConditionalInvocations List[InvocationExpressionSyntax] = List[InvocationExpressionSyntax]()
+
+        private func RecordConditionalInvocation(expression ExpressionSyntax) {
+            var target = expression
+            while target is ConditionalAccessExpressionSyntax access {
+                target = access.WhenNotNull
+            }
+            if target is InvocationExpressionSyntax invocation &&
+                this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol{IsConditional: true} {
+                this.ConditionalInvocations.Add(invocation)
+            }
+        }
+    }
+
     shared {
         const ConditionalSymbolsDiagnosticId string = "CS2GS-CONDITIONAL-SYMBOLS"
 
@@ -34,35 +49,37 @@ partial class CSharpToGSharpTranslator {
     }
 
     private func PreserveConditionalSymbols(
-        trees IEnumerable[SyntaxTree],
+        invocations IEnumerable[InvocationExpressionSyntax],
         context TranslationContext,
         attributes IReadOnlyList[AttributeUse]
     ) IReadOnlyList[AttributeUse] {
         let states = Dictionary[string, bool](StringComparer.Ordinal)
         var conflicting = false
         var firstCall InvocationExpressionSyntax? = nil
-        for tree in trees.OrderBy((item SyntaxTree) -> item.FilePath, StringComparer.Ordinal) {
+        for invocation in invocations
+            .Distinct()
+            .OrderBy((item InvocationExpressionSyntax) -> item.SyntaxTree.FilePath, StringComparer.Ordinal)
+            .ThenBy((item InvocationExpressionSyntax) -> item.SpanStart) {
+            let tree = invocation.SyntaxTree
             using let model = context.UseSemanticModelFor(tree, context.Compilation)
-            for invocation in tree.GetRoot().DescendantNodes().OfType[InvocationExpressionSyntax]() {
-                if context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method || !method.IsConditional {
+            if context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method || !method.IsConditional {
+                continue
+            }
+            firstCall ??= invocation
+            for name in GetConditionalMethodSymbols(method) {
+                if !SymbolNames.IsValidName(name) {
+                    context.ReportUnsupported(
+                        invocation,
+                        "The conditional symbol '$name' cannot be represented by a G# symbol annotation.",
+                        ConditionalSymbolsDiagnosticId
+                    )
                     continue
                 }
-                firstCall ??= invocation
-                for name in GetConditionalMethodSymbols(method) {
-                    if !SymbolNames.IsValidName(name) {
-                        context.ReportUnsupported(
-                            invocation,
-                            "The conditional symbol '$name' cannot be represented by a G# symbol annotation.",
-                            ConditionalSymbolsDiagnosticId
-                        )
-                        continue
-                    }
-                    let defined = context.IsPreprocessorSymbolDefined(tree, invocation.SpanStart, name)
-                    if states.TryGetValue(name, out var previous) && previous != defined {
-                        conflicting = true
-                    } else {
-                        states[name] = defined
-                    }
+                let defined = context.IsPreprocessorSymbolDefined(tree, invocation.SpanStart, name)
+                if states.TryGetValue(name, out var previous) && previous != defined {
+                    conflicting = true
+                } else {
+                    states[name] = defined
                 }
             }
         }

@@ -7488,6 +7488,7 @@ partial class CSharpToGSharpTranslator {
 
         private func TranslateExpressionStatement(expression ExpressionSyntax?) GStatement? {
             if expression != nil && this.IsElidedInvocation(expression) {
+                this.RecordConditionalInvocation(expression)
                 return nil
             }
             if expression is ConditionalAccessExpressionSyntax conditionalAccess &&
@@ -8055,6 +8056,7 @@ partial class CSharpToGSharpTranslator {
             GStatement
         ]? {
             if expression != nil && this.IsElidedInvocation(expression) {
+                this.RecordConditionalInvocation(expression)
                 return Array.Empty[GStatement]()
             }
             if expression is AssignmentExpressionSyntax assignment && assignment.IsKind(

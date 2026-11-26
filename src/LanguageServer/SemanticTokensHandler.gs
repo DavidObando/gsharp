@@ -81,6 +81,7 @@ shared class SemanticTokensComputer {
             // Fall back to syntax-only classification
 
         }
+        inactiveSpans.Sort((left TextSpan, right TextSpan) -> left.Start.CompareTo(right.Start))
         // Use ParseTokens to get ALL tokens including comments (parser filters them out)
         let allTokens = SyntaxTree.ParseTokens(text)
         var inactiveIndex = 0

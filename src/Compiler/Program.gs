@@ -428,7 +428,9 @@ open class Program {
                     ),
                     parsed
                 )
-                DiagnosticWriter.WriteDiagnostics(Console.Out, symbolWarnings)
+                if symbolWarnings.Count > 0 {
+                    DiagnosticWriter.WriteDiagnostics(Console.Out, symbolWarnings)
+                }
                 if symbolWarnings.Any((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error) {
                     return Error
                 }
