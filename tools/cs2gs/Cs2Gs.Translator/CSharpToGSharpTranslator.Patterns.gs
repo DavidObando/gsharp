@@ -6932,13 +6932,10 @@ partial class CSharpToGSharpTranslator {
             for (symbol, boundLocal) in pinnedBindings {
                 this.state.PatternBindings[symbol] = boundLocal
             }
+            // Keep the capture variable non-null-free here; gsc narrows it from the when-guard assignment (#5643).
             for delayedCapture in switchDelayedCompoundCaptures {
                 this.state.StoredPatternCaptures.Add(delayedCapture)
-                for boundKey in this.state.PatternBindings.Keys.ToList() {
-                    if object.ReferenceEquals(this.state.PatternBindings[boundKey], delayedCapture) {
-                        this.state.PatternBindings[boundKey] = NonNullAssertionExpression(delayedCapture)
-                    }
-                }
+                this.state.NonNullStoredPatternCaptures.Add(delayedCapture)
             }
             let result = combined ?? LiteralExpression.Bool(true)
             return if localCompoundDeclarations.Count == 0 {

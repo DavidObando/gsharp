@@ -1725,6 +1725,7 @@ internal partial class ExpressionBinder {
         // Issue #343: pre-validate named-argument layout for CLR constructor calls.
         if !overloads.TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
             DeclareInvalidClrConstructorInlineOutLocals(syntax, inlineOutArguments, bindExplicitTyped: true)
+            overloads.BindCallArgumentsForLayoutRecovery(syntax.Arguments, preserveInlineOutDeclarations: true)
             result = BoundErrorExpression(syntax)
             return true
         }
@@ -1747,6 +1748,19 @@ internal partial class ExpressionBinder {
                 (canAccessInternalConstructors && (constructor.IsAssembly || constructor.IsFamilyOrAssembly))
         )
             .ToArray()
+        if ctors.Length > 0 && CallCandidateRecorder.IsEnabled {
+            let constructedType = resultTypeOverride ??
+                (
+                if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {
+                    cast[TypeSymbol](
+                        ImportedTypeSymbol.GetConstructed(clrType, openGenericDefinition, symbolicTypeArgs)
+                    )
+                } else {
+                    TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+                }
+            )
+            CallCandidateRecorder.RecordConstructors(ctors, constructedType)
+        }
         if inlineOutArguments.Count > 0 {
             let invalidInlineOutArguments = inlineOutArguments.Where(
                 (index int32) -> !ctors.Any(

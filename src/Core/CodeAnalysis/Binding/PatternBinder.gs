@@ -1367,7 +1367,7 @@ internal class PatternBinder {
                 case lit is BoundLiteralExpression when lit.Value != nil && ExpressionBinder.IsIntegerLiteralValue(
                     lit.Value
                 ) {
-                    value = lit.Value!!
+                    value = lit.Value
                     return true
                 }
                 case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.Identity &&

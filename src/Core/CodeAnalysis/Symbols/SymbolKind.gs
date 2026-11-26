@@ -19,5 +19,7 @@ enum SymbolKind {
     EnumMember,
     Property,
     Event,
-    TypeAlias
+    TypeAlias,
+    /// The constructor of an imported type (#6177).
+    ImportedConstructor
 }

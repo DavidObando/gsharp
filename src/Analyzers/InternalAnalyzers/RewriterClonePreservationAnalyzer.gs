@@ -307,8 +307,8 @@ class RewriterClonePreservationAnalyzer : GSharpDiagnosticAnalyzer {
                             AddPatternMembers(label.Value!!, reads)
                         }
                     }
-                    case invocation is CallExpressionSyntax when model != nil {
-                        FollowHelper(invocation, parameterName, model!!, reads, cancellationToken)
+                    case invocation is CallExpressionSyntax when model is {} resolvedModel {
+                        FollowHelper(invocation, parameterName, resolvedModel, reads, cancellationToken)
                     }
                 }
             }

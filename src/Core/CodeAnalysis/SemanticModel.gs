@@ -248,6 +248,23 @@ partial class SemanticModel {
                 bound = operand
                 continue
             }
+            if current is BoundNullConditionalAccessExpression hop {
+                let unwrapWhenNotNull = switch hop.WhenNotNull {
+                    case BoundIndirectCallExpression{
+                        Target: BoundVariableExpression targetVar
+                    }: !object.ReferenceEquals(targetVar.Variable, hop.Capture)
+                    case BoundFunctionPointerInvocationExpression{
+                        Pointer: BoundVariableExpression ptrVar
+                    }: !object.ReferenceEquals(ptrVar.Variable, hop.Capture)
+                    default: true
+                }
+                bound = if unwrapWhenNotNull {
+                    hop.WhenNotNull
+                } else {
+                    hop.Receiver
+                }
+                continue
+            }
             // An assignment answers the variable, field or property it writes, never the receiver
             // of the write (#6126). A write to a field-like event's backing field answers nothing.
             if current is BoundFieldAssignmentExpression{Field: {IsEventBackingField: true}} {
@@ -270,9 +287,13 @@ partial class SemanticModel {
                 ReferencedSourceSymbol(expression) is {} widened {
                 return SymbolInfo(widened)
             }
-            // A constructor call answers the `init` that overload resolution chose (#6079).
+            // A constructor call answers the `init` that overload resolution chose (#6079), or the imported
+            // constructor (#6177).
             if current is BoundConstructorCallExpression{SelectedConstructor: {} constructor} {
                 return SymbolInfo(constructor.Function)
+            }
+            if current is BoundClrConstructorCallExpression clrConstruction {
+                return SymbolInfo(ImportedConstructorSymbol(clrConstruction.Constructor, clrConstruction.Type))
             }
             if current is BoundImportedInstanceCallExpression{AssociatedProperty: not nil} importedPropertyCall &&
                 ReferencedImportedSymbol(importedPropertyCall) is {} importedPropertySymbol {
@@ -305,8 +326,64 @@ partial class SemanticModel {
         if index.Value.StaticQualifierTypes.TryGetValue(target, out var qualifierType) && qualifierType != nil {
             return SymbolInfo(qualifierType)
         }
+        // #6217: the name of a member answers the member, as its identifier does. An inner accessor of a
+        // chain (`B.C` in `A.B.C`) answers as its terminal.
+        if MemberNameToken(target) is {} memberName {
+            return SymbolInfo(GetTokenSymbol(memberName))
+        }
+        if InnerAccessorTerminal(target) is {} terminal {
+            return GetSymbolInfo(terminal, cancellationToken)
+        }
         return SymbolInfo.None
     }
+
+    // #6217: the identifier of a name that names a member in an accessor chain: the right part of an
+    // accessor, or a middle name of `A.B.C` (the left part of an inner accessor). The head of a chain
+    // binds on its own.
+    private func MemberNameToken(node SyntaxNode) SyntaxToken? {
+        let identifier = if node is NameExpressionSyntax name {
+            name.IdentifierToken
+        } else if node is GenericNameExpressionSyntax generic {
+            generic.Identifier
+        } else {
+            return nil
+        }
+        // An indexed member (`Text` in `c.Text[0]`) is the target of an index expression in the chain.
+        var member SyntaxNode = node
+        while member.Parent is IndexExpressionSyntax index && object.ReferenceEquals(index.Target, member) {
+            member = index
+        }
+        if member.Parent is not AccessorExpressionSyntax accessor {
+            return nil
+        }
+        if object.ReferenceEquals(accessor.RightPart, member) {
+            return identifier
+        }
+        return if object.ReferenceEquals(accessor.LeftPart, member) && IsInnerAccessor(accessor) {
+            identifier
+        } else {
+            default(SyntaxToken?)
+        }
+    }
+
+    // #6217: the outermost accessor of the chain of an inner accessor (`A.B.C` for `B.C`). G# nests a chain
+    // to the right, so an inner accessor has the value of the whole chain, also when its terminal is an
+    // index expression that has no anchor of its own (`bag.D.Id[0]`).
+    private func InnerAccessorTerminal(node SyntaxNode) ExpressionSyntax? {
+        if node is not AccessorExpressionSyntax accessor || !IsInnerAccessor(accessor) {
+            return nil
+        }
+        var outer AccessorExpressionSyntax = accessor
+        while outer.Parent is AccessorExpressionSyntax parent && object.ReferenceEquals(parent.RightPart, outer) {
+            outer = parent
+        }
+        return outer
+    }
+
+    private func IsInnerAccessor(
+        accessor AccessorExpressionSyntax
+    ) bool -> accessor.Parent is AccessorExpressionSyntax outer &&
+        object.ReferenceEquals(outer.RightPart, accessor)
 
     /// Returns the type of the expression at [`node`](paramref) — the
     /// counterpart of Roslyn's `GetTypeInfo`. The outermost bound node's
@@ -315,11 +392,23 @@ partial class SemanticModel {
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The resolution result; (cref:TypeInfo.Type) is null for non-expressions.
     func GetTypeInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) TypeInfo {
-        return if GetBoundNode(node, cancellationToken) is BoundExpression expression {
-            TypeInfo((CapturedIndexArgument(expression, expectedBlockSyntax: node) ?? expression).Type)
-        } else {
-            TypeInfo.None
+        if GetBoundNode(node, cancellationToken) is BoundExpression expression {
+            return TypeInfo((CapturedIndexArgument(expression, expectedBlockSyntax: node) ?? expression).Type)
         }
+        // #6217: the name of a member has the type of the member read, and an inner accessor the type of its
+        // terminal.
+        if MemberNameToken(node) is {} memberName {
+            // The read keeps its narrowing: a null assertion that the binder adds carries the narrowed type.
+            return if FindReferencedNode(memberName) is {} read && GetTokenSymbol(memberName) != nil {
+                TypeInfo(read.Type)
+            } else {
+                TypeInfo.None
+            }
+        }
+        if InnerAccessorTerminal(node) is {} terminal {
+            return GetTypeInfo(terminal, cancellationToken)
+        }
+        return TypeInfo.None
     }
 
     /// Reads the actual binder's closed type-receiver decision at an original
@@ -640,10 +729,9 @@ partial class SemanticModel {
             if error.FailedCallee is {} callee {
                 VisitExpression(callee)
             }
-            if error.CallSyntax is {} callSyntax && !error.MemberGroup.IsDefaultOrEmpty && object.ReferenceEquals(
-                callSyntax.SyntaxTree,
-                tree
-            ) {
+            if error.CallSyntax is {} callSyntax &&
+                (!error.MemberGroup.IsDefaultOrEmpty || !error.ConstructorGroup.IsDefaultOrEmpty) &&
+                object.ReferenceEquals(callSyntax.SyntaxTree, tree) {
                 failedCalls.TryAdd(callSyntax, error)
             }
             if !error.FailedChildren.IsDefaultOrEmpty {

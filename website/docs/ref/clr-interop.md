@@ -303,7 +303,7 @@ ADR-0231 specifies the `@defined("NAME")` constant expression and `@If(predicate
 conditional inclusion. Inclusion checks inherited symbol state before adding the
 annotated node's own definitions. Ordinary `if` still checks both arms.
 These accepted contracts require implementation and are not supported by the
-published 0.5.793 SDK. They do not introduce runtime variables or textual preprocessing.
+published 0.5.803 SDK. They do not introduce runtime variables or textual preprocessing.
 Ordinary annotated blocks retain their existing variable scopes.
 
 ## By-ref pointers (`&` / `*` / `*T`)

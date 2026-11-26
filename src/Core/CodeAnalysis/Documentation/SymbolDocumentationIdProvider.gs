@@ -300,7 +300,7 @@ internal shared class SymbolDocumentationIdProvider {
                 !importedType.TypeArguments.IsDefaultOrEmpty {
                 AppendClrConstructedTypeReference(
                     builder,
-                    importedType.OpenDefinition!!,
+                    importedType.OpenDefinition,
                     importedType.TypeArguments,
                     ownerType,
                     function
