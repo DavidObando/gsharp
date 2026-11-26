@@ -18,6 +18,8 @@ class Issue6231ScopedSymbolsTests {
     @InlineData(`Omit(other.Read())`, "Read", true)
     @InlineData(`other.Next().Keep(1)`, "Next", false)
     @InlineData(`other.Next().Keep(1)`, "Next", true)
+    @InlineData(`other.Next()?.Keep(1)`, "Next", false)
+    @InlineData(`other.Next()?.Keep(1)`, "Next", true)
     @InlineData(`other.Read().KeepExtension(1)`, "Read", false)
     @InlineData(`other.Read().KeepExtension(1)`, "Read", true)
     @InlineData(`(1).KeepExtension(other.Read())`, "Read", false)
@@ -70,6 +72,8 @@ class Child : Parent {
     @InlineData(`Omit(other.Read())`, "Read", true)
     @InlineData(`other.Next().Keep(1)`, "Next", false)
     @InlineData(`other.Next().Keep(1)`, "Next", true)
+    @InlineData(`other.Next()?.Keep(1)`, "Next", false)
+    @InlineData(`other.Next()?.Keep(1)`, "Next", true)
     @InlineData(`other.Read().KeepExtension(1)`, "Read", false)
     @InlineData(`other.Read().KeepExtension(1)`, "Read", true)
     @InlineData(`(1).KeepExtension(other.Read())`, "Read", false)
@@ -149,9 +153,15 @@ public class GenericCalls<T> {
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func Driver_RetainedSourceOperands_StillElideEffectsAndCaptures(enabled bool) {
+    @InlineData("plain", false)
+    @InlineData("plain", true)
+    @InlineData("nullable", false)
+    @InlineData("nullable", true)
+    @InlineData("slice", false)
+    @InlineData("slice", true)
+    @InlineData("nullable-slice", false)
+    @InlineData("nullable-slice", true)
+    func Driver_RetainedSourceOperands_StillElideEffectsAndCaptures(shape string, enabled bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let source = "import System\nimport System.Diagnostics\n" +
             (
@@ -162,11 +172,16 @@ public class GenericCalls<T> {
             }
         ) +
             `@Conditional("A") func (self int32) KeepCapture(action () -> void) { action() }
+@Conditional("A") func (self slice[int32]) KeepSlice(action () -> void) { action() }
+class C { @Conditional("A") func Keep(action () -> void) { action() } }
 class Calls { shared {
     @Conditional("A") func Keep[T](value T, action () -> void) { action() }
 } }
 func Receiver() int32 { Console.Write("r") return 1 }
 func Argument() int32 { Console.Write("a") return 1 }
+func NullableReceiver() C? { Console.Write("r") return C() }
+func SliceReceiver() slice[int32] { Console.Write("r") return slice[int32]{1} }
+func NullableSliceReceiver() slice[int32]? { Console.Write("r") return slice[int32]{1} }
 class Consumer { shared {
     func Run() {
         var value = 7
@@ -183,13 +198,30 @@ Consumer.Run()`
         let expected = CaptureLayout(baseline)
         IlVerifier.Verify(baseline)
         Assert.Equal(Encoding.UTF8.GetBytes("7"), fixture.RunBytes(baseline))
-        let program = fixture.Compile(source.Replace("// CALLS", `Receiver().KeepCapture(func () { value++ })
-        Calls.Keep[int32](Argument(), func () { value++ })`, StringComparison.Ordinal), "CaptureRetention6231", true)
+        let calls = if shape == "plain" {
+            `Receiver().KeepCapture(func () { value++ })
+        Calls.Keep[int32](Argument(), func () { value++ })`
+        } else if shape == "nullable" {
+            `NullableReceiver()?.Keep(func () { Console.Write("a") value++ })`
+        } else if shape == "slice" {
+            `SliceReceiver().KeepSlice(func () { Console.Write("a") value++ })`
+        } else {
+            `NullableSliceReceiver()?.KeepSlice(func () { Console.Write("a") value++ })`
+        }
+        let program = fixture.Compile(
+            source.Replace("// CALLS", calls, StringComparison.Ordinal),
+            "CaptureRetention6231",
+            true
+        )
         IlVerifier.Verify(program)
         Assert.Equal(
             Encoding.UTF8.GetBytes(
                 if enabled {
-                    "ra9"
+                    if shape == "plain" {
+                        "ra9"
+                    } else {
+                        "ra8"
+                    }
                 } else {
                     "7"
                 }
@@ -203,6 +235,44 @@ Consumer.Run()`
             Assert.Equal(expected.Types, actual.Types)
             Assert.Equal(expected.Locals, actual.Locals)
         }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Driver_ConditionalNativeReceivers_PreserveMutableStorage(enabled bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = "import System\nimport System.Diagnostics\n" +
+            (
+            if enabled {
+                "@file:DefineSymbol(\"A\")\n"
+            } else {
+                ""
+            }
+        ) +
+            `struct Cell {
+    var Value int32
+    @Conditional("A") func Increment() { this.Value++ }
+}
+@Conditional("A") func (self slice[int32]) Increment() { self[0]++ }
+var cells = slice[Cell]{Cell{Value: 7}}
+cells[0].Increment()
+let data = slice[int32]{3}
+data.Increment()
+Console.Write(cells[0].Value)
+Console.Write(data[0])`
+        let program = fixture.Compile(source, "ConditionalNativeStorage6231", true)
+        IlVerifier.Verify(program)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                if enabled {
+                    "84"
+                } else {
+                    "73"
+                }
+            ),
+            fixture.RunBytes(program)
+        )
     }
 
     private func CaptureLayout(program string)(Types[]string, Locals[]string) {

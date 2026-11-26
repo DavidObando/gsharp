@@ -69,6 +69,12 @@ abstract class BoundCallOperationExpression : BoundExpression {
         set;
     }
 
+    /// Gets discarded receiver-initialization statements for semantic traversal only.
+    internal prop ElidedSourceStatements ImmutableArray[BoundStatement] {
+        get;
+        set;
+    }
+
     /// Gets the logical void result of an elided call, independent of its suspending ABI.
     internal func GetConditionalCallType(resultType TypeSymbol) TypeSymbol -> if IsElidedConditionalCall {
         TypeSymbol.Void

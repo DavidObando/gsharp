@@ -1534,7 +1534,13 @@ internal partial class ExpressionBinder {
         }
         $scope = $scope.Pop()
         if whenNotNull is BoundCallOperationExpression{IsElidedConditionalCall: true} {
-            return whenNotNull
+            return ApplyConditionalCallElision(
+                BoundBlockExpression(
+                    nil,
+                    ImmutableArray.Create[BoundStatement](BoundVariableDeclaration(nil, capture, receiver)),
+                    whenNotNull
+                )
+            )
         }
         // Issue #1213: a null-conditional invocation whose access produces no
         // value — the canonical event-raise form `evt?.Invoke(args)` where the

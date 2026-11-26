@@ -116,6 +116,15 @@ abstract class BoundTreeWalker {
         if node == nil {
             return
         }
+        if node is BoundCallOperationExpression call &&
+            call.IsElidedConditionalCall &&
+            VisitElidedConditionalCallOperands &&
+            !call.ElidedSourceStatements.IsDefaultOrEmpty {
+            // Index original source before synthetic receiver references can claim its syntax.
+            for statement in call.ElidedSourceStatements {
+                VisitStatement(statement)
+            }
+        }
         switch node.Kind {
             case BoundNodeKind.ErrorExpression,
             BoundNodeKind.Utf8StringExpression,

@@ -37,6 +37,18 @@ internal partial class ExpressionBinder {
             )
         ) {
             call.IsElidedConditionalCall = true
+            if expression is BoundBlockExpression {
+                let sourceStatements = ImmutableArray.CreateBuilder[BoundStatement]()
+                var current BoundExpression = expression
+                while current is BoundBlockExpression prefix {
+                    sourceStatements.AddRange(prefix.Statements)
+                    current = prefix.Expression
+                }
+                if !call.ElidedSourceStatements.IsDefaultOrEmpty {
+                    sourceStatements.AddRange(call.ElidedSourceStatements)
+                }
+                call.ElidedSourceStatements = sourceStatements.ToImmutable()
+            }
             return call
         }
         return expression

@@ -18,6 +18,98 @@ import Xunit
 
 class Issue6231ConditionalCompilationTests {
     @Theory
+    @InlineData(`c?.Log(value)`, false)
+    @InlineData(`c?.Log(value)`, true)
+    @InlineData(`Build(value).LogSlice(value)`, false)
+    @InlineData(`Build(value).LogSlice(value)`, true)
+    @InlineData(`MaybeBuild(value)?.LogSlice(value)`, false)
+    @InlineData(`MaybeBuild(value)?.LogSlice(value)`, true)
+    func ConditionalOriginalReceivers_RetainSourceRatherThanCaptureTemporaries(call string, enabled bool) {
+        let source = `import System.Diagnostics
+class C { @Conditional("A") func Log(value int32) {} }
+@Conditional("A") func (self slice[int32]) LogSlice(value int32) {}
+func Build(value int32) slice[int32] -> slice[int32]{value}
+func MaybeBuild(value int32) slice[int32]? -> slice[int32]{value}
+func Read(c C?, value int32) {
+    ` + call + `
+    let after = 1
+}`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "original-receiver.gs"))
+        let compilation = Compilation(tree){
+            IsLibrary = true,
+            IncrementalBodyReuse = true,
+            PreprocessorSymbols = if enabled {
+                ImmutableHashSet.Create("A")
+            } else {
+                ImmutableHashSet[string].Empty
+            }
+        }
+        AssertOriginalReceiverIndexed(compilation, tree, enabled)
+        let editedSource = source.Replace("let after = 1", "let after = 2", StringComparison.Ordinal)
+        let edited = SyntaxTree.Parse(SourceText.From(editedSource, "original-receiver.gs"))
+        let successor = compilation.ReplaceSyntaxTree(tree, edited)
+        AssertOriginalReceiverIndexed(successor, edited, enabled)
+        let prefix = successor.BindPrefix(
+            edited,
+            editedSource.IndexOf("    let after", StringComparison.Ordinal),
+            PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+        )
+        AssertOriginalReceiverIndexed(prefix.Compilation, prefix.SyntaxTree, enabled)
+    }
+
+    private func AssertOriginalReceiverIndexed(compilation Compilation, tree SyntaxTree, enabled bool) {
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let model = compilation.GetSemanticModel(tree)
+        let read = tree
+            .Root
+            .Members
+            .OfType[FunctionDeclarationSyntax]()
+            .Single((function FunctionDeclarationSyntax) -> function.Identifier.Text == "Read")
+        let names = read
+            .DescendantNodesAndSelf()
+            .OfType[NameExpressionSyntax]()
+            .Where((name NameExpressionSyntax) -> name.IdentifierToken.Text is "c" or "value")
+            .ToArray()
+        Assert.True(names.Length >= 2)
+        for name in names {
+            let parameter = read.Parameters.Single(
+                (p ParameterSyntax) -> p.Identifier?.Text == name.IdentifierToken.Text
+            )
+            let symbol = Assert.IsAssignableFrom[VariableSymbol](model.GetDeclaredSymbol(parameter))
+            Assert.True(compilation.IsActive(name))
+            let bound = Assert.IsAssignableFrom[BoundExpression](model.GetBoundNode(name))
+            Assert.NotEqual(TypeSymbol.Error, bound.Type)
+            Assert.Equal(symbol.Type, bound.Type)
+            Assert.Equal(symbol.Type, model.GetTypeInfo(name).Type)
+            Assert.Same(symbol, model.GetSymbolInfo(name).Symbol)
+        }
+        let calls = read.DescendantNodesAndSelf().OfType[CallExpressionSyntax]().ToArray()
+        let conditional = calls.Single((c CallExpressionSyntax) -> c.Identifier.Text is "Log" or "LogSlice")
+        var boundConditional = Assert.IsAssignableFrom[BoundExpression](model.GetBoundNode(conditional))
+        while boundConditional is BoundBlockExpression block {
+            boundConditional = block.Expression
+        }
+        Assert.Equal(
+            !enabled,
+            Assert.IsAssignableFrom[BoundCallOperationExpression](boundConditional).IsElidedConditionalCall
+        )
+        Assert.Equal(TypeSymbol.Void, model.GetTypeInfo(conditional).Type)
+        let factory = calls.SingleOrDefault((c CallExpressionSyntax) -> c.Identifier.Text is "Build" or "MaybeBuild")
+        if factory != nil {
+            let declaration = tree
+                .Root
+                .Members
+                .OfType[FunctionDeclarationSyntax]()
+                .Single((function FunctionDeclarationSyntax) -> function.Identifier.Text == factory.Identifier.Text)
+            let symbol = Assert.IsAssignableFrom[FunctionSymbol](model.GetDeclaredSymbol(declaration))
+            let bound = Assert.IsAssignableFrom[BoundCallOperationExpression](model.GetBoundNode(factory))
+            Assert.Same(symbol, bound.CalledFunction)
+            Assert.Same(symbol, model.GetSymbolInfo(factory).Symbol)
+            Assert.Equal(symbol.Type, model.GetTypeInfo(factory).Type)
+        }
+    }
+
+    @Theory
     @InlineData(`c.Log(value)`, false)
     @InlineData(`c.Log(value)`, true)
     @InlineData(`KeepFree(value)`, false)
@@ -148,6 +240,12 @@ func Read(c C, value int32, trace TraceSource) {
     @InlineData(`Omit(other.Read())`, "Read", true)
     @InlineData(`other.Next().Keep(1)`, "Next", false)
     @InlineData(`other.Next().Keep(1)`, "Next", true)
+    @InlineData(`other.MaybeNext()?.Keep(1)`, "MaybeNext", false)
+    @InlineData(`other.MaybeNext()?.Keep(1)`, "MaybeNext", true)
+    @InlineData(`other.Items().KeepSlice()`, "Items", false)
+    @InlineData(`other.Items().KeepSlice()`, "Items", true)
+    @InlineData(`other.MaybeItems()?.KeepSlice()`, "MaybeItems", false)
+    @InlineData(`other.MaybeItems()?.KeepSlice()`, "MaybeItems", true)
     @InlineData(`other.Read().KeepExtension(1)`, "Read", false)
     @InlineData(`other.Read().KeepExtension(1)`, "Read", true)
     @InlineData(`(1).KeepExtension(other.Read())`, "Read", false)
@@ -165,9 +263,13 @@ func Read(c C, value int32, trace TraceSource) {
 open class Parent {
     protected func Read() int32 -> 1
     protected func Next() Parent -> Parent()
+    protected func MaybeNext() Parent? -> Parent()
+    protected func Items() slice[int32] -> slice[int32]{1}
+    protected func MaybeItems() slice[int32]? -> slice[int32]{1}
     @Conditional("A") func Keep(value int32) {}
 }
 @Conditional("A") func (self int32) KeepExtension(value int32) {}
+@Conditional("A") func (self slice[int32]) KeepSlice() {}
 @Conditional("A") func KeepFree(value int32) {}
 class Calls { shared {
     @Conditional("A") func Keep[T](value T) {}
