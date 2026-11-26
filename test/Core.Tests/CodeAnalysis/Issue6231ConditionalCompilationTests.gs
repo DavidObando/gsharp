@@ -232,6 +232,70 @@ func Disabled() { let outside = 0 }
     }
 
     @Fact
+    func ScriptPrefixReuse_PreservesScopedQueriesAndRejectsChangedBaseSymbols() {
+        const source = `@file:DefineSymbol("FILE")
+let root = @defined("BASE")
+@UndefineSymbol("FILE") let suppressed = @defined("FILE")
+@DefineSymbol("MEMBER")
+func Read() bool {
+    let localMember = @defined("MEMBER")
+    let localBase = @defined("BASE")
+    let localFile = @defined("FILE")
+    return localMember && localBase && localFile
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "scoped-script.gs"))
+        let compilation = Compilation(tree)
+        let options = PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+        let AssertQuery = func (result PrefixBindResult, name string, expected bool) {
+            let declaration = result
+                .SyntaxTree
+                .Root
+                .DescendantNodesAndSelf()
+                .OfType[VariableDeclarationSyntax]()
+                .Single((v VariableDeclarationSyntax) -> v.Identifier.ValueText == name)
+            let query = declaration.DescendantNodes().OfType[DefinedExpressionSyntax]().Single()
+            let bound = Assert.IsType[BoundLiteralExpression](
+                result.Compilation.GetSemanticModel(result.SyntaxTree).GetBoundNode(query)
+            )
+            Assert.Equal(expected, cast[bool](bound.Value))
+        }
+        using let measurements = CompilationMeasurements.Start("test")
+        let first = compilation.BindPrefix(tree, source.IndexOf("    let localBase", StringComparison.Ordinal), options)
+        let second = compilation.BindPrefix(
+            tree,
+            source.IndexOf("    return", StringComparison.Ordinal),
+            options,
+            first
+        )
+        Assert.True(measurements.GetCounter("declarations.reuses") > 0)
+        AssertQuery(second, "localMember", true)
+        AssertQuery(second, "localBase", false)
+        AssertQuery(second, "localFile", true)
+        let root = second
+            .SyntaxTree
+            .Root
+            .DescendantNodesAndSelf()
+            .OfType[VariableDeclarationSyntax]()
+            .Single((v VariableDeclarationSyntax) -> v.Identifier.ValueText == "root")
+        let symbol = second.Compilation.GetSemanticModel(second.SyntaxTree).GetDeclaredSymbol(root)
+        Assert.Same(second.SyntaxTree, Assert.IsAssignableFrom[Symbol](symbol).DeclaringSyntaxNodes.Single().SyntaxTree)
+        let before = measurements.GetCounter("declarations.reuses")
+        compilation.PreprocessorSymbols = ImmutableHashSet.Create("BASE")
+        let changed = compilation.BindPrefix(
+            tree,
+            source.IndexOf("    return", StringComparison.Ordinal),
+            options,
+            second
+        )
+        Assert.Equal(before, measurements.GetCounter("declarations.reuses"))
+        AssertQuery(changed, "root", true)
+        AssertQuery(changed, "localMember", true)
+        AssertQuery(changed, "localBase", true)
+        AssertQuery(changed, "localFile", true)
+    }
+
+    @Fact
     func PrefixCut_PreservesInactiveContextAndOpenOwnerDefinitions() {
         const hidden = `func F() {
     @If(false) {
