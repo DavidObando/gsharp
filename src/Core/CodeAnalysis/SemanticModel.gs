@@ -543,6 +543,8 @@ partial class SemanticModel {
     /// pre-order walk) and harvests local/pattern variable declarations from
     /// symbol-valued bound-node properties.
     private class IndexingWalker : BoundTreeWalker {
+        internal override prop VisitElidedConditionalCallOperands bool -> true
+
         private let tree SyntaxTree
         private let boundBySyntax Dictionary[SyntaxNode, BoundNode]
         private let declaredBySyntax Dictionary[SyntaxNode, Symbol]

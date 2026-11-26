@@ -28,6 +28,8 @@ import System.Collections.Generic
 /// reports nothing the class-level check already rejected.
 internal shared class ProtectedReceiverDiagnostics {
     private class Walker : BoundTreeWalker {
+        internal override prop VisitElidedConditionalCallOperands bool -> true
+
         private let diagnostics DiagnosticBag
         private let reported HashSet[(Location TextLocation, Member string)] = HashSet[
             (Location TextLocation, Member string)
@@ -69,23 +71,6 @@ internal shared class ProtectedReceiverDiagnostics {
                     VisitStatement(literal.Body)
                 } else {
                     base.VisitExpression(node)
-                    // Elision skips runtime work, not the accessibility of operands.
-                    if node is BoundCallOperationExpression{IsElidedConditionalCall: true} call {
-                        switch call {
-                            case instance is BoundUserInstanceCallExpression {
-                                VisitExpression(instance.Receiver)
-                            }
-                            case imported is BoundImportedInstanceCallExpression {
-                                VisitExpression(imported.Receiver)
-                            }
-                            case baseCall is BoundBaseInterfaceCallExpression {
-                                VisitExpression(baseCall.Receiver)
-                            }
-                        }
-                        for argument in call.Arguments {
-                            VisitExpression(argument)
-                        }
-                    }
                 }
             } finally {
                 anchor = outerAnchor

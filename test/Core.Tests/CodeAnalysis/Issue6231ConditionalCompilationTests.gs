@@ -18,6 +18,132 @@ import Xunit
 
 class Issue6231ConditionalCompilationTests {
     @Theory
+    @InlineData(`c.Log(value)`, false)
+    @InlineData(`c.Log(value)`, true)
+    @InlineData(`KeepFree(value)`, false)
+    @InlineData(`KeepFree(value)`, true)
+    @InlineData(`value.LogExtension(1)`, false)
+    @InlineData(`value.LogExtension(1)`, true)
+    @InlineData(`(1).LogExtension(value)`, false)
+    @InlineData(`(1).LogExtension(value)`, true)
+    @InlineData(`Calls.Keep[int32](value)`, false)
+    @InlineData(`Calls.Keep[int32](value)`, true)
+    @InlineData(`GenericCalls[int32].Keep(value)`, false)
+    @InlineData(`GenericCalls[int32].Keep(value)`, true)
+    @InlineData(`Calls.KeepPlain(value)`, false)
+    @InlineData(`Calls.KeepPlain(value)`, true)
+    @InlineData(`Debug.Assert(value > 0)`, false)
+    @InlineData(`Debug.Assert(value > 0)`, true)
+    @InlineData(`trace.TraceInformation(value.ToString())`, false)
+    @InlineData(`trace.TraceInformation(value.ToString())`, true)
+    func ConditionalOperands_KeepTheirActiveSemanticIndex(call string, enabled bool) {
+        let tree = SyntaxTree.Parse(SourceText.From(SemanticOperandSource(call), "semantic-operands.gs"))
+        let compilation = Compilation(tree){
+            IsLibrary = true,
+            PreprocessorSymbols = if enabled {
+                ImmutableHashSet.Create("A", "DEBUG", "TRACE")
+            } else {
+                ImmutableHashSet[string].Empty
+            }
+        }
+        AssertIndexedConditionalOperands(compilation, tree, enabled)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConditionalOperandIndex_SurvivesBodyReuseAndPartialBinding(enabled bool) {
+        let source = SemanticOperandSource(`c.Log(value)`)
+        let tree = SyntaxTree.Parse(SourceText.From(source, "reused-semantic-operands.gs"))
+        let compilation = Compilation(tree){
+            IsLibrary = true,
+            IncrementalBodyReuse = true,
+            PreprocessorSymbols = if enabled {
+                ImmutableHashSet.Create("A")
+            } else {
+                ImmutableHashSet[string].Empty
+            }
+        }
+        AssertIndexedConditionalOperands(compilation, tree, enabled)
+        let editedSource = source.Replace("c.Log(value)", "c.Log(value + 1)", StringComparison.Ordinal)
+        let edited = SyntaxTree.Parse(SourceText.From(editedSource, "reused-semantic-operands.gs"))
+        let successor = compilation.ReplaceSyntaxTree(tree, edited)
+        AssertIndexedConditionalOperands(successor, edited, enabled)
+        let prefix = successor.BindPrefix(
+            edited,
+            editedSource.IndexOf("    let after", StringComparison.Ordinal),
+            PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+        )
+        AssertIndexedConditionalOperands(prefix.Compilation, prefix.SyntaxTree, enabled)
+    }
+
+    private func SemanticOperandSource(call string) string -> `import System.Diagnostics
+class C { @Conditional("A") func Log(value int32) {} }
+@Conditional("A") func KeepFree(value int32) {}
+@Conditional("A") func (self int32) LogExtension(value int32) {}
+class Calls { shared {
+    @Conditional("A") func Keep[T](value T) {}
+    @Conditional("A") func KeepPlain(value int32) {}
+} }
+class GenericCalls[T] { shared { @Conditional("A") func Keep(value T) {} } }
+@If(false) func Hidden() { Missing(unbound) }
+func Read(c C, value int32, trace TraceSource) {
+    ` + call + `
+    let after = 1
+}`
+
+    private func AssertIndexedConditionalOperands(compilation Compilation, tree SyntaxTree, enabled bool) {
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let model = compilation.GetSemanticModel(tree)
+        let read = tree
+            .Root
+            .DescendantNodesAndSelf()
+            .OfType[FunctionDeclarationSyntax]()
+            .Single((function FunctionDeclarationSyntax) -> function.Identifier.Text == "Read")
+        let names = read
+            .DescendantNodesAndSelf()
+            .OfType[NameExpressionSyntax]()
+            .Where((name NameExpressionSyntax) -> name.IdentifierToken.Text is "c" or "value" or "trace")
+            .ToArray()
+        Assert.Contains(names, (name NameExpressionSyntax) -> name.IdentifierToken.Text == "value")
+        for name in names {
+            Assert.True(compilation.IsActive(name))
+            let parameter = read.Parameters.Single(
+                (p ParameterSyntax) -> p.Identifier?.Text == name.IdentifierToken.Text
+            )
+            let declared = Assert.IsAssignableFrom[VariableSymbol](model.GetDeclaredSymbol(parameter))
+            Assert.NotEqual(TypeSymbol.Error, declared.Type)
+            let bound = Assert.IsAssignableFrom[BoundExpression](model.GetBoundNode(name))
+            Assert.Equal(declared.Type, bound.Type)
+            Assert.Equal(declared.Type, model.GetTypeInfo(name).Type)
+            Assert.Same(declared, model.GetSymbolInfo(name).Symbol)
+            if name.IdentifierToken.Text == "value" {
+                Assert.Equal(TypeSymbol.Int32, declared.Type)
+                Assert.Equal(
+                    TypeSymbol.Int32,
+                    model.GetSpeculativeTypeInfo(name.Span.Start, SyntaxTree.ParseExpression("value")!!).Type
+                )
+            }
+        }
+        let call = read
+            .DescendantNodesAndSelf()
+            .OfType[CallExpressionSyntax]()
+            .OrderBy((node CallExpressionSyntax) -> node.Span.Start)
+            .First()
+        let operation = Assert.IsAssignableFrom[BoundCallOperationExpression](model.GetBoundNode(call))
+        Assert.Equal(!enabled, operation.IsElidedConditionalCall)
+        let inactive = tree
+            .Root
+            .DescendantNodesAndSelf()
+            .OfType[NameExpressionSyntax]()
+            .Single((name NameExpressionSyntax) -> name.IdentifierToken.Text == "unbound")
+        Assert.False(compilation.IsActive(inactive))
+        Assert.Null(model.GetBoundNode(inactive))
+        Assert.Null(model.GetTypeInfo(inactive).Type)
+        Assert.Null(model.GetSymbolInfo(inactive).Symbol)
+    }
+
+    @Theory
     @InlineData(`Omit(other.Read())`, "Read", false)
     @InlineData(`Omit(other.Read())`, "Read", true)
     @InlineData(`other.Next().Keep(1)`, "Next", false)
