@@ -173,15 +173,25 @@ open class Adr0225PrefixBindReuseTests {
         "package P\n\nlet m = Make()\n\nfunc Make() {\n    let a = 1\n    return object {\n        let X = 1\n    }\n}\n",
         true
     )
+    @InlineData(
+        "package P\n\nlet unrelated = 1\n\nfunc Make() {\n    return object {\n        let X = 1\n    }\n}\n\nfunc Use() int32 {\n    return Make().X\n}\n",
+        true
+    )
     func ChainedCutsOfAScriptThatLaterTextCanChange_ReportWhatABindFromScratchReports(source string, inBody bool) {
         let tree = SyntaxTree.Parse(SourceText.From(source, "script.gs"))
         let compilation = Compilation(tree)
         let cuts = List[int32]()
         if inBody {
-            let body = tree.Root.DescendantNodes().OfType[FunctionDeclarationSyntax]().Last().Body!!
-            cuts.Add(body.OpenBraceToken.Span.End)
-            cuts.Add(body.Statements[0].Span.End)
-            cuts.Add(body.Statements[1].Span.End)
+            let make = tree
+                .Root
+                .DescendantNodes()
+                .OfType[FunctionDeclarationSyntax]()
+                .First((f FunctionDeclarationSyntax) -> f.Identifier.ValueText == "Make")
+                .Body!!
+            cuts.Add(make.OpenBraceToken.Span.End)
+            for statement in make.Statements {
+                cuts.Add(statement.Span.End)
+            }
         } else {
             let start = source.IndexOf("Abs(1)", StringComparison.Ordinal) + "Abs(1)".Length
             cuts.Add(start + 1)

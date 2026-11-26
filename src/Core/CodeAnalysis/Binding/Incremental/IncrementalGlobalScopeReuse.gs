@@ -114,7 +114,7 @@ internal shared class IncrementalGlobalScopeReuse {
         // cuts of one prefix chain do (ADR-0225 D6.6). The bound global statements then keep valid spans
         // and the same text, and the skeleton check below proves that the statements did not change.
         let sharesText = object.ReferenceEquals(previousText, updatedText) &&
-            ReusableGlobalStatements($scope, updatedTree)
+            ReusableGlobalStatements($scope, previousTree, updatedTree)
         if ContainsUnsupportedConstruct(previousTree, allowTopLevelStatements: sharesText) ||
             ContainsUnsupportedConstruct(updatedTree, allowTopLevelStatements: sharesText) {
             return false
@@ -572,7 +572,11 @@ internal shared class IncrementalGlobalScopeReuse {
     // them reads the provisional expressions of the prefix cut (ADR-0225 D6.8), which only a bind records.
     // A suspending function (ADR-0174) can change how a retained call of it is bound, and a return type that
     // a body infers can change with the open body, so neither may occur before or after the edit.
-    private func ReusableGlobalStatements($scope BoundGlobalScope, updatedTree SyntaxTree) bool {
+    private func ReusableGlobalStatements(
+        $scope BoundGlobalScope,
+        previousTree SyntaxTree,
+        updatedTree SyntaxTree
+    ) bool {
         // A later declaration or overload can still change what a retained statement resolved to, and only a
         // bind records that (the cut in the top-level statements, or nothing kept).
         if updatedTree.Prefix is not{} cut ||
@@ -587,6 +591,11 @@ internal shared class IncrementalGlobalScopeReuse {
                 return false
             }
         }
+        // A function without a return type whose body returns an anonymous object takes the object's type
+        // (DeclarationBinder), so the open body can change a signature; neither tree may have one.
+        if InfersAnonymousReturn(previousTree) || InfersAnonymousReturn(updatedTree) {
+            return false
+        }
         for node in Descendants(updatedTree.Root) {
             if node.Kind == SyntaxKind.LeftArrowToken ||
                 node.Kind == SyntaxKind.GoStatement ||
@@ -598,6 +607,17 @@ internal shared class IncrementalGlobalScopeReuse {
             }
         }
         return true
+    }
+
+    private func InfersAnonymousReturn(tree SyntaxTree) bool {
+        for node in Descendants(tree.Root) {
+            if node is FunctionDeclarationSyntax{Type: nil, Body: {} body} && Descendants(body).Any(
+                (n SyntaxNode) -> n is AnonymousClassExpressionSyntax
+            ) {
+                return true
+            }
+        }
+        return false
     }
 
     private func ContainsUnsupportedConstruct(tree SyntaxTree, allowTopLevelStatements bool) bool {
