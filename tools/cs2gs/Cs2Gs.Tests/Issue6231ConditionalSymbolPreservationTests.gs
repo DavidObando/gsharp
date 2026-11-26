@@ -94,6 +94,16 @@ public static partial class Demo {
         Assert.False(SdkCompilerCapabilities.HasScopedConditionalSymbols(unsupported))
         using let invalid = MemoryStream([]uint8{0, 1, 2, 3})
         Assert.False(SdkCompilerCapabilities.HasScopedConditionalSymbols(invalid))
+        let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Marker.cs", `
+namespace GSharp.Core.CodeAnalysis {
+    internal static class ConditionalSymbols { }
+}
+`)})
+        using let internalMarker = MemoryStream()
+        let emitted = project.Compilation.Emit(internalMarker)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        internalMarker.Position = 0
+        Assert.False(SdkCompilerCapabilities.HasScopedConditionalSymbols(internalMarker))
         Assert.False(SdkCompilerCapabilities.SupportsScopedConditionalSymbols("Release", "0.0.0-unavailable-6231"))
     }
 

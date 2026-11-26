@@ -7,6 +7,7 @@ package Cs2Gs.Pipeline
 import System
 import System.IO
 import System.IO.Compression
+import System.Reflection
 import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
 
@@ -72,7 +73,8 @@ internal shared class SdkCompilerCapabilities {
                 let definition = metadata.GetTypeDefinition(handle)
                 if metadata.GetString(definition.Namespace) == "GSharp.Core.CodeAnalysis" && metadata.GetString(
                     definition.Name
-                ) == "ConditionalSymbols" {
+                ) == "ConditionalSymbols" &&
+                    (definition.Attributes & TypeAttributes.VisibilityMask) == TypeAttributes.Public {
                     return true
                 }
             }

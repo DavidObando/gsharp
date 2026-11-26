@@ -190,10 +190,20 @@ open class ProjectStateTests {
             Assert.Contains("RELEASE", successor.PreprocessorSymbols)
             Assert.DoesNotContain("DEBUG", successor.PreprocessorSymbols)
             Assert.Empty(successor.GetDiagnostics())
+            let previousMtime = File.GetLastWriteTimeUtc(rspPath)
             File.Delete(rspPath)
             let withoutResponseFile = project.GetCompilation()
             Assert.NotSame(successor, withoutResponseFile)
             Assert.Empty(withoutResponseFile.PreprocessorSymbols)
+            File.WriteAllLines(rspPath, []string{"/d:DEBUG"})
+            File.SetLastWriteTimeUtc(rspPath, previousMtime)
+            let recreated = project.GetCompilation()
+            Assert.NotSame(withoutResponseFile, recreated)
+            Assert.Contains("DEBUG", recreated.PreprocessorSymbols)
+            Assert.Contains(
+                recreated.GetDiagnostics(),
+                (diagnostic CoreDiagnostic) -> diagnostic.Message.Contains("missingSymbol", StringComparison.Ordinal)
+            )
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }

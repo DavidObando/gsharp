@@ -297,7 +297,7 @@ Compiler-synthesized attributes such as `CompilerGenerated`, `Extension`, `Async
 
 The development compiler implements scoped conditional symbols (ADR-0230) and
 semantic conditional inclusion (ADR-0231). These features are not supported by
-the published 0.5.793 SDK.
+the published 0.5.803 SDK.
 
 `@DefineSymbol("NAME")` and `@UndefineSymbol("NAME")` set compile-time symbol state
 on eligible declarations and ordinary blocks. Use `@file:` after imports for a

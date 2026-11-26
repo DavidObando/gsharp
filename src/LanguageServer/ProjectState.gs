@@ -510,6 +510,7 @@ open class ProjectState {
         var currentMtime DateTime
         try {
             if !File.Exists(referenceSourcePath) {
+                referenceSourceMtimeUtc = DateTime.MinValue
                 SetConditionalSymbols_NoLock(HashSet[string](StringComparer.Ordinal))
                 return
             }

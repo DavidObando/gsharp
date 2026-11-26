@@ -16,13 +16,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def run(*arguments, cwd):
     result = subprocess.run(
-        arguments, cwd=cwd, text=True, stdout=subprocess.PIPE,
+        arguments, cwd=cwd, stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, check=False,
         env={**os.environ, "NUGET_PACKAGES": str(cwd.parent / "packages")},
     )
     if result.returncode:
-        raise RuntimeError(result.stdout)
-    return result.stdout.strip()
+        raise RuntimeError(result.stdout.decode("utf-8", errors="replace"))
+    return result.stdout
 
 
 def main():
@@ -70,7 +70,8 @@ def main():
             run("dotnet", "build", "Probe.gsproj", "-graph", "--nologo",
                 "-p:ExtraSymbols=" + symbol, cwd=work)
             actual = run("dotnet", str(work / "bin/Debug/net10.0/Probe.dll"), cwd=work)
-            assert actual == expected, (symbol, expected, actual)
+            expected_bytes = (expected + os.linesep).encode("utf-8")
+            assert actual == expected_bytes, (symbol, expected_bytes, actual)
             response = (work / "obj/Debug/net10.0/Probe.rsp").read_text()
             assert "/define:" in response and symbol in response, response
         print("PASS: packaged SDK symbol forwarding, scoped undefinition, and symbol-only rebuilds.")
