@@ -623,7 +623,8 @@ open class Program {
         /// Explicit `/reference:` overrides take precedence over SDK-bundled
         /// runtimes so override-only APIs are preserved at run time.
         /// A program whose PE has no corresponding AssemblyRef gets nothing extra.
-        /// A destination copy is refreshed only when the source runtime is newer.
+        /// A destination copy is refreshed whenever its contents differ from the
+        /// selected runtime.
         /// @param outputPath The emitted assembly.
         /// @param runtimeDirectory The bundled runtime directory from (cref:ResolveRuntimeDirectory).
         /// @param referencePaths The resolved compilation reference paths (explicit `/r:` first).
@@ -677,7 +678,7 @@ open class Program {
                         }
                         copied.Add(refName)
                         queue.Enqueue(runtimePath)
-                        CopyBundledFileIfNewer(runtimePath, outputDir, refName + ".dll")
+                        CopyBundledFileIfDifferent(runtimePath, outputDir, refName + ".dll")
                     }
                 }
             } catch (IOException) {
@@ -705,6 +706,31 @@ open class Program {
         ) ||
             string.Equals(name, "Gsharp.Runtime.Values", StringComparison.OrdinalIgnoreCase)
 
+        private func IsReferenceAssembly(reader MetadataReader) bool {
+            for attrHandle in reader.GetAssemblyDefinition().GetCustomAttributes() {
+                let attr = reader.GetCustomAttribute(attrHandle)
+                var ns = ""
+                var name = ""
+                if attr.Constructor.Kind == HandleKind.MemberReference {
+                    let memberRef = reader.GetMemberReference(cast[MemberReferenceHandle](attr.Constructor))
+                    if memberRef.Parent.Kind == HandleKind.TypeReference {
+                        let typeRef = reader.GetTypeReference(cast[TypeReferenceHandle](memberRef.Parent))
+                        ns = reader.GetString(typeRef.Namespace)
+                        name = reader.GetString(typeRef.Name)
+                    }
+                } else if attr.Constructor.Kind == HandleKind.MethodDefinition {
+                    let methodDef = reader.GetMethodDefinition(cast[MethodDefinitionHandle](attr.Constructor))
+                    let typeDef = reader.GetTypeDefinition(methodDef.GetDeclaringType())
+                    ns = reader.GetString(typeDef.Namespace)
+                    name = reader.GetString(typeDef.Name)
+                }
+                if ns == "System.Runtime.CompilerServices" && name == "ReferenceAssemblyAttribute" {
+                    return true
+                }
+            }
+            return false
+        }
+
         private func AddRuntimeOverrideCandidate(candidates Dictionary[string, string], candidatePath string) {
             if string.IsNullOrEmpty(candidatePath) || !File.Exists(candidatePath) {
                 return
@@ -716,7 +742,7 @@ open class Program {
                     return
                 }
                 let reader = pe.GetMetadataReader()
-                if !reader.IsAssembly {
+                if !reader.IsAssembly || IsReferenceAssembly(reader) {
                     return
                 }
                 let asmName = reader.GetString(reader.GetAssemblyDefinition().Name)
@@ -736,18 +762,29 @@ open class Program {
             }
         }
 
-        private func CopyBundledFileIfNewer(bundled string, outputDir string, targetFileName string) {
+        private func CopyBundledFileIfDifferent(bundled string, outputDir string, targetFileName string) {
             let destination = Path.Combine(outputDir, targetFileName)
             if string.Equals(Path.GetFullPath(bundled), destination, StringComparison.OrdinalIgnoreCase) {
                 return
             }
-            // A copy from an earlier compile into the same folder is refreshed
-            // when the bundled runtime is newer — a stale runtime beside a fresh
-            // program fails at run time with a missing member.
-            if File.Exists(destination) && File.GetLastWriteTimeUtc(destination) >= File.GetLastWriteTimeUtc(bundled) {
+            // Refresh whenever contents differ so switching /reference: overrides
+            // (including to an older-dated DLL) never leaves a stale runtime beside
+            // the newly compiled assembly.
+            if File.Exists(destination) && FilesHaveSameContents(bundled, destination) {
                 return
             }
             File.Copy(bundled, destination, overwrite: true)
+        }
+
+        private func FilesHaveSameContents(firstPath string, secondPath string) bool {
+            let firstInfo = FileInfo(firstPath)
+            let secondInfo = FileInfo(secondPath)
+            if firstInfo.Length != secondInfo.Length {
+                return false
+            }
+            let firstBytes = File.ReadAllBytes(firstPath)
+            let secondBytes = File.ReadAllBytes(secondPath)
+            return firstBytes.AsSpan().SequenceEqual(secondBytes)
         }
 
         private func Emit(
