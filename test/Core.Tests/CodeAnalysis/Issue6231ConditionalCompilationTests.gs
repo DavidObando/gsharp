@@ -22,6 +22,18 @@ class Issue6231ConditionalCompilationTests {
     @InlineData(`Omit(other.Read())`, "Read", true)
     @InlineData(`other.Next().Keep(1)`, "Next", false)
     @InlineData(`other.Next().Keep(1)`, "Next", true)
+    @InlineData(`other.Read().KeepExtension(1)`, "Read", false)
+    @InlineData(`other.Read().KeepExtension(1)`, "Read", true)
+    @InlineData(`(1).KeepExtension(other.Read())`, "Read", false)
+    @InlineData(`(1).KeepExtension(other.Read())`, "Read", true)
+    @InlineData(`Calls.Keep[int32](other.Read())`, "Read", false)
+    @InlineData(`Calls.Keep[int32](other.Read())`, "Read", true)
+    @InlineData(`GenericCalls[int32].Keep(other.Read())`, "Read", false)
+    @InlineData(`GenericCalls[int32].Keep(other.Read())`, "Read", true)
+    @InlineData(`Calls.KeepPlain(other.Read())`, "Read", false)
+    @InlineData(`Calls.KeepPlain(other.Read())`, "Read", true)
+    @InlineData(`KeepFree(other.Read())`, "Read", false)
+    @InlineData(`KeepFree(other.Read())`, "Read", true)
     func OmittedCallOperands_StillValidateNestedProtectedReceivers(call string, member string, enabled bool) {
         let source = `import System.Diagnostics
 open class Parent {
@@ -29,6 +41,13 @@ open class Parent {
     protected func Next() Parent -> Parent()
     @Conditional("A") func Keep(value int32) {}
 }
+@Conditional("A") func (self int32) KeepExtension(value int32) {}
+@Conditional("A") func KeepFree(value int32) {}
+class Calls { shared {
+    @Conditional("A") func Keep[T](value T) {}
+    @Conditional("A") func KeepPlain(value int32) {}
+} }
+class GenericCalls[T] { shared { @Conditional("A") func Keep(value T) {} } }
 class Child : Parent {
     @Conditional("A") func Omit(value int32) {}
     func Bad(other Parent) { ` + call + ` }

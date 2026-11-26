@@ -36,12 +36,11 @@ class BoundCallExpression : BoundCallOperationExpression {
     /// Initializes a new instance of the (cref:BoundCallExpression)
     /// class, optionally marking it as a `[Conditional]`-elided call
     /// (ADR-0047 §6 / issue #176). When elided the emitter and interpreter
-    /// emit / evaluate no IL or behaviour at the call site, and the argument
-    /// list is empty because C# semantics forbid evaluating arguments to a
-    /// conditional method whose symbol is undefined.
+    /// emit / evaluate no IL or behaviour at the call site. Bound arguments
+    /// remain available for semantic validation but are not evaluated.
     /// @param syntax The originating syntax.
     /// @param function The function symbol.
-    /// @param arguments The provided arguments; empty when elided.
+    /// @param arguments The bound arguments, including when elided.
     /// @param returnType The (already-substituted) call-site return type, or `null` to use `function.Type`.
     /// @param isConditionalElided When `true`, the call has been elided per `[Conditional]` rules.
     init(

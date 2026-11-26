@@ -3529,9 +3529,8 @@ internal partial class OverloadResolver {
 
     /// Constructs a (cref:BoundCallExpression) for a direct function
     /// call, applying ADR-0047 §6 / issue #176 `[Conditional]` call-site
-    /// elision. When elision applies, the resulting call carries an empty
-    /// argument list (C# semantics: arguments to a conditional method are
-    /// not evaluated when the symbol is undefined) and the
+    /// elision. The call retains its bound arguments for semantic validation;
+    /// when elision applies the
     /// (cref:BoundCallExpression.IsConditionalElided) flag is set so
     /// the emitter and interpreter skip both argument evaluation and the
     /// method invocation. The validation that the function returns
@@ -3546,16 +3545,16 @@ internal partial class OverloadResolver {
         returnType TypeSymbol?,
         methodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
     ) BoundCallExpression {
-        if KnownAttributes.IsConditionallyElided(function, Scope.ConditionalCompilation.SymbolsAt(syntax)) {
-            return BoundCallExpression(
-                nil,
+        return BoundCallExpression(
+            syntax,
+            function,
+            arguments,
+            returnType,
+            isConditionalElided: KnownAttributes.IsConditionallyElided(
                 function,
-                ImmutableArray[BoundExpression].Empty,
-                returnType,
-                isConditionalElided: true
-            ){MethodTypeArguments = methodTypeArguments}
-        }
-        return BoundCallExpression(syntax, function, arguments, returnType){MethodTypeArguments = methodTypeArguments}
+                Scope.ConditionalCompilation.SymbolsAt(syntax)
+            )
+        ){MethodTypeArguments = methodTypeArguments}
     }
 
     /// Issue #3760: resolves a user method group against a fully closed input

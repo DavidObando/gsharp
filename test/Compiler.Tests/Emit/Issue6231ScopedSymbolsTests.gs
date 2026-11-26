@@ -8,6 +8,7 @@ import System
 import System.Collections.Immutable
 import System.IO
 import System.Linq
+import System.Reflection
 import System.Text
 import Xunit
 
@@ -17,6 +18,18 @@ class Issue6231ScopedSymbolsTests {
     @InlineData(`Omit(other.Read())`, "Read", true)
     @InlineData(`other.Next().Keep(1)`, "Next", false)
     @InlineData(`other.Next().Keep(1)`, "Next", true)
+    @InlineData(`other.Read().KeepExtension(1)`, "Read", false)
+    @InlineData(`other.Read().KeepExtension(1)`, "Read", true)
+    @InlineData(`(1).KeepExtension(other.Read())`, "Read", false)
+    @InlineData(`(1).KeepExtension(other.Read())`, "Read", true)
+    @InlineData(`Calls.Keep[int32](other.Read())`, "Read", false)
+    @InlineData(`Calls.Keep[int32](other.Read())`, "Read", true)
+    @InlineData(`GenericCalls[int32].Keep(other.Read())`, "Read", false)
+    @InlineData(`GenericCalls[int32].Keep(other.Read())`, "Read", true)
+    @InlineData(`Calls.KeepPlain(other.Read())`, "Read", false)
+    @InlineData(`Calls.KeepPlain(other.Read())`, "Read", true)
+    @InlineData(`KeepFree(other.Read())`, "Read", false)
+    @InlineData(`KeepFree(other.Read())`, "Read", true)
     func Driver_ImportedOmittedCallOperands_ValidateNestedProtectedReceivers(call string, member string, enabled bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let library = CompileProtectedParent(fixture)
@@ -29,7 +42,14 @@ class Issue6231ScopedSymbolsTests {
                 ""
             }
         ) +
-            `class Child : Parent {
+            `@Conditional("A") func (self int32) KeepExtension(value int32) {}
+@Conditional("A") func KeepFree(value int32) {}
+class Calls { shared {
+    @Conditional("A") func Keep[T](value T) {}
+    @Conditional("A") func KeepPlain(value int32) {}
+} }
+class GenericCalls[T] { shared { @Conditional("A") func Keep(value T) {} } }
+class Child : Parent {
     @Conditional("A") func Omit(value int32) {}
     func Bad(other Parent) { ` +
             call +
@@ -50,6 +70,18 @@ class Issue6231ScopedSymbolsTests {
     @InlineData(`Omit(other.Read())`, "Read", true)
     @InlineData(`other.Next().Keep(1)`, "Next", false)
     @InlineData(`other.Next().Keep(1)`, "Next", true)
+    @InlineData(`other.Read().KeepExtension(1)`, "Read", false)
+    @InlineData(`other.Read().KeepExtension(1)`, "Read", true)
+    @InlineData(`(1).KeepExtension(other.Read())`, "Read", false)
+    @InlineData(`(1).KeepExtension(other.Read())`, "Read", true)
+    @InlineData(`Calls.Keep<int>(other.Read())`, "Read", false)
+    @InlineData(`Calls.Keep<int>(other.Read())`, "Read", true)
+    @InlineData(`GenericCalls<int>.Keep(other.Read())`, "Read", false)
+    @InlineData(`GenericCalls<int>.Keep(other.Read())`, "Read", true)
+    @InlineData(`Calls.KeepPlain(other.Read())`, "Read", false)
+    @InlineData(`Calls.KeepPlain(other.Read())`, "Read", true)
+    @InlineData(`KeepFree(other.Read())`, "Read", false)
+    @InlineData(`KeepFree(other.Read())`, "Read", true)
     func NativeCSharp_OmittedCallOperands_StillRequireAccessibleProtectedReceivers(
         call string,
         member string,
@@ -63,7 +95,18 @@ public class Parent {
 }
 public class Child : Parent {
     [Conditional("A")] void Omit(int value) {}
+    [Conditional("A")] static void KeepFree(int value) {}
     void Bad(Parent other) { ` + call + `; }
+}
+public static class Extensions {
+    [Conditional("A")] public static void KeepExtension(this int self, int value) {}
+}
+public static class Calls {
+    [Conditional("A")] public static void Keep<T>(T value) {}
+    [Conditional("A")] public static void KeepPlain(int value) {}
+}
+public class GenericCalls<T> {
+    [Conditional("A")] public static void Keep(T value) {}
 }`
         let parseOptions = Microsoft
             .CodeAnalysis
@@ -103,6 +146,80 @@ public class Child : Parent {
         Assert.Equal("CS1540", diagnostic.Id)
         Assert.Equal(source.LastIndexOf(member + "(", StringComparison.Ordinal), diagnostic.Location.SourceSpan.Start)
         Assert.Equal(member.Length, diagnostic.Location.SourceSpan.Length)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Driver_RetainedSourceOperands_StillElideEffectsAndCaptures(enabled bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = "import System\nimport System.Diagnostics\n" +
+            (
+            if enabled {
+                "@file:DefineSymbol(\"A\")\n"
+            } else {
+                ""
+            }
+        ) +
+            `@Conditional("A") func (self int32) KeepCapture(action () -> void) { action() }
+class Calls { shared {
+    @Conditional("A") func Keep[T](value T, action () -> void) { action() }
+} }
+func Receiver() int32 { Console.Write("r") return 1 }
+func Argument() int32 { Console.Write("a") return 1 }
+class Consumer { shared {
+    func Run() {
+        var value = 7
+        // CALLS
+        Console.Write(value)
+    }
+} }
+Consumer.Run()`
+        let baseline = fixture.Compile(
+            source.Replace("// CALLS", "", StringComparison.Ordinal),
+            "CaptureRetention6231",
+            true
+        )
+        let expected = CaptureLayout(baseline)
+        IlVerifier.Verify(baseline)
+        Assert.Equal(Encoding.UTF8.GetBytes("7"), fixture.RunBytes(baseline))
+        let program = fixture.Compile(source.Replace("// CALLS", `Receiver().KeepCapture(func () { value++ })
+        Calls.Keep[int32](Argument(), func () { value++ })`, StringComparison.Ordinal), "CaptureRetention6231", true)
+        IlVerifier.Verify(program)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                if enabled {
+                    "ra9"
+                } else {
+                    "7"
+                }
+            ),
+            fixture.RunBytes(program)
+        )
+        let actual = CaptureLayout(program)
+        if enabled {
+            Assert.True(!actual.Types.SequenceEqual(expected.Types) || !actual.Locals.SequenceEqual(expected.Locals))
+        } else {
+            Assert.Equal(expected.Types, actual.Types)
+            Assert.Equal(expected.Locals, actual.Locals)
+        }
+    }
+
+    private func CaptureLayout(program string)(Types[]string, Locals[]string) {
+        let assembly = Assembly.Load(File.ReadAllBytes(program))
+        let types = assembly
+            .GetTypes()
+            .Select((type Type) -> type.FullName ?? "")
+            .OrderBy((name string) -> name, StringComparer.Ordinal)
+            .ToArray()
+        let locals = assembly
+            .GetTypes()
+            .Single((type Type) -> type.Name == "Consumer")
+            .GetMethod("Run", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!!.GetMethodBody()!!
+            .LocalVariables
+            .Select((local LocalVariableInfo) -> local.LocalType.FullName ?? "")
+            .ToArray()
+        return (types, locals)
     }
 
     @Fact
