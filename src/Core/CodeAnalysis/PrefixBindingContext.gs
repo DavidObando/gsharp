@@ -1484,17 +1484,14 @@ internal shared class PrefixBindingContext {
 
     private func CollectBlockReturnStatements(node SyntaxNode, returns List[ReturnStatementSyntax]) {
         for child in node.GetChildren() {
-            if child is SyntaxToken || child is LambdaExpressionSyntax || child is FunctionLiteralExpressionSyntax {
+            if child is SyntaxToken ||
+                child is LambdaExpressionSyntax ||
+                child is FunctionLiteralExpressionSyntax ||
+                child is NameOfExpressionSyntax {
                 continue
             }
             if child is ReturnStatementSyntax ret {
                 returns.Add(ret)
-                continue
-            }
-            if child is ExpressionSyntax &&
-                child is not BlockExpressionSyntax &&
-                child is not IfExpressionSyntax &&
-                child is not IfLetExpressionSyntax {
                 continue
             }
             CollectBlockReturnStatements(child, returns)

@@ -3226,6 +3226,118 @@ func Main() {
 `
         AssertWitness(compoundReturnSource.Replace("/*CUT*/", string.Empty), "GS0155")
         AssertFutureDependent(BindKeep(compoundReturnSource), "GS0155", "later-overload")
+
+        // 23. Enclosing CLR delegate field and property invocations stay Final at a KeepDeclarations
+        // top-level cut even when later globals with the same names follow.
+        const delegateMemberControl = `package P
+
+import System
+
+class Box {
+    let f Func[int32] = () -> 1
+
+    prop p Func[int32] {
+        get {
+            return () -> 1
+        }
+    }
+
+    func Use() {
+        let s1 string = f()
+        let s2 string = p()
+    }
+}
+
+let before = 0
+/*CUT*/
+let f = func () string {
+    return ""
+}
+let p = func () string {
+    return ""
+}
+`
+        let delegateMemberKeep = BindKeep(delegateMemberControl)
+        let delegateMemberErrors = delegateMemberKeep
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(2, delegateMemberErrors.Count)
+        Assert.All(delegateMemberErrors, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+
+        // 24. Base-interface call records single-candidate non-generic fixed signatures before binding
+        // arguments.
+        const fixedBaseInterfaceControl = `package P
+
+interface IBox {
+    func RunExpr(f () -> int32, g () -> void) {
+    }
+}
+
+class SubBox : IBox {
+    func Call() {
+        let v = int32(1)
+        base[IBox].RunExpr(() -> v, () -> {
+            let bad int32 = "s"
+        })
+    }
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let fixedBaseInterfaceKeep = BindKeep(fixedBaseInterfaceControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            fixedBaseInterfaceKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        // 25. Return statements inside switch expression operands inside a sibling block lambda propagate
+        // narrowed variable dependencies.
+        const switchReturnSource = `package P
+
+class Closed {
+    shared {
+        func Apply(f () -> int32, g (int32) -> int32) {
+        }
+
+        func Apply(f () -> string, g (string) -> string) {
+        }
+    }
+}
+
+func G(o object) int32? {
+    return 1
+}
+
+func Main() {
+    let outer = func () {
+        let raw = G(1)
+        if raw is {} a {
+            Closed.Apply(() -> {
+                let unused = switch true {
+                    case true: {
+                        return a
+                    }
+                    default: 0
+                }
+                return 0
+            }, (x) -> {
+                return "s"
+            })
+        }
+    }
+/*CUT*/
+    let G = func (i int32) string? {
+        return ""
+    }
+}
+`
+        AssertWitness(switchReturnSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(switchReturnSource), "GS0155", "later-overload")
     }
 
     @Fact

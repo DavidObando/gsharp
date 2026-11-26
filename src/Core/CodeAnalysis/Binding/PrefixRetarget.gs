@@ -306,15 +306,32 @@ internal shared class PrefixRetarget {
             StringComparison.Ordinal
         ) &&
             invoke.Receiver.Type.ClrType is {} receiverClr &&
-            ClrTypeUtilities.IsDelegateType(receiverClr) &&
-            invoke.Receiver is BoundVariableExpression recvVar &&
-            recvVar.Variable is not GlobalVariableSymbol {
+            ClrTypeUtilities.IsDelegateType(receiverClr) && IsNonShadowableDelegateReceiver(invoke.Receiver) {
             return false
         }
         if node is BoundCallExpression call {
             return call.Function.ContainingType != nil
         }
         return true
+    }
+
+    private func IsNonShadowableDelegateReceiver(receiver BoundExpression) bool {
+        var current = receiver
+        while current is BoundConversionExpression conv {
+            current = conv.Expression
+        }
+        if current is BoundVariableExpression recvVar {
+            return recvVar.Variable is not GlobalVariableSymbol
+        }
+        if current is BoundFieldAccessExpression field {
+            let owner = field.Field.ContainingType
+            return owner is StructSymbol || owner is InterfaceSymbol
+        }
+        if current is BoundPropertyReferenceOperationExpression prop {
+            let owner = prop.ReferencedProperty?.ContainingType
+            return owner is StructSymbol || owner is InterfaceSymbol
+        }
+        return false
     }
 
     private func IsSimpleNameConversionCall(syntax SyntaxNode, node BoundExpression) bool {
