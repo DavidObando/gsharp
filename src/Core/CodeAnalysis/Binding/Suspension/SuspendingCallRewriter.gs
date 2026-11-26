@@ -77,6 +77,14 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
     /// <inheritdoc />
     /// ```
     protected override func RewriteBlockStatement(node BoundBlockStatement) BoundStatement {
+        // Issue #6249: StatementBinder wraps every `defer` body in a cleanup
+        // shield because inferred suspension is unknown at bind time. Remove
+        // the shield when the rewritten cleanup never references its local so
+        // synchronous `defer` emits a plain try/finally without referencing
+        // Gsharp.Runtime.Channels.
+        if TryRewriteDeferShieldBlock(node, out var rewrittenShield) {
+            return rewrittenShield!!
+        }
         // The scope lowering declares the block's `ctx` local before the try it
         // guards, so every statement after that declaration is under it.
         let outer = lexicalContext
@@ -99,6 +107,54 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
         } finally {
             lexicalContext = outer
         }
+    }
+
+    private func TryRewriteDeferShieldBlock(node BoundBlockStatement, out result BoundStatement?) bool {
+        if node.Statements.Length != 2 ||
+            node.Statements[0] is not BoundVariableDeclaration shieldDecl ||
+            !IsDeferShieldLocal(shieldDecl.Variable) ||
+            node.Statements[1] is not BoundTryStatement shieldTry ||
+            !shieldTry.CatchClauses.IsEmpty ||
+            shieldTry.FinallyBlock == nil {
+            result = nil
+            return false
+        }
+        let outer = lexicalContext
+        var rewrittenTryBlock BoundBlockStatement
+        try {
+            lexicalContext = BoundVariableExpression(nil, shieldDecl.Variable)
+            rewrittenTryBlock = cast[BoundBlockStatement](RewriteStatement(shieldTry.TryBlock))
+        } finally {
+            lexicalContext = outer
+        }
+        if !ReferencesVariable(rewrittenTryBlock, shieldDecl.Variable) {
+            result = rewrittenTryBlock
+            return true
+        }
+        let rewrittenDecl = RewriteStatement(shieldDecl)
+        var rewrittenFinally BoundBlockStatement
+        try {
+            lexicalContext = BoundVariableExpression(nil, shieldDecl.Variable)
+            rewrittenFinally = cast[BoundBlockStatement](RewriteStatement(shieldTry.FinallyBlock!!))
+        } finally {
+            lexicalContext = outer
+        }
+        if object.ReferenceEquals(rewrittenDecl, shieldDecl) && object.ReferenceEquals(
+            rewrittenTryBlock,
+            shieldTry.TryBlock
+        ) &&
+            object.ReferenceEquals(rewrittenFinally, shieldTry.FinallyBlock) {
+            result = node
+            return true
+        }
+        let updatedTry = BoundTryStatement(
+            shieldTry.Syntax,
+            rewrittenTryBlock,
+            shieldTry.CatchClauses,
+            rewrittenFinally
+        )
+        result = BoundBlockStatement(node.Syntax, ImmutableArray.Create[BoundStatement](rewrittenDecl, updatedTry))
+        return true
     }
 
     /// ```xmldoc
@@ -586,5 +642,46 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
             .Type
             .ClrType
             ?.FullName == "Gsharp.Concurrency.Context"
+
+        private func IsDeferShieldLocal(variable VariableSymbol) bool -> IsContextLocal(variable) &&
+            variable.Name.StartsWith("<defer$$shield$$", StringComparison.Ordinal)
+
+        private func ReferencesVariable(statement BoundStatement, target VariableSymbol) bool {
+            let finder = ShieldReferenceFinder(target)
+            finder.VisitStatement(statement)
+            return finder.Found
+        }
+    }
+
+    private class ShieldReferenceFinder : BoundTreeWalker {
+        private let target VariableSymbol
+
+        init(target VariableSymbol) {
+            this.target = target
+        }
+
+        prop Found bool {
+            get;
+            private set;
+        }
+
+        open override func VisitExpression(node BoundExpression) {
+            if Found {
+                return
+            }
+            if node is BoundVariableExpression variableExpr && object.ReferenceEquals(variableExpr.Variable, target) {
+                Found = true
+                return
+            }
+            if node is BoundFunctionLiteralExpression lambda {
+                if lambda.CapturedVariables.Contains(target) {
+                    Found = true
+                    return
+                }
+                VisitStatement(lambda.Body)
+                return
+            }
+            base.VisitExpression(node)
+        }
     }
 }
