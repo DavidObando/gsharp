@@ -14,6 +14,51 @@ import System.Linq
 import Xunit
 
 open class Issue6231ConditionalSymbolPreservationTests {
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func ConditionalStaticExtensionHelperPreservesSymbols(supported bool) {
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("Helper.cs", ConditionalHelperSource)}
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator(){SupportsScopedConditionalSymbols = supported}.TranslateDocument(
+                document,
+                context
+            )
+        )
+        if supported {
+            Assert.Empty(
+                context.Diagnostics.Where(
+                    (diagnostic TranslationDiagnostic) -> diagnostic.Severity != TranslationSeverity.Info
+                )
+            )
+            Assert.Contains("@file:DefineSymbol(\"ACTIVE\")", printed, StringComparison.Ordinal)
+        } else {
+            let diagnostic = Assert.Single(
+                context.Diagnostics.Where(
+                    (
+                        item TranslationDiagnostic
+                    ) -> item.DiagnosticId == CSharpToGSharpTranslator.ConditionalSymbolsDiagnosticId
+                )
+            )
+            Assert.True(diagnostic.IsUnsupported)
+            Assert.NotNull(diagnostic.Location)
+            Assert.DoesNotContain("@file:DefineSymbol", printed, StringComparison.Ordinal)
+        }
+    }
+
+    @Fact
+    func ConditionalStaticExtensionHelperMatchesNativeEffects() {
+        Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(
+            ConditionalHelperSource,
+            expectedOutput: "2:1:1"
+        )
+    }
+
     @Fact
     func MergedOutputIgnoresUnrelatedCallsInAContributingFile() {
         let project = CSharpProjectLoader.LoadInMemory([](string, source string){("A.cs", `
@@ -233,6 +278,28 @@ namespace GSharp.Core.CodeAnalysis {
     }
 
     shared {
+        private const ConditionalHelperSource string = `
+#define ACTIVE
+#nullable enable
+using System.Diagnostics;
+public sealed class Receiver { }
+public static class Extensions {
+    [Conditional("ACTIVE")]
+    public static unsafe void Log(this Receiver receiver, int* value) { Demo.Calls++; }
+}
+public static unsafe class Demo {
+    public static int Calls;
+    static int receivers, arguments;
+    static Receiver? Make(bool present) { receivers++; return present ? new Receiver() : null; }
+    static int* Argument() { arguments++; return default(int*); }
+    public static string Run() {
+        Make(false)?.Log(Argument());
+        Make(true)?.Log(Argument());
+        return receivers + ":" + arguments + ":" + Calls;
+    }
+}
+`
+
         private func Translate(supported bool)(Printed string, Context TranslationContext) {
             let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Symbols.cs", `
 #define ZETA

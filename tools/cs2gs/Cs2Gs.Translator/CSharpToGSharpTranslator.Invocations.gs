@@ -842,6 +842,7 @@ partial class CSharpToGSharpTranslator {
             out call GExpression,
             hostLocalAssignmentSeam bool
         ) {
+            this.RecordConditionalInvocation(invocation!!)
             let receiver GExpression? = this.CaptureReceiverOnce(
                 this.TranslateExpression(conditionalAccess.Expression),
                 conditionalAccess.Expression,
