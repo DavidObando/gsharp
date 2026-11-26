@@ -967,17 +967,16 @@ internal shared class PrefixBindingContext {
                 return true
             }
         }
-        // A report inside a lambda or function literal without an explicit return type can depend on an
-        // enclosing call whose signature or receiver uses a provisional expression (#6229).
+        // A report inside a lambda can depend on an enclosing call or contextual assignment target whose
+        // signature or receiver uses a provisional expression (#6229). A function literal always declares its
+        // parameter types and returns either its explicit type or void, so its body does not depend on an
+        // enclosing context.
         for var i = enclosingLambdas.Count - 1; i >= 0; i-- {
             let lambda = enclosingLambdas[i]
             if skipSubtree != nil && object.ReferenceEquals(lambda, skipSubtree) {
                 continue
             }
-            if !(
-                lambda is LambdaExpressionSyntax ||
-                    (lambda is FunctionLiteralExpressionSyntax lit && lit.ReturnTypeClause == nil)
-            ) {
+            if lambda is not LambdaExpressionSyntax {
                 continue
             }
             if EnclosingCallOfArgument(tree, lambda) is {} enclosingCall {
@@ -1001,8 +1000,40 @@ internal shared class PrefixBindingContext {
                     fixedCallSpan: enclosingFixedSpan
                 )
             }
+            if EnclosingAssignmentWithTarget(tree, lambda) is {} assignment {
+                return StatementUsesProvisionalCore(
+                    cut,
+                    tree,
+                    assignment.Span,
+                    skipSubtree: lambda,
+                    excludeCallLambdas: false
+                )
+            }
         }
         return false
+    }
+
+    private func EnclosingAssignmentWithTarget(tree SyntaxTree, expression SyntaxNode) SyntaxNode? {
+        var current SyntaxNode = expression
+        while tree.GetParent(current) is {} parent {
+            if parent is ParenthesizedExpressionSyntax || parent is CheckedExpressionSyntax {
+                current = parent
+                continue
+            }
+            if (parent is IndexAssignmentExpressionSyntax idx && object.ReferenceEquals(idx.Value, current)) ||
+                (
+                parent is MemberIndexAssignmentExpressionSyntax memIdx && object.ReferenceEquals(memIdx.Value, current)
+            ) ||
+                (parent is FieldAssignmentExpressionSyntax fld && object.ReferenceEquals(fld.Value, current)) ||
+                (
+                parent is MemberFieldAssignmentExpressionSyntax memFld && object.ReferenceEquals(memFld.Value, current)
+            ) ||
+                (parent is AssignmentExpressionSyntax assign && object.ReferenceEquals(assign.Expression, current)) {
+                return parent
+            }
+            return nil
+        }
+        return nil
     }
 
     internal func EnclosingCallOfArgumentExact(tree SyntaxTree, expression SyntaxNode, callSpan TextSpan) bool {
@@ -1014,7 +1045,9 @@ internal shared class PrefixBindingContext {
     private func EnclosingCallOfArgument(tree SyntaxTree, expression SyntaxNode) SyntaxNode? {
         var current SyntaxNode = expression
         while tree.GetParent(current) is {} parent {
-            if parent is ParenthesizedExpressionSyntax || parent is NamedArgumentExpressionSyntax {
+            if parent is ParenthesizedExpressionSyntax ||
+                parent is CheckedExpressionSyntax ||
+                parent is NamedArgumentExpressionSyntax {
                 current = parent
                 continue
             }
@@ -1866,10 +1899,17 @@ internal shared class PrefixBindingContext {
 
     internal func IsBodyTypedByCandidate(value ExpressionSyntax) bool {
         var current = value
-        while current is ParenthesizedExpressionSyntax parenthesized {
-            current = parenthesized.Expression
+        while current is ParenthesizedExpressionSyntax || current is CheckedExpressionSyntax {
+            if current is ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized.Expression
+            } else if current is CheckedExpressionSyntax checkedExpr {
+                current = checkedExpr.Expression
+            } else {
+                break
+            }
         }
-        if current is FunctionLiteralExpressionSyntax lit && lit.ReturnTypeClause != nil {
+        // A function literal always declares its parameter types and returns either its explicit type or void.
+        if current is FunctionLiteralExpressionSyntax {
             return false
         }
         return IsTypedByCandidate(current)
@@ -1881,8 +1921,14 @@ internal shared class PrefixBindingContext {
     /// @returns `false` for an expression that has a type of its own.
     internal func IsTypedByCandidate(value ExpressionSyntax) bool {
         var current = value
-        while current is ParenthesizedExpressionSyntax parenthesized {
-            current = parenthesized.Expression
+        while current is ParenthesizedExpressionSyntax || current is CheckedExpressionSyntax {
+            if current is ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized.Expression
+            } else if current is CheckedExpressionSyntax checkedExpr {
+                current = checkedExpr.Expression
+            } else {
+                break
+            }
         }
         if current is BinaryExpressionSyntax binary {
             return binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken

@@ -571,11 +571,15 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                     } else {
                         argument
                     }
-                    while value is RefArgumentExpressionSyntax || value is ParenthesizedExpressionSyntax {
+                    while value is RefArgumentExpressionSyntax ||
+                        value is ParenthesizedExpressionSyntax ||
+                        value is CheckedExpressionSyntax {
                         if value is RefArgumentExpressionSyntax{Expression: {} refInner} {
                             value = refInner
                         } else if value is ParenthesizedExpressionSyntax paren {
                             value = paren.Expression
+                        } else if value is CheckedExpressionSyntax checkedExpr {
+                            value = checkedExpr.Expression
                         } else {
                             break
                         }

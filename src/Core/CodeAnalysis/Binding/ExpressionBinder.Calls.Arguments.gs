@@ -3344,6 +3344,13 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportUnableToFindFunction(synthesizedCall.Location, methodName)
             return BoundErrorExpression(nil)
         }
+        if PrefixBindingContext.Current is {} prefixCut &&
+            !prefixCut.LaterOverloadsPossible &&
+            candidates.Count == 1 &&
+            !candidates[0].IsGenericMethod {
+            PrefixBindingContext.AddFixedSignatureCall(syntax)
+            PrefixBindingContext.AddFixedSignatureCall(synthesizedCall)
+        }
         let arguments = BindBaseCallArguments(synthesizedCall)
         let receiver = BoundVariableExpression(nil, thisParameter)
         if TryResolveAndBindClrInstanceCall(
@@ -3632,6 +3639,15 @@ internal partial class ExpressionBinder {
             overloads.BindCallArgumentsForLayoutRecovery(ce.Arguments)
             result = BoundErrorExpression(nil)
             return true
+        }
+        if PrefixBindingContext.Current is {} prefixCut &&
+            !prefixCut.LaterOverloadsPossible &&
+            candidates.Count == 1 &&
+            !candidates[0].IsGenericMethod {
+            PrefixBindingContext.AddFixedSignatureCall(ce)
+            if callSyntax != nil && !object.ReferenceEquals(callSyntax, ce) {
+                PrefixBindingContext.AddFixedSignatureCall(callSyntax)
+            }
         }
         let arguments = BindBaseCallArguments(ce)
         if GetBaseAccessThisParameter() is not{} thisParameter {

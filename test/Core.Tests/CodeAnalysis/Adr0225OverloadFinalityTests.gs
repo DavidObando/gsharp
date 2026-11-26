@@ -3330,42 +3330,31 @@ interface IBox {
     }
 
     func CallPriv() {
-        let outer = func () {
-            let v = G(1)
-            this.RunPriv(() -> v, () -> {
-                let badPriv int32 = "s"
-            })
-        }
+        let v = int32(1)
+        this.RunPriv(() -> v, () -> {
+            let badPriv int32 = "s"
+        })
     }
-}
-
-func G(o object) int32 {
-    return 0
 }
 
 func UseIface(c IBox) {
-    let outer = func () {
-        let v = G(1)
-        c.RunExpr(() -> v, () -> {
-            let badIface int32 = "s"
-        })
-    }
+    let v = int32(1)
+    c.RunExpr(() -> v, () -> {
+        let badIface int32 = "s"
+    })
 }
 
 func UseTp[T IBox](c T) {
-    let outer = func () {
-        let v = G(1)
-        c.RunExpr(() -> v, () -> {
-            let badTp int32 = "s"
-        })
-    }
+    let v = int32(1)
+    c.RunExpr(() -> v, () -> {
+        let badTp int32 = "s"
+    })
 }
 
-func Main() {
+let before = 0
 /*CUT*/
-    let G = func (i int32) string {
-        return ""
-    }
+let int32 = func (i int32) string {
+    return ""
 }
 `
         let fixedInterfaceInstanceKeep = BindKeep(fixedInterfaceInstanceControl)
@@ -3661,6 +3650,12 @@ namespace ClrApi {
         public static void RunExpr(Func<int> f, Action g) {}
         public void RunInstanceExpr(Func<int> f, Action g) {}
     }
+    public class BaseClrBox {
+        public virtual void RunExpr(Func<int> f, Action g) {}
+    }
+    public interface IClrBase {
+        void RunExpr(Func<int> f, Action g) {}
+    }
 }`)
         let clrRefs = []MetadataReference{
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
@@ -3815,6 +3810,174 @@ func (l List[int32]) ForEach(f (int32) -> int32) int32 {
             "GS0124",
             "later-overload"
         )
+
+        // 30. Checked and unchecked expression wrappers do not cause explicitly typed function-literal
+        // bodies to inherit enclosing call provisional premises.
+        const checkedExplicitLitSource = `package P
+
+class Closed {
+    shared {
+        func Run(a object, f () -> int32) {
+        }
+    }
+}
+
+func Main() {
+    let outer = func () {
+        let v = int32(1)
+        Closed.Run(v, checked(func () int32 {
+            let badChecked int32 = "s"
+            return 0
+        }))
+        Closed.Run(v, unchecked(func () int32 {
+            let badUnchecked int32 = "s"
+            return 0
+        }))
+    }
+/*CUT*/
+    let int32 = func (i int32) string {
+        return ""
+    }
+}
+`
+        let checkedExplicitKeep = BindKeep(checkedExplicitLitSource)
+        let checkedExplicitErrors = checkedExplicitKeep
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(2, checkedExplicitErrors.Count)
+        Assert.All(
+            checkedExplicitErrors,
+            (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality)
+        )
+
+        // 31. An implicit-void function literal (`func () { ... }` without a return clause) has a fixed void
+        // signature, so its body stays Final despite a provisional sibling argument (while a whole-argument
+        // mismatch to `() -> int32` remains FutureDependent in Nothing mode).
+        const implicitVoidControl = `package P
+
+class Closed {
+    shared {
+        func Run(a object, f () -> void) {
+        }
+    }
+}
+
+func Main() {
+    let outer = func () {
+        let v = int32(1)
+        Closed.Run(v, func () {
+            let badVoid int32 = "s"
+        })
+    }
+/*CUT*/
+    let int32 = func (i int32) string {
+        return ""
+    }
+}
+`
+        let implicitVoidKeep = BindKeep(implicitVoidControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            implicitVoidKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        const implicitVoidWholePrefix = `package P
+
+func Run(a object, f () -> int32) {
+}
+
+func Main() {
+    let v = 1
+    Run(v, func () {
+    })
+`
+        const implicitVoidWholeWitness = `}
+
+func Run(a int32, f () -> void) {
+}
+`
+        AssertWitness(implicitVoidWholePrefix + implicitVoidWholeWitness, "GS0154", "GS0155")
+        AssertFutureDependent(
+            BindNothing(implicitVoidWholePrefix, []string{"}\n", implicitVoidWholeWitness}),
+            "GS0154",
+            "later-declaration"
+        )
+
+        // 32. Imported CLR base-class and default-interface base calls record single-candidate non-generic
+        // fixed signatures before binding arguments.
+        const clrBaseSource = `package P
+
+import System
+import ClrApi
+
+class DerivedBase : BaseClrBox {
+    func CallBase() {
+        let v = int32(1)
+        base.RunExpr(() -> v, () -> {
+            let badBase int32 = "s"
+        })
+    }
+}
+
+class DerivedIface : IClrBase {
+    func CallIface() {
+        let v = int32(1)
+        base[IClrBase].RunExpr(() -> v, () -> {
+            let badIface int32 = "s"
+        })
+    }
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let clrBaseCut = clrBaseSource.IndexOf("/*CUT*/", StringComparison.Ordinal)
+        Assert.True(clrBaseCut >= 0)
+        let clrBaseTree = SyntaxTree.Parse(SourceText.From(clrBaseSource.Replace("/*CUT*/", string.Empty), "prefix.gs"))
+        let clrBaseKeep = Compilation(clrResolver, clrBaseTree).BindPrefix(
+            clrBaseTree,
+            clrBaseCut,
+            PrefixBindOptions(PrefixRemainder.KeepDeclarations, includeScope: false)
+        )
+        let clrBaseErrors = clrBaseKeep
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(2, clrBaseErrors.Count)
+        Assert.All(clrBaseErrors, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+
+        // 33. Contextual lambda on the RHS of an indexed assignment whose target has a provisional type
+        // classifies inner mismatch as FutureDependent in KeepDeclarations.
+        const indexedAssignLambdaSource = `package P
+
+import System
+
+func Make(i int32) []Action[int32] {
+    return [1]Action[int32]
+}
+
+func Use() {
+    let a = Make(int32(1))
+    a[0] = (x) -> {
+        let s string = x
+    }
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+func Make(s string) []Action[string] {
+    return [1]Action[string]
+}
+`
+        AssertWitness(indexedAssignLambdaSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(indexedAssignLambdaSource), "GS0155", "later-overload")
     }
 
     @Fact
