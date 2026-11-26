@@ -965,6 +965,11 @@ open class Compilation {
             // The successor reuses the previous declarations when the prefix trees differ only in
             // member bodies, and binds from scratch otherwise.
             successor = previous.Compilation.ReplaceSyntaxTree(previous.SyntaxTree, prefixTree)
+            // #6215: the reused declarations do not bind again, so their imported type names come from the
+            // previous cut.
+            if previous.SyntaxTree.Prefix is {} previousCut && prefixCut.LaterOverloadsPossible {
+                prefixCut.InheritHideableNames(previousCut)
+            }
             // Both prefix trees have the host's text, so a member body that did not change has the same
             // spans and the same diagnostics: the body cache can serve it. The open body changed, so its
             // hash misses and it binds again.

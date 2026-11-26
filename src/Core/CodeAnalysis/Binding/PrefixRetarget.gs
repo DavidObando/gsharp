@@ -23,7 +23,6 @@ internal shared class PrefixRetarget {
         if syntax == nil || PrefixBindingContext.Current is not{} cut {
             return
         }
-        NoteHideableName(syntax, kind, bound, qualifierType)
         if CanChange(cut, syntax, kind, bound, qualifierType) {
             PrefixBindingContext.AddProvisional(syntax)
         } else {
@@ -99,13 +98,6 @@ internal shared class PrefixRetarget {
             }
             // A static read has no receiver: its qualifier is the type that the lookup started from.
             let qualifier = receiver?.Type ?? node.StaticQualifierType
-            if receiver == nil &&
-                NamesImportedType(node.StaticQualifierType) &&
-                syntax is AccessorExpressionSyntax qualified &&
-                IsBareTypeQualifier(qualified, node.StaticQualifierType) {
-                // #6215: a later source type can hide the imported type that the bare qualifier names.
-                PrefixBindingContext.AddHideable(syntax)
-            }
             if qualifier == nil && receiver == nil {
                 // No qualifier is known: the read cannot be shown to be fixed.
                 PrefixBindingContext.AddProvisional(syntax)
@@ -118,99 +110,6 @@ internal shared class PrefixRetarget {
             node = receiver
         }
         PrefixBindingContext.AddFixed(syntax)
-    }
-
-    /// Records a type clause whose bare name resolves to an imported type: a later source type of the same
-    /// name hides it when nothing follows the cut (#6215).
-    /// @param syntax The type clause.
-    /// @param type The type that the clause denotes.
-    func NoteTypeClause(syntax TypeClauseSyntax?, type TypeSymbol?) {
-        if syntax != nil && !syntax.HasQualifier && NamesImportedType(type) {
-            PrefixBindingContext.AddHideable(syntax)
-        }
-    }
-
-    // Whether the left part of [`accessor`](paramref) is the bare name of [`type`](paramref) at the head of
-    // its chain (`Console` of `Console.Title`), not a namespace (`System` of `System.Console.Title`) or a
-    // name that a namespace qualifies (`Math` of `System.Math.Abs(1)`).
-    private func IsBareTypeQualifier(accessor AccessorExpressionSyntax, type TypeSymbol?) bool {
-        if accessor.LeftPart is not NameExpressionSyntax head || type == nil {
-            return false
-        }
-        if accessor.Parent is AccessorExpressionSyntax outer && object.ReferenceEquals(outer.RightPart, accessor) {
-            return false
-        }
-        var simple = type.Name
-        let dot = simple.LastIndexOf('.')
-        if dot >= 0 {
-            simple = simple.Substring(dot + 1)
-        }
-        let bracket = simple.IndexOf('[')
-        if bracket >= 0 {
-            simple = simple.Substring(0, bracket)
-        }
-        return head.IdentifierToken.ValueText == simple
-    }
-
-    // The imported type whose static member a call names.
-    private func StaticOwner(node BoundExpression, qualifierType TypeSymbol?) TypeSymbol? {
-        if qualifierType != nil {
-            return qualifierType
-        }
-        let declaring = if node is BoundClrStaticCallExpression clr {
-            clr.Method.DeclaringType
-        } else if node is BoundImportedCallExpression imported {
-            imported.Function.Method.DeclaringType
-        } else {
-            default(System.Type?)
-        }
-        return if declaring == nil {
-            default(TypeSymbol?)
-        } else {
-            ImportedTypeSymbol.GetWithoutNullability(declaring, NullabilityFreeReason.TypeStructure)
-        }
-    }
-
-    // Whether [`type`](paramref) is an imported type, under the nullability carriers and the array forms.
-    private func NamesImportedType(type TypeSymbol?) bool {
-        var current = type
-        for var depth = 0; depth < 8 && current != nil; depth++ {
-            if current is ImportedTypeSymbol {
-                return true
-            }
-            if current is NullableTypeSymbol nullable {
-                current = nullable.UnderlyingType
-            } else if current is PlatformTypeSymbol platform {
-                current = platform.UnderlyingType
-            } else if current is ArrayTypeSymbol array {
-                current = array.ElementType
-            } else {
-                return false
-            }
-        }
-        return false
-    }
-
-    // #6215: a construction or a static member of an imported type that a bare name qualifies.
-    private func NoteHideableName(
-        syntax SyntaxNode,
-        kind PrefixCallKind,
-        node BoundExpression,
-        qualifierType TypeSymbol?
-    ) {
-        if kind == PrefixCallKind.Name && node is BoundClrConstructorCallExpression {
-            PrefixBindingContext.AddHideable(syntax)
-        } else if (
-            NamesImportedType(qualifierType) ||
-                node is BoundClrStaticCallExpression ||
-                (node is BoundImportedCallExpression staticCall && !IsImportedExtension(staticCall))
-        ) &&
-            kind == PrefixCallKind.Member &&
-            syntax.Parent is AccessorExpressionSyntax accessor &&
-            IsBareTypeQualifier(accessor, StaticOwner(node, qualifierType)) &&
-            object.ReferenceEquals(accessor.RightPart, syntax) {
-            PrefixBindingContext.AddHideable(accessor)
-        }
     }
 
     /// Records [`syntax`](paramref) when it names a variable whose inferred type a later declaration can

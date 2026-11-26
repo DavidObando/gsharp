@@ -218,26 +218,40 @@ internal sealed class PrefixCut {
         }
     }
 
-    // #6215: the expressions whose type a later source type that hides an imported type can change.
-    private let hiddenKeys HashSet[(Text SourceText, Span TextSpan)] = HashSet[(Text SourceText, Span TextSpan)]()
-    private let hiddenSpans List[(Text SourceText, Span TextSpan)] = List[(Text SourceText, Span TextSpan)]()
+    // #6215: the simple names that a lookup resolved to an imported type. A later source type of the same
+    // name hides the imported one when nothing follows the cut.
+    private let hiddenNames HashSet[string] = HashSet[string](StringComparer.Ordinal)
 
-    /// Records that a later source type can hide the imported type that [`node`](paramref) names or that
-    /// types it (#6215).
-    /// @param node A type clause, a type name or a construction.
-    internal func AddHideable(node SyntaxNode) {
-        let key = (node.SyntaxTree.Text, node.Span)
+    /// Records that a lookup resolved [`name`](paramref) to an imported type (#6215).
+    /// @param name The simple name.
+    internal func AddHideableName(name string) {
         lock provisionalGate {
-            provisionalTrees[node.SyntaxTree.Text] = node.SyntaxTree
-            if hiddenKeys.Add(key) {
-                hiddenSpans.Add(key)
-            }
+            hiddenNames.Add(name)
+        }
+    }
+
+    /// Takes the hideable names of [`previous`](paramref), whose declarations a reusing bind does not bind
+    /// again (#6215).
+    /// @param previous The cut of the previous bind of a chain.
+    internal func InheritHideableNames(previous PrefixCut) {
+        if object.ReferenceEquals(previous, this) {
+            return
+        }
+        let names = previous.HideableNameList()
+        lock provisionalGate {
+            hiddenNames.UnionWith(names)
+        }
+    }
+
+    private func HideableNameList() List[string] {
+        lock provisionalGate {
+            return List[string](hiddenNames)
         }
     }
 
     /// Returns a value that tells whether [`node`](paramref) is recorded in the registry of
-    /// [`hideable`](paramref): the type names that a later type can hide (#6215), or the expressions
-    /// that a later overload can change (#6179).
+    /// [`hideable`](paramref): a bare name of an imported type that a later type can hide (#6215), or an
+    /// expression that a later overload can change (#6179).
     /// @param node A syntax node.
     /// @param hideable Which registry.
     /// @returns `true` for a recorded node.
@@ -245,37 +259,89 @@ internal sealed class PrefixCut {
         if !hideable {
             return IsProvisional(node)
         }
-        let key = (node.SyntaxTree.Text, node.Span)
-        lock provisionalGate {
-            return hiddenSpans.Count > 0 && hiddenKeys.Contains(key)
-        }
+        return HideableIdentifier(node) is {} identifier && IsHideableName(identifier.ValueText)
     }
 
-    /// Gets a value that tells whether the bind recorded a type name that a later type can hide (#6215).
+    /// Gets a value that tells whether the bind resolved a name to an imported type (#6215).
     internal prop HasHideable bool {
         get {
             lock provisionalGate {
-                return hiddenSpans.Count > 0
+                return hiddenNames.Count > 0
             }
         }
     }
 
-    /// Returns a value that tells whether [`location`](paramref) contains a type name that a later type can
-    /// hide (#6215).
+    /// Returns a value that tells whether [`location`](paramref) overlaps a bare name of an imported type
+    /// that a later type can hide (#6215).
     /// @param location A diagnostic location.
-    /// @returns `true` when a recorded name is in the location.
+    /// @returns `true` when a recorded name overlaps the location.
     internal func ContainsHideable(location TextLocation) bool {
-        let span = location.Span
+        if !HasHideable || ProvisionalTree(location.Text) is not{} tree {
+            return false
+        }
+        return OverlapsHideable(tree.Root, location.Span)
+    }
+
+    private func IsHideableName(name string) bool {
         lock provisionalGate {
-            for entry in hiddenSpans {
-                if object.ReferenceEquals(entry.Text, location.Text) &&
-                    span.Start <= entry.Span.Start &&
-                    entry.Span.End <= span.End {
-                    return true
-                }
+            return hiddenNames.Contains(name)
+        }
+    }
+
+    private func OverlapsHideable(node SyntaxNode, span TextSpan) bool {
+        if HideableIdentifier(node) is {} identifier &&
+            Overlap(identifier.Span, span) &&
+            IsHideableName(identifier.ValueText) {
+            return true
+        }
+        for child in node.GetChildren() {
+            if child is not SyntaxToken && Overlap(child.Span, span) && OverlapsHideable(child, span) {
+                return true
             }
         }
         return false
+    }
+
+    // Whether two spans share a position; an empty span counts where it stands.
+    private func Overlap(left TextSpan, right TextSpan) bool {
+        if left.Length == 0 {
+            return right.Start <= left.Start && left.Start <= right.End
+        }
+        if right.Length == 0 {
+            return left.Start <= right.Start && right.Start <= left.End
+        }
+        return left.Start < right.End && right.Start < left.End
+    }
+
+    // The identifier of a bare name that can name a type: the name of a type clause without a qualifier,
+    // and a name, a generic name or a call that is not a member of a qualifier (`Console` of
+    // `Console.Title`, not `Math` of `System.Math.Abs(1)` nor `Title`).
+    private func HideableIdentifier(node SyntaxNode) SyntaxToken? {
+        return if node is TypeClauseSyntax clause {
+            if clause.HasQualifier {
+                default(SyntaxToken?)
+            } else {
+                clause.Identifier
+            }
+        } else if node is NameExpressionSyntax name && !IsQualifiedMember(name) {
+            name.IdentifierToken
+        } else if node is GenericNameExpressionSyntax generic && !IsQualifiedMember(generic) {
+            generic.Identifier
+        } else if node is CallExpressionSyntax call && !IsQualifiedMember(call) {
+            call.Identifier
+        } else {
+            default(SyntaxToken?)
+        }
+    }
+
+    private func IsQualifiedMember(node SyntaxNode) bool {
+        if node.Parent is not AccessorExpressionSyntax accessor {
+            return false
+        }
+        if object.ReferenceEquals(accessor.RightPart, node) {
+            return true
+        }
+        return accessor.Parent is AccessorExpressionSyntax outer && object.ReferenceEquals(outer.RightPart, accessor)
     }
 
     /// Returns a value that tells whether [`node`](paramref) is an expression whose type a later
@@ -577,12 +643,12 @@ internal shared class PrefixBindingContext {
         }
     }
 
-    /// Records that a later source type can hide the imported type that [`node`](paramref) names, when
-    /// nothing follows the cut (#6215).
-    /// @param node A type clause, a type name or a construction.
-    internal func AddHideable(node SyntaxNode?) {
-        if node != nil && current.Value is {} cut && cut.LaterOverloadsPossible {
-            cut.AddHideable(node)
+    /// Records that a lookup resolved [`name`](paramref) to an imported type, which a later source type of
+    /// the same name hides when nothing follows the cut (#6215).
+    /// @param name The simple name.
+    internal func AddHideableName(name string?) {
+        if !string.IsNullOrEmpty(name) && current.Value is {} cut && cut.LaterOverloadsPossible {
+            cut.AddHideableName(name)
         }
     }
 

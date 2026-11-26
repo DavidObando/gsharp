@@ -1660,6 +1660,94 @@ class Math {
         }
     }
 
+    /// #6215: an imported type that a bare name reaches through a lookup that reports, a folded constant, a
+    /// built-in mapping, a constructed generic qualifier or an array clause can be hidden by a later source
+    /// type, and the report that depends on it is not final. A constructed generic qualifier is already
+    /// reported as depending on a later declaration, which takes precedence.
+    @Theory
+    @InlineData(
+        "package P\n\nimport System.Threading\nimport System.Timers\n\nfunc Use(t Timer) {\n    let done = 0\n",
+        "}\n\nclass Timer {\n}\n",
+        "GS0547",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System\n\nfunc Main() {\n    let s string = Math.PI\n    let done = 0\n",
+        "}\n\nclass Math {\n    shared {\n        let PI string = \"\"\n    }\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System\n\nfunc Use(s String) {\n    let b bool = s.Length\n    let done = 0\n",
+        "}\n\nclass String {\n    prop Length bool -> false\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    @InlineData(
+        "package P\n\nimport System.Collections.Generic\n\nfunc Main() {\n    let n int32 = Comparer[int32].Default\n    let done = 0\n",
+        "}\n\nclass Comparer[T] {\n    shared {\n        let Default int32 = 0\n    }\n}\n",
+        "GS0155",
+        "later-declaration"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc Use(sb []StringBuilder) {\n    let first = sb[0]\n    let s string = first.Length\n    let done = 0\n",
+        "}\n\nclass StringBuilder {\n    prop Length string -> \"\"\n}\n",
+        "GS0155",
+        "later-type"
+    )
+    func ImportedTypeReachedByABareName_ALaterSourceTypeCanHideIt(
+        prefix string,
+        witness string,
+        id string,
+        reason string
+    ) {
+        let result = BindNothing(prefix, []string{"}\n", witness})
+        AssertWitness(prefix + witness, id)
+        AssertFutureDependent(result, id, reason)
+        // Every later declaration is kept, so no later type can hide the imported one (#6215).
+        for d in BindKeep(prefix + "/*CUT*/" + witness).Diagnostics.Where(
+            (d ClassifiedDiagnostic) -> d.Diagnostic.Id == id
+        ) {
+            Assert.NotEqual("later-type", d.Reason)
+        }
+    }
+
+    /// #6215: the keyword `string` names the built-in type, which no source type can hide.
+    @Fact
+    func BuiltInKeywordType_NoLaterSourceTypeCanHideIt() {
+        const prefix = "package P\n\nfunc Use(s string) {\n    let b bool = s.Length\n    let done = 0\n"
+        let result = BindNothing(prefix, []string{"}\n"})
+        let matching = result.Diagnostics.Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").ToList()
+        Assert.NotEmpty(matching)
+        Assert.All(matching, (d ClassifiedDiagnostic) -> Assert.NotEqual("later-type", d.Reason))
+    }
+
+    /// #6215: successive cuts under `Nothing` that reuse the declarations keep the imported type of a
+    /// parameter clause and a return type, and report what a bind from scratch reports.
+    @Fact
+    func ChainedCutsInABodyWithAnImportedParameterType_ReportWhatABindFromScratchReports() {
+        const source = "package P\n\nimport System.Text\n\nfunc Make() StringBuilder {\n    return StringBuilder()\n}\n\nfunc Use(sb StringBuilder) {\n    let a = 1\n    let s string = sb.Length\n    let b = 2\n    let t string = Make().Length\n    let c = 3\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "prefix.gs"))
+        let compilation = Compilation(tree)
+        let body = tree
+            .Root
+            .DescendantNodes()
+            .OfType[FunctionDeclarationSyntax]()
+            .First((f FunctionDeclarationSyntax) -> f.Identifier.ValueText == "Use")
+            .Body!!
+        let options = PrefixBindOptions(PrefixRemainder.Nothing, includeScope: false)
+        var previous PrefixBindResult? = nil
+        var laterType = 0
+        for statement in body.Statements {
+            let scratch = compilation.BindPrefix(tree, statement.Span.End, options)
+            let chained = compilation.BindPrefix(tree, statement.Span.End, options, previous)
+            Assert.Equal(Classify(scratch), Classify(chained))
+            laterType += scratch.Diagnostics.Count((d ClassifiedDiagnostic) -> d.Reason == "later-type")
+            previous = chained
+        }
+        Assert.True(laterType > 0)
+    }
+
     @Fact
     func ResolvedCall_AnExactNonGenericMatchCannotBeBeaten() {
         const prefix = `package P
@@ -1954,6 +2042,13 @@ async func Main() {
         private func Diagnose(text string) ImmutableArray[Diagnostic] -> Compilation(
             SyntaxTree.Parse(SourceText.From(text, "prefix.gs"))
         ).GetDiagnostics()
+
+        private func Classify(result PrefixBindResult) string -> string.Join(
+            "\n",
+            result.Diagnostics.Select(
+                (d ClassifiedDiagnostic) -> "${d.Diagnostic.Id}@${d.Diagnostic.Location.Span} ${d.Finality} ${d.Reason}"
+            )
+        )
 
         private func Key(d Diagnostic) string -> "${d.Id}@${d.Location.Span.Start}:${d.Location.Span.Length}"
     }

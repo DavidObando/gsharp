@@ -4942,13 +4942,6 @@ partial class Binder {
     }
 
     private func BindTypeClause(syntax TypeClauseSyntax?) TypeSymbol? {
-        let bound = BindTypeClauseUnrecorded(syntax)
-        // #6215: a later source type can hide the imported type that a bare name of the clause resolves to.
-        PrefixRetarget.NoteTypeClause(syntax, bound)
-        return bound
-    }
-
-    private func BindTypeClauseUnrecorded(syntax TypeClauseSyntax?) TypeSymbol? {
         if syntax == nil {
             return nil
         }
