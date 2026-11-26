@@ -10,9 +10,141 @@ import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Immutable
 import System.Linq
+import System.Reflection
+import System.Reflection.Emit
+import System.Threading
 import Xunit
 
 class Issue6231ConditionalCompilationTests {
+    @Theory
+    @InlineData(`class C { prop P int32 { @Missing get { return 1 } } }`, `@Missing`)
+    @InlineData(`class C { prop P int32 { @Obsolete get { return 1 } } }`, `@Obsolete`)
+    @InlineData(`class C { event Changed () -> void { @Missing add {} remove {} } }`, `@Missing`)
+    @InlineData(`class C { event Changed () -> void { add {} @Obsolete remove {} } }`, `@Obsolete`)
+    func ActiveAccessors_RejectOrdinaryAnnotationsInsteadOfDiscardingThem(source string, offending string) {
+        let compilation = Compilation(SyntaxTree.Parse("import System\n" + source)){IsLibrary = true}
+        let diagnostic = Assert.Single(compilation.GetDiagnostics().Where((d Diagnostic) -> d.Id == "GS0206"))
+        Assert.Equal(14 + source.IndexOf(offending, StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal(offending.Length, diagnostic.Location.Span.Length)
+    }
+
+    @Fact
+    func InactiveAccessorOwners_DoNotValidateOrdinaryAnnotations() {
+        let compilation = Compilation(SyntaxTree.Parse(`@If(false) class Hidden {
+    prop P int32 { @Missing get { return Missing() } }
+    event Changed () -> void { @Missing add { Missing() } @Missing remove { Missing() } }
+}`)){IsLibrary = true}
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+    }
+
+    @Theory
+    @InlineData(`if true @If(false) { Missing() }`)
+    @InlineData(`if false {} else @If(false) { Missing() }`)
+    @InlineData(`for false @If(false) { Missing() }`)
+    @InlineData(`for var i = 0; i < 1; i++ @If(false) { Missing() }`)
+    @InlineData(`for item in []int32{1} @If(false) { Missing() }`)
+    @InlineData(`lock Object() @If(false) { Missing() }`)
+    func InactiveRequiredBodies_BindAsEmptyWithoutBindingTheirContents(body string) {
+        let tree = SyntaxTree.Parse("import System\nfunc F() { " + body + " }")
+        let compilation = Compilation(tree){IsLibrary = true}
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let inactive = tree
+            .Root
+            .DescendantNodesAndSelf()
+            .OfType[BlockStatementSyntax]()
+            .Single((node BlockStatementSyntax) -> !compilation.IsActive(node))
+        Assert.Null(compilation.GetSemanticModel(tree).GetTypeInfo(inactive).Type)
+    }
+
+    @Theory
+    @InlineData(`func F() { @defined("A").ToString() }`, 1)
+    @InlineData(`@defined("A").ToString()`, 1)
+    @InlineData(`func F() { @defined("A") }`, 1)
+    @InlineData(`@defined("A")`, 1)
+    @InlineData(`func F() { @defined("A") && true }`, 1)
+    @InlineData(`func F() { @defined("A") @defined("B").ToString() }`, 2)
+    @InlineData(`@defined("A") @defined("B")`, 2)
+    func IntrinsicLedStatements_ReachDedicatedExpressionParsing(source string, queries int32) {
+        let tree = SyntaxTree.Parse(source)
+        Assert.Empty(tree.Diagnostics)
+        Assert.Equal(queries, tree.Root.DescendantNodesAndSelf().OfType[DefinedExpressionSyntax]().Count())
+        let compilation = Compilation(tree){IsLibrary = !tree.Root.Members.OfType[GlobalStatementSyntax]().Any()}
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+    }
+
+    @Fact
+    func DefinedNamedAttributeChains_KeepTheirDeclarationOwner() {
+        let tree = SyntaxTree.Parse(`@defined("ordinary") @defined("second") class Marked {}`)
+        Assert.Empty(tree.Diagnostics)
+        Assert.Empty(tree.Root.DescendantNodesAndSelf().OfType[DefinedExpressionSyntax]())
+        Assert.Equal(2, Assert.Single(tree.Root.Members).Annotations.Length)
+    }
+
+    @Fact
+    func ChangedBaseSymbols_CannotBeOverwrittenByADelayedInitialMapPublisher() {
+        let tree = SyntaxTree.Parse(`@If(@defined("NEW")) func Selected() {}
+@If(!@defined("NEW")) func Hidden() { Missing() }`)
+        let compilation = Compilation(tree){IsLibrary = true}
+        let stale = ConditionalCompilationMap(ImmutableHashSet[string].Empty)
+        let field = typeof(Compilation).GetField(
+            "conditionalCompilation",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        )!!
+        let compareExchange = typeof(Interlocked)
+            .GetMethods()
+            .Single((method MethodInfo) -> method.Name == "CompareExchange" && method.IsGenericMethodDefinition)
+            .MakeGenericMethod(typeof(ConditionalCompilationMap))
+        let publication = DynamicMethod(
+            "PublishDelayedConditionalMap",
+            typeof(Void),
+            []Type{typeof(Compilation), typeof(ConditionalCompilationMap)},
+            typeof(Compilation),
+            true
+        )
+        let il = publication.GetILGenerator()
+        il.Emit(OpCodes.Ldarg_0)
+        il.Emit(OpCodes.Ldflda, field)
+        il.Emit(OpCodes.Ldarg_1)
+        il.Emit(OpCodes.Ldnull)
+        il.Emit(OpCodes.Call, compareExchange)
+        il.Emit(OpCodes.Pop)
+        il.Emit(OpCodes.Ret)
+
+        // Replay the lazy initializer's CAS after a setter, without scheduler timing or a production hook.
+        compilation.PreprocessorSymbols = ImmutableHashSet.Create("NEW")
+        publication.Invoke(nil, []object{compilation, stale})
+        Assert.True(compilation.IsActive(tree.Root.Members[0]))
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+    }
+
+    @Theory
+    @InlineData(false, 1)
+    @InlineData(true, 3)
+    func OrdinaryAttributes_DoNotCreateConditionalLookupRegions(conditional bool, expectedRegions int32) {
+        let source = "import System\n" + string.Join(
+            "\n",
+            Enumerable.Range(0, 40).Select((i int32) -> "@Obsolete func F" + i.ToString() + "() {}")
+        ) +
+            if conditional {
+            "\n@If(false) @Obsolete func Hidden() { Missing() }\n" +
+                `@DefineSymbol("A") @Obsolete func Scoped() bool -> @defined("A")`
+        } else {
+            ""
+        }
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree){IsLibrary = true}
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let activity = compilation.ConditionalCompilation
+        let treeMap = typeof(ConditionalCompilationMap).GetMethod(
+            "GetTree",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        )!!.Invoke(activity, []object{tree})!!
+        let regions = cast[System.Collections.ICollection](
+            treeMap.GetType().GetField("Regions", BindingFlags.Instance | BindingFlags.NonPublic)!!.GetValue(treeMap)!!
+        )
+        Assert.Equal(expectedRegions, regions.Count)
+    }
+
     @Theory
     @InlineData("", false)
     @InlineData("@A", false)

@@ -68,6 +68,7 @@ DefaultExpression
 DefaultKeyword
 DeferKeyword
 DeferStatement
+DefinedExpression
 DeinitDeclaration
 DelegateDeclaration
 DiscardPattern

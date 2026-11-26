@@ -60,7 +60,10 @@ internal partial class DeclarationBinder {
         if !syntax.HasBaseConstructorArguments &&
             (
             (!hasImplicitBaseConstructorToResolve) ||
-                (!syntax.Constructors.IsDefaultOrEmpty && !structSymbol.HasPrimaryConstructor)
+                (
+                !$scope.ConditionalCompilation.Filter(syntax.Constructors).IsDefaultOrEmpty &&
+                    !structSymbol.HasPrimaryConstructor
+            )
         ) {
             return
         }

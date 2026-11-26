@@ -340,7 +340,11 @@ open partial class Parser {
         // ADR-0047 / issue #141: Kotlin-style annotation lead-ins precede any
         // other modifier on a declaration. We collect them once and then
         // attach the list to whichever member node ParseMember produces.
-        var annotations = ParseAnnotations()
+        var annotations = if LooksLikeDefinedExpressionStatement() {
+            ImmutableArray[AnnotationSyntax].Empty
+        } else {
+            ParseAnnotations()
+        }
         var accessibilityModifier SyntaxToken? = nil
         if Current.Kind == SyntaxKind.PublicKeyword ||
             Current.Kind == SyntaxKind.InternalKeyword ||
@@ -475,6 +479,61 @@ open partial class Parser {
             }
         }
         return member.WithAnnotations(annotations)
+    }
+
+    private func LooksLikeDefinedExpressionStatement() bool {
+        if Current.Kind != SyntaxKind.AtToken || Peek(1).Text != "defined" || Peek(
+            2
+        ).Kind != SyntaxKind.OpenParenthesisToken {
+            return false
+        }
+        var offset = 0
+        while true {
+            offset += 2
+            var depth = 0
+            while true {
+                let kind = Peek(offset).Kind
+                if kind == SyntaxKind.EndOfFileToken {
+                    return true
+                }
+                if kind == SyntaxKind.OpenParenthesisToken {
+                    depth++
+                } else if kind == SyntaxKind.CloseParenthesisToken {
+                    depth--
+                }
+                offset++
+                if depth == 0 {
+                    break
+                }
+            }
+            if Peek(offset).Kind != SyntaxKind.AtToken || Peek(offset + 1).Text != "defined" || Peek(
+                offset + 2
+            ).Kind != SyntaxKind.OpenParenthesisToken {
+                break
+            }
+        }
+        let next = Peek(offset)
+        // A declaration head keeps the ordinary attribute spelling; other continuations start an expression.
+        return !(
+            (
+                next.Kind is SyntaxKind.AtToken or
+                    SyntaxKind.OpenBraceToken or
+                    SyntaxKind.FuncKeyword or
+                    SyntaxKind.LetKeyword or
+                    SyntaxKind.VarKeyword or
+                    SyntaxKind.ConstKeyword or
+                    SyntaxKind.PublicKeyword or
+                    SyntaxKind.InternalKeyword or
+                    SyntaxKind.PrivateKeyword or
+                    SyntaxKind.ProtectedKeyword
+            ) ||
+                IsFunctionColorModifier(next.Kind) ||
+                TryDetectAggregateDeclarationHead(offset) ||
+                (
+                next.Kind == SyntaxKind.IdentifierToken &&
+                    (next.Text == "type" || next.Text == "delegate" || next.Text == "partial" || next.Text == "unsafe")
+            )
+        )
     }
 
     /// Parses zero or more Kotlin-style annotations (ADR-0047) at the current

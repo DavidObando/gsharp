@@ -13,6 +13,51 @@ import Xunit
 
 class Issue6231ScopedSymbolsTests {
     @Fact
+    func Driver_AllExplicitConstructorsInactive_StillResolvesImportedOptionalBaseConstructor() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`namespace OptionalBase6231 {
+    public class Parent {
+        public int Value { get; }
+        public Parent(int value = 7) { Value = value; }
+    }
+}`, "OptionalBase6231")
+        let frozen = File.ReadAllBytes(library)
+        let program = fixture.Compile(`import System
+import OptionalBase6231
+class Derived : Parent { @If(false) init() { Missing() } }
+Console.Write(Derived().Value)`, "OptionalBaseConsumer6231", true, "/r:" + library)
+        IlVerifier.Verify(program, []string{library})
+        Assert.Equal(Encoding.UTF8.GetBytes("7"), fixture.RunBytes(program))
+        Assert.Equal(frozen, File.ReadAllBytes(library))
+    }
+
+    @Fact
+    func Driver_InactiveRequiredBodies_PreserveActiveConditionsAndHeaders() {
+        AssertOutput(`import System
+var conditions = 0
+func Next() bool { conditions++ return false }
+func Gate() object { Console.Write("L") return Object() }
+if true @If(false) { Missing() }
+if false {} else @If(false) { Missing() }
+for Next() @If(false) { Missing() }
+for var i = 0; i < 2; i++ @If(false) { Missing() }
+for item in []int32{1, 2} @If(false) { Missing() }
+lock Gate() @If(false) { Missing() }
+Console.Write(conditions)`, "L1")
+    }
+
+    @Fact
+    func Driver_IntrinsicLedStatements_EvaluateArgumentsAtBothEntryPoints() {
+        AssertOutput(`import System
+@file:DefineSymbol("A")
+func Next() bool { Console.Write("x") return true }
+func Local() { @defined("A").Equals(Next()) }
+@defined("A")
+@defined("A").Equals(Next())
+Local()`, "xx")
+    }
+
+    @Fact
     func Driver_AllLocalDeclarationForms_PreserveAnnotationsAndOwnOnlyTheirInitializers() {
         AssertOutput(`import System
 data struct Flag { var Value bool }

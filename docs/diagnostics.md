@@ -301,7 +301,7 @@ ADR-0047 introduces Kotlin-style attribute syntax (`@Foo(...)`) and the `@Attrib
 | GS0203 | Error | Class tagged `@Attribute` cannot also declare an explicit base class. | `@Attribute class Trace : Other {}` — the `@Attribute` sugar implies `: System.Attribute`. |
 | GS0204 | **Warning** (Error if `IsError=true`) | Reference to a symbol marked `[Obsolete]`. | Calling a function, instantiating a class (`Old(5)`), writing a struct literal (`Old{}`), naming a struct/class/interface/enum in a type clause, reading an obsolete parameter, reading/writing an obsolete `var`/`let`/`const`, reading an obsolete enum member (`Color.Red`), or reading/writing an obsolete struct/class field (`p.Old`) — all declared with `@Obsolete("use Bar")`. Severity is promoted to error when the attribute's second argument is `true`. |
 | GS0205 | Error | Attribute is reserved for compiler synthesis. | `@CompilerGenerated`, `@Extension`, `@AsyncStateMachine`, `@Nullable`, or `@NullableContext` written in user source. |
-| GS0206 | Error | Annotations are only allowed on variable declarations, not on this statement. | `@Obsolete\nreturn` inside a function body — annotations may precede `var`/`let`/`const` but no other statement kind. |
+| GS0206 | Error | An annotation appears on an unsupported statement or accessor. | `@Obsolete\nreturn` inside a function body. Ordinary annotations on property/event accessors are also rejected rather than silently discarded; compiler-only scoped symbol annotations remain supported. |
 | GS0207 | Error | Parameter `{name}` is annotated `@EnumeratorCancellation` but has type `{type}`; only `System.Threading.CancellationToken` parameters can carry this annotation. | `@EnumeratorCancellation` placed on a `string` parameter. |
 | GS0208 | Error | Parameter `{name}` is annotated `@EnumeratorCancellation` but its enclosing function is not an async sequence (does not return `IAsyncEnumerable[T]`). | `@EnumeratorCancellation` on a sync function or a non-sequence async function. |
 | GS0209 | Error | Attribute `{name}` is not valid on this position; its `[AttributeUsage]` permits only: `{targets}`. | Applying a `@field`-targeted attribute to a method. |
@@ -480,7 +480,8 @@ the generator's IDs (for example `SYSLIB1043`).
 The GS9300–GS9319 block is reserved for the G# analyzer framework host
 ([ADR-0169](adr/0169-gsharp-analyzer-framework.md)): `gsc` loading and running
 `GSharpDiagnosticAnalyzer` assemblies passed via `/gsanalyzer:`. (The adjacent
-GS92xx block belongs to the gsgen source-generator host.)
+GS92xx block belongs to the gsgen source-generator host.) Compiler-intrinsic
+validation also uses GS9309–GS9312 in this block.
 
 | ID | Severity | Description |
 |----|----------|-------------|
@@ -493,6 +494,10 @@ GS92xx block belongs to the gsgen source-generator host.)
 | GS9306 | Error | `@ExtensionOwner`, synthesized by cs2gs to preserve a migrated C# static extension class's CLR owner-type identity, was used outside the one shape it supports: a top-level extension function carrying a single `typeof(T)` argument naming a non-generic class declared in the same package. |
 | GS9307 | Error | `@Oblivious` / `@NullabilityEnabled` was written in a shape it does not support: with arguments, with a target specifier, or both annotations on the same declaration. Neither takes arguments; the nearest annotation decides whether the unadorned reference types written inside it are oblivious (`T!`). |
 | GS9308 | Warning | A code-fix provider threw while it registered fixes for a diagnostic. The provider gives no fix for that diagnostic; other providers are not affected (ADR-0227). |
+| GS9309 | Error | A scoped `@DefineSymbol` or `@UndefineSymbol` annotation has an invalid target, arguments, symbol name, or contradictory same-owner definitions. |
+| GS9310 | Error | An `@If` annotation has an invalid target or predicate, or more than one `@If` applies to the same owner. Predicates accept only `@defined("NAME")`, Boolean literals, `!`, `&&`, `\|\|`, and parentheses. |
+| GS9311 | Error | An `@defined` expression does not have exactly one literal string containing a valid conditional symbol name. |
+| GS9312 | Error | An invalid conditional symbol name was supplied. The compiler descriptor defaults to Error; command-line `/define:` validation reports it as Warning and ignores that entry. A missing overall `/define:` value remains an error. |
 
 ### Internal diagnostics (GS9996–GS9999)
 
