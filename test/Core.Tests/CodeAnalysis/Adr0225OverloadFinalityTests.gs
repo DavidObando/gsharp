@@ -3978,6 +3978,231 @@ func Make(s string) []Action[string] {
 `
         AssertWitness(indexedAssignLambdaSource.Replace("/*CUT*/", string.Empty), "GS0155")
         AssertFutureDependent(BindKeep(indexedAssignLambdaSource), "GS0155", "later-overload")
+
+        // 34. Class-typed receiver calling an inherited default interface method records single-candidate
+        // non-generic fixed signatures before binding arguments.
+        const defaultInterfaceClassControl = `package P
+
+interface IBox {
+    func RunExpr(f () -> int32, g () -> void) {
+    }
+}
+
+class Box : IBox {
+}
+
+func Use(c Box) {
+    let v = int32(1)
+    c.RunExpr(() -> v, () -> {
+        let bad int32 = "s"
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let defaultInterfaceClassKeep = BindKeep(defaultInterfaceClassControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            defaultInterfaceClassKeep
+                .Diagnostics
+                .Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+                .Finality
+        )
+
+        // 35. Fixed-signature call excludes unrelated provisional sibling value arguments while preserving
+        // captured provisional reads inside the lambda body.
+        const fixedSiblingValueControl = `package P
+
+class Closed {
+    shared {
+        func Run(a object, f () -> void) {
+        }
+    }
+}
+
+func Use() {
+    let v = int32(1)
+    Closed.Run(v, () -> {
+        let bad int32 = "s"
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let fixedSiblingValueKeep = BindKeep(fixedSiblingValueControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            fixedSiblingValueKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        const fixedSiblingCapturedSource = `package P
+
+class Closed {
+    shared {
+        func Run(a object, f () -> void) {
+        }
+    }
+}
+
+func Use() {
+    let v = int32(1)
+    Closed.Run(v, () -> {
+        let s string = v
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        AssertWitness(fixedSiblingCapturedSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(fixedSiblingCapturedSource), "GS0155", "later-overload")
+
+        // 36. Ternary and if-expression RHS lambdas on an indexed assignment inherit the provisional target.
+        const ternaryAssignLambdaSource = `package P
+
+import System
+
+func Make(i int32) []Action[int32] {
+    return [1]Action[int32]
+}
+
+func Use(cond bool) {
+    let a = Make(int32(1))
+    a[0] = cond ? (x) -> {
+        let s string = x
+    } : (x) -> {
+    }
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+func Make(s string) []Action[string] {
+    return [1]Action[string]
+}
+`
+        AssertWitness(ternaryAssignLambdaSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(ternaryAssignLambdaSource), "GS0155", "later-overload")
+
+        const ifExprAssignLambdaSource = `package P
+
+import System
+
+func Make(i int32) []Action[int32] {
+    return [1]Action[int32]
+}
+
+func Use(cond bool) {
+    let a = Make(int32(1))
+    a[0] = if cond {
+        (x) -> {
+            let s string = x
+        }
+    } else {
+        (x) -> {
+        }
+    }
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+func Make(s string) []Action[string] {
+    return [1]Action[string]
+}
+`
+        AssertWitness(ifExprAssignLambdaSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(ifExprAssignLambdaSource), "GS0155", "later-overload")
+
+        // 37. Conditional function literals do not inherit enclosing call sibling or receiver provisional
+        // premises inside their bodies, while whole-argument conversion failures remain FutureDependent.
+        const conditionalLitBodyControl = `package P
+
+class BoxInt {
+    func Run(f () -> int32) {
+    }
+}
+
+class Closed {
+    shared {
+        func Run(a object, f () -> int32) {
+        }
+    }
+}
+
+func MakeBox(o object) BoxInt {
+    return BoxInt()
+}
+
+func Use(cond bool) {
+    let v = int32(1)
+    Closed.Run(v, cond ? func () int32 {
+        let badSibling int32 = "s"
+        return 0
+    } : func () int32 {
+        return 1
+    })
+    MakeBox(v).Run(cond ? func () int32 {
+        let badReceiver int32 = "s"
+        return 0
+    } : func () int32 {
+        return 1
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let conditionalLitBodyKeep = BindKeep(conditionalLitBodyControl)
+        let conditionalLitErrors = conditionalLitBodyKeep
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(2, conditionalLitErrors.Count)
+        Assert.All(conditionalLitErrors, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+
+        const conditionalLitWholePrefix = `package P
+
+func Run(a object, f () -> string) {
+}
+
+func Main(cond bool) {
+    let v = 1
+    Run(v, cond ? func () int32 {
+        return 0
+    } : func () int32 {
+        return 1
+    })
+`
+        const conditionalLitWholeWitness = `}
+
+func Run(a int32, f () -> int32) {
+}
+`
+        AssertWitness(conditionalLitWholePrefix + conditionalLitWholeWitness, "GS0154", "GS0155")
+        AssertFutureDependent(
+            BindNothing(conditionalLitWholePrefix, []string{"}\n", conditionalLitWholeWitness}),
+            "GS0155",
+            "later-declaration"
+        )
     }
 
     @Fact

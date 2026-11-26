@@ -374,18 +374,15 @@ internal sealed class PrefixCut {
                 return true
             }
             if excludeCallLambdas && outer.Start < next.Span.Start && next.Span.End <= outer.End {
+                if fixedCallSpan is {} callSpan &&
+                    next is ExpressionSyntax nextExpr &&
+                    PrefixBindingContext.EnclosingCallOfArgumentExact(nextExpr.SyntaxTree, nextExpr, callSpan) {
+                    return true
+                }
                 if next is FunctionLiteralExpressionSyntax {
                     return true
                 }
-                if next is LambdaExpressionSyntax {
-                    if fixedCallSpan is {} callSpan && PrefixBindingContext.EnclosingCallOfArgumentExact(
-                        next.SyntaxTree,
-                        next,
-                        callSpan
-                    ) {
-                        return true
-                    }
-                } else if node is LambdaExpressionSyntax &&
+                if next is LambdaExpressionSyntax { } else if node is LambdaExpressionSyntax &&
                     (next is BlockExpressionSyntax || next is BlockStatementSyntax) {
                     if inSiblingLambdaBlock && !inSiblingReturn {
                         return true
@@ -1013,12 +1010,63 @@ internal shared class PrefixBindingContext {
         return false
     }
 
+    private func TryStepContextualResultParent(
+        tree SyntaxTree,
+        current SyntaxNode,
+        includeNamedArguments bool
+    ) SyntaxNode? {
+        if tree.GetParent(current) is not{} parent {
+            return nil
+        }
+        if parent is ParenthesizedExpressionSyntax paren && object.ReferenceEquals(paren.Expression, current) {
+            return parent
+        }
+        if parent is CheckedExpressionSyntax checkedExpr && object.ReferenceEquals(checkedExpr.Expression, current) {
+            return parent
+        }
+        if includeNamedArguments && parent is NamedArgumentExpressionSyntax named && object.ReferenceEquals(
+            named.Expression,
+            current
+        ) {
+            return parent
+        }
+        if parent is BlockExpressionSyntax block && object.ReferenceEquals(block.Expression, current) {
+            return parent
+        }
+        if parent is ConditionalExpressionSyntax cond &&
+            (object.ReferenceEquals(cond.WhenTrue, current) || object.ReferenceEquals(cond.WhenFalse, current)) {
+            return parent
+        }
+        if parent is IfExpressionSyntax ifExpr &&
+            (
+            object.ReferenceEquals(ifExpr.ThenBlock, current) || object.ReferenceEquals(ifExpr.ElseExpression, current)
+        ) {
+            return parent
+        }
+        if parent is IfLetExpressionSyntax ifLet &&
+            (
+            object.ReferenceEquals(ifLet.ThenBlock, current) || object.ReferenceEquals(ifLet.ElseExpression, current)
+        ) {
+            return parent
+        }
+        if parent is SwitchExpressionArmSyntax arm && object.ReferenceEquals(arm.Result, current) {
+            return parent
+        }
+        if parent is SwitchExpressionSyntax && current is SwitchExpressionArmSyntax {
+            return parent
+        }
+        return nil
+    }
+
     private func EnclosingAssignmentWithTarget(tree SyntaxTree, expression SyntaxNode) SyntaxNode? {
         var current SyntaxNode = expression
-        while tree.GetParent(current) is {} parent {
-            if parent is ParenthesizedExpressionSyntax || parent is CheckedExpressionSyntax {
-                current = parent
+        while true {
+            if TryStepContextualResultParent(tree, current, includeNamedArguments: false) is {} nextParent {
+                current = nextParent
                 continue
+            }
+            if tree.GetParent(current) is not{} parent {
+                return nil
             }
             if (parent is IndexAssignmentExpressionSyntax idx && object.ReferenceEquals(idx.Value, current)) ||
                 (
@@ -1044,14 +1092,22 @@ internal shared class PrefixBindingContext {
 
     private func EnclosingCallOfArgument(tree SyntaxTree, expression SyntaxNode) SyntaxNode? {
         var current SyntaxNode = expression
-        while tree.GetParent(current) is {} parent {
-            if parent is ParenthesizedExpressionSyntax ||
-                parent is CheckedExpressionSyntax ||
-                parent is NamedArgumentExpressionSyntax {
-                current = parent
+        while true {
+            if TryStepContextualResultParent(tree, current, includeNamedArguments: true) is {} nextParent {
+                current = nextParent
                 continue
             }
-            if parent is CallExpressionSyntax || parent is BaseInterfaceCallExpressionSyntax {
+            if tree.GetParent(current) is not{} parent {
+                return nil
+            }
+            if parent is CallExpressionSyntax call {
+                return if object.ReferenceEquals(call.Callee, current) {
+                    default(SyntaxNode?)
+                } else {
+                    call
+                }
+            }
+            if parent is BaseInterfaceCallExpressionSyntax {
                 return parent
             }
             return nil
@@ -1292,16 +1348,17 @@ internal shared class PrefixBindingContext {
             if child is FunctionLiteralExpressionSyntax {
                 continue
             }
+            if excludeCallLambdas &&
+                fixedCallSpan is {} callArgSpan &&
+                child is ExpressionSyntax exprChild &&
+                EnclosingCallOfArgumentExact(exprChild.SyntaxTree, exprChild, callArgSpan) {
+                continue
+            }
             if child is LambdaExpressionSyntax l {
                 if declared {
                     continue
                 }
                 if excludeCallLambdas {
-                    if fixedCallSpan is {} callSpan {
-                        if EnclosingCallOfArgumentExact(l.SyntaxTree, l, callSpan) {
-                            continue
-                        }
-                    }
                     if l.Body is BlockExpressionSyntax || l.Body is BlockStatementSyntax {
                         if l.Body is BlockExpressionSyntax block {
                             if block.Expression is {} tail {
@@ -1814,12 +1871,13 @@ internal shared class PrefixBindingContext {
             if child is FunctionLiteralExpressionSyntax {
                 continue
             }
+            if excludeCallLambdas &&
+                fixedCallSpan is {} callArgSpan &&
+                child is ExpressionSyntax exprChild &&
+                EnclosingCallOfArgumentExact(exprChild.SyntaxTree, exprChild, callArgSpan) {
+                continue
+            }
             if excludeCallLambdas && child is LambdaExpressionSyntax lambdaChild {
-                if fixedCallSpan is {} callSpan {
-                    if EnclosingCallOfArgumentExact(lambdaChild.SyntaxTree, lambdaChild, callSpan) {
-                        continue
-                    }
-                }
                 if lambdaChild.Body is BlockExpressionSyntax block {
                     if block.Expression is {} tail &&
                         HeaderContainsProvisional(

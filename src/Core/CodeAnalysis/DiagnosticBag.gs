@@ -587,9 +587,13 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                     if value is LambdaExpressionSyntax || value is FunctionLiteralExpressionSyntax {
                         skipSubtree = value
                     }
-                    dependsOnCandidate = (argumentSpan.Start == span.Start && argumentSpan.End == span.End) ||
-                        (value.Span.Start == span.Start && value.Span.End == span.End) ||
-                        PrefixBindingContext.IsBodyTypedByCandidate(value)
+                    let strictFunctionLiteral = HasStrictEnclosingFunctionLiteral(value, span)
+                    dependsOnCandidate = !strictFunctionLiteral &&
+                        (
+                        (argumentSpan.Start == span.Start && argumentSpan.End == span.End) ||
+                            (value.Span.Start == span.Start && value.Span.End == span.End) ||
+                            PrefixBindingContext.IsBodyTypedByCandidate(value)
+                    )
                     break
                 }
             }
@@ -610,6 +614,34 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             span = frame.Syntax.Span
         }
         return nil
+    }
+
+    private func HasStrictEnclosingFunctionLiteral(root ExpressionSyntax, span TextSpan) bool {
+        if root is FunctionLiteralExpressionSyntax && !(root.Span.Start == span.Start && root.Span.End == span.End) {
+            return true
+        }
+        var node SyntaxNode = root
+        while true {
+            var next SyntaxNode? = nil
+            for child in node.GetChildren() {
+                if child is not SyntaxToken &&
+                    child.Span.Start <= span.Start &&
+                    span.End <= child.Span.End &&
+                    child.Span.Length > 0 {
+                    next = child
+                    break
+                }
+            }
+            if next == nil {
+                return false
+            }
+            if next is FunctionLiteralExpressionSyntax &&
+                !(next.Span.Start == span.Start && next.Span.End == span.End) {
+                return true
+            }
+            node = next
+        }
+        return false
     }
 
     // #6179, #6229: a report on the call itself, outside its arguments, while the binder resolves it (an

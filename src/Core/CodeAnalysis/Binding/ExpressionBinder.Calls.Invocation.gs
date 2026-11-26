@@ -2031,6 +2031,42 @@ internal partial class ExpressionBinder {
             )
                 .IsDefaultOrEmpty {
                 PrefixBindingContext.AddFixedSignatureCall(ce)
+            } else if instanceMethods.Length == 0 &&
+                recvType is StructSymbol structRecv &&
+                $scope.TryLookupExtensionFunctions(recvType, methodName).IsDefaultOrEmpty {
+                var defaultCount = 0
+                var singleDefault FunctionSymbol? = nil
+                for current in structRecv.GetHierarchy() {
+                    for iface in current.Interfaces {
+                        if iface == nil {
+                            continue
+                        }
+                        let candidates = TypeMemberModel.GetMethods(
+                            iface,
+                            methodName,
+                            MemberQuery.Instance(MemberKinds.Method)
+                        )
+                        for var i = 0; i < candidates.Length; i++ {
+                            if InterfaceSymbol.HasDefaultBody(candidates[i]) {
+                                defaultCount++
+                                if defaultCount == 1 {
+                                    singleDefault = candidates[i]
+                                } else {
+                                    break
+                                }
+                            }
+                        }
+                        if defaultCount > 1 {
+                            break
+                        }
+                    }
+                    if defaultCount > 1 {
+                        break
+                    }
+                }
+                if defaultCount == 1 && singleDefault != nil && !singleDefault.IsGeneric {
+                    PrefixBindingContext.AddFixedSignatureCall(ce)
+                }
             }
             return
         }
