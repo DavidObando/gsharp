@@ -568,16 +568,22 @@ internal shared class IncrementalGlobalScopeReuse {
     }
 
     // #6178: the reused global statements keep their bound form, so nothing that the open body can change
-    // may affect them. With nothing after the cut, a report in them reads the provisional expressions of
-    // the prefix cut (ADR-0225 D6.8), which only a bind records; the bind runs only with the declarations
-    // kept. A suspending function (ADR-0174) can change how a retained call of it is bound, so no function
-    // may suspend before or after the edit.
+    // may affect them. With nothing after the cut, or with the cut in the top-level statements, a report in
+    // them reads the provisional expressions of the prefix cut (ADR-0225 D6.8), which only a bind records.
+    // A suspending function (ADR-0174) can change how a retained call of it is bound, and a return type that
+    // a body infers can change with the open body, so neither may occur before or after the edit.
     private func ReusableGlobalStatements($scope BoundGlobalScope, updatedTree SyntaxTree) bool {
-        if updatedTree.Prefix is not{} cut || cut.Remainder != PrefixRemainder.KeepDeclarations {
+        // A later declaration or overload can still change what a retained statement resolved to, and only a
+        // bind records that (the cut in the top-level statements, or nothing kept).
+        if updatedTree.Prefix is not{} cut ||
+            cut.Remainder != PrefixRemainder.KeepDeclarations ||
+            cut.LaterDeclarationsPossible ||
+            cut.LaterOverloadsPossible {
             return false
         }
+        // A return type that a body infers can change with the open body.
         for function in EnumerateFunctionSymbols($scope) {
-            if function.IsSuspending {
+            if function.IsSuspending || function.IsReturnTypeInferred {
                 return false
             }
         }

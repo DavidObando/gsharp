@@ -70,7 +70,8 @@ open class Adr0225PrefixBindReuseTests {
     @Fact
     func SuccessiveCutsInAMemberOfAScript_ReuseTheDeclarations() {
         var checks = 0
-        var keptChecks = 0
+        var withGlobals = 0
+        var reusesWithGlobals = 0
         var scratchTicks = 0L
         var reusedTicks = 0L
         let wrong = List[string]()
@@ -90,13 +91,19 @@ open class Adr0225PrefixBindReuseTests {
                         var watch = System.Diagnostics.Stopwatch.StartNew()
                         let scratch = compilation.BindPrefix(tree, cut, options)
                         scratchTicks += watch.ElapsedTicks
+                        let reusesBefore = measurements.GetCounter("declarations.reuses")
                         watch = System.Diagnostics.Stopwatch.StartNew()
                         let reused = compilation.BindPrefix(tree, cut, options, previous)
                         reusedTicks += watch.ElapsedTicks
-                        checks++
-                        if remainder == PrefixRemainder.KeepDeclarations {
-                            keptChecks++
+                        // A chained bind whose prefix keeps top-level statements is the case of #6178.
+                        if previous != nil &&
+                            reused.SyntaxTree.Root.Members.Any((m MemberSyntax) -> m is GlobalStatementSyntax) {
+                            withGlobals++
+                            if measurements.GetCounter("declarations.reuses") > reusesBefore {
+                                reusesWithGlobals++
+                            }
                         }
+                        checks++
                         if Describe(scratch) != Describe(reused) {
                             wrong.Add(
                                 "${Path.GetFileName(file)} ${remainder} cut ${cut}:\n${Describe(scratch)}\n---\n${Describe(reused)}"
@@ -109,15 +116,16 @@ open class Adr0225PrefixBindReuseTests {
         }
         let reuses = measurements.GetCounter("declarations.reuses")
         Console.WriteLine(
-            "#6178 script cuts: ${checks}, declaration reuses: ${reuses}, scratch ${scratchTicks * 1000 / System.Diagnostics.Stopwatch.Frequency} ms, chained ${reusedTicks * 1000 / System.Diagnostics.Stopwatch.Frequency} ms"
+            "#6178 script cuts: ${checks}, declaration reuses: ${reuses}, with top-level statements ${reusesWithGlobals} of ${withGlobals}, scratch ${scratchTicks * 1000 / System.Diagnostics.Stopwatch.Frequency} ms, chained ${reusedTicks * 1000 / System.Diagnostics.Stopwatch.Frequency} ms"
         )
         Assert.True(checks > 200, "checked ${checks} cuts")
         Assert.True(wrong.Count == 0, string.Join("\n\n", wrong.Take(5)))
-        // With nothing after the cut, the reused global statements would miss the provisional records of
-        // the cut (ADR-0225 D6.8), so only the cuts that keep the declarations reuse them.
+        // Only the cuts that keep the declarations can reuse them (ADR-0225 D6.8), and the cuts in files
+        // that have no top-level statements in the prefix reuse them without #6178. Every chained cut whose prefix keeps top-level statements is the case of #6178.
+        Assert.True(withGlobals > 50, "${withGlobals} chained cuts keep top-level statements")
         Assert.True(
-            reuses > keptChecks / 2,
-            "${reuses} declaration reuses in ${keptChecks} cuts that keep the declarations"
+            reusesWithGlobals > withGlobals / 2,
+            "${reusesWithGlobals} declaration reuses in ${withGlobals} chained cuts that keep top-level statements"
         )
     }
 
@@ -151,6 +159,42 @@ open class Adr0225PrefixBindReuseTests {
                 Assert.Equal(Describe(scratch), Describe(reused))
                 previous = reused
             }
+        }
+    }
+
+    /// #6178: cuts in the top-level statements, and a function whose return type its body infers, bind on a
+    /// chain as from scratch.
+    @Theory
+    @InlineData(
+        "package P\n\nimport System.Math\n\nlet value = Abs(1)\n\n\n\nfunc Use() {\n    let x string = value\n}\n",
+        false
+    )
+    @InlineData(
+        "package P\n\nlet m = Make()\n\nfunc Make() {\n    let a = 1\n    return object {\n        let X = 1\n    }\n}\n",
+        true
+    )
+    func ChainedCutsOfAScriptThatLaterTextCanChange_ReportWhatABindFromScratchReports(source string, inBody bool) {
+        let tree = SyntaxTree.Parse(SourceText.From(source, "script.gs"))
+        let compilation = Compilation(tree)
+        let cuts = List[int32]()
+        if inBody {
+            let body = tree.Root.DescendantNodes().OfType[FunctionDeclarationSyntax]().Last().Body!!
+            cuts.Add(body.OpenBraceToken.Span.End)
+            cuts.Add(body.Statements[0].Span.End)
+            cuts.Add(body.Statements[1].Span.End)
+        } else {
+            let start = source.IndexOf("Abs(1)", StringComparison.Ordinal) + "Abs(1)".Length
+            cuts.Add(start + 1)
+            cuts.Add(start + 2)
+            cuts.Add(start + 3)
+        }
+        var previous PrefixBindResult? = nil
+        for cut in cuts {
+            let options = PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+            let scratch = compilation.BindPrefix(tree, cut, options)
+            let reused = compilation.BindPrefix(tree, cut, options, previous)
+            Assert.Equal(Describe(scratch), Describe(reused))
+            previous = reused
         }
     }
 
