@@ -1742,6 +1742,36 @@ class Math {
         }
     }
 
+    /// #6215: a `yield`, a method group of a source receiver function, a condition that narrows a name, and a
+    /// type parameter that takes a keyword spelling are outside the shapes that the opt-in test follows, so
+    /// a report that a later type can remove is later-type.
+    @Theory
+    @InlineData(
+        "package P\n\nimport System\nimport System.Collections.Generic\n\nfunc Values() IEnumerable[String] {\n    yield 1\n",
+        "}\n",
+        "}\n\nstruct String {\n    var V int32\n    func operator implicit (v int32) String {\n        return String{V: v}\n    }\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc (s string) Make() StringBuilder {\n    return StringBuilder()\n}\n\nfunc Main() {\n    let s = \"a\"\n    let f = s.Make\n    let text string = f().Length\n    let done = 0\n",
+        "}\n",
+        "}\n\nclass StringBuilder {\n    prop Length string -> \"\"\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.Text\n\nfunc Use(x object) {\n    if x is StringBuilder {\n        let b bool = x.Length\n        let done = 0\n",
+        "    }\n}\n",
+        "    }\n}\n\nclass StringBuilder {\n    prop Length bool -> false\n}\n"
+    )
+    @InlineData(
+        "package P\n\nimport System.IO\n\nfunc Use[string Stream](s string) {\n    let b bool = s.Length\n    let done = 0\n",
+        "}\n",
+        "}\n\nopen class Stream {\n    prop Length bool -> false\n}\n"
+    )
+    func ShapeThatTheTestDoesNotFollow_IsLaterType(prefix string, closer string, witness string) {
+        let result = BindNothing(prefix, []string{closer, witness})
+        AssertWitness(prefix + witness, "GS0155")
+        AssertFutureDependent(result, "GS0155", "later-type")
+    }
+
     /// #6215: the keyword `string` names the built-in type, which no source type can hide.
     @Fact
     func BuiltInKeywordType_NoLaterSourceTypeCanHideIt() {

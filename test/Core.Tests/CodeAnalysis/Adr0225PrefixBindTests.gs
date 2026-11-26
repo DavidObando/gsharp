@@ -843,7 +843,15 @@ func Value(x int32) int32 {
                         } else {
                             DiagnosticFinality.Final
                         }
-                        if found.Count != 1 || found[0].Finality != finality {
+                        // #6215: the later-type test is opt-in, so a report outside the shapes that it follows
+                        // (in a generic function or type, or behind a qualified name) is later-type instead of
+                        // final.
+                        let laterType = remainder == PrefixRemainder.Nothing &&
+                            finality == DiagnosticFinality.Final &&
+                            found.Count == 1 &&
+                            found[0].Finality == DiagnosticFinality.FutureDependent &&
+                            found[0].Reason == "later-type"
+                        if found.Count != 1 || (found[0].Finality != finality && !laterType) {
                             wrong.Add(
                                 "${Path.GetFileName(file)} cut ${cut} ${remainder} ${mutation.Id}: expected ${finality}, got ${string.Join("; ", result.Diagnostics)}"
                             )
@@ -883,13 +891,7 @@ func Value(x int32) int32 {
                 "GS0155",
                 DiagnosticFinality.Final
             ),
-            // #6215: the opt-in later-type test does not follow a qualified name, so the member of an imported type
-            // reached by one counts as hideable.
-            (
-                "let importedMismatch__ string = System.Math.Abs(1)\nlet after__ = 0",
-                "GS0155",
-                DiagnosticFinality.FutureDependent
-            )
+            ("let importedMismatch__ string = System.Math.Abs(1)\nlet after__ = 0", "GS0155", DiagnosticFinality.Final)
         }
 
         private func Bind(source string, remainder PrefixRemainder) PrefixBindResult -> BindWith(

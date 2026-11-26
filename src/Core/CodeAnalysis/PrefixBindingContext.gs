@@ -170,6 +170,37 @@ internal sealed class PrefixCut {
         }
     }
 
+    private var receiverFunctionNames HashSet[string]?
+
+    /// Returns the names of the receiver functions that the trees of the bind declare (#6215).
+    /// @returns The names.
+    internal func ReceiverFunctionNames() HashSet[string] {
+        lock provisionalGate {
+            if receiverFunctionNames is {} known {
+                return known
+            }
+        }
+        let names = HashSet[string](StringComparer.Ordinal)
+        for tree in ProvisionalTreeList() {
+            CollectReceiverFunctionNames(tree.Root, names)
+        }
+        lock provisionalGate {
+            receiverFunctionNames ??= names
+            return receiverFunctionNames!!
+        }
+    }
+
+    private func CollectReceiverFunctionNames(node SyntaxNode, names HashSet[string]) {
+        if node is FunctionDeclarationSyntax{IsExtension: true} function {
+            names.Add(function.Identifier.ValueText)
+        }
+        for child in node.GetChildren() {
+            if child is not SyntaxToken {
+                CollectReceiverFunctionNames(child, names)
+            }
+        }
+    }
+
     /// Returns the trees in which the bind recorded an expression or a name (#6179).
     /// @returns The trees.
     internal func ProvisionalTreeList() List[SyntaxTree] {
@@ -804,7 +835,21 @@ internal shared class PrefixBindingContext {
         if !supported || statement == nil || function == nil {
             return true
         }
-        return !IsIndependentOfLaterTypes(statement, function, 4, HashSet[object](ReferenceEqualityComparer.Instance))
+        // A type parameter can take the spelling of a keyword type (`func F[string Stream]`).
+        for var ancestor SyntaxNode? = function; ancestor != nil; ancestor = tree.GetParent(ancestor!!) {
+            if ancestor is FunctionDeclarationSyntax{IsGeneric: true} ||
+                ancestor is StructDeclarationSyntax{TypeParameterList: {}} ||
+                ancestor is InterfaceDeclarationSyntax{TypeParameterList: {}} {
+                return true
+            }
+        }
+        return !IsIndependentOfLaterTypes(
+            statement,
+            function,
+            cut.ReceiverFunctionNames(),
+            4,
+            HashSet[object](ReferenceEqualityComparer.Instance)
+        )
     }
 
     // Whether the header of [`statement`](paramref) and what it reads can be shown not to depend on a type
@@ -812,6 +857,7 @@ internal shared class PrefixBindingContext {
     private func IsIndependentOfLaterTypes(
         statement StatementSyntax,
         function FunctionDeclarationSyntax,
+        receiverNames HashSet[string],
         depth int32,
         visited HashSet[object]
     ) bool {
@@ -824,12 +870,16 @@ internal shared class PrefixBindingContext {
         if statement is ReturnStatementSyntax && function.Type is {} returnType && !IsKeywordTypeClause(returnType) {
             return false
         }
+        // A yielded value converts to the element type of the result, which the test does not follow.
+        if statement is YieldStatementSyntax {
+            return false
+        }
         let reads = HashSet[string](StringComparer.Ordinal)
-        if !HeaderIsIndependent(statement, statement, false, reads) {
+        if !HeaderIsIndependent(statement, statement, false, reads, receiverNames) {
             return false
         }
         for name in reads {
-            if !NameIsIndependent(name, statement, function, depth, visited) {
+            if !NameIsIndependent(name, statement, function, receiverNames, depth, visited) {
                 return false
             }
         }
@@ -842,7 +892,8 @@ internal shared class PrefixBindingContext {
         statement StatementSyntax,
         node SyntaxNode,
         inExpression bool,
-        reads HashSet[string]
+        reads HashSet[string],
+        receiverNames HashSet[string]
     ) bool {
         for child in node.GetChildren() {
             if child is SyntaxToken token {
@@ -852,6 +903,10 @@ internal shared class PrefixBindingContext {
                 if node is NameExpressionSyntax || node is CallExpressionSyntax {
                     if !IsMemberOfQualifier(node) {
                         reads.Add(token.ValueText)
+                    } else if receiverNames.Contains(token.ValueText) {
+                        // A source receiver function of that name can be the member, and its signature can
+                        // name a type that a later declaration hides.
+                        return false
                     }
                 } else if node is AssignmentExpressionSyntax {
                     reads.Add(token.ValueText)
@@ -882,7 +937,7 @@ internal shared class PrefixBindingContext {
                 }
                 continue
             }
-            if !HeaderIsIndependent(statement, child, inExpression || child is ExpressionSyntax, reads) {
+            if !HeaderIsIndependent(statement, child, inExpression || child is ExpressionSyntax, reads, receiverNames) {
                 return false
             }
         }
@@ -890,11 +945,13 @@ internal shared class PrefixBindingContext {
     }
 
     // A bare name is independent when a parameter with a keyword type, or an earlier statement of the same
-    // function whose header is independent, declares it.
+    // function, declares it, and every earlier or enclosing statement that names it (a declaration, a
+    // write, or a condition that narrows it) is independent.
     private func NameIsIndependent(
         name string,
         statement StatementSyntax,
         function FunctionDeclarationSyntax,
+        receiverNames HashSet[string],
         depth int32,
         visited HashSet[object]
     ) bool {
@@ -916,11 +973,13 @@ internal shared class PrefixBindingContext {
         for candidate in earlier {
             let declared = HashSet[string](StringComparer.Ordinal)
             CollectHeaderNames(candidate, candidate, false, declared, declared: true)
-            if !declared.Contains(name) {
+            let read = HashSet[string](StringComparer.Ordinal)
+            CollectHeaderNames(candidate, candidate, false, read, declared: false)
+            if !declared.Contains(name) && !read.Contains(name) {
                 continue
             }
-            found = true
-            if !IsIndependentOfLaterTypes(candidate, function, depth - 1, visited) {
+            found = found || declared.Contains(name)
+            if !IsIndependentOfLaterTypes(candidate, function, receiverNames, depth - 1, visited) {
                 return false
             }
         }
