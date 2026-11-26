@@ -7034,19 +7034,19 @@ partial class CSharpToGSharpTranslator {
         }
 
         // Wraps a translated expression in an explicit G# pointer conversion-call
-        // (`*void(expr)`, `*uint8(expr)`, ...) when C# performed an IMPLICIT
+        // (`cast[*void](expr)`, `cast[*uint8](expr)`, ...) when C# performed an IMPLICIT
         // pointer→pointer conversion at this position. In C# a pointer→pointer
         // conversion between DIFFERENT pointee types (`byte* → void*`,
         // `void* → byte*`, `int* → void*`, ...) is implicit, but per ADR-0122 §6
-        // G# requires it to be spelled explicitly as the conversion-call
-        // `*<TargetPointee>(expr)`; the bare operand is rejected with GS0156
+        // G# requires it to be spelled explicitly as a pointer conversion;
+        // the bare operand is rejected with GS0156
         // ("An explicit conversion exists"). Applied at argument, assignment,
         // return, and local-initializer positions (issue #914).
         //
         // No wrap is emitted when the pointee types are identical (no conversion
         // is needed) — this also naturally covers an already-explicit C# cast
         // `(void*)x` bound to a `void*` target (source == converted == `void*`),
-        // which cs2gs already renders as `*void(x)`, avoiding a double wrap. The
+        // which cs2gs already renders as `cast[*void](x)`, avoiding a double wrap. The
         // full target pointer type is mapped through the standard type mapper so
         // the pointee (`void`, `uint8`, `int32`, ...) is spelled with G# names.
         private func CoercePointerConversion(expression ExpressionSyntax?, translated GExpression?) GExpression? {

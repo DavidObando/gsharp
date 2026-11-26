@@ -13,8 +13,8 @@ import Xunit
 
 /// Issue #914: in C# a pointer→pointer conversion between different pointee
 /// types (`byte* → void*`) is IMPLICIT, but per ADR-0122 §6 G# requires
-/// it to be spelled explicitly as the conversion-call `*<TargetPointee>(expr)`
-/// (`*void(expr)`, `*uint8(expr)`). Emitting the bare operand fails
+/// it to be spelled explicitly as the pointer conversion `cast[*<TargetPointee>](expr)`
+/// (`cast[*void](expr)`, `cast[*uint8](expr)`). Emitting the bare operand fails
 /// gsc with GS0156 ("An explicit conversion exists"). These tests cover the
 /// implicit conversion at argument, assignment, return, and local-initializer
 /// positions, verify a same-pointee argument is NOT wrapped, and verify an
@@ -36,7 +36,7 @@ namespace Corpus.Issue914
     }
 }
 `)
-        Assert.Contains("Sink(*void(pBuf))", rendered, StringComparison.Ordinal)
+        Assert.Contains("Sink(cast[*void](pBuf))", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
     }
 
@@ -55,7 +55,7 @@ namespace Corpus.Issue914
     }
 }
 `)
-        Assert.Contains("q = *void(p)", rendered, StringComparison.Ordinal)
+        Assert.Contains("q = cast[*void](p)", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
     }
 
@@ -73,7 +73,7 @@ namespace Corpus.Issue914
     }
 }
 `)
-        Assert.Contains("return *void(p)", rendered, StringComparison.Ordinal)
+        Assert.Contains("return cast[*void](p)", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
     }
 
@@ -91,7 +91,7 @@ namespace Corpus.Issue914
     }
 }
 `)
-        Assert.Contains("*void(pBuf)", rendered, StringComparison.Ordinal)
+        Assert.Contains("cast[*void](pBuf)", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
     }
 
@@ -113,13 +113,13 @@ namespace Corpus.Issue914
 }
 `)
         Assert.Contains("Sink(pBuffer)", rendered, StringComparison.Ordinal)
-        Assert.DoesNotContain("*void(pBuffer)", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("cast[*void](pBuffer)", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
     }
 
     @Fact
     func ExplicitCastArgument_IsNotDoubleWrapped() {
-        // An explicit C# `(void*)pBuf` already renders as `*void(pBuf)`; the
+        // An explicit C# `(void*)pBuf` already renders as `cast[*void](pBuf)`; the
         // implicit-conversion pass must not wrap it again.
         let rendered = Render(`
 namespace Corpus.Issue914
@@ -135,8 +135,8 @@ namespace Corpus.Issue914
     }
 }
 `)
-        Assert.Contains("Sink(*void(pBuf))", rendered, StringComparison.Ordinal)
-        Assert.DoesNotContain("*void(*void(pBuf))", rendered, StringComparison.Ordinal)
+        Assert.Contains("Sink(cast[*void](pBuf))", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("cast[*void](cast[*void](pBuf))", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
     }
 
