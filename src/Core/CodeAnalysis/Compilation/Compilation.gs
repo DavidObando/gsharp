@@ -430,6 +430,8 @@ open class Compilation {
                 CompilationMeasurements.Count("input.methods", bp.Functions.Count)
                 // A cancelled build publishes nothing: the compilation is dead (ADR-0212 §8).
                 WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+                // #6177: the body bind reports these; a diagnostic of the declarations keeps its phase.
+                Diagnostic.StampPhase(bp.Diagnostics, DiagnosticPhase.Body)
                 Volatile.Write[BoundProgram?](&this.boundProgram, bp)
                 return bp
             } finally {
@@ -506,6 +508,8 @@ open class Compilation {
             bound.FailedCalls = recordedFailedCalls
         }
         WorkBudget.CancellationToken.ThrowIfCancellationRequested()
+        // #6177: the declaration bind reports these. A reused scope keeps the phase of its first bind.
+        Diagnostic.StampPhase(bound.Diagnostics, DiagnosticPhase.Declaration)
         Volatile.Write[BoundGlobalScope?](&this.globalScope, bound)
         return bound
     }
@@ -704,7 +708,9 @@ open class Compilation {
         }
         let diagnostics = DiagnosticBag()
         diagnostics.ReportExecutableWithoutEntryPoint(location, nearMiss?.Name)
-        return diagnostics.ToImmutableArray()
+        let reported = diagnostics.ToImmutableArray()
+        Diagnostic.StampPhase(reported, DiagnosticPhase.Declaration)
+        return reported
     }
 
     // The documentation pass of Emit and of GetDiagnostics: one rule (ADR-0212 §7a).
@@ -718,6 +724,8 @@ open class Compilation {
             documentationDiagnostics,
             WarnOnMissingDocumentation
         )
+        // #6177: documentation comments are checked with the declarations.
+        Diagnostic.StampPhase(documentationDiagnostics.ToImmutableArray(), DiagnosticPhase.Declaration)
         return documentationDiagnostics
     }
 
@@ -1540,10 +1548,11 @@ open class Compilation {
         }
     }
 
-    private func CreateEmitResult(success bool, diagnostics ImmutableArray[Diagnostic]) EmitResult -> EmitResult(
-        success,
-        ApplySourceSuppressions(diagnostics)
-    )
+    private func CreateEmitResult(success bool, diagnostics ImmutableArray[Diagnostic]) EmitResult {
+        // #6177: a diagnostic that no earlier pipeline stamped comes from lowering or emit.
+        Diagnostic.StampPhase(diagnostics, DiagnosticPhase.Emit)
+        return EmitResult(success, ApplySourceSuppressions(diagnostics))
+    }
 
     private func PublishArtifact(staged MemoryStream, destination Stream?) {
         if destination != nil && staged.Length > 0 {

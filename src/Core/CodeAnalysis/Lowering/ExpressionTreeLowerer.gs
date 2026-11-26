@@ -286,7 +286,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 parameterMap,
                 out var objectInitializer
             ) {
-                return objectInitializer!!
+                return objectInitializer
             }
             default {
                 throw NotSupportedException("Unsupported expression-tree lowering node: ${expression.Kind}.")

@@ -320,7 +320,7 @@ shared class NullConditionalChain {
                 CollectChainDescendants(index.Target, into)
             }
             case call is CallExpressionSyntax when call.Callee != nil {
-                CollectChainDescendants(call.Callee!!, into)
+                CollectChainDescendants(call.Callee, into)
             }
         }
     }

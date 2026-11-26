@@ -5261,24 +5261,27 @@ internal partial class StatementBinder {
     private func ApplyConditionEffectsToNarrowings(
         syntax SyntaxNode,
         condition BoundExpression,
-        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil,
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
     ) Dictionary[AccessPath, TypeSymbol]? {
         if !HasAnyActiveNarrowings() {
             return nil
         }
-        let removedFacts = conditionRemovedFacts ?? Dictionary[AccessPath, TypeSymbol]()
-        conditionRemovedFacts = removedFacts
-        removedFacts.Clear()
+        let targetRemovedFacts = removedFacts ?? (conditionRemovedFacts ?? Dictionary[AccessPath, TypeSymbol]())
+        if removedFacts == nil {
+            conditionRemovedFacts = targetRemovedFacts
+            targetRemovedFacts.Clear()
+        }
         InvalidateNarrowingsForAssignedVariables(
             syntax,
             BoundExpressionStatement(syntax, condition),
-            removedFacts,
+            targetRemovedFacts,
             aliasesAtEntry
         )
-        return if removedFacts.Count == 0 {
+        return if targetRemovedFacts.Count == 0 {
             default(Dictionary[AccessPath, TypeSymbol]?)
         } else {
-            Dictionary[AccessPath, TypeSymbol](removedFacts)
+            Dictionary[AccessPath, TypeSymbol](targetRemovedFacts)
         }
     }
 
@@ -5300,12 +5303,13 @@ internal partial class StatementBinder {
         }
     }
 
-    /// #5629: a switch arm's header, bound once in dispatch order: the pattern, the narrowing that it proves for the
-    /// discriminant, the guard, the callable aliases that the guard removed, and whether the header's effects can
-    /// remove the discriminant's fact (then no later arm proves a narrowing of it either).
+    /// #5629: a switch arm's header, bound once in dispatch order: the pattern, the pattern narrowing frame, the
+    /// arm-entry narrowing frame (pattern plus guard when-true, #5643), the guard, the callable aliases that the guard
+    /// removed, and whether the header's effects can remove the discriminant's fact.
     internal sealed class SwitchArmHeader {
         init(
             pattern BoundPattern,
+            patternFrame Dictionary[AccessPath, TypeSymbol]?,
             frame Dictionary[AccessPath, TypeSymbol]?,
             boundGuard BoundExpression?,
             removedAliases HashSet[VariableSymbol]?,
@@ -5313,6 +5317,7 @@ internal partial class StatementBinder {
             mayRemoveDiscriminantFact bool
         ) {
             Pattern = pattern
+            PatternFrame = patternFrame
             Frame = frame
             Guard = boundGuard
             RemovedAliases = removedAliases
@@ -5321,6 +5326,10 @@ internal partial class StatementBinder {
         }
 
         prop Pattern BoundPattern {
+            get;
+        }
+
+        prop PatternFrame Dictionary[AccessPath, TypeSymbol]? {
             get;
         }
 
@@ -5345,12 +5354,12 @@ internal partial class StatementBinder {
         }
     }
 
-    /// ADR-0208 R18 and R19 (#5629): binds a switch arm's header in the current (arm) scope, after the headers before
-    /// it. The test's effects apply first, as a condition's do. Its pattern proves a narrowing of the discriminant
-    /// unless its own effects or those of a header before it ([`discriminantStale`](paramref)) can remove the tested
-    /// fact, as for `if x is P`. The guard binds under that narrowing; its effects then apply with the pattern's frame
-    /// on the stack (the body pushes the same dictionary), and so do its callable-alias effects. The switch statement
-    /// and the switch expression both bind their headers here.
+    /// ADR-0208 R18 and R19 (#5629, #5643): binds a switch arm's header in the current (arm) scope, after the headers
+    /// before it. The test's effects apply first, as a condition's do. Its pattern proves a narrowing of the
+    /// discriminant unless its own effects or those of a header before it ([`discriminantStale`](paramref)) can remove
+    /// the tested fact, as for `if x is P`. The guard binds under that narrowing; its effects then apply with the
+    /// pattern's frame on the stack, and its when-true narrowing merges into the arm frame. Both the switch statement
+    /// and the switch expression bind their headers here.
     internal func BindSwitchArmHeader(
         valueSyntax PatternSyntax,
         guardSyntax ExpressionSyntax?,
@@ -5368,11 +5377,12 @@ internal partial class StatementBinder {
         ApplyHeaderCallableEffects(BoundIsExpression(valueSyntax, BoundVariableExpression(nil, evaluated), pattern))
         let test = BoundIsExpression(valueSyntax, discriminant, pattern)
         let testMayRemove = TestMayRemoveItsOperandFact(test)
-        let frame = if discriminantStale || testMayRemove {
+        let patternFrame = if discriminantStale || testMayRemove {
             default(Dictionary[AccessPath, TypeSymbol]?)
         } else {
             TryClassifyPatternNarrowing(discriminant, pattern)
         }
+        var frame = patternFrame
         var boundGuard BoundExpression? = nil
         var removedAliases HashSet[VariableSymbol]? = nil
         var removedNonNullByRef HashSet[VariableSymbol]? = nil
@@ -5380,12 +5390,44 @@ internal partial class StatementBinder {
         if guardSyntax != nil {
             let guardAliasesBefore = CaptureExternalCallableAliases()
             let guardNonNullByRefBefore = CaptureNonNullByRefVariables()
-            let bound = BindGuardExpressionWithNarrowing(guardSyntax, frame)
+            let outerRemoved = activeConditionRemovedFacts
+            let removedFacts = Dictionary[AccessPath, TypeSymbol]()
+            activeConditionRemovedFacts = removedFacts
+            var bound BoundExpression
+            try {
+                bound = BindGuardExpressionWithNarrowing(guardSyntax, patternFrame)
+            } finally {
+                activeConditionRemovedFacts = outerRemoved
+            }
             RestoreExternalCallableAliases(guardAliasesBefore)
             RestoreNonNullByRefVariables(guardNonNullByRefBefore)
-            ApplySwitchGuardEffects(guardSyntax, bound, frame, guardAliasesBefore)
+            ApplySwitchGuardEffects(guardSyntax, bound, patternFrame, guardAliasesBefore, removedFacts)
             ApplyHeaderCallableEffects(bound)
             guardMayRemove = EffectsMayRemoveFactOf(discriminant, bound, nil, guardAliasesBefore)
+            if outerRemoved != nil {
+                for entry in removedFacts {
+                    if !outerRemoved.ContainsKey(entry.Key) {
+                        outerRemoved[entry.Key] = entry.Value
+                    }
+                }
+            }
+            let effectiveRemoved = if removedFacts.Count == 0 {
+                default(Dictionary[AccessPath, TypeSymbol]?)
+            } else {
+                removedFacts
+            }
+            EnsureClosureAssignedNames(guardSyntax)
+            let (guardWhenTrue, _, _, _) = ComputeConditionNarrowingInOrder(
+                bound,
+                guardAliasesBefore,
+                effectiveRemoved,
+                forShortCircuitOperand: false,
+                allowBoolCall: true,
+                keepBoolCallInLogicalOps: true,
+                shortCircuitInComposedOps: false,
+                header: guardSyntax
+            )
+            frame = MergeNarrowingFrames(patternFrame, guardWhenTrue)
             boundGuard = bound
         }
         aliasesBefore.ExceptWith(externalCallableAliases)
@@ -5398,6 +5440,7 @@ internal partial class StatementBinder {
         }
         return SwitchArmHeader(
             pattern,
+            patternFrame,
             frame,
             boundGuard,
             removedAliases,
@@ -5415,7 +5458,7 @@ internal partial class StatementBinder {
     ) HashSet[VariableSymbol]? {
         ApplySwitchArmTestEffects(valueSyntax, header.Pattern.Type, header.Pattern)
         if guardSyntax != nil && header.Guard is {} boundGuard {
-            ApplySwitchGuardEffects(guardSyntax, boundGuard, header.Frame)
+            ApplySwitchGuardEffects(guardSyntax, boundGuard, header.PatternFrame)
         }
         if header.RemovedAliases is {} removed {
             externalCallableAliases.ExceptWith(removed)
@@ -5431,15 +5474,16 @@ internal partial class StatementBinder {
         syntax SyntaxNode,
         boundGuard BoundExpression,
         frame Dictionary[AccessPath, TypeSymbol]?,
-        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil,
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
     ) {
         if frame == nil {
-            ApplyConditionEffectsToNarrowings(syntax, boundGuard, aliasesAtEntry)
+            ApplyConditionEffectsToNarrowings(syntax, boundGuard, aliasesAtEntry, removedFacts)
             return
         }
         binderCtx.PushNarrowingFrame(frame)
         try {
-            ApplyConditionEffectsToNarrowings(syntax, boundGuard, aliasesAtEntry)
+            ApplyConditionEffectsToNarrowings(syntax, boundGuard, aliasesAtEntry, removedFacts)
         } finally {
             binderCtx.EndNarrowingProof()
         }

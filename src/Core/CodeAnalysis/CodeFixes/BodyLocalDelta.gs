@@ -275,6 +275,8 @@ internal shared class BodyLocalDelta {
             }
             body.Add(moved!!)
         }
+        // #6177: the speculative bind of the body reports these, as the body bind would.
+        Diagnostic.StampPhase(speculative.NewDiagnostics, DiagnosticPhase.Body)
         for d in speculative.NewDiagnostics {
             // A diagnostic at the member's declaration names the old text.
             if !TryRelocate(d, oldText, newTree.Text, spanMap, out var moved) {

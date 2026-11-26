@@ -9093,6 +9093,61 @@ partial class Binder {
             }
         }
 
+        /// Speculatively binds [`typeClause`](paramref) against the program's scope to read its
+        /// (cref:TypeSymbol), discarding any diagnostics (#6223).
+        /// @param globalScope The bound global scope of the compilation.
+        /// @param references The reference resolver supplying imported types.
+        /// @param containingFunction The function enclosing the clause, or `null` for top-level statements.
+        /// @param typeClause The type clause to bind.
+        /// @param referencingTree The tree (file) whose imports apply.
+        /// @param additionalTypeParameters Type parameters of enclosing generic local functions from outermost
+        /// to innermost, or `null`.
+        /// @returns The non-error type symbol, or `null` when binding fails.
+        internal func BindSpeculativeTypeClause(
+            globalScope BoundGlobalScope?,
+            references ReferenceResolver,
+            containingFunction FunctionSymbol?,
+            typeClause TypeClauseSyntax?,
+            referencingTree SyntaxTree,
+            additionalTypeParameters IEnumerable[TypeParameterSymbol]? = nil
+        ) TypeSymbol? {
+            if globalScope == nil || typeClause == nil {
+                return nil
+            }
+            try {
+                let parentScope = CreateParentScope(
+                    globalScope,
+                    references,
+                    globalScope.PreprocessorSymbols,
+                    preserveLatestImportSyntaxTrees: true
+                )
+                let binder = Binder(parentScope, containingFunction)
+                let previousPackage = parentScope.SetCurrentDeclaringPackage(containingFunction?.Package?.Name)
+                let previousTree = parentScope.SetCurrentReferencingSyntaxTree(referencingTree)
+                try {
+                    if additionalTypeParameters != nil {
+                        for typeParameter in additionalTypeParameters {
+                            if typeParameter != nil {
+                                binder.binderCtx.CurrentTypeParameters ??= Dictionary[string, TypeParameterSymbol]()
+                                binder.binderCtx.CurrentTypeParameters!![typeParameter.Name] = typeParameter
+                            }
+                        }
+                    }
+                    let bound TypeSymbol? = binder.BindTypeClause(typeClause)
+                    return if bound == nil || object.ReferenceEquals(bound, TypeSymbol.Error) {
+                        default(TypeSymbol?)
+                    } else {
+                        bound
+                    }
+                } finally {
+                    parentScope.SetCurrentDeclaringPackage(previousPackage)
+                    parentScope.SetCurrentReferencingSyntaxTree(previousTree)
+                }
+            } catch (Exception) {
+                return nil
+            }
+        }
+
         /// Gets the name of the package a tree belongs to: its `package` declaration, else the default package.
         /// @param tree The tree.
         /// @param defaultPackageName The name of the package of a tree that declares none.

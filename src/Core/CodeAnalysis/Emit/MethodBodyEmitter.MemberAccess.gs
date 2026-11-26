@@ -12,7 +12,6 @@ import GSharp.Core.CodeAnalysis.Lowering.Iterators
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System
-import System.Collections
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Diagnostics
@@ -1277,51 +1276,8 @@ internal partial class MethodBodyEmitter {
             this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(constrainedGetter, idx.ConstrainedInterfaceType))
             return
         }
-        // #313: indexing an erased generic over a type parameter (e.g.
-        // `items[0]` where `items: List[T]`, or `map["k"]` where
-        // `map: Dictionary[string, T]`). At runtime the receiver is a closed
-        // generic (e.g. `List<int32>`) but is typed as the erased
-        // `List<object>`; a `callvirt List<object>::get_Item` would fail.
-        // Route the read through the non-generic System.Collections.IList /
-        // IDictionary interfaces, which return the element as System.Object —
-        // exactly the erased shape of the type parameter.
-        if idx.Target.Type is ImportedTypeSymbol erasedGen &&
-            erasedGen.HasTypeParameterArgument &&
-            idx.Target.Type.ClrType is Type erasedClr &&
-            idx.Arguments.Length == 1 {
-            // Issue #3705 (family 3): `erasedClr` is an imported type, so it is
-            // a MetadataLoadContext type on every `/reference:` compile — a
-            // host `typeof(IList).IsAssignableFrom(...)` is silently false
-            // there and the erasure below is skipped, emitting a
-            // `callvirt List<object>::get_Item` that cannot bind at runtime.
-            if ClrLoadContext.Satisfies(erasedClr, typeof(IList)) && idx.Arguments[0].Type == TypeSymbol.Int32 {
-                this.EmitInstanceReceiver(idx.Target)
-                this.il.OpCode(ILOpCode.Castclass)
-                this.il.Token(EntityHandle(this.outer.memberRefs.GetTypeReference(typeof(IList))))
-                this.EmitExpression(idx.Arguments[0])
-                let iListGetter = BclMember.Getter(typeof(IList), "Item")
-                this.il.OpCode(ILOpCode.Callvirt)
-                this.il.Token(this.outer.memberRefs.GetMethodReference(iListGetter))
-                this.EmitErasedObjectReturnWidening(TypeSymbol.Object, idx.Type)
-                return
-            }
-            if ClrLoadContext.Satisfies(erasedClr, typeof(IDictionary)) {
-                this.EmitInstanceReceiver(idx.Target)
-                this.il.OpCode(ILOpCode.Castclass)
-                this.il.Token(EntityHandle(this.outer.memberRefs.GetTypeReference(typeof(IDictionary))))
-                this.EmitExpression(idx.Arguments[0])
-                if ReflectionMetadataEmitter.IsValueTypeSymbol(idx.Arguments[0].Type) {
-                    this.il.OpCode(ILOpCode.Box)
-                    this.il.Token(this.outer.memberRefs.GetElementTypeToken(idx.Arguments[0].Type))
-                }
-                let iDictGetter = BclMember.Getter(typeof(IDictionary), "Item")
-                this.il.OpCode(ILOpCode.Callvirt)
-                this.il.Token(this.outer.memberRefs.GetMethodReference(iDictGetter))
-                this.EmitErasedObjectReturnWidening(TypeSymbol.Object, idx.Type)
-                return
-            }
-        }
-        // Phase 4 emit parity: indexer read. `d[k]` -> `callvirt get_Item(k)`.
+        // ADR-0087: generic receivers are reified. Keep the selected accessor
+        // and receiver storage instead of erasing dispatch through IList/IDictionary.
         this.EmitInstanceReceiver(
             idx.Target,
             isReadOnlyCall: idx.Indexer.GetMethod is {} readGetter && RefCapabilities.IsReadOnlyMethod(readGetter)
@@ -1339,14 +1295,7 @@ internal partial class MethodBodyEmitter {
             nonPublic: true
         ) ??
             throw InvalidOperationException("Indexer on '${idx.Indexer.DeclaringType?.FullName}' has no getter.")
-        let receiverIsValueType = ReflectionMetadataEmitter.IsValueTypeSymbol(idx.Target.Type)
-        this.il.OpCode(
-            if receiverIsValueType {
-                ILOpCode.Call
-            } else {
-                ILOpCode.Callvirt
-            }
-        )
+        this.il.OpCode(this.InstanceAccessorOpCode(idx.Target))
         // Issue #671: route through the receiver-aware overload so the indexer
         // getter MemberRef parent is the constructed symbolic type when the
         // target is a generic with G# user-defined type arguments.

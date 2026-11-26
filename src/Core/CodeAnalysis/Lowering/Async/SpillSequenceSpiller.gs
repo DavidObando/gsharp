@@ -3879,7 +3879,7 @@ shared class SpillSequenceSpiller {
                 field.Receiver.Type
             ): BoundFieldAccessExpression(
                 field.Syntax,
-                PreserveStorageReceiver(field.Receiver!!),
+                PreserveStorageReceiver(field.Receiver),
                 BoundNodeForm.DeclaringType(field),
                 field.Field,
                 field.SubstitutedType,
@@ -3888,7 +3888,7 @@ shared class SpillSequenceSpiller {
             case clrField is BoundClrPropertyAccessExpression when clrField.Member is FieldInfo &&
                 clrField.Receiver != nil &&
                 !Binder.IsReferenceTypeForConstraint(clrField.Receiver.Type): clrField.WithReceiver(
-                PreserveStorageReceiver(clrField.Receiver!!)
+                PreserveStorageReceiver(clrField.Receiver)
             )
             default: receiver
         }

@@ -50,6 +50,12 @@ class BoundClrConstructorCallExpression : BoundExpression {
         get;
     }
 
+    /// Gets the candidate constructors considered before binding (#6223).
+    internal prop ConstructorGroup ImmutableArray[object] {
+        get;
+        set;
+    }
+
     private var _type TypeSymbol
     override prop Type TypeSymbol -> _type
     override prop Kind BoundNodeKind -> BoundNodeKind.ClrConstructorCallExpression

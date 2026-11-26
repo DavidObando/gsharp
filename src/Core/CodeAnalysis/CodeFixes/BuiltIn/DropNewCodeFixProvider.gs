@@ -45,8 +45,10 @@ internal class DropNewCodeFixProvider : GSharpCodeFixProvider {
             return
         }
         let model = context.SemanticModel
-        // A call to a function has a symbol. A construction has none and has the constructed type.
-        if model.GetSymbolInfo(call, context.CancellationToken).Symbol != nil {
+        // A call to a function has a symbol. A construction has the constructed type, and its symbol is
+        // the imported constructor (#6177) or none.
+        if model.GetSymbolInfo(call, context.CancellationToken).Symbol is {} called &&
+            called is not ImportedConstructorSymbol {
             return
         }
         let type = model.GetTypeInfo(call, context.CancellationToken).Type

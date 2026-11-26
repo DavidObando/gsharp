@@ -206,7 +206,7 @@ internal shared class ConstantExpressionEvaluator {
                 parameterType.IsSameAs(typeof(char)) &&
                 call.Arguments is [{} argument] &&
                 TryBuild(argument, out var charOperand) {
-                built = Expression.Call(ConvertCharToString, charOperand!!)
+                built = Expression.Call(ConvertCharToString, charOperand)
                 return true
             }
             case fieldAccess is BoundFieldAccessExpression when fieldAccess.Field.IsConst &&

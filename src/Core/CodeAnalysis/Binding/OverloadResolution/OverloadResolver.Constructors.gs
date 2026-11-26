@@ -98,7 +98,12 @@ internal partial class OverloadResolver {
         // Issue #343: pre-validate named-argument layout (positional precedes
         // named, no duplicate names). Diagnostics are reported by the helper.
         if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
+            BindCallArgumentsForLayoutRecovery(syntax.Arguments)
             return BoundErrorExpression(syntax)
+        }
+        let openGenericPrimary = syntax.TypeArgumentList == nil && classType.IsGenericDefinition
+        if openGenericPrimary {
+            CallCandidateRecorder.RecordSourcePrimaryConstructor(classType)
         }
         // Phase 4.3b / ADR-0020: a primary-constructor call on a generic
         // class definition (`Box(5)` or `Box[int](5)`) builds a type-argument
@@ -288,6 +293,9 @@ internal partial class OverloadResolver {
             return BoundErrorExpression(syntax)
         }
         let parameters = classType.PrimaryConstructorParameters
+        if !openGenericPrimary {
+            CallCandidateRecorder.RecordSourcePrimaryConstructor(classType)
+        }
         let parameterNameAt(int32) -> string = (parameterIndex int32) -> parameters[parameterIndex].Name
         var boundArguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)
         for argument in syntax.Arguments {
@@ -799,12 +807,24 @@ internal partial class OverloadResolver {
         classType StructSymbol
     ) BoundExpression {
         var classType = classType
+        let openGenericExplicit = syntax.TypeArgumentList == nil && classType.IsGenericDefinition
         let inlineOutArgumentIndices = GetInlineOutArgumentIndices(syntax.Arguments)
         // Issue #343: pre-validate named-argument layout (positional precedes
         // named, no duplicate names). Diagnostics are reported by the helper.
         if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
             DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices)
+            BindCallArgumentsForLayoutRecovery(syntax.Arguments, preserveInlineOutDeclarations: true)
             return BoundErrorExpression(syntax)
+        }
+        if openGenericExplicit && CallCandidateRecorder.IsEnabled {
+            let openConstructors = GetAccessibleExplicitConstructorsOrAll(classType)
+            if !openConstructors.IsDefaultOrEmpty {
+                let openFunctions = ImmutableArray.CreateBuilder[FunctionSymbol](openConstructors.Length)
+                for ctor in openConstructors {
+                    openFunctions.Add(ctor.Function)
+                }
+                CallCandidateRecorder.RecordSourceConstructors(openFunctions.MoveToImmutable(), classType)
+            }
         }
         // Issue #1214: a generic class declaring an explicit `init(...)`
         // constructor is constructed at a closed type (`Box[int32](5, "x")`).
@@ -852,6 +872,13 @@ internal partial class OverloadResolver {
         // Issue #1214: for a closed generic construction, the constructor table
         // lives on the open definition (EffectiveExplicitConstructors).
         var ctorOverloads = GetAccessibleExplicitConstructorsOrAll(classType)
+        if !openGenericExplicit && CallCandidateRecorder.IsEnabled && !ctorOverloads.IsDefaultOrEmpty {
+            let constructedFunctions = ImmutableArray.CreateBuilder[FunctionSymbol](ctorOverloads.Length)
+            for ctor in ctorOverloads {
+                constructedFunctions.Add(CreateConstructedConstructorCandidate(ctor, classType))
+            }
+            CallCandidateRecorder.RecordSourceConstructors(constructedFunctions.MoveToImmutable(), classType)
+        }
         if !inlineOutArgumentIndices.IsDefaultOrEmpty {
             let invalidInlineOutArgument = inlineOutArgumentIndices.FirstOrDefault(
                 (index int32) -> !ctorOverloads.Any(
@@ -2085,6 +2112,7 @@ internal partial class OverloadResolver {
             return BoundErrorExpression(syntax)
         }
         if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
+            BindCallArgumentsForLayoutRecovery(syntax.Arguments)
             return BoundErrorExpression(syntax)
         }
         let boundArgsBuilder = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)

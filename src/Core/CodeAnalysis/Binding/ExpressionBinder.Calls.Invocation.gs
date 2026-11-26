@@ -1666,12 +1666,12 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportNamedArgumentOnlyValidForCopy(ce.Location)
             return BoundErrorExpression(nil)
         }
-        // Issue #343: validate named-argument layout (positional precedes named,
-        // no duplicate names). Errors are reported by the helper so the call
-        // short-circuits to a bound error here.
-        if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
-            return BoundErrorExpression(nil)
-        }
+        // Issue #343 / #6221: validate named-argument layout (positional precedes named,
+        // no duplicate names). When layout fails, continue binding arguments and resolving
+        // the callee with extra reports dropped so the semantic model keeps both (#6221).
+        let layoutOk = overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames)
+        let layoutDiagMark = Diagnostics.Count
+        let layoutLiteralDiagCount = literalTargetDiagnostics.Count
         // Issue #311: resolve an explicit `[T1, T2]` type-argument list (e.g.
         // `Array.Empty[string]()`) into mapped CLR types up front so every
         // generic-method dispatch path below can close the candidate.
@@ -1734,6 +1734,8 @@ internal partial class ExpressionBinder {
                 recordDeferredArgumentSnapshot?(inner)
                 if inner is RefArgumentExpressionSyntax refArg {
                     boundArguments.Add(BindRefArgumentExpression(refArg, parameter: nil))
+                } else if !layoutOk {
+                    boundArguments.Add(BindExpression(inner))
                 } else if IsTargetDependentBlockArgumentSyntax(inner) {
                     if !delegateTargetCandidatesComputed {
                         delegateTargetCandidatesComputed = true
@@ -1901,7 +1903,7 @@ internal partial class ExpressionBinder {
                     receiverStart,
                     hasUnresolvedTypeArguments
                 )
-                if !hasUnresolvedTypeArguments && conversions.TryRefreshReboundArguments(
+                if layoutOk && !hasUnresolvedTypeArguments && conversions.TryRefreshReboundArguments(
                     initialArguments,
                     out var refreshedArguments
                 ) {
@@ -1938,7 +1940,7 @@ internal partial class ExpressionBinder {
             } else {
                 default(BoundExpression?)
             }
-            if selectedCalleeEffectsLoad != nil && ce.Arguments.Count > 0 {
+            if layoutOk && selectedCalleeEffectsLoad != nil && ce.Arguments.Count > 0 {
                 lastSelectedCallablePropertyLoad = nil
                 lastSelectedIndexedCalleeLoad = nil
                 result = Diagnostics.ReplaceDiagnosticsIn(
@@ -1955,6 +1957,24 @@ internal partial class ExpressionBinder {
                         return bindArgumentsAndDispatch()
                     }
                 )
+            }
+            if !layoutOk {
+                Diagnostics.TruncateTo(layoutDiagMark)
+                if literalTargetDiagnostics.Count > layoutLiteralDiagCount {
+                    literalTargetDiagnostics.RemoveRange(
+                        layoutLiteralDiagCount,
+                        literalTargetDiagnostics.Count - layoutLiteralDiagCount
+                    )
+                }
+                for arg in ce.Arguments {
+                    $scope.RemoveVariablesDeclaredInSpan(arg.SyntaxTree, arg.Span)
+                }
+                RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
+                return if result is BoundErrorExpression {
+                    result
+                } else {
+                    BoundErrorExpression.FindFailedCall(result) ?? BoundErrorExpression(nil)
+                }
             }
             return result
         } finally {

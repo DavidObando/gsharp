@@ -1172,7 +1172,7 @@ open class Adr0227BodyLocalDeltaTests {
         diagnostics.Select(
             (
                 d Diagnostic
-            ) -> "${d.Location.Text?.FileName}|${d.Id}|${d.Severity}|${d.Location.Span.Start}|${d.Location.Span.Length}|${d.Message}|${d.AdditionalLocations.Length}|${string.Join(",", d.AdditionalLocations.Select((l TextLocation) -> "${l.Text?.FileName}:${l.Span.Start}:${l.Span.Length}"))}|${d.Suggestions.Length}"
+            ) -> "${d.Location.Text?.FileName}|${d.Id}|${d.Severity}|${d.Location.Span.Start}|${d.Location.Span.Length}|${d.Message}|${d.AdditionalLocations.Length}|${string.Join(",", d.AdditionalLocations.Select((l TextLocation) -> "${l.Text?.FileName}:${l.Span.Start}:${l.Span.Length}"))}|${d.Suggestions.Length}|${d.Phase}"
         )
             .OrderBy((k string) -> k, StringComparer.Ordinal)
     )

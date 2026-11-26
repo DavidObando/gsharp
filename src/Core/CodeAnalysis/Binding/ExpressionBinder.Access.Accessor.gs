@@ -2029,6 +2029,8 @@ internal partial class ExpressionBinder {
             return false
         }
         if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
+            CallCandidateRecorder.RecordFunctions(instanceGroup.AddRange(staticGroup), structSym)
+            overloads.BindCallArgumentsForLayoutRecovery(ce.Arguments)
             result = BoundErrorExpression(nil)
             return true
         }
@@ -4052,9 +4054,8 @@ internal partial class ExpressionBinder {
         let structSym StructSymbol? = ownerType as StructSymbol
         let ifaceSym = ownerType as InterfaceSymbol
         let methodName = ce.Identifier.ValueText
-        if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
-            return BoundErrorExpression(nil)
-        }
+        let layoutOk = overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames)
+        let layoutDiagMark = Diagnostics.Count
         let preArgumentsNarrowing = if preboundArguments.IsDefault {
             CaptureNarrowingBindSnapshot()
         } else {
@@ -4082,7 +4083,9 @@ internal partial class ExpressionBinder {
                 if boundArgument == nil && refArgument != nil {
                     boundArgument = BindRefArgumentExpression(refArgument, parameter: nil)
                 }
-                if IsUntypedArrowLambda(inner) && (boundArgument == nil || boundArgument is BoundErrorExpression) {
+                if layoutOk &&
+                    IsUntypedArrowLambda(inner) &&
+                    (boundArgument == nil || boundArgument is BoundErrorExpression) {
                     (
                         (
                             if deferredStaticLambdaIndices == nil {
@@ -4095,7 +4098,11 @@ internal partial class ExpressionBinder {
                     boundArgument = BoundErrorExpression(OverloadResolver.GetLambdaArgumentSyntax(inner) ?? inner)
                 }
                 if boundArgument == nil {
-                    boundArgument = BindArgumentDeferringBranchy(inner)
+                    if layoutOk {
+                        boundArgument = BindArgumentDeferringBranchy(inner)
+                    } else {
+                        boundArgument = BindExpression(inner)
+                    }
                 }
                 if preboundArguments.IsDefault {
                     ApplySubExpressionNarrowingEffects(inner, boundArgument)
@@ -4118,7 +4125,7 @@ internal partial class ExpressionBinder {
                     initialArguments,
                     deferredStaticLambdaIndices
                 )
-                if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+                if layoutOk && conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
                     Diagnostics.TruncateNonReboundSince(overloadDiagMark)
                     bound = BindUserTypeStaticCallAfterArguments(
                         ownerType,
@@ -4140,7 +4147,8 @@ internal partial class ExpressionBinder {
         lastSelectedCallablePropertyLoad = nil
         try {
             var result = bindStaticArgumentsAndDispatch()
-            if !preAppliedCallableProperty &&
+            if layoutOk &&
+                !preAppliedCallableProperty &&
                 lastSelectedCallablePropertyLoad is {} selectedPropLoad &&
                 ce.Arguments.Count > 0 {
                 lastSelectedCallablePropertyLoad = nil
@@ -4155,6 +4163,18 @@ internal partial class ExpressionBinder {
                         return bindStaticArgumentsAndDispatch()
                     }
                 )
+            }
+            if !layoutOk {
+                Diagnostics.TruncateTo(layoutDiagMark)
+                for arg in ce.Arguments {
+                    $scope.RemoveVariablesDeclaredInSpan(arg.SyntaxTree, arg.Span)
+                }
+                RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
+                return if result is BoundErrorExpression {
+                    result
+                } else {
+                    BoundErrorExpression.FindFailedCall(result) ?? BoundErrorExpression(nil)
+                }
             }
             return result
         } finally {

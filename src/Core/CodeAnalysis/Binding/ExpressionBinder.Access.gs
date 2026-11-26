@@ -284,58 +284,71 @@ internal partial class ExpressionBinder {
         } else {
             TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
         }
-        var handled = TryBindClrConstructorFromType(
-            clrType,
-            terminalCall,
-            out result,
-            out var noApplicableOverload,
-            out var boundArguments,
-            openGenericDef,
-            symbolicArgs
-        ) ||
-            FinishClrConstructorBindingFailure(
-            terminalCall,
-            typeSimpleName,
-            noApplicableOverload,
-            boundArguments,
-            &result,
-            constructedTarget
-        )
-        // Issue #3821: the shared failure helper only commits to the
-        // no-applicable-overload diagnostic when the call carries an explicit
-        // type-argument list (issue #2633 fixed this cascade for the GENERIC
-        // spelling only). Without that, a non-generic qualified construction
-        // whose arguments match no constructor answered "not handled", the
-        // whole accessor chain re-bound as a namespace walk, and the walk
-        // failed at its HEAD — reporting GS0157 "Cannot find type System"
-        // about a segment that resolves perfectly. cs2gs writes fully-qualified
-        // type names whenever a simple name is ambiguous (issues #2258/#3805),
-        // so on the self-migration corpus every argument error at such a call
-        // site collapsed into that one misleading line.
-        //
-        // Committing is gated twice, because two later arms of
-        // `BindAccessorExpression` can still bind a chain this one gave up on:
-        //
-        //   * the prefix must be a NAMESPACE, not a type. When the last prefix
-        //     segment is itself a type (`Outer.Nested(...)`,
-        //     `DebuggableAttribute.DebuggingModes(2)`), the fully-qualified
-        //     static-access arm can still find a member of it.
-        //   * the terminal simple name must not also name a SOURCE type. A
-        //     package-qualified source construction (`Oahu.Tui.Nested.Refresh(1)`,
-        //     issue #2585) reaches the CLR arm first and can resolve a
-        //     same-named REFERENCE type whose constructors do not match — the
-        //     source arm below is the one that binds it.
-        //
-        // A namespace prefix with no source homonym has neither second chance,
-        // so there the fallthrough can only ever produce GS0157.
-        if !handled && noApplicableOverload && namespacePrefix.Length > 0 && !$scope.TryResolveType(
-            namespacePrefix,
-            out _
-        ) &&
-            !TryLookupSourceTypeWithImportPrecedence(typeSimpleName, preferredArity: -1, declaration: nil, out _) {
-            Diagnostics.ReportNoApplicableOverload(terminalCall.Identifier.Location, typeSimpleName)
-            result = BoundErrorExpression(terminalCall)
-            handled = true
+        let frame = CallCandidateRecorder.Begin(terminalCall, constructedTarget)
+        binderCtx.ExpectCallArguments(terminalCall.Arguments)
+        var handled = false
+        try {
+            handled = TryBindClrConstructorFromType(
+                clrType,
+                terminalCall,
+                out result,
+                out var noApplicableOverload,
+                out var boundArguments,
+                openGenericDef,
+                symbolicArgs
+            ) ||
+                FinishClrConstructorBindingFailure(
+                terminalCall,
+                typeSimpleName,
+                noApplicableOverload,
+                boundArguments,
+                &result,
+                constructedTarget
+            )
+            // Issue #3821: the shared failure helper only commits to the
+            // no-applicable-overload diagnostic when the call carries an explicit
+            // type-argument list (issue #2633 fixed this cascade for the GENERIC
+            // spelling only). Without that, a non-generic qualified construction
+            // whose arguments match no constructor answered "not handled", the
+            // whole accessor chain re-bound as a namespace walk, and the walk
+            // failed at its HEAD — reporting GS0157 "Cannot find type System"
+            // about a segment that resolves perfectly. cs2gs writes fully-qualified
+            // type names whenever a simple name is ambiguous (issues #2258/#3805),
+            // so on the self-migration corpus every argument error at such a call
+            // site collapsed into that one misleading line.
+            //
+            // Committing is gated twice, because two later arms of
+            // `BindAccessorExpression` can still bind a chain this one gave up on:
+            //
+            //   * the prefix must be a NAMESPACE, not a type. When the last prefix
+            //     segment is itself a type (`Outer.Nested(...)`,
+            //     `DebuggableAttribute.DebuggingModes(2)`), the fully-qualified
+            //     static-access arm can still find a member of it.
+            //   * the terminal simple name must not also name a SOURCE type. A
+            //     package-qualified source construction (`Oahu.Tui.Nested.Refresh(1)`,
+            //     issue #2585) reaches the CLR arm first and can resolve a
+            //     same-named REFERENCE type whose constructors do not match — the
+            //     source arm below is the one that binds it.
+            //
+            // A namespace prefix with no source homonym has neither second chance,
+            // so there the fallthrough can only ever produce GS0157.
+            if !handled && noApplicableOverload && namespacePrefix.Length > 0 && !$scope.TryResolveType(
+                namespacePrefix,
+                out _
+            ) &&
+                !TryLookupSourceTypeWithImportPrecedence(typeSimpleName, preferredArity: -1, declaration: nil, out _) {
+                Diagnostics.ReportNoApplicableOverload(terminalCall.Identifier.Location, typeSimpleName)
+                result = BoundErrorExpression(terminalCall)
+                handled = true
+            }
+            if handled && result is {} resolvedResult {
+                binderCtx.CompleteCall(resolvedResult, terminalCall.Arguments, call: terminalCall)
+                CallCandidateRecorder.Stamp(frame, resolvedResult)
+            } else {
+                binderCtx.CompleteCall(BoundErrorExpression(nil), terminalCall.Arguments, call: terminalCall)
+            }
+        } finally {
+            CallCandidateRecorder.End(frame)
         }
         if handled && terminalObjectCreation != nil {
             result = BindObjectInitializerSuffix(

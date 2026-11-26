@@ -711,6 +711,30 @@ internal partial class OverloadResolver {
             !aggregate.EffectiveExplicitConstructors.IsDefaultOrEmpty
     )
 
+    private func RecordSourceConstructorFallbackCandidates(structType StructSymbol) {
+        if !CallCandidateRecorder.IsEnabled {
+            return
+        }
+        if !structType.EffectiveExplicitConstructors.IsDefaultOrEmpty {
+            let ctors = structType.EffectiveExplicitConstructors
+            let functions = ImmutableArray.CreateBuilder[FunctionSymbol](ctors.Length)
+            for ctor in ctors {
+                functions.Add(
+                    if structType.IsGenericDefinition {
+                        ctor.Function
+                    } else {
+                        CreateConstructedConstructorCandidate(ctor, structType)
+                    }
+                )
+            }
+            CallCandidateRecorder.RecordSourceConstructors(functions.MoveToImmutable(), structType)
+            return
+        }
+        if structType.HasPrimaryConstructor {
+            CallCandidateRecorder.RecordSourcePrimaryConstructor(structType)
+        }
+    }
+
     /// Binds calls with the same conversion and construction rules for simple and qualified targets.
     /// @param syntax The call syntax.
     /// @param resolvedType The exact qualified target, or null for ordinary lookup.
@@ -982,6 +1006,16 @@ internal partial class OverloadResolver {
                     explicitConversionType,
                     explicitConversionType.Name
                 )
+                if syntax.NullableQuestionToken == nil &&
+                    IsConstructibleSourceType(singleArgClass, syntax.Arguments.Count) {
+                    RecordSourceConstructorFallbackCandidates(
+                        if syntax.TypeArgumentList != nil && explicitConversionType is StructSymbol closedStruct {
+                            closedStruct
+                        } else {
+                            singleArgClass
+                        }
+                    )
+                }
                 return conversions.BindConversion(syntax.Arguments[0], explicitConversionType, allowExplicit: true)
             }
             if syntax.NullableQuestionToken != nil ||
@@ -1035,12 +1069,11 @@ internal partial class OverloadResolver {
         if tryBindIntrinsicCall(syntax, out var intrinsic) {
             return intrinsic!!
         }
-        // Issue #343: pre-validate named-argument layout (positional precedes
-        // named, no duplicate names). Errors are reported by the helper so the
-        // call short-circuits to a bound error here.
-        if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
-            return BoundErrorExpression(nil)
-        }
+        // Issue #343 / #6221: pre-validate named-argument layout (positional precedes
+        // named, no duplicate names). When layout fails, continue binding arguments and resolving
+        // the callee with extra reports dropped so the semantic model keeps both (#6221).
+        let layoutOk = TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames)
+        let layoutDiagMark = Diagnostics.Count
         var boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
         // Issue #951: untyped arrow lambdas whose binding
         // is deferred until the callee's parameter types are known, so the
@@ -1064,6 +1097,11 @@ internal partial class OverloadResolver {
             out var memberName,
             out var memberAccessibility
         ) {
+            if !layoutOk {
+                binderCtx.RecordCallCallee(syntax, () -> BuildFailedCalleeLoad(callTarget, syntax, nil))
+                BindCallArgumentsForLayoutRecovery(syntax.Arguments)
+                return BoundErrorExpression(nil)
+            }
             let owner = Invariant.Required(
                 declaringOwner,
                 "an inaccessible implicit callable member has a declaring owner",
@@ -1075,6 +1113,8 @@ internal partial class OverloadResolver {
                 owner.Name,
                 memberAccessibility
             )
+            // #6199: the callee answers the member that the name resolves to, as a receiver call does.
+            binderCtx.RecordCallCallee(syntax, () -> BuildFailedCalleeLoad(callTarget, syntax, nil))
             return BoundErrorExpression(nil)
         }
         // Issue #2066: a smart-cast null-guard (`if x != nil { x(...) }`)
@@ -1091,6 +1131,16 @@ internal partial class OverloadResolver {
             TryGetNarrowedVariableType(callTargetVariable)
         } else {
             default(TypeSymbol?)
+        }
+        let layoutNarrowingRollback = if layoutOk {
+            default(Action?)
+        } else {
+            captureCallArgumentPrebindRollback?(syntax)
+        }
+        let layoutPreArgumentsNarrowing = if layoutOk {
+            default(StatementBinder.NarrowingBindSnapshot)
+        } else {
+            CaptureNarrowingBindSnapshot()
         }
         if symbol is ImplicitPropertyVariableSymbol || symbol is ImplicitStaticPropertyVariableSymbol {
             let preCalleeLoad = BuildCalleeLoad(cast[VariableSymbol](symbol), syntax.Identifier, narrowedCallTargetType)
@@ -1109,7 +1159,8 @@ internal partial class OverloadResolver {
             if argSyntax is RefArgumentExpressionSyntax refArg {
                 // The first binding pass has no resolved parameter for inline out arguments.
                 boundArgument = bindRefArgumentExpression(refArg, nil)
-            } else if bindLambdaWithTarget != nil &&
+            } else if layoutOk &&
+                bindLambdaWithTarget != nil &&
                 lambdaSyntax is {} deferredLambda &&
                 IsUntypedArrowLambda(deferredLambda) {
                 // Issue #951: defer; bind once the parameter delegate target is
@@ -1126,7 +1177,11 @@ internal partial class OverloadResolver {
                 ).Add(deferredLambda)
                 boundArgument = BoundErrorExpression(deferredLambda)
             } else {
-                boundArgument = BindOverloadArgumentValue(argSyntax)
+                boundArgument = if layoutOk {
+                    BindOverloadArgumentValue(argSyntax)
+                } else {
+                    bindExpression(argSyntax)
+                }
             }
             ApplySubExpressionNarrowingEffects(argSyntax, boundArgument)
             boundArguments.Add(boundArgument)
@@ -1145,7 +1200,7 @@ internal partial class OverloadResolver {
             narrowedCallTargetType,
             preArgumentsNarrowing
         )
-        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+        if layoutOk && conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
             Diagnostics.TruncateNonReboundSince(overloadDiagMark)
             result = BindCallExpressionAfterArguments(
                 syntax,
@@ -1159,6 +1214,19 @@ internal partial class OverloadResolver {
                 narrowedCallTargetType,
                 preArgumentsNarrowing
             )
+        }
+        if !layoutOk {
+            Diagnostics.TruncateTo(layoutDiagMark)
+            layoutNarrowingRollback?.Invoke()
+            RestoreNarrowingBindSnapshot(layoutPreArgumentsNarrowing)
+            for argument in syntax.Arguments {
+                Scope.RemoveVariablesDeclaredInSpan(argument.SyntaxTree, argument.Span)
+            }
+            return if result is BoundErrorExpression {
+                result
+            } else {
+                BoundErrorExpression.FindFailedCall(result) ?? BoundErrorExpression(nil)
+            }
         }
         if syntax.NullableQuestionToken != nil {
             intersectNarrowingWithSnapshot?(preArgumentsNarrowing)
