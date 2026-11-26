@@ -5617,6 +5617,13 @@ internal class ReflectionMetadataEmitter {
             return false
         }
 
+        /// Returns `true` when [`type`](paramref) is a non-nullable value type.
+        /// Issue #6248: non-nullable value types cannot hold `nil` and cannot be tested with `brtrue`.
+        internal func IsNonNullableValueType(type TypeSymbol?) bool -> type != nil &&
+            !(type is NullableTypeSymbol) &&
+            !(type is PlatformTypeSymbol) &&
+            !NullableLifting.IsValueTypeNullableClr(type.ClrType) && IsValueTypeSymbol(type)
+
         internal func ImportedInstanceReceiverRequiresBoxing(receiverType TypeSymbol, method MethodInfo) bool {
             var receiverType = receiverType
             if receiverType is ByRefTypeSymbol byRef {

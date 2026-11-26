@@ -1688,6 +1688,21 @@ internal partial class MethodBodyEmitter {
     }
 
     private func EmitNullConditionalAccess(nc BoundNullConditionalAccessExpression) {
+        // Issue #6248: a non-nullable value-type receiver cannot be nil, and
+        // `brtrue` over a struct/value slot fails IL verification or tests
+        // falsy zero bits. Capture the receiver once and emit the access unconditionally.
+        if ReflectionMetadataEmitter.IsNonNullableValueType(nc.Receiver.Type) {
+            this.EmitExpression(nc.Receiver)
+            this.EmitStoreVariable(nc.Capture)
+            this.EmitExpression(nc.WhenNotNull)
+            if !object.ReferenceEquals(nc.Type, TypeSymbol.Void) &&
+                nc.Type is NullableTypeSymbol nonNullValueResult &&
+                NullableLifting.IsAnyValueTypeNullable(nonNullValueResult) &&
+                !(nc.WhenNotNull.Type is NullableTypeSymbol) {
+                this.EmitNullableValueWrap(nonNullValueResult)
+            }
+            return
+        }
         // Issue #1213: a `void`-typed null-conditional (e.g. the event-raise
         // form `evt?.Invoke(args)` where the delegate returns `void`) leaves no
         // value on the stack. Emit a plain null-guarded access: evaluate the
@@ -1766,13 +1781,7 @@ internal partial class MethodBodyEmitter {
                 this.il.MarkLabel(nonNull)
                 this.EmitExpression(nc.WhenNotNull)
                 if !(nc.WhenNotNull.Type is NullableTypeSymbol) {
-                    let ctorToken = if underlying is TypeParameterSymbol {
-                        this.outer.memberRefs.GetNullableCtorMemberRefForOpenTypeParameter(nullableType)
-                    } else {
-                        this.outer.memberRefs.GetNullableCtorMemberRefForUserValueType(nullableType)
-                    }
-                    this.il.OpCode(ILOpCode.Newobj)
-                    this.il.Token(ctorToken)
+                    this.EmitNullableValueWrap(nullableType)
                 }
                 this.il.MarkLabel(end)
                 return
@@ -1786,7 +1795,6 @@ internal partial class MethodBodyEmitter {
                     "Cannot construct Nullable<${innerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set."
                 )
             }
-            let nullableInnerArg = nullableClr.GetGenericArguments()[0]
             // nil branch: ldloca slot; initobj Nullable<T>; ldloc slot
             this.il.LoadLocalAddress(slot)
             this.il.OpCode(ILOpCode.Initobj)
@@ -1798,12 +1806,7 @@ internal partial class MethodBodyEmitter {
             this.il.MarkLabel(nonNull)
             this.EmitExpression(nc.WhenNotNull)
             if !(nc.WhenNotNull.Type is NullableTypeSymbol) {
-                let ctor = nullableClr.GetConstructor([]Type{nullableInnerArg}) ??
-                    throw InvalidOperationException(
-                    "Nullable<${nullableInnerArg.FullName}> has no single-arg constructor."
-                )
-                this.il.OpCode(ILOpCode.Newobj)
-                this.il.Token(this.outer.memberRefs.GetCtorReference(ctor))
+                this.EmitNullableValueWrap(nullableType)
             }
             this.il.MarkLabel(end)
             return
@@ -1815,6 +1818,32 @@ internal partial class MethodBodyEmitter {
         this.il.MarkLabel(nonNull)
         this.EmitExpression(nc.WhenNotNull)
         this.il.MarkLabel(end)
+    }
+
+    private func EmitNullableValueWrap(nullableType NullableTypeSymbol) {
+        let underlying = nullableType.UnderlyingType
+        if NullableLifting.RequiresSymbolicNullableGetValue(nullableType) ||
+            underlying?.ClrType is not{IsValueType: true} {
+            let ctorToken = if underlying is TypeParameterSymbol {
+                this.outer.memberRefs.GetNullableCtorMemberRefForOpenTypeParameter(nullableType)
+            } else {
+                this.outer.memberRefs.GetNullableCtorMemberRefForUserValueType(nullableType)
+            }
+            this.il.OpCode(ILOpCode.Newobj)
+            this.il.Token(ctorToken)
+            return
+        }
+        let innerClr = underlying.ClrType
+        if !NullableLifting.TryConstructNullable(this.outer.emitCtx.References, innerClr, out var nullableClr) {
+            throw InvalidOperationException(
+                "Cannot construct Nullable<${innerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set."
+            )
+        }
+        let nullableInnerArg = nullableClr.GetGenericArguments()[0]
+        let ctor = nullableClr.GetConstructor([]Type{nullableInnerArg}) ??
+            throw InvalidOperationException("Nullable<${nullableInnerArg.FullName}> has no single-arg constructor.")
+        this.il.OpCode(ILOpCode.Newobj)
+        this.il.Token(this.outer.memberRefs.GetCtorReference(ctor))
     }
 
     // Issue #1700: evaluates a null-conditional access's receiver and
@@ -1869,9 +1898,9 @@ internal partial class MethodBodyEmitter {
             this.il.MarkLabel(nilFallthrough)
             return
         }
-        // Reference-typed (or non-nullable-collapse) receiver: `nc.Capture`
+        // Reference-typed or open type-parameter receiver: `nc.Capture`
         // shares the CLR representation of `nc.Receiver`, so a direct
-        // store/reload/brtrue is valid IL.
+        // store/reload/brtrue (with boxing for open type parameters) is valid IL.
         this.EmitExpression(nc.Receiver)
         this.EmitStoreVariable(nc.Capture)
         this.EmitLoadVariable(nc.Capture)

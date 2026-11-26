@@ -2937,6 +2937,7 @@ shared class SpillSequenceSpiller {
             // reconcile this wrapper/unwrapped type mismatch.
             let isValueTypeNullableReceiver = nc.Receiver.Type is NullableTypeSymbol ncReceiverNullable &&
                 NullableLifting.IsAnyValueTypeNullable(ncReceiverNullable)
+            let isNonNullableValueTypeReceiver = ReflectionMetadataEmitter.IsNonNullableValueType(nc.Receiver.Type)
             let receiverHasAwait = HasAwait(nc.Receiver)
             let whenNotNullHasAwait = HasAwait(nc.WhenNotNull)
             if !isValueTypeNullableReceiver && !receiverHasAwait && !whenNotNullHasAwait {
@@ -2952,8 +2953,8 @@ shared class SpillSequenceSpiller {
                 receiver = spilledReceiver.Value
             }
             if !isValueTypeNullableReceiver && !whenNotNullHasAwait {
-                // Reference-type (or non-nullable-collapse) receiver, only
-                // the receiver needed spilling — WhenNotNull is still
+                // Reference-type, open type-parameter, or non-nullable value-type
+                // receiver, only the receiver needed spilling — WhenNotNull is still
                 // await-free. The emitter's shared variable load/store path
                 // preserves nc.Capture whether it remains local or is hoisted.
                 let rebuiltNc = BoundNullConditionalAccessExpression(
@@ -2965,6 +2966,37 @@ shared class SpillSequenceSpiller {
                     nc.ResultSlot
                 )
                 return BoundSpillSequenceExpression(nil, locals.ToImmutable(), sideEffects.ToImmutable(), rebuiltNc)
+            }
+            // Issue #6248: a non-nullable value-type receiver cannot be nil,
+            // so capture it once and spill WhenNotNull without a null branch.
+            if isNonNullableValueTypeReceiver {
+                locals.Add(cast[LocalVariableSymbol](nc.Capture))
+                sideEffects.Add(BoundVariableDeclaration(nil, cast[LocalVariableSymbol](nc.Capture), receiver))
+                let spilledWhenNotNull = SpillExpression(nc.WhenNotNull)
+                locals.AddRange(spilledWhenNotNull.Locals)
+                sideEffects.AddRange(spilledWhenNotNull.SideEffects)
+                if object.ReferenceEquals(nc.Type, TypeSymbol.Void) {
+                    sideEffects.Add(BoundExpressionStatement(nil, spilledWhenNotNull.Value))
+                    return BoundSpillSequenceExpression(
+                        nil,
+                        locals.ToImmutable(),
+                        sideEffects.ToImmutable(),
+                        BoundLiteralExpression(nil, nil, TypeSymbol.Void)
+                    )
+                }
+                var value = spilledWhenNotNull.Value
+                if nc.ResultSlot != nil && !(value.Type is NullableTypeSymbol) {
+                    value = BoundConversionExpression(nil, nc.Type, value)
+                }
+                let resultLocal = MakeSpillTemp(nc.Type)
+                locals.Add(resultLocal)
+                sideEffects.Add(BoundVariableDeclaration(nil, resultLocal, value))
+                return BoundSpillSequenceExpression(
+                    nil,
+                    locals.ToImmutable(),
+                    sideEffects.ToImmutable(),
+                    BoundVariableExpression(nil, resultLocal)
+                )
             }
             // Either WhenNotNull has an await (must run only on the non-nil
             // path, needing explicit if/else control flow) or the receiver
