@@ -3167,6 +3167,9 @@ internal partial class ExpressionBinder {
         if (completedSuspendingCall ?? bound) is not BoundUserInstanceCallExpression uic {
             return bound
         }
+        if uic.IsElidedConditionalCall {
+            return uic
+        }
         let baseCall = BoundBaseInterfaceCallExpression(
             syntax,
             uic.Receiver,
@@ -3525,6 +3528,9 @@ internal partial class ExpressionBinder {
         let declaringType StructSymbol? = uic.Method.ReceiverType as StructSymbol ?? searchBase
         if declaringType == nil {
             return BoundErrorExpression(nil)
+        }
+        if uic.IsElidedConditionalCall {
+            return uic
         }
         let baseCall = BoundBaseClassCallExpression(
             callSyntax,
