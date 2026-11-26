@@ -3505,6 +3505,31 @@ func Run(a int32, f () -> int32) {
             "GS0154",
             "later-declaration"
         )
+
+        // 29. Explicitly typed function-literal arguments still allow imported-call retargeting when a
+        // later receiver-form overload can avoid a lossy delegate conversion (GS0124).
+        const explicitForEachPrefix = `package P
+
+import System.Collections.Generic
+
+func Main() {
+    let v = List[int32]().ForEach(func (i int32) int32 {
+        return i + 1
+    })
+    let done = 0
+`
+        const explicitForEachWitness = `}
+
+func (l List[int32]) ForEach(f (int32) -> int32) int32 {
+    return 0
+}
+`
+        AssertWitness(explicitForEachPrefix + explicitForEachWitness, "GS0124")
+        AssertFutureDependent(
+            BindNothing(explicitForEachPrefix, []string{"}\n", explicitForEachWitness}),
+            "GS0124",
+            "later-overload"
+        )
     }
 
     @Fact

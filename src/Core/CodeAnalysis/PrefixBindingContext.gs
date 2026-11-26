@@ -1498,6 +1498,17 @@ internal shared class PrefixBindingContext {
         }
     }
 
+    internal func IsBodyTypedByCandidate(value ExpressionSyntax) bool {
+        var current = value
+        while current is ParenthesizedExpressionSyntax parenthesized {
+            current = parenthesized.Expression
+        }
+        if current is FunctionLiteralExpressionSyntax lit && lit.ReturnTypeClause != nil {
+            return false
+        }
+        return IsTypedByCandidate(current)
+    }
+
     /// Returns a value that tells whether the type of [`value`](paramref) comes from the parameter that
     /// it fills, so that a diagnostic inside it can depend on the candidate (ADR-0225 D6.5).
     /// @param value An argument expression.
@@ -1512,9 +1523,6 @@ internal shared class PrefixBindingContext {
         }
         if current is LiteralExpressionSyntax literal {
             return literal.LiteralToken.Kind == SyntaxKind.NilKeyword
-        }
-        if current is FunctionLiteralExpressionSyntax lit && lit.ReturnTypeClause != nil {
-            return false
         }
         return !(
             current is NameExpressionSyntax ||

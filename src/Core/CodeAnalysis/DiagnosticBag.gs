@@ -585,7 +585,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                     }
                     dependsOnCandidate = (argumentSpan.Start == span.Start && argumentSpan.End == span.End) ||
                         (value.Span.Start == span.Start && value.Span.End == span.End) ||
-                        PrefixBindingContext.IsTypedByCandidate(value)
+                        PrefixBindingContext.IsBodyTypedByCandidate(value)
                     break
                 }
             }
