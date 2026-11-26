@@ -136,6 +136,15 @@ internal shared class IncrementalGlobalScopeReuse {
         if !string.Equals(previousSkeleton, updatedSkeleton, StringComparison.Ordinal) {
             return false
         }
+        let conditionalCompilation = $scope.ConditionalCompilation
+        if conditionalCompilation == nil {
+            return false
+        }
+        let structuralDiagnostics = DiagnosticBag()
+        conditionalCompilation.Validate(updatedTree, structuralDiagnostics)
+        if structuralDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) {
+            return false
+        }
         // Skeleton equality guarantees identical structure, hence identical
         // per-kind declaration counts and ordering. Build a positional map for
         // each declaration kind; defensively assert matching counts.

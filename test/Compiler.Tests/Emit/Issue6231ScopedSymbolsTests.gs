@@ -12,6 +12,97 @@ import System.Text
 import Xunit
 
 class Issue6231ScopedSymbolsTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Driver_ImportedConditionalProtectedCalls_ValidateReceiverAndMemberSpan(enabled bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = CompileProtectedParent(fixture)
+        let source = "import Protected6231\n" +
+            (
+            if enabled {
+                "@file:DefineSymbol(\"A\")\n"
+            } else {
+                ""
+            }
+        ) +
+            `class Child : Parent {
+    func Bad(other Parent) { other.Ping(1) }
+}`
+        let (code, output) = fixture.TryCompile(source, "ProtectedReceiver6231", false, "/r:" + library)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0379", output)
+        let prefix = source.Substring(0, source.IndexOf("Ping(1)", StringComparison.Ordinal)).Split('\n')
+        let line = prefix.Length
+        let column = prefix.Last().Length + 1
+        Assert.Contains("(${line},${column},${line},${column + 4})", output)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Driver_ConditionalProtectedCalls_PreserveElisionOfReceiverAndArguments(imported bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = if imported {
+            CompileProtectedParent(fixture)
+        } else {
+            nil
+        }
+        let frozen = if library != nil {
+            File.ReadAllBytes(library)
+        } else {
+            nil
+        }
+        let source = "import System\n" +
+            (
+            if imported {
+                "import Protected6231\n"
+            } else {
+                `import System.Diagnostics
+open class Parent {
+    @Conditional("A") protected func Ping(value int32) { Console.Write("m") }
+}
+`
+            }
+        ) +
+            `class Child : Parent {
+    func Run() {
+        Receiver().Ping(Argument())
+        @DefineSymbol("A") { Receiver().Ping(Argument()) }
+        Receiver().Ping(Argument())
+    }
+}
+func Receiver() Child { Console.Write("r") return Child() }
+func Argument() int32 { Console.Write("a") return 1 }
+Child().Run()`
+        let program = if library != nil {
+            fixture.Compile(source, "ProtectedEffects6231", true, "/r:" + library)
+        } else {
+            fixture.Compile(source, "ProtectedEffects6231", true)
+        }
+        IlVerifier.Verify(
+            program,
+            if library != nil {
+                []string{library}
+            } else {
+                []string{}
+            }
+        )
+        Assert.Equal(Encoding.UTF8.GetBytes("ram"), fixture.RunBytes(program))
+        if library != nil {
+            Assert.Equal(frozen, File.ReadAllBytes(library))
+        }
+    }
+
+    private func CompileProtectedParent(fixture NativeSliceLanguageTests.Fixture) string ->
+    fixture.CompileCSharp(`using System;
+using System.Diagnostics;
+namespace Protected6231 {
+    public class Parent {
+        [Conditional("A")] protected void Ping(int value) { Console.Write("m"); }
+    }
+}`, "ProtectedParent6231")
+
     @Fact
     func Driver_AllExplicitConstructorsInactive_StillResolvesImportedOptionalBaseConstructor() {
         using let fixture = NativeSliceLanguageTests.Fixture()

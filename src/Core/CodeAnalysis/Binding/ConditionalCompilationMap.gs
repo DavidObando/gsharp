@@ -1,6 +1,7 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Analyzers
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
@@ -17,11 +18,12 @@ internal class ConditionalCompilationMap {
     }
 
     private class Region {
-        internal init(node SyntaxNode, symbols ImmutableHashSet[string], active bool) {
+        internal init(node SyntaxNode, symbols ImmutableHashSet[string], active bool, order int32) {
             Span = node.Span
             Symbols = symbols
             Active = active
             OpenAtEnd = PrefixBindingContext.IsOpen(node)
+            Order = order
         }
         internal prop Span TextSpan {
             get;
@@ -35,11 +37,49 @@ internal class ConditionalCompilationMap {
         internal prop OpenAtEnd bool {
             get;
         }
+        internal prop Order int32 {
+            get;
+        }
+        internal prop Parent Region? {
+            get;
+            set;
+        }
     }
 
     private class TreeMap {
         internal let Regions List[Region] = List[Region]()
         internal let Diagnostics DiagnosticBag = DiagnosticBag()
+        internal var Root Region?
+
+        internal func IndexRegions() {
+            Root = Regions[0]
+            Regions.Sort(
+                (left Region, right Region) -> {
+                    let start = left.Span.Start.CompareTo(right.Span.Start)
+                    if start != 0 {
+                        return start
+                    }
+                    let length = right.Span.Length.CompareTo(left.Span.Length)
+                    return if length != 0 {
+                        length
+                    } else {
+                        left.Order.CompareTo(right.Order)
+                    }
+                }
+            )
+            let parents = Stack[Region]()
+            for region in Regions {
+                while parents.Count > 0 && parents.Peek().Span.End < region.Span.End {
+                    parents.Pop()
+                }
+                region.Parent = if parents.Count > 0 {
+                    parents.Peek()
+                } else {
+                    nil
+                }
+                parents.Push(region)
+            }
+        }
     }
 
     internal func IsActive(node SyntaxNode) bool -> FindRegion(node).Active
@@ -79,8 +119,34 @@ internal class ConditionalCompilationMap {
 
     private func FindRegion(tree SyntaxTree, span TextSpan) Region {
         let treeMap = GetTree(tree)
-        var result = treeMap.Regions[0]
-        for region in treeMap.Regions {
+        let root = treeMap.Root!!
+        if treeMap.Regions.Count == 1 {
+            CompilationMeasurements.Count("conditional.regions.probed")
+            return root
+        }
+        var probes = 0
+        var low = 0
+        var high = treeMap.Regions.Count - 1
+        var index = -1
+        while low <= high {
+            let middle = low + (high - low) / 2
+            probes++
+            if treeMap.Regions[middle].Span.Start <= span.Start {
+                index = middle
+                low = middle + 1
+            } else {
+                high = middle - 1
+            }
+        }
+        var result = root
+        var candidate = if index < 0 {
+            nil
+        } else {
+            treeMap.Regions[index]
+        }
+        while candidate != nil {
+            let region = candidate
+            probes++
             if region.Span.Start <= span.Start &&
                 (
                 if span.Length == 0 {
@@ -89,10 +155,13 @@ internal class ConditionalCompilationMap {
                     region.Span.End >= span.End
                 }
             ) &&
-                region.Span.Length <= result.Span.Length {
+                region.Span.Length <= root.Span.Length {
                 result = region
+                break
             }
+            candidate = region.Parent
         }
+        CompilationMeasurements.Count("conditional.regions.probed", probes)
         return result
     }
 
@@ -213,7 +282,7 @@ internal class ConditionalCompilationMap {
                     }
                 }
                 if node is CompilationUnitSyntax || hasConditionalAnnotation {
-                    treeMap.Regions.Add(Region(node, effective, active))
+                    treeMap.Regions.Add(Region(node, effective, active, treeMap.Regions.Count))
                 }
                 for var i = node.ChildCount - 1; i >= 0; i-- {
                     let child = node.GetChild(i)
@@ -222,6 +291,7 @@ internal class ConditionalCompilationMap {
                     }
                 }
             }
+            treeMap.IndexRegions()
             trees[tree] = treeMap
             return treeMap
         }

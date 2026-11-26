@@ -13,9 +13,180 @@ import System.Linq
 import System.Reflection
 import System.Reflection.Emit
 import System.Threading
+import System.Text
 import Xunit
 
 class Issue6231ConditionalCompilationTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConditionalProtectedCalls_AlwaysValidateTheReceiverAtTheMemberSpan(enabled bool) {
+        const source = `import System.Diagnostics
+open class Parent {
+    @Conditional("A") protected func Ping(value int32) {}
+}
+class Child : Parent {
+    func Bad(other Parent) { other.Ping(1) }
+}`
+        let compilation = Compilation(SyntaxTree.Parse(source)){
+            IsLibrary = true,
+            PreprocessorSymbols = if enabled {
+                ImmutableHashSet.Create("A")
+            } else {
+                ImmutableHashSet[string].Empty
+            }
+        }
+        let diagnostic = Assert.Single(compilation.GetDiagnostics().Where((d Diagnostic) -> d.Id == "GS0379"))
+        Assert.Equal(source.IndexOf("Ping(1)", StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal(4, diagnostic.Location.Span.Length)
+    }
+
+    @Theory
+    @InlineData(`@DefineSymbol("") {}`)
+    @InlineData(`@DefineSymbol(1) {}`)
+    @InlineData(`@DefineSymbol("A") @UndefineSymbol("A") {}`)
+    @InlineData(`@return:DefineSymbol("A") {}`)
+    func BodyOnlyEdits_ValidateStructuralAnnotationsBeforeReusingDeclarations(annotation string) {
+        const source = `func Read() int32 {
+    @DefineSymbol("A") {}
+    return 1
+}`
+        let original = SyntaxTree.Parse(SourceText.From(source, "structural-reuse.gs"))
+        let compilation = Compilation(original){IsLibrary = true, IncrementalBodyReuse = true}
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let previousScope = compilation.GlobalScope
+        let edited = SyntaxTree.Parse(
+            SourceText.From(
+                source.Replace(`@DefineSymbol("A") {}`, annotation, StringComparison.Ordinal),
+                "structural-reuse.gs"
+            )
+        )
+        using let measurements = CompilationMeasurements.Start("test")
+        let successor = compilation.ReplaceSyntaxTree(original, edited)
+        let fresh = Compilation(edited){IsLibrary = true}
+        let expected = fresh.GetDiagnostics().Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Contains(expected, (d Diagnostic) -> d.Id == "GS9309")
+        let actual = successor.GetDiagnostics().Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Equal(
+            expected.Select((d Diagnostic) -> (d.Id, d.Location.Span.Start, d.Location.Span.Length)),
+            actual.Select((d Diagnostic) -> (d.Id, d.Location.Span.Start, d.Location.Span.Length))
+        )
+        Assert.NotSame(previousScope, successor.GlobalScope)
+        let prefix = successor.BindPrefix(
+            edited,
+            edited.Text.Length,
+            PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+        )
+        Assert.Equal(
+            expected.Select((d Diagnostic) -> (d.Id, d.Location.Span.Start, d.Location.Span.Length)),
+            prefix
+                .Compilation
+                .GetDiagnostics()
+                .Where((d Diagnostic) -> d.IsError)
+                .Select((d Diagnostic) -> (d.Id, d.Location.Span.Start, d.Location.Span.Length))
+        )
+        Assert.Equal(0, measurements.GetCounter("declarations.reuses"))
+    }
+
+    @Fact
+    func ValidBodyOnlySymbolEdit_StillReusesDeclarationsAndRebindsItsEnvironment() {
+        const source = `func Read() bool {
+    @DefineSymbol("A") { return @defined("A") }
+}`
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree){IsLibrary = true, IncrementalBodyReuse = true}
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let previousScope = compilation.GlobalScope
+        let edited = SyntaxTree.Parse(
+            source.Replace(`@DefineSymbol("A")`, `@DefineSymbol("B")`, StringComparison.Ordinal)
+        )
+        using let measurements = CompilationMeasurements.Start("test")
+        let successor = compilation.ReplaceSyntaxTree(tree, edited)
+        Assert.Empty(successor.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        Assert.Same(previousScope, successor.GlobalScope)
+        Assert.Equal(1L, measurements.GetCounter("declarations.reuses"))
+        let query = edited.Root.DescendantNodesAndSelf().OfType[DefinedExpressionSyntax]().Single()
+        let bound = Assert.IsType[BoundLiteralExpression](successor.GetSemanticModel(edited).GetBoundNode(query))
+        Assert.False(cast[bool](bound.Value))
+    }
+
+    @Theory
+    @InlineData(64)
+    @InlineData(512)
+    func AnnotatedSiblingLookups_ProbeLogarithmicallyRatherThanScanningTheFile(count int32) {
+        let source = StringBuilder()
+        for var i = 0; i < count; i++ {
+            source
+                .Append(`@DefineSymbol("A") func F`)
+                .Append(i)
+                .AppendLine(`() bool { @UndefineSymbol("A") { let hidden = @defined("A") } return @defined("A") }`)
+        }
+        let tree = SyntaxTree.Parse(source.ToString())
+        let compilation = Compilation(tree){IsLibrary = true}
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let activity = compilation.ConditionalCompilation
+        Assert.True(activity.IsActive(tree.Root))
+        let members = tree.Root.Members.OfType[FunctionDeclarationSyntax]().ToArray()
+        using let measurements = CompilationMeasurements.Start("test")
+        for member in members {
+            let queries = member.DescendantNodesAndSelf().OfType[DefinedExpressionSyntax]().ToArray()
+            Assert.True(activity.IsActive(member))
+            Assert.False(activity.SymbolsAt(tree, queries[0].Span.Start).Contains("A"))
+            Assert.True(activity.SymbolsAt(queries[1]).Contains("A"))
+        }
+        let lookups = int64(3 * count)
+        Assert.InRange(measurements.GetCounter("conditional.regions.probed"), lookups, lookups * 24)
+    }
+
+    @Fact
+    func RegionIndex_MatchesOriginalContainmentAndBoundaryRules() {
+        const source = `import System
+@file:DefineSymbol("BASE")
+@DefineSymbol("A") func First() bool {
+    @UndefineSymbol("A") { let hidden = @defined("A") }
+    return @defined("A")
+}
+@If(false) func Hidden() { Missing() }
+@DefineSymbol("B") func Second() bool -> @defined("A")
+`
+        let tree = SyntaxTree.Parse(source)
+        let compilation = Compilation(tree){IsLibrary = true}
+        let activity = compilation.ConditionalCompilation
+        activity.IsActive(tree.Root)
+        let flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public
+        let treeMap = typeof(ConditionalCompilationMap).GetMethod("GetTree", flags)!!.Invoke(activity, []object{tree})!!
+        let regions = cast[System.Collections.IEnumerable](
+            treeMap.GetType().GetField("Regions", flags)!!.GetValue(treeMap)!!
+        )
+            .Cast[object]()
+            .OrderBy((region object) -> cast[int32](region.GetType().GetProperty("Order", flags)!!.GetValue(region)!!))
+            .Select(
+            (region object) -> (
+                Span: cast[TextSpan](region.GetType().GetProperty("Span", flags)!!.GetValue(region)!!),
+                Symbols: cast[ImmutableHashSet[string]](
+                    region.GetType().GetProperty("Symbols", flags)!!.GetValue(region)!!
+                ),
+                Active: cast[bool](region.GetType().GetProperty("Active", flags)!!.GetValue(region)!!),
+                Open: cast[bool](region.GetType().GetProperty("OpenAtEnd", flags)!!.GetValue(region)!!),
+                Order: cast[int32](region.GetType().GetProperty("Order", flags)!!.GetValue(region)!!)
+            )
+        )
+            .ToArray()
+        for var position = 0; position <= source.Length; position++ {
+            let span = TextSpan(position, 0)
+            var expected = regions[0]
+            for region in regions {
+                if region.Span.Start <= span.Start &&
+                    (region.Span.End > span.Start || (region.Open && region.Span.End == span.Start)) &&
+                    region.Span.Length <= expected.Span.Length {
+                    expected = region
+                }
+            }
+            Assert.Equal(expected.Active, activity.IsActiveAt(tree, position))
+            Assert.True(expected.Symbols.SetEquals(activity.SymbolsAt(tree, position)))
+        }
+    }
+
     @Theory
     @InlineData(`class C { prop P int32 { @Missing get { return 1 } } }`, `@Missing`)
     @InlineData(`class C { prop P int32 { @Obsolete get { return 1 } } }`, `@Obsolete`)
