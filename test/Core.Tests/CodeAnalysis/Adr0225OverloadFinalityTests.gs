@@ -3431,6 +3431,80 @@ let int32 = func (i int32) string {
         let clrErrors = clrKeep.Diagnostics.Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").ToList()
         Assert.Equal(4, clrErrors.Count)
         Assert.All(clrErrors, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+
+        // 28. Explicitly typed function-literal bodies do not inherit enclosing call sibling or receiver
+        // provisional premises, while whole-argument conversion failures still inherit the call premise.
+        const explicitLitSource = `package P
+
+class BoxInt {
+    func Run(f () -> int32) {
+    }
+}
+
+class BoxStr {
+    func Run(f () -> string) {
+    }
+}
+
+class Closed {
+    shared {
+        func Run(a object, f () -> int32) {
+        }
+    }
+}
+
+func MakeBox(o object) BoxInt {
+    return BoxInt()
+}
+
+func Main() {
+    let outer = func () {
+        let v = int32(1)
+        Closed.Run(v, func () int32 {
+            let badSibling int32 = "s"
+            return 0
+        })
+        MakeBox(v).Run(func () int32 {
+            let badReceiver int32 = "s"
+            return 0
+        })
+    }
+/*CUT*/
+    let int32 = func (i int32) string {
+        return ""
+    }
+}
+`
+        let explicitLitKeep = BindKeep(explicitLitSource)
+        let explicitLitErrors = explicitLitKeep
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(2, explicitLitErrors.Count)
+        Assert.All(explicitLitErrors, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+
+        const wholeLitConversionPrefix = `package P
+
+func Run(a object, f () -> string) {
+}
+
+func Main() {
+    let v = 1
+    Run(v, func () int32 {
+        return 0
+    })
+`
+        const wholeLitConversionWitness = `}
+
+func Run(a int32, f () -> int32) {
+}
+`
+        AssertWitness(wholeLitConversionPrefix + wholeLitConversionWitness, "GS0154", "GS0155")
+        AssertFutureDependent(
+            BindNothing(wholeLitConversionPrefix, []string{"}\n", wholeLitConversionWitness}),
+            "GS0154",
+            "later-declaration"
+        )
     }
 
     @Fact

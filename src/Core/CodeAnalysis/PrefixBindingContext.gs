@@ -1513,6 +1513,9 @@ internal shared class PrefixBindingContext {
         if current is LiteralExpressionSyntax literal {
             return literal.LiteralToken.Kind == SyntaxKind.NilKeyword
         }
+        if current is FunctionLiteralExpressionSyntax lit && lit.ReturnTypeClause != nil {
+            return false
+        }
         return !(
             current is NameExpressionSyntax ||
                 current is GenericNameExpressionSyntax ||
