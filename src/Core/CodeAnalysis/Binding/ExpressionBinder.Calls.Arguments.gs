@@ -3488,6 +3488,15 @@ internal partial class ExpressionBinder {
             overloads.BindCallArgumentsForLayoutRecovery(ce.Arguments)
             return BoundErrorExpression(nil)
         }
+        if PrefixBindingContext.Current is {} prefixCut &&
+            !prefixCut.LaterOverloadsPossible &&
+            baseOverloads.Length == 1 &&
+            !baseOverloads[0].IsGeneric {
+            PrefixBindingContext.AddFixedSignatureCall(callSyntax)
+            if !object.ReferenceEquals(callSyntax, ce) {
+                PrefixBindingContext.AddFixedSignatureCall(ce)
+            }
+        }
         let arguments = BindBaseCallArguments(ce)
         let method FunctionSymbol? = overloads.SelectInstanceOverloadOrReport(
             baseOverloads,

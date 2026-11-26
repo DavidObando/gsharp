@@ -190,7 +190,9 @@ internal shared class PrefixRetarget {
         // With the cut in the top-level statements of KeepDeclarations, a later top-level global can hide a
         // simple-name call in a member or function body unless it resolved to a variable or package function
         // (#6229).
-        if kind == PrefixCallKind.Name && PrefixBindingContext.LaterGlobalCanHide(syntax) &&
+        if !cut.LaterOverloadsPossible && kind == PrefixCallKind.Name && PrefixBindingContext.LaterGlobalCanHide(
+            syntax
+        ) &&
             CanBeShadowedByLaterGlobal(syntax, node) {
             return true
         }

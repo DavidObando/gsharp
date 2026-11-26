@@ -4066,11 +4066,17 @@ internal partial class ExpressionBinder {
             ce,
             isStatic: true
         )
-        if PrefixBindingContext.Current is {} prefixCut && !prefixCut.LaterOverloadsPossible && structSym != nil {
+        if PrefixBindingContext.Current is {} prefixCut &&
+            !prefixCut.LaterOverloadsPossible &&
+            (structSym != nil || ifaceSym != nil) {
             let staticMethods = TypeMemberModel.GetMethods(
-                structSym,
+                ownerType,
                 methodName,
-                MemberQuery.InheritedStatic(MemberKinds.Method)
+                if structSym != nil {
+                    MemberQuery.InheritedStatic(MemberKinds.Method)
+                } else {
+                    MemberQuery.Static(MemberKinds.Method)
+                }
             )
             if staticMethods.Length == 1 && !staticMethods[0].IsGeneric {
                 PrefixBindingContext.AddFixedSignatureCall(ce)

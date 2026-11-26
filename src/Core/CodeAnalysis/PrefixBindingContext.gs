@@ -354,17 +354,17 @@ internal sealed class PrefixCut {
                     ) {
                         return true
                     }
-                } else if !inSiblingLambdaBlock &&
-                    node is LambdaExpressionSyntax &&
+                } else if node is LambdaExpressionSyntax &&
                     (next is BlockExpressionSyntax || next is BlockStatementSyntax) {
+                    if inSiblingLambdaBlock && !inSiblingReturn {
+                        return true
+                    }
                     inSiblingLambdaBlock = true
-                    if next is BlockExpressionSyntax block &&
+                    inSiblingReturn = next is BlockExpressionSyntax block &&
                         block.Expression is {} tail &&
                         tail.Span.Start <= inner.Start &&
-                        inner.End <= tail.Span.End {
-                        inSiblingReturn = true
-                    }
-                } else if inSiblingLambdaBlock && next is ReturnStatementSyntax {
+                        inner.End <= tail.Span.End
+                } else if inSiblingLambdaBlock && !inSiblingReturn && next is ReturnStatementSyntax {
                     inSiblingReturn = true
                 }
             }
@@ -649,13 +649,13 @@ internal shared class PrefixBindingContext {
     }
 
     /// Returns a value that tells whether a later top-level statement can declare a global that hides a
-    /// simple-name lookup inside [`syntax`](paramref) in `KeepDeclarations` mode (#6229). Only bodies bound
-    /// after top-level statements (functions, methods, constructors, accessors, and static initializers) see
-    /// later globals; earlier top-level statements and field initializers do not.
+    /// simple-name lookup inside [`syntax`](paramref) (#6229). Only bodies bound after top-level
+    /// statements (functions, methods, constructors, accessors, and static initializers) see later globals;
+    /// earlier top-level statements and field initializers do not.
     /// @param syntax The lookup syntax node.
     /// @returns `true` when a later top-level global can shadow the lookup.
     internal func LaterGlobalCanHide(syntax SyntaxNode) bool {
-        if current.Value is not{} cut || cut.LaterOverloadsPossible || !cut.LaterDeclarationsPossible {
+        if current.Value is not{} cut || !cut.LaterDeclarationsPossible {
             return false
         }
         return IsInMemberOrFunctionBody(syntax)
@@ -1250,21 +1250,27 @@ internal shared class PrefixBindingContext {
                                     fixedCallSpan
                                 )
                             }
+                            let blockReturns = List[ReturnStatementSyntax]()
                             for stmt in block.Statements {
-                                if stmt is ReturnStatementSyntax {
-                                    CollectHeaderNames(
-                                        statement,
-                                        stmt,
-                                        false,
-                                        names,
-                                        declared,
-                                        skipSubtree,
-                                        report,
-                                        declaredSpans,
-                                        excludeCallLambdas,
-                                        fixedCallSpan
-                                    )
+                                if stmt is ReturnStatementSyntax ret {
+                                    blockReturns.Add(ret)
+                                } else {
+                                    CollectBlockReturnStatements(stmt, blockReturns)
                                 }
+                            }
+                            for ret in blockReturns {
+                                CollectHeaderNames(
+                                    statement,
+                                    ret,
+                                    false,
+                                    names,
+                                    declared,
+                                    skipSubtree,
+                                    report,
+                                    declaredSpans,
+                                    excludeCallLambdas,
+                                    fixedCallSpan
+                                )
                             }
                         }
                         continue
@@ -1430,12 +1436,19 @@ internal shared class PrefixBindingContext {
                     ) {
                         return true
                     }
+                    let blockReturns = List[ReturnStatementSyntax]()
                     for stmt in block.Statements {
-                        if stmt is ReturnStatementSyntax &&
-                            HeaderContainsProvisional(
+                        if stmt is ReturnStatementSyntax ret {
+                            blockReturns.Add(ret)
+                        } else {
+                            CollectBlockReturnStatements(stmt, blockReturns)
+                        }
+                    }
+                    for ret in blockReturns {
+                        if HeaderContainsProvisional(
                             cut,
                             statement,
-                            stmt,
+                            ret,
                             false,
                             anyCall,
                             report,
@@ -1467,6 +1480,25 @@ internal shared class PrefixBindingContext {
             }
         }
         return false
+    }
+
+    private func CollectBlockReturnStatements(node SyntaxNode, returns List[ReturnStatementSyntax]) {
+        for child in node.GetChildren() {
+            if child is SyntaxToken || child is LambdaExpressionSyntax || child is FunctionLiteralExpressionSyntax {
+                continue
+            }
+            if child is ReturnStatementSyntax ret {
+                returns.Add(ret)
+                continue
+            }
+            if child is ExpressionSyntax &&
+                child is not BlockExpressionSyntax &&
+                child is not IfExpressionSyntax &&
+                child is not IfLetExpressionSyntax {
+                continue
+            }
+            CollectBlockReturnStatements(child, returns)
+        }
     }
 
     /// Returns a value that tells whether the type of [`value`](paramref) comes from the parameter that

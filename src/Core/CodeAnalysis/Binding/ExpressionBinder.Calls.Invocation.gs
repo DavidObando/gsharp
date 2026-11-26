@@ -1723,10 +1723,25 @@ internal partial class ExpressionBinder {
         )
         if PrefixBindingContext.Current is {} prefixCut &&
             !prefixCut.LaterOverloadsPossible &&
-            receiver?.Type is StructSymbol fixedStructReceiver {
-            let instanceMethods = MemberLookup.CollectSourceInstanceMethods(fixedStructReceiver, methodName)
+            receiver?.Type is {} recvType &&
+            (
+            recvType is StructSymbol ||
+                recvType is InterfaceSymbol ||
+                (
+                recvType is TypeParameterSymbol tpRecv &&
+                    HasProvenNonNullTypeParameterReceiver(receiver, tpRecv) &&
+                    (tpRecv.InterfaceConstraint != nil || tpRecv.ClassConstraint is StructSymbol)
+            )
+        ) {
+            var instanceMethods = MemberLookup.CollectSourceInstanceMethods(recvType, methodName)
+            if recvType is InterfaceSymbol ifaceRecv && IsInsideSameInterface(ifaceRecv.Definition ?? ifaceRecv) {
+                let privateOverloads = ifaceRecv.GetPrivateMethods(methodName)
+                if privateOverloads.Length > 0 {
+                    instanceMethods = instanceMethods.AddRange(privateOverloads)
+                }
+            }
             if instanceMethods.Length == 1 && !instanceMethods[0].IsGeneric && $scope.TryLookupExtensionFunctions(
-                fixedStructReceiver,
+                recvType,
                 methodName
             )
                 .IsDefaultOrEmpty {

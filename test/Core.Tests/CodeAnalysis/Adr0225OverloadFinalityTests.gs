@@ -2990,6 +2990,242 @@ func Main() {
             DiagnosticFinality.Final,
             overloadedOwnKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
         )
+
+        // 17. Sealed interface static single-candidate non-generic fixed call records before argument binding.
+        const fixedSealedIfaceStaticControl = `package P
+
+sealed interface IFoo {
+    shared {
+        func RunExpr(f () -> int32, g () -> void) {
+        }
+    }
+}
+
+func G(o object) int32 {
+    return 0
+}
+
+func Main() {
+    let outer = func () {
+        let v = G(1)
+        IFoo.RunExpr(() -> v, () -> {
+            let bad int32 = "s"
+        })
+    }
+/*CUT*/
+    let G = func (i int32) string {
+        return ""
+    }
+}
+`
+        let fixedSealedIfaceStaticKeep = BindKeep(fixedSealedIfaceStaticControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            fixedSealedIfaceStaticKeep
+                .Diagnostics
+                .Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+                .Finality
+        )
+
+        // 18. Source interface, constrained type parameter, and private interface instance calls record
+        // single-candidate non-generic fixed signatures before argument binding.
+        const fixedInterfaceInstanceControl = `package P
+
+interface IBox {
+    func RunExpr(f () -> int32, g () -> void);
+
+    private func RunPriv(f () -> int32, g () -> void) {
+    }
+
+    func CallPriv() {
+        let outer = func () {
+            let v = G(1)
+            this.RunPriv(() -> v, () -> {
+                let badPriv int32 = "s"
+            })
+        }
+    }
+}
+
+func G(o object) int32 {
+    return 0
+}
+
+func UseIface(c IBox) {
+    let outer = func () {
+        let v = G(1)
+        c.RunExpr(() -> v, () -> {
+            let badIface int32 = "s"
+        })
+    }
+}
+
+func UseTp[T IBox](c T) {
+    let outer = func () {
+        let v = G(1)
+        c.RunExpr(() -> v, () -> {
+            let badTp int32 = "s"
+        })
+    }
+}
+
+func Main() {
+/*CUT*/
+    let G = func (i int32) string {
+        return ""
+    }
+}
+`
+        let fixedInterfaceInstanceKeep = BindKeep(fixedInterfaceInstanceControl)
+        let ifaceInstanceErrors = fixedInterfaceInstanceKeep
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(3, ifaceInstanceErrors.Count)
+        Assert.All(ifaceInstanceErrors, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
+
+        // 19. Base single-candidate non-generic fixed call records before argument binding.
+        const fixedBaseCallControl = `package P
+
+open class BaseBox {
+    func RunExpr(f () -> int32, g () -> void) {
+    }
+}
+
+class SubBox : BaseBox {
+    func Call() {
+        let v = int32(1)
+        base.RunExpr(() -> v, () -> {
+            let bad int32 = "s"
+        })
+    }
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let fixedBaseKeep = BindKeep(fixedBaseCallControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            fixedBaseKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        // 20. Nested block lambdas reset sibling return/tail state so an unused local inside a nested block
+        // does not keep an outer return marked provisional for sibling diagnostics.
+        const nestedSiblingResetControl = `package P
+
+class Closed {
+    shared {
+        func Make(f () -> void) int32 {
+            return 1
+        }
+
+        func Apply(f () -> int32, g (int32) -> int32) {
+        }
+
+        func Apply(f () -> string, g (string) -> string) {
+        }
+    }
+}
+
+func Main() {
+    let outer = func () {
+        Closed.Apply(() -> {
+            return Closed.Make(() -> {
+                let a = int32(1)
+            })
+        }, (x) -> {
+            return "s"
+        })
+    }
+/*CUT*/
+    let int32 = func (i int32) string {
+        return ""
+    }
+}
+`
+        let nestedSiblingResetKeep = BindKeep(nestedSiblingResetControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            nestedSiblingResetKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        // 21. Successful bare-name read of an imported constant inside a function body is shadowed by a later
+        // top-level global in Nothing mode (while an earlier top-level statement stays Final).
+        const bareNameShadowPrefix = `package P
+
+import System.Math
+
+func Use() {
+    let s string = PI
+}
+`
+        const bareNameShadowWitness = `let PI = ""
+`
+        AssertWitness(bareNameShadowPrefix + bareNameShadowWitness, "GS0155")
+        AssertFutureDependent(
+            BindNothing(bareNameShadowPrefix, []string{string.Empty, bareNameShadowWitness}),
+            "GS0155",
+            "later-overload"
+        )
+        const bareNameTopControlPrefix = `package P
+
+import System.Math
+
+let s string = PI
+`
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            BindNothing(bareNameTopControlPrefix, []string{string.Empty, bareNameShadowWitness})
+                .Diagnostics
+                .Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+                .Finality
+        )
+
+        // 22. Compound return statements inside a sibling block lambda propagate narrowed variable dependencies.
+        const compoundReturnSource = `package P
+
+import System
+
+class Closed {
+    shared {
+        func Apply(f () -> int32, g (int32) -> int32) {
+        }
+
+        func Apply(f () -> string, g (string) -> string) {
+        }
+    }
+}
+
+func G(o object) int32? {
+    return 1
+}
+
+func Main() {
+    let outer = func () {
+        let raw = G(1)
+        if raw is {} a {
+            Closed.Apply(() -> {
+                if true {
+                    return a
+                }
+                throw Exception()
+            }, (x) -> {
+                return "s"
+            })
+        }
+    }
+/*CUT*/
+    let G = func (i int32) string? {
+        return ""
+    }
+}
+`
+        AssertWitness(compoundReturnSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(compoundReturnSource), "GS0155", "later-overload")
     }
 
     @Fact
