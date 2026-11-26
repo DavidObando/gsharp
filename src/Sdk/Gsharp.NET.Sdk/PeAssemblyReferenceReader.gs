@@ -9,11 +9,69 @@ import System.Collections.Generic
 import System.IO
 import System.Text
 
-/// Minimal ECMA-335 PE/CLI metadata reader that extracts `AssemblyRef` (table
-/// `0x23`) simple names without taking a `System.Reflection.Metadata` package
-/// dependency in the `netstandard2.0` MSBuild task assembly.
+/// Minimal ECMA-335 PE/CLI metadata reader that extracts `Assembly` (table
+/// `0x20`) and `AssemblyRef` (table `0x23`) simple names without taking a
+/// `System.Reflection.Metadata` package dependency in the `netstandard2.0`
+/// MSBuild task assembly.
 internal shared class PeAssemblyReferenceReader {
+    private const AssemblyTable int32 = 0x20
     private const AssemblyRefTable int32 = 0x23
+
+    private sealed class MetadataLayout {
+        internal let StringsOffset int32
+        internal let StringsSize int32
+        internal let TablesStart int32
+        internal let Rows List[int32]
+        internal let StringWidth int32
+        internal let GuidWidth int32
+        internal let BlobWidth int32
+
+        internal init(
+            stringsOffset int32,
+            stringsSize int32,
+            tablesStart int32,
+            rows List[int32],
+            stringWidth int32,
+            guidWidth int32,
+            blobWidth int32
+        ) {
+            this.StringsOffset = stringsOffset
+            this.StringsSize = stringsSize
+            this.TablesStart = tablesStart
+            this.Rows = rows
+            this.StringWidth = stringWidth
+            this.GuidWidth = guidWidth
+            this.BlobWidth = blobWidth
+        }
+    }
+
+    /// Reads the `Name` column of row 0 in the `Assembly` table (`0x20`) of a
+    /// managed PE file, or `nil` if the image has no CLI metadata or no
+    /// `Assembly` row.
+    internal func ReadAssemblySimpleName(assemblyPath string) string? {
+        let data = File.ReadAllBytes(assemblyPath)
+        return ReadAssemblySimpleName(data)
+    }
+
+    internal func ReadAssemblySimpleName(data[]uint8) string? {
+        let layout = ReadMetadataLayout(data)
+        if layout == nil || layout.Rows[AssemblyTable] <= 0 {
+            return nil
+        }
+
+        let cursor = AdvanceToTable(layout, AssemblyTable)
+        // Assembly row (ECMA-335 II.22.2):
+        // HashAlgId(4), MajorVersion(2), MinorVersion(2), BuildNumber(2),
+        // RevisionNumber(2), Flags(4), PublicKey(B), Name(S), Culture(S).
+        let rowSize = 16 + layout.BlobWidth + 2 * layout.StringWidth
+        if cursor < 0 || cursor + rowSize > data.Length {
+            throw InvalidDataException("Assembly table extends past end of image.")
+        }
+
+        let nameFieldOffset = cursor + 16 + layout.BlobWidth
+        let stringIndex = ReadStringIndex(data, nameFieldOffset, layout.StringWidth)
+        return ReadMetadataString(data, layout.StringsOffset, layout.StringsSize, stringIndex)
+    }
 
     /// Reads the `Name` column of every row in the `AssemblyRef` table of a
     /// managed PE file.
@@ -23,6 +81,37 @@ internal shared class PeAssemblyReferenceReader {
     }
 
     internal func ReadAssemblyReferenceNames(data[]uint8)[]string {
+        let layout = ReadMetadataLayout(data)
+        if layout == nil {
+            return Array.Empty[string]()!!
+        }
+
+        let assemblyRefCount = layout.Rows[AssemblyRefTable]
+        if assemblyRefCount <= 0 {
+            return Array.Empty[string]()!!
+        }
+
+        var cursor = AdvanceToTable(layout, AssemblyRefTable)
+
+        // AssemblyRef row (ECMA-335 II.22.5):
+        // MajorVersion(2), MinorVersion(2), BuildNumber(2), RevisionNumber(2),
+        // Flags(4), PublicKeyOrToken(B), Name(S), Culture(S), HashValue(B).
+        let rowSize = 12 + layout.BlobWidth + 2 * layout.StringWidth + layout.BlobWidth
+        if cursor < 0 || cursor + assemblyRefCount * rowSize > data.Length {
+            throw InvalidDataException("AssemblyRef table extends past end of image.")
+        }
+
+        let names = List[string](assemblyRefCount)
+        for var i = 0; i < assemblyRefCount; i++ {
+            let nameFieldOffset = cursor + 12 + layout.BlobWidth
+            let stringIndex = ReadStringIndex(data, nameFieldOffset, layout.StringWidth)
+            names.Add(ReadMetadataString(data, layout.StringsOffset, layout.StringsSize, stringIndex))
+            cursor += rowSize
+        }
+        return names.ToArray()
+    }
+
+    private func ReadMetadataLayout(data[]uint8) MetadataLayout? {
         if data.Length < 0x40 || data[0] != 0x4D || data[1] != 0x5A {
             throw InvalidDataException("Not a PE image.")
         }
@@ -57,7 +146,7 @@ internal shared class PeAssemblyReferenceReader {
         }
         let cliRva = ReadUInt32(data, cliDirOffset)
         if cliRva == 0 {
-            return Array.Empty[string]()!!
+            return nil
         }
         let sectionsOffset = optionalOffset + optionalHeaderSize
         let cliOffset = RvaToOffset(data, sectionsOffset, sectionCount, cliRva)
@@ -142,48 +231,44 @@ internal shared class PeAssemblyReferenceReader {
             cursor += 4
         }
 
-        let assemblyRefCount = rows[AssemblyRefTable]
-        if assemblyRefCount <= 0 {
-            return Array.Empty[string]()!!
-        }
+        return MetadataLayout(stringsOffset, stringsSize, cursor, rows, stringWidth, guidWidth, blobWidth)
+    }
 
-        for var table = 0; table < AssemblyRefTable; table++ {
-            let count = rows[table]
+    private func AdvanceToTable(layout MetadataLayout, targetTable int32) int32 {
+        var cursor = layout.TablesStart
+        for var table = 0; table < targetTable; table++ {
+            let count = layout.Rows[table]
             if count > 0 {
-                let rowSize = GetTableRowSize(table, rows, stringWidth, guidWidth, blobWidth)
+                let rowSize = GetTableRowSize(
+                    table,
+                    layout.Rows,
+                    layout.StringWidth,
+                    layout.GuidWidth,
+                    layout.BlobWidth
+                )
                 cursor += count * rowSize
             }
         }
+        return cursor
+    }
 
-        // AssemblyRef row (ECMA-335 II.22.5):
-        // MajorVersion(2), MinorVersion(2), BuildNumber(2), RevisionNumber(2),
-        // Flags(4), PublicKeyOrToken(B), Name(S), Culture(S), HashValue(B).
-        let rowSize = 12 + blobWidth + 2 * stringWidth + blobWidth
-        if cursor < 0 || cursor + assemblyRefCount * rowSize > data.Length {
-            throw InvalidDataException("AssemblyRef table extends past end of image.")
-        }
+    private func ReadStringIndex(data[]uint8, offset int32, stringWidth int32) int32 -> if stringWidth == 4 {
+        ReadInt32(data, offset)
+    } else {
+        cast[int32](ReadUInt16(data, offset))
+    }
 
-        let names = List[string](assemblyRefCount)
-        for var i = 0; i < assemblyRefCount; i++ {
-            let nameFieldOffset = cursor + 12 + blobWidth
-            let stringIndex = if stringWidth == 4 {
-                ReadInt32(data, nameFieldOffset)
-            } else {
-                cast[int32](ReadUInt16(data, nameFieldOffset))
-            }
-            if stringIndex < 0 || stringIndex >= stringsSize {
-                throw InvalidDataException("AssemblyRef Name index outside #Strings heap.")
-            }
-            let begin = stringsOffset + stringIndex
-            var end = begin
-            let limit = stringsOffset + stringsSize
-            while end < limit && end < data.Length && data[end] != 0 {
-                end += 1
-            }
-            names.Add(Encoding.UTF8.GetString(data, begin, end - begin))
-            cursor += rowSize
+    private func ReadMetadataString(data[]uint8, stringsOffset int32, stringsSize int32, stringIndex int32) string {
+        if stringIndex < 0 || stringIndex >= stringsSize {
+            throw InvalidDataException("Metadata Name index outside #Strings heap.")
         }
-        return names.ToArray()
+        let begin = stringsOffset + stringIndex
+        var end = begin
+        let limit = stringsOffset + stringsSize
+        while end < limit && end < data.Length && data[end] != 0 {
+            end += 1
+        }
+        return Encoding.UTF8.GetString(data, begin, end - begin)
     }
 
     private func RvaToOffset(data[]uint8, sectionsOffset int32, sectionCount int32, rva uint32) int32 {

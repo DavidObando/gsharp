@@ -184,6 +184,134 @@ class Issue6249BundledRuntimePackTests : IDisposable {
         Assert.DoesNotContain("ref/net10.0/Gsharp.Runtime.Values.dll", entries)
     }
 
+    @Fact
+    func Task_MatchesRenamedRuntimeCandidate_ByAssemblyMetadataName() {
+        let extensionsPath = FindOutputDll("Gsharp.Extensions", "Gsharp.Extensions.dll")
+        let channelsPath = FindOutputDll("Gsharp.Runtime.Channels", "Gsharp.Runtime.Channels.dll")
+        let renamedPath = Path.Combine(directory, "Override.Gsharp.Runtime.Channels.dll")
+        File.Copy(channelsPath, renamedPath)
+
+        let engine = CapturingBuildEngine()
+        let task = ResolveReferencedGsharpRuntimesTask(){
+            BuildEngine = engine,
+            AssemblyPath = extensionsPath,
+            BundledRuntimeCandidates = []ITaskItem{TaskItem(renamedPath)}
+        }
+        Assert.True(task.Execute())
+        Assert.Empty(engine.Warnings)
+        let resolved = Assert.Single(task.ReferencedRuntimes)
+        Assert.Equal(Path.GetFullPath(renamedPath), resolved.ItemSpec)
+        Assert.Equal("Gsharp.Runtime.Channels.dll", resolved.GetMetadata("PackageFileName"))
+    }
+
+    @Fact
+    func PackTarget_PrefersExplicitReference_AndUsesAssemblyMetadataName_WhenSdkRuntimeOptedOut() {
+        let extensionsPath = FindOutputDll("Gsharp.Extensions", "Gsharp.Extensions.dll")
+        let channelsPath = FindOutputDll("Gsharp.Runtime.Channels", "Gsharp.Runtime.Channels.dll")
+        let valuesPath = FindOutputDll("Gsharp.Runtime.Values", "Gsharp.Runtime.Values.dll")
+
+        // Create a renamed copy with a trailing overlay marker so we can verify
+        // the packed DLL bytes come from the explicit Reference rather than the SDK DLL.
+        let renamedChannelsPath = Path.Combine(directory, "Override.Gsharp.Runtime.Channels.dll")
+        let originalBytes = File.ReadAllBytes(channelsPath)
+        let marker = Encoding.UTF8.GetBytes("CUSTOM_OVERRIDE_MARKER")
+        let customList = List[uint8](originalBytes.Length + marker.Length)
+        customList.AddRange(originalBytes)
+        customList.AddRange(marker)
+        let customBytes = customList.ToArray()
+        File.WriteAllBytes(renamedChannelsPath, customBytes)
+
+        File.WriteAllText(Path.Combine(directory, "Directory.Build.props"), "<Project />\n")
+        File.WriteAllText(Path.Combine(directory, "Directory.Build.targets"), "<Project />\n")
+
+        let document = XDocument.Parse(`<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <IncludeSymbols>false</IncludeSymbols>
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>none</DebugType>
+    <IsPackable>true</IsPackable>
+    <PackageId>PackCustomRuntimeTest</PackageId>
+    <Version>1.0.0</Version>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Gsharp.Runtime.Channels">
+      <HintPath>$(CustomChannelsPath)</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <Import Project="" />
+  <PropertyGroup>
+    <TargetPath>$(FixtureAssembly)</TargetPath>
+    <TargetRefPath>$(FixtureAssembly)</TargetRefPath>
+  </PropertyGroup>
+  <Target Name="BuiltProjectOutputGroup" Returns="@(BuiltProjectOutputGroupOutput)">
+    <ItemGroup>
+      <BuiltProjectOutputGroupOutput Include="$(TargetPath)" TargetPath="PackCustomRuntime.dll" FinalOutputPath="$(TargetPath)" />
+    </ItemGroup>
+  </Target>
+</Project>`)
+        let root = document.Root ?? throw InvalidOperationException("The fixture has no root.")
+        let properties = root.Elements("PropertyGroup").First()
+        properties.SetElementValue("GsharpToolFullPath", typeof(BuildTask).Assembly.Location)
+        properties.SetElementValue("FixtureAssembly", extensionsPath)
+        properties.SetElementValue("CustomChannelsPath", renamedChannelsPath)
+        properties.SetElementValue("GsharpExtensionsAssemblyFullPath", extensionsPath)
+        properties.SetElementValue("GsharpChannelsRuntimeAssemblyFullPath", channelsPath)
+        properties.SetElementValue("GsharpValuesRuntimeAssemblyFullPath", valuesPath)
+        root
+            .Elements("Import")
+            .Last()
+            .SetAttributeValue("Project", Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets"))
+        document.Save(Path.Combine(directory, "PackCustomRuntime.proj"))
+
+        let start = ProcessStartInfo("dotnet"){
+            WorkingDirectory = directory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        }
+        for argument in[]string{
+            "msbuild",
+            "PackCustomRuntime.proj",
+            "-restore",
+            "-t:Pack",
+            "-p:NoBuild=true",
+            "-p:Configuration=Release",
+            "-nr:false",
+            "-nologo",
+            "-v:minimal"
+        } {
+            start.ArgumentList.Add(argument)
+        }
+        using let process = Process.Start(start) ?? throw InvalidOperationException("Cannot start pack.")
+        let stdoutTask = process.StandardOutput.ReadToEndAsync()
+        let stderrTask = process.StandardError.ReadToEndAsync()
+        process.WaitForExit()
+        let output = stdoutTask.GetAwaiter().GetResult() + stderrTask.GetAwaiter().GetResult()
+        Assert.True(process.ExitCode == 0, output)
+
+        let packages = Directory.GetFiles(Path.Combine(directory, "bin", "Release"), "*.nupkg")
+        Assert.Single(packages)
+        using let archive = ZipFile.OpenRead(packages[0])
+        let entries = archive.Entries.Select((e ZipArchiveEntry) -> e.FullName).ToHashSet(StringComparer.Ordinal)
+        Assert.Contains("lib/net10.0/Gsharp.Runtime.Channels.dll", entries)
+        Assert.Contains("ref/net10.0/Gsharp.Runtime.Channels.dll", entries)
+        Assert.DoesNotContain("lib/net10.0/Override.Gsharp.Runtime.Channels.dll", entries)
+        Assert.DoesNotContain("ref/net10.0/Override.Gsharp.Runtime.Channels.dll", entries)
+
+        let packedEntry = archive.GetEntry("lib/net10.0/Gsharp.Runtime.Channels.dll") ??
+            throw InvalidOperationException("Missing packed runtime entry.")
+        using let ms = MemoryStream()
+        using let stream = packedEntry.Open()
+        stream.CopyTo(ms)
+        Assert.Equal(customBytes, ms.ToArray())
+    }
+
     private func FindOutputDll(projectFolder string, fileName string) string {
         let path = Path.Combine(RepoRoot.Path, "out", "bin", "Release", projectFolder, fileName)
         Assert.True(File.Exists(path), "Expected build output at " + path)

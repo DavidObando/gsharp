@@ -57,14 +57,27 @@ open class ResolveReferencedGsharpRuntimesTask : Task {
         }
 
         let candidatesByName = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
+        let seenPaths = HashSet[string](StringComparer.OrdinalIgnoreCase)
         for item in this.BundledRuntimeCandidates {
             let fullPath = item.ItemSpec
             if string.IsNullOrEmpty(fullPath) || !File.Exists(fullPath) {
                 continue
             }
-            let simpleName = Path.GetFileNameWithoutExtension(fullPath)
-            if !string.IsNullOrEmpty(simpleName) && !candidatesByName.ContainsKey(simpleName) {
-                candidatesByName[simpleName] = fullPath
+            let normalizedPath = Path.GetFullPath(fullPath)
+            if !seenPaths.Add(normalizedPath) {
+                continue
+            }
+            var simpleName string? = nil
+            try {
+                simpleName = PeAssemblyReferenceReader.ReadAssemblySimpleName(normalizedPath)
+            } catch (ex Exception) {
+                continue
+            }
+            if simpleName != nil && IsKnownBundledRuntimeName(simpleName) && !candidatesByName.ContainsKey(simpleName) {
+                candidatesByName[simpleName] = normalizedPath
+                if candidatesByName.Count == 3 {
+                    break
+                }
             }
         }
 
@@ -113,7 +126,9 @@ open class ResolveReferencedGsharpRuntimesTask : Task {
         sortedNames.Sort(StringComparer.Ordinal)
         let results = List[ITaskItem](sortedNames.Count)
         for name in sortedNames {
-            results.Add(TaskItem(candidatesByName[name]))
+            let item = TaskItem(candidatesByName[name])
+            item.SetMetadata("PackageFileName", name + ".dll")
+            results.Add(item)
         }
         this._referencedRuntimes = results.ToArray()
         return !this.Log.HasLoggedErrors
