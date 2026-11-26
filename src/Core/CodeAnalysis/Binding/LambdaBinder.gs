@@ -2677,7 +2677,10 @@ internal class LambdaBinder {
         binderCtx.NonNullByRefVariables.RemoveWhere((v VariableSymbol) -> !v.IsReadOnly)
         this.binderCtx.CurrentFallthroughTarget = nil
         this.binderCtx.CurrentFallthroughAnchor = nil
-        this.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(bodySyntax)
+        this.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(
+            bodySyntax,
+            Scope.ConditionalCompilation
+        )
         return saved
     }
 

@@ -991,8 +991,8 @@ internal partial class DeclarationBinder {
         value = nil
         type = nil
         switch syntax {
-            case literal is LiteralExpressionSyntax {
-                if bindExpression(literal) is BoundLiteralExpression bl {
+            case LiteralExpressionSyntax, DefinedExpressionSyntax {
+                if bindExpression(syntax) is BoundLiteralExpression bl {
                     value = bl.Value
                     type = bl.Type
                     return true

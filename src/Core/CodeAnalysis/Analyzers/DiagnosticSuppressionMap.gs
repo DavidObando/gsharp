@@ -206,6 +206,9 @@ class DiagnosticSuppressionMap {
             case m is MemberSyntax: m.Annotations
             case b is BlockStatementSyntax: b.Annotations
             case v is VariableDeclarationSyntax: v.Annotations
+            case v is TupleDeconstructionStatementSyntax: v.Annotations
+            case v is NamedDeconstructionStatementSyntax: v.Annotations
+            case v is MultiAssignmentStatementSyntax: v.Annotations
             case f is FieldDeclarationSyntax: f.Annotations
             case p is PropertyDeclarationSyntax: p.Annotations
             case e is EventDeclarationSyntax: e.Annotations

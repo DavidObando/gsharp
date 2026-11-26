@@ -4,10 +4,22 @@
 
 package GSharp.Core.CodeAnalysis.Syntax
 
+import System.Collections.Immutable
+
 /// Represents a multi-target assignment statement, e.g.
 /// `a, obj.Field, values[i] = b, 1, 2` or
 /// `a, let fresh = Pair()`.
 partial class MultiAssignmentStatementSyntax : StatementSyntax {
+    private var declarationAnnotations ImmutableArray[AnnotationSyntax] = ImmutableArray[AnnotationSyntax].Empty
+
+    /// Gets the annotations attached to this statement.
+    prop Annotations ImmutableArray[AnnotationSyntax] -> declarationAnnotations
+
+    internal func WithAnnotations(annotations ImmutableArray[AnnotationSyntax]) {
+        declarationAnnotations = annotations
+        InvalidateCachedSpan()
+    }
+
     /// Initializes a new instance of the (cref:MultiAssignmentStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param targets The comma-separated assignment or fresh-local targets.

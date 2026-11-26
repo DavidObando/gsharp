@@ -407,6 +407,9 @@ partial class SemanticModel {
         if GetBoundNode(node, cancellationToken) is BoundExpression expression {
             return TypeInfo((CapturedIndexArgument(expression, expectedBlockSyntax: node) ?? expression).Type)
         }
+        if node is DefinedExpressionSyntax {
+            return TypeInfo(TypeSymbol.Bool)
+        }
         // #6217: the name of a member has the type of the member read, and an inner accessor the type of its
         // terminal.
         if MemberNameToken(node) is {} memberName {

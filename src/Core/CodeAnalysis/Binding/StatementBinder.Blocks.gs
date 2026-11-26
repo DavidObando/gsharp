@@ -719,6 +719,9 @@ internal partial class StatementBinder {
     /// ADR-0208 R10 (#5168): collects the targets of `??=` and `&` in a filter. An index input of the
     /// target is only read; nested writes stay found by the traversal.
     private func CollectFilterWriteTargets(node SyntaxNode, names HashSet[string]) {
+        if !$scope.ConditionalCompilation.IsActive(node) {
+            return
+        }
         if node is NullCoalescingAssignmentExpressionSyntax coalescing {
             CollectWriteTargetNames(coalescing.Target, names)
         } else if node is UnaryExpressionSyntax unary && unary.OperatorToken.Kind == SyntaxKind.AmpersandToken {
@@ -746,6 +749,9 @@ internal partial class StatementBinder {
     /// ADR-0208 R10 (#5168): collects the names under `ref` and `out` arguments. An `in` argument
     /// cannot write its storage.
     private func CollectWritableRefArgumentNames(node SyntaxNode, names HashSet[string]) {
+        if !$scope.ConditionalCompilation.IsActive(node) {
+            return
+        }
         if node is RefArgumentExpressionSyntax reference && !string.Equals(
             reference.RefKindModifier.Text,
             "in",
@@ -2952,7 +2958,7 @@ internal partial class StatementBinder {
     }
 
     private func ReportSuspensionPointsInFixedBody(node SyntaxNode?) {
-        if node == nil ||
+        if node == nil || !$scope.ConditionalCompilation.IsActive(node) ||
             node is FunctionLiteralExpressionSyntax ||
             node is LambdaExpressionSyntax ||
             node is FixedStatementSyntax {

@@ -75,7 +75,8 @@ open partial class Parser {
             }
             if Current.Kind != SyntaxKind.ConstKeyword &&
                 Current.Kind != SyntaxKind.LetKeyword &&
-                Current.Kind != SyntaxKind.VarKeyword {
+                Current.Kind != SyntaxKind.VarKeyword &&
+                !(Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.LetKeyword) {
                 if leadingAnnotations.Length > 0 {
                     Diagnostics.ReportAnnotationsNotAllowedOnStatement(leadingAnnotations[0].AtToken.Location)
                 }
@@ -141,17 +142,18 @@ open partial class Parser {
             case SyntaxKind.AsyncKeyword when Peek(1).Kind == SyntaxKind.LetKeyword {
                 // ADR-0174 D15: `async let name = expr` starts `expr` as a child
                 // of the enclosing scope and binds `name` to its eventual result.
-                return ParseAsyncLetStatement()
+                let declaration = ParseAsyncLetStatement()
+                let _ = AttachDeclarationAnnotations(declaration, leadingAnnotations)
+                return declaration
             }
             case SyntaxKind.ConstKeyword, SyntaxKind.LetKeyword, SyntaxKind.VarKeyword {
                 if Current.Kind != SyntaxKind.ConstKeyword && LooksLikeMultiAssignment() {
-                    return ParseMultiAssignmentStatement()
+                    let declaration = ParseMultiAssignmentStatement()
+                    let _ = AttachDeclarationAnnotations(declaration, leadingAnnotations)
+                    return declaration
                 }
                 let declaration = ParseVariableDeclaration()
-                if declaration is VariableDeclarationSyntax variableDeclaration &&
-                    !leadingAnnotations.IsDefaultOrEmpty {
-                    variableDeclaration.WithAnnotations(leadingAnnotations)
-                }
+                let _ = AttachDeclarationAnnotations(declaration, leadingAnnotations)
                 return declaration
             }
             case SyntaxKind.IfKeyword {
@@ -526,6 +528,30 @@ open partial class Parser {
             break
         }
         return SeparatedSyntaxList[ExpressionSyntax](nodesAndSeparators.ToImmutable())
+    }
+
+    private func AttachDeclarationAnnotations(
+        statement StatementSyntax,
+        annotations ImmutableArray[AnnotationSyntax]
+    ) bool {
+        switch statement {
+            case declaration is VariableDeclarationSyntax {
+                declaration.WithAnnotations(annotations)
+            }
+            case declaration is TupleDeconstructionStatementSyntax {
+                declaration.WithAnnotations(annotations)
+            }
+            case declaration is NamedDeconstructionStatementSyntax {
+                declaration.WithAnnotations(annotations)
+            }
+            case declaration is MultiAssignmentStatementSyntax {
+                declaration.WithAnnotations(annotations)
+            }
+            default {
+                return false
+            }
+        }
+        return true
     }
 
     private func ParseVariableDeclaration() StatementSyntax {

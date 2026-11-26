@@ -8984,6 +8984,7 @@ partial class MultiAssignmentStatementSyntax {
     internal override prop ChildCount int32 {
         get {
             var count = 0
+            count += Annotations.Length
             count += SeparatedLength(Targets)
             if IsPresent(OperatorToken) {
                 count++
@@ -8999,23 +9000,28 @@ partial class MultiAssignmentStatementSyntax {
     internal override func GetChild(index int32) SyntaxNode {
         var remaining = index
         if remaining >= 0 {
-            let child0 = SeparatedItems(Targets)
+            let child0 = Annotations
             if remaining < child0.Length {
                 return child0[remaining]
             }
             remaining -= child0.Length
-            let child1 = OperatorToken
-            if IsPresent(child1) {
+            let child1 = SeparatedItems(Targets)
+            if remaining < child1.Length {
+                return child1[remaining]
+            }
+            remaining -= child1.Length
+            let child2 = OperatorToken
+            if IsPresent(child2) {
                 if remaining == 0 {
-                    return child1
+                    return child2
                 }
                 remaining--
             }
-            let child2 = SeparatedItems(Values)
-            if remaining < child2.Length {
-                return child2[remaining]
+            let child3 = SeparatedItems(Values)
+            if remaining < child3.Length {
+                return child3[remaining]
             }
-            remaining -= child2.Length
+            remaining -= child3.Length
         }
         throw ArgumentOutOfRangeException(nameof(index))
     }
@@ -9268,6 +9274,7 @@ partial class NamedDeconstructionStatementSyntax {
     internal override prop ChildCount int32 {
         get {
             var count = 0
+            count += Annotations.Length
             if IsPresent(Keyword) {
                 count++
             }
@@ -9294,43 +9301,48 @@ partial class NamedDeconstructionStatementSyntax {
     internal override func GetChild(index int32) SyntaxNode {
         var remaining = index
         if remaining >= 0 {
-            let child0 = Keyword
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0
-                }
-                remaining--
+            let child0 = Annotations
+            if remaining < child0.Length {
+                return child0[remaining]
             }
-            let child1 = OpenBraceToken
+            remaining -= child0.Length
+            let child1 = Keyword
             if IsPresent(child1) {
                 if remaining == 0 {
                     return child1
                 }
                 remaining--
             }
-            let child2 = SeparatedItems(Fields)
-            if remaining < child2.Length {
-                return child2[remaining]
-            }
-            remaining -= child2.Length
-            let child3 = CloseBraceToken
-            if IsPresent(child3) {
+            let child2 = OpenBraceToken
+            if IsPresent(child2) {
                 if remaining == 0 {
-                    return child3
+                    return child2
                 }
                 remaining--
             }
-            let child4 = EqualsToken
+            let child3 = SeparatedItems(Fields)
+            if remaining < child3.Length {
+                return child3[remaining]
+            }
+            remaining -= child3.Length
+            let child4 = CloseBraceToken
             if IsPresent(child4) {
                 if remaining == 0 {
                     return child4
                 }
                 remaining--
             }
-            let child5 = Initializer
+            let child5 = EqualsToken
             if IsPresent(child5) {
                 if remaining == 0 {
                     return child5
+                }
+                remaining--
+            }
+            let child6 = Initializer
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6
                 }
                 remaining--
             }
@@ -12746,6 +12758,7 @@ partial class TupleDeconstructionStatementSyntax {
     internal override prop ChildCount int32 {
         get {
             var count = 0
+            count += Annotations.Length
             if IsPresent(Keyword) {
                 count++
             }
@@ -12772,43 +12785,48 @@ partial class TupleDeconstructionStatementSyntax {
     internal override func GetChild(index int32) SyntaxNode {
         var remaining = index
         if remaining >= 0 {
-            let child0 = Keyword
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0
-                }
-                remaining--
+            let child0 = Annotations
+            if remaining < child0.Length {
+                return child0[remaining]
             }
-            let child1 = OpenParenToken
+            remaining -= child0.Length
+            let child1 = Keyword
             if IsPresent(child1) {
                 if remaining == 0 {
                     return child1
                 }
                 remaining--
             }
-            let child2 = SeparatedItems(Identifiers)
-            if remaining < child2.Length {
-                return child2[remaining]
-            }
-            remaining -= child2.Length
-            let child3 = CloseParenToken
-            if IsPresent(child3) {
+            let child2 = OpenParenToken
+            if IsPresent(child2) {
                 if remaining == 0 {
-                    return child3
+                    return child2
                 }
                 remaining--
             }
-            let child4 = EqualsToken
+            let child3 = SeparatedItems(Identifiers)
+            if remaining < child3.Length {
+                return child3[remaining]
+            }
+            remaining -= child3.Length
+            let child4 = CloseParenToken
             if IsPresent(child4) {
                 if remaining == 0 {
                     return child4
                 }
                 remaining--
             }
-            let child5 = Initializer
+            let child5 = EqualsToken
             if IsPresent(child5) {
                 if remaining == 0 {
                     return child5
+                }
+                remaining--
+            }
+            let child6 = Initializer
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6
                 }
                 remaining--
             }

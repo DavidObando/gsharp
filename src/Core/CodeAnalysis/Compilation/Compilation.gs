@@ -169,9 +169,8 @@ open class Compilation {
         }
     }
 
-    /// Gets or sets the active preprocessor symbol set used by
-    /// `[Conditional("SYMBOL")]` call-site elision (ADR-0047 §6 /
-    /// issue #176). A call to a function marked
+    /// Gets or sets the base symbols for scoped queries, inclusion, and conditional call-site elision (ADRs 0230 and 0231).
+    /// A call to a function marked
     /// `[Conditional("SYMBOL")]` is elided when *none* of the named
     /// symbols is in this set; if any named symbol is present, the call is
     /// emitted normally. Defaults to (cref:ImmutableHashSet{T}.Empty)
@@ -182,15 +181,35 @@ open class Compilation {
     prop PreprocessorSymbols ImmutableHashSet[string]? {
         get -> preprocessorSymbols
         set {
-            preprocessorSymbols = value ?? ImmutableHashSet[string].Empty
-            conditionalCompilation = nil
+            let normalized = (value ?? ImmutableHashSet[string].Empty).WithComparer(StringComparer.Ordinal)
+            buildGate.Wait()
+            try {
+                if preprocessorSymbols != nil && preprocessorSymbols.SetEquals(normalized) {
+                    return
+                }
+                preprocessorSymbols = normalized
+                conditionalCompilation = nil
+                ResetConsumerBindingState_Locked()
+            } finally {
+                buildGate.Release()
+            }
         }
     }
 
     private var conditionalCompilation ConditionalCompilationMap?
 
-    internal prop ConditionalCompilation ConditionalCompilationMap ->
-    conditionalCompilation ??= ConditionalCompilationMap(preprocessorSymbols)
+    internal prop ConditionalCompilation ConditionalCompilationMap {
+        get {
+            if conditionalCompilation == nil {
+                Interlocked.CompareExchange(
+                    &conditionalCompilation,
+                    ConditionalCompilationMap(preprocessorSymbols),
+                    nil
+                )
+            }
+            return conditionalCompilation!!
+        }
+    }
 
     /// Tests whether syntax participates in this compilation's semantic model.
     /// @param syntax The original, unmodified syntax node.
@@ -717,12 +736,13 @@ open class Compilation {
     private func ValidateDocumentation(program BoundProgram) DiagnosticBag {
         let documentationDiagnostics = DiagnosticBag()
         using let documentationValidationPhase = CompilationMeasurements.BeginPhase("documentation.validation")
-        DocumentationValidator.Validate(
+        DocumentationValidator.ValidateActive(
             SyntaxTrees,
             program.Functions.Keys.ToImmutableArray(),
             program.Structs,
             documentationDiagnostics,
-            WarnOnMissingDocumentation
+            WarnOnMissingDocumentation,
+            ConditionalCompilation
         )
         // #6177: documentation comments are checked with the declarations.
         Diagnostic.StampPhase(documentationDiagnostics.ToImmutableArray(), DiagnosticPhase.Declaration)

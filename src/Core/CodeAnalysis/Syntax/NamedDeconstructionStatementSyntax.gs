@@ -4,8 +4,20 @@
 
 package GSharp.Core.CodeAnalysis.Syntax
 
+import System.Collections.Immutable
+
 /// Represents `let { Field = local, ... } = expr` data-struct deconstruction.
 partial class NamedDeconstructionStatementSyntax : StatementSyntax {
+    private var declarationAnnotations ImmutableArray[AnnotationSyntax] = ImmutableArray[AnnotationSyntax].Empty
+
+    /// Gets the annotations attached to this declaration.
+    prop Annotations ImmutableArray[AnnotationSyntax] -> declarationAnnotations
+
+    internal func WithAnnotations(annotations ImmutableArray[AnnotationSyntax]) {
+        declarationAnnotations = annotations
+        InvalidateCachedSpan()
+    }
+
     /// Initializes a new instance of the (cref:NamedDeconstructionStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `let` keyword.

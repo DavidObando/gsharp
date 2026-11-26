@@ -23,7 +23,7 @@ internal partial class StatementBinder {
 
     private func GetRegionScanner() RegionEffectScanner {
         if regionScanner == nil {
-            regionScanner = RegionEffectScanner()
+            regionScanner = RegionEffectScanner($scope.ConditionalCompilation)
         }
         return regionScanner!!
     }
@@ -5308,7 +5308,7 @@ internal partial class StatementBinder {
             if spansByBody.TryGetValue(rootKey, out var cachedTopLevel) {
                 return cachedTopLevel
             }
-            let topLevelSpan = BackwardJumpSpans.Compute(rootKey, topLevelStatementList)
+            let topLevelSpan = BackwardJumpSpans.Compute(rootKey, topLevelStatementList, $scope.ConditionalCompilation)
             spansByBody[rootKey] = topLevelSpan
             if topLevelSpan != nil {
                 CompilationMeasurements.Count("narrowing.spans")
@@ -5318,7 +5318,7 @@ internal partial class StatementBinder {
         if spansByBody.TryGetValue(body, out var cached) {
             return cached
         }
-        let span = BackwardJumpSpans.Compute(body)
+        let span = BackwardJumpSpans.Compute(body, $scope.ConditionalCompilation)
         spansByBody[body] = span
         if span != nil {
             CompilationMeasurements.Count("narrowing.spans")
@@ -5442,7 +5442,8 @@ internal partial class StatementBinder {
     }
 
     private func CollectUserLabelsInRegion(node SyntaxNode, labels List[string]) {
-        if node is FunctionLiteralExpressionSyntax or
+        if !$scope.ConditionalCompilation.IsActive(node) ||
+            node is FunctionLiteralExpressionSyntax or
             LambdaExpressionSyntax or
             FunctionDeclarationSyntax or
             AnonymousClassExpressionSyntax {
@@ -8104,6 +8105,9 @@ internal partial class StatementBinder {
             let scannedYieldFunctions = HashSet[SyntaxNode](ReferenceEqualityComparer.Instance)
             for tree in CollectCompilationSyntaxTrees() {
                 for node in tree.Root.DescendantNodesAndSelf() {
+                    if !$scope.ConditionalCompilation.IsActive(node) {
+                        continue
+                    }
                     if node is YieldStatementSyntax {
                         var p SyntaxNode? = node.Parent
                         while p != nil &&
@@ -8363,6 +8367,9 @@ internal partial class StatementBinder {
             let createCalls = List[(ElemType TypeSymbol?, Call CallExpressionSyntax)]()
             for tree in CollectCompilationSyntaxTrees() {
                 for node in tree.Root.DescendantNodesAndSelf() {
+                    if !$scope.ConditionalCompilation.IsActive(node) {
+                        continue
+                    }
                     if node is AccessorExpressionSyntax acc &&
                         acc.RightPart is CallExpressionSyntax call &&
                         call.Identifier.ValueText == "Create" &&
@@ -10005,7 +10012,7 @@ internal partial class StatementBinder {
         summary CallEffectSummary,
         ref hitCycle bool
     ) {
-        if node == nil || summary.WritesAnyStorage {
+        if node == nil || !$scope.ConditionalCompilation.IsActive(node) || summary.WritesAnyStorage {
             return
         }
         switch node {
@@ -13028,7 +13035,7 @@ internal partial class StatementBinder {
     }
 
     private func SyntaxTreeWritesFieldName(node SyntaxNode?, fieldName string) bool {
-        if node == nil {
+        if node == nil || !$scope.ConditionalCompilation.IsActive(node) {
             return false
         }
         switch node {
@@ -13538,7 +13545,7 @@ internal partial class StatementBinder {
     }
 
     private func SyntaxTreeTakesReferenceToName(node SyntaxNode?, memberName string, enclosingReturnsByRef bool) bool {
-        if node == nil {
+        if node == nil || !$scope.ConditionalCompilation.IsActive(node) {
             return false
         }
         if node is AccessorExpressionSyntax atomicAcc &&
@@ -13600,7 +13607,7 @@ internal partial class StatementBinder {
     }
 
     private func SyntaxContainsIdentifierName(node SyntaxNode?, name string) bool {
-        if node == nil {
+        if node == nil || !$scope.ConditionalCompilation.IsActive(node) {
             return false
         }
         if node is NameExpressionSyntax nameExpr && nameExpr.IdentifierToken.ValueText == name {
@@ -15128,7 +15135,7 @@ internal partial class StatementBinder {
     }
 
     private func CollectCalleeFreshLocalsCore(node SyntaxNode?, candidates HashSet[string], nonFresh HashSet[string]) {
-        if node == nil {
+        if node == nil || !$scope.ConditionalCompilation.IsActive(node) {
             return
         }
         switch node {

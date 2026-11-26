@@ -17,10 +17,11 @@ internal class ConditionalCompilationMap {
     }
 
     private class Region {
-        internal init(span TextSpan, symbols ImmutableHashSet[string], active bool) {
-            Span = span
+        internal init(node SyntaxNode, symbols ImmutableHashSet[string], active bool) {
+            Span = node.Span
             Symbols = symbols
             Active = active
+            OpenAtEnd = PrefixBindingContext.IsOpen(node)
         }
         internal prop Span TextSpan {
             get;
@@ -31,6 +32,9 @@ internal class ConditionalCompilationMap {
         internal prop Active bool {
             get;
         }
+        internal prop OpenAtEnd bool {
+            get;
+        }
     }
 
     private class TreeMap {
@@ -39,6 +43,11 @@ internal class ConditionalCompilationMap {
     }
 
     internal func IsActive(node SyntaxNode) bool -> FindRegion(node).Active
+
+    internal func IsActiveAt(tree SyntaxTree, position int32) bool -> FindRegion(tree, TextSpan(position, 0)).Active
+
+    internal func SymbolsAt(tree SyntaxTree, position int32) ImmutableHashSet[string] ->
+    FindRegion(tree, TextSpan(position, 0)).Symbols
 
     internal func Filter[T SyntaxNode](nodes ImmutableArray[T]) ImmutableArray[T] {
         var result ImmutableArray[T].Builder? = nil
@@ -66,13 +75,20 @@ internal class ConditionalCompilationMap {
         diagnostics.AddRange(GetTree(tree).Diagnostics)
     }
 
-    private func FindRegion(node SyntaxNode) Region {
-        let treeMap = GetTree(node.SyntaxTree)
+    private func FindRegion(node SyntaxNode) Region -> FindRegion(node.SyntaxTree, node.Span)
+
+    private func FindRegion(tree SyntaxTree, span TextSpan) Region {
+        let treeMap = GetTree(tree)
         var result = treeMap.Regions[0]
-        let span = node.Span
         for region in treeMap.Regions {
             if region.Span.Start <= span.Start &&
-                region.Span.End >= span.End &&
+                (
+                if span.Length == 0 {
+                    region.Span.End > span.Start || (region.OpenAtEnd && region.Span.End == span.Start)
+                } else {
+                    region.Span.End >= span.End
+                }
+            ) &&
                 region.Span.Length <= result.Span.Length {
                 result = region
             }
@@ -116,7 +132,8 @@ internal class ConditionalCompilationMap {
                                 "only one @If is allowed per owner"
                             )
                         }
-                        if !IsAllowedOwner(node, annotation, inclusion: true) {
+                        let allowed = IsAllowedOwner(node, annotation, inclusion: true)
+                        if !allowed {
                             treeMap.Diagnostics.ReportConditionalInclusionInvalid(
                                 annotation.Location,
                                 "this target cannot be conditionally included"
@@ -127,16 +144,29 @@ internal class ConditionalCompilationMap {
                                 annotation.Location,
                                 "exactly one predicate is required"
                             )
-                            active = false
+                            if allowed {
+                                active = false
+                            }
                         } else {
                             // Validate both operands, including below an inactive ancestor.
                             let included = EvaluatePredicate(annotation.Arguments[0], inherited, treeMap.Diagnostics)
-                            active = active && included
+                            if allowed {
+                                active = active && included
+                            }
                         }
                     }
                 }
                 for annotation in annotations {
-                    if !IsDefinition(annotation) || !active {
+                    if active &&
+                        (
+                        node is TupleDeconstructionStatementSyntax or
+                            NamedDeconstructionStatementSyntax or
+                            MultiAssignmentStatementSyntax
+                    ) &&
+                        !IsIntrinsic(annotation) {
+                        treeMap.Diagnostics.ReportAnnotationsNotAllowedOnStatement(annotation.Location)
+                    }
+                    if !IsDefinition(annotation) {
                         continue
                     }
                     if !IsAllowedOwner(node, annotation, inclusion: false) {
@@ -168,15 +198,17 @@ internal class ConditionalCompilationMap {
                             )
                         }
                         definitions[name] = defined
-                        effective = if defined {
-                            effective.Add(name)
-                        } else {
-                            effective.Remove(name)
+                        if active {
+                            effective = if defined {
+                                effective.Add(name)
+                            } else {
+                                effective.Remove(name)
+                            }
                         }
                     }
                 }
                 if node is CompilationUnitSyntax || !annotations.IsDefaultOrEmpty {
-                    treeMap.Regions.Add(Region(node.Span, effective, active))
+                    treeMap.Regions.Add(Region(node, effective, active))
                 }
                 for var i = node.ChildCount - 1; i >= 0; i-- {
                     let child = node.GetChild(i)
@@ -218,11 +250,27 @@ internal class ConditionalCompilationMap {
             if node is PropertyAccessorSyntax or EventAccessorSyntax {
                 return !inclusion
             }
+            if node is GlobalStatementSyntax globalStatement {
+                return globalStatement.Statement is BlockStatementSyntax
+            }
+            if node is ImportSyntax or PackageSyntax {
+                return false
+            }
+            if node is MultiAssignmentStatementSyntax multi {
+                for target in multi.Targets {
+                    if target is not MultiAssignmentDeclarationExpressionSyntax {
+                        return false
+                    }
+                }
+                return true
+            }
             return node is MemberSyntax or
                 FieldDeclarationSyntax or
                 PropertyDeclarationSyntax or
                 EventDeclarationSyntax or
                 VariableDeclarationSyntax or
+                TupleDeconstructionStatementSyntax or
+                NamedDeconstructionStatementSyntax or
                 BlockStatementSyntax
         }
 

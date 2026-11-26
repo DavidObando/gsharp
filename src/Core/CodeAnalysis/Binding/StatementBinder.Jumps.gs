@@ -2725,7 +2725,10 @@ internal partial class StatementBinder {
         /// leaks ((cref:ApplyEarlyExitPatternVariables)), backward-jump span lookup
         /// ((cref:EnterBackwardJumpSpanIfFirstStatement)), and loop-exit facts
         /// ((cref:RecordLoopExitFacts)).
-        internal func ContainsUserGotoOrLabel(node SyntaxNode?) bool {
+        internal func ContainsUserGotoOrLabel(node SyntaxNode?, activeCode ConditionalCompilationMap? = nil) bool {
+            if node != nil && activeCode?.IsActive(node) == false {
+                return false
+            }
             switch node {
                 case nil {
                     return false
@@ -2744,14 +2747,17 @@ internal partial class StatementBinder {
                 }
             }
             for child in node!!.GetChildren() {
-                if ContainsUserGotoOrLabel(child) {
+                if ContainsUserGotoOrLabel(child, activeCode) {
                     return true
                 }
             }
             return false
         }
 
-        private func ContainsUserLabel(node SyntaxNode?) bool {
+        private func ContainsUserLabel(node SyntaxNode?, activeCode ConditionalCompilationMap? = nil) bool {
+            if node != nil && activeCode?.IsActive(node) == false {
+                return false
+            }
             switch node {
                 case nil {
                     return false
@@ -2766,7 +2772,7 @@ internal partial class StatementBinder {
                     return false
                 }
             }
-            return node!!.GetChildren().Any(ContainsUserLabel)
+            return node!!.GetChildren().Any((child SyntaxNode) -> ContainsUserLabel(child, activeCode))
         }
 
         internal func IsHandlerRegionPrefix(

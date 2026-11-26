@@ -246,6 +246,12 @@ class GSharpAnalyzerDriver {
         if disabled.Contains(owner) {
             return
         }
+        for tree in compilation.SyntaxTrees {
+            if object.ReferenceEquals(tree.Text, diagnostic.Location.Text) &&
+                !compilation.ConditionalCompilation.IsActiveAt(tree, diagnostic.Location.Span.Start) {
+                return
+            }
+        }
         if !supportedIds[owner].Contains(diagnostic.Id) {
             if reportedUnsupported.Add((owner, diagnostic.Id)) {
                 Record(

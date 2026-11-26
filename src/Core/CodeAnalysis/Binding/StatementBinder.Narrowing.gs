@@ -2342,7 +2342,7 @@ internal partial class StatementBinder {
         if !binderCtx.FunctionContainsUserGotoOrLabel || statement == nil {
             return false
         }
-        let finder = UserLabelFinder()
+        let finder = UserLabelFinder($scope.ConditionalCompilation)
         finder.VisitStatement(statement)
         return finder.Found
     }
@@ -2351,7 +2351,7 @@ internal partial class StatementBinder {
         if !binderCtx.FunctionContainsUserGotoOrLabel || expression == nil {
             return false
         }
-        let finder = UserLabelFinder()
+        let finder = UserLabelFinder($scope.ConditionalCompilation)
         finder.VisitExpression(expression)
         return finder.Found
     }
@@ -2366,6 +2366,12 @@ internal partial class StatementBinder {
     }
 
     private class UserLabelFinder : BoundTreeWalker {
+        private let activeCode ConditionalCompilationMap
+
+        init(activeCode ConditionalCompilationMap) {
+            this.activeCode = activeCode
+        }
+
         prop Found bool {
             get;
             private set;
@@ -2379,7 +2385,7 @@ internal partial class StatementBinder {
                 Found = true
                 return
             }
-            if node.Syntax != nil && ContainsUserLabel(node.Syntax) {
+            if node.Syntax != nil && ContainsUserLabel(node.Syntax, activeCode) {
                 Found = true
                 return
             }
@@ -2390,7 +2396,7 @@ internal partial class StatementBinder {
             if Found || node == nil || node is BoundFunctionLiteralExpression {
                 return
             }
-            if node.Syntax != nil && ContainsUserLabel(node.Syntax) {
+            if node.Syntax != nil && ContainsUserLabel(node.Syntax, activeCode) {
                 Found = true
                 return
             }
