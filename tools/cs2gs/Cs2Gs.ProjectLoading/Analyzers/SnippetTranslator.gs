@@ -162,7 +162,13 @@ shared class SnippetTranslator {
     /// re-placed markers.
     /// @param csharpWithMarkers The marked C# snippet (a full compilation unit).
     /// @returns The translation result.
-    func Translate(csharpWithMarkers string) SnippetTranslationResult {
+    func Translate(csharpWithMarkers string) SnippetTranslationResult -> Translate(csharpWithMarkers, false)
+
+    /// Translates a snippet for the destination compiler's capabilities.
+    /// @param csharpWithMarkers The marked C# snippet.
+    /// @param supportsScopedConditionalSymbols Whether the destination supports scoped conditional symbols.
+    /// @returns The translation result.
+    func Translate(csharpWithMarkers string, supportsScopedConditionalSymbols bool) SnippetTranslationResult {
         let markedTexts = List[MarkedText]()
         let cleanSource = StripMarkers(csharpWithMarkers, markedTexts)
         let diagnostics = List[TranslationDiagnostic]()
@@ -200,7 +206,7 @@ shared class SnippetTranslator {
                 packageFilter: package_,
                 includeFileAttributes: unitIndex == 0,
                 includeGlobalNamespace: unitIndex == 0
-            )
+            ){SupportsScopedConditionalSymbols = supportsScopedConditionalSymbols}
             let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
             printedUnits.Add(GSharpPrinter.Print(translator.TranslateDocument(document, context)))
             for reported in context.Diagnostics {

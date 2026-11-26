@@ -356,9 +356,22 @@ stderr:
         // translation (map-advanced) is complete, an unsupported construct or a
         // round-trip failure means the live library path cannot run yet; the
         // stage records the reason and skips rather than fabricating a pass.
+        let requestedSdkVersion = context.Options.RepositorySdkVersion ??
+            (
+            if context.Options.OutputLayout == MigrationOutputLayout.Repository {
+                context.Options.SdkVersion
+            } else {
+                default(string?)
+            }
+        )
+        let sdk = this.libraryRunner.ResolveSdkPackage(requestedSdkVersion)
+        let sdkVersion = sdk?.Version ?? requestedSdkVersion
+        let supportsScopedConditionalSymbols = sdk != nil &&
+            SdkCompilerCapabilities.SupportsScopedConditionalSymbolsInPackage(sdk.Version, sdk.NupkgPath)
         let tests = await TranslateProjectAsync(
             context.App.TestsProjectPath,
             context.Options.Config,
+            supportsScopedConditionalSymbols,
             cancellationToken
         ).ConfigureAwait(false)
         if tests.LoadErrors != nil {
@@ -409,14 +422,7 @@ stderr:
             TestsName: libraryName + ".Tests",
             TestsRootNamespace: libraryName.Replace('-', '_') + ".Tests",
             TestFiles: tests.Files,
-            SdkVersion: context.Options.RepositorySdkVersion ??
-                (
-                if context.Options.OutputLayout == MigrationOutputLayout.Repository {
-                    context.Options.SdkVersion
-                } else {
-                    default(string?)
-                }
-            )
+            SdkVersion: sdkVersion
         }
         let workDir = Path.Combine(context.ArtifactDir, "test-parity")
         let run = this.libraryRunner.Run(project, workDir)
@@ -751,6 +757,7 @@ stderr:
         private async func TranslateProjectAsync(
             projectPath string?,
             config string?,
+            supportsScopedConditionalSymbols bool,
             cancellationToken CancellationToken
         ) TranslatedProject {
             let project = (
@@ -789,7 +796,9 @@ stderr:
             // anonymousTypeRegistriesByPackage`) is shared too — otherwise two
             // files in the same package could each mint a colliding
             // `AnonymousTypeN` name for two DIFFERENT anonymous shapes (GS0102).
-            let translator = CSharpToGSharpTranslator(preservePartialParts: true)
+            let translator = CSharpToGSharpTranslator(preservePartialParts: true){
+                SupportsScopedConditionalSymbols = supportsScopedConditionalSymbols
+            }
             for document in project.Documents {
                 cancellationToken.ThrowIfCancellationRequested()
                 let translationContext = TranslationContext(

@@ -138,6 +138,7 @@ class TranslateStage : IMigrationStage {
         // uses for non-fatal, informational events (test-parity.log).
         NoteNuGetAuditAdvisories(context, project)
         NoteCSharpBindingErrors(context, project)
+        let supportsScopedConditionalSymbols = SdkCompilerCapabilities.SupportsScopedConditionalSymbols(context)
         let usedOutputPaths = HashSet[string](StringComparer.OrdinalIgnoreCase)
         if context.Options.OutputLayout == MigrationOutputLayout.DiagnosticRun {
             CopyProjectFiles(project.ProjectDirectory!!, context.ProjectOutputDir, usedOutputPaths)
@@ -439,11 +440,7 @@ class TranslateStage : IMigrationStage {
                 translatedFilePaths: translatedFilePaths
             ){
                 ConditionalCompilation = context.Options.ConditionalCompilation,
-                SupportsScopedConditionalSymbols = !context.Options.CompileViaSdk ||
-                    SdkCompilerCapabilities.SupportsScopedConditionalSymbols(
-                    context.Options.Config,
-                    context.Options.RepositorySdkVersion ?? context.Options.SdkVersion
-                )
+                SupportsScopedConditionalSymbols = supportsScopedConditionalSymbols
             }
             PreserveGeneratedFriendAssemblyAnnotations(context, currentProject, isReferencedProject, usedOutputPaths)
             // ADR-0143 2026-09-23 amendment / ADR-0192: translate EVERY unit of
@@ -530,7 +527,10 @@ class TranslateStage : IMigrationStage {
                     // compiles them as G#. The snippet translator needs a C#
                     // project loader, so it lives one assembly above the
                     // translator and is injected here.
-                    translationContext.TranslateAnalyzerSnippet = SnippetTranslator.Translate
+                    translationContext.TranslateAnalyzerSnippet = (source string) -> SnippetTranslator.Translate(
+                        source,
+                        pending.Translator.SupportsScopedConditionalSymbols
+                    )
                     pending.Context = translationContext
                     try {
                         return pending.Translator.TranslateDocument(
@@ -912,6 +912,7 @@ class TranslateStage : IMigrationStage {
                     siblingCompilations,
                     repositoryCompilations,
                     context,
+                    supportsScopedConditionalSymbols,
                     cancellationToken
                 ) {
                     referencedDependencyFailed = true
@@ -1574,6 +1575,7 @@ class TranslateStage : IMigrationStage {
             siblingCompilations IReadOnlyList[CSharpCompilation],
             repositoryCompilations IReadOnlyList[CSharpCompilation]?,
             context StageExecutionContext,
+            supportsScopedConditionalSymbols bool,
             cancellationToken CancellationToken
         ) bool {
             let referencedPath = Path.GetFullPath(referencedProject.ProjectPath!!)
@@ -1622,11 +1624,7 @@ class TranslateStage : IMigrationStage {
                     translatedFilePaths: translatedFilePaths
                 ){
                     ConditionalCompilation = context.Options.ConditionalCompilation,
-                    SupportsScopedConditionalSymbols = !context.Options.CompileViaSdk ||
-                        SdkCompilerCapabilities.SupportsScopedConditionalSymbols(
-                        context.Options.Config,
-                        context.Options.RepositorySdkVersion ?? context.Options.SdkVersion
-                    )
+                    SupportsScopedConditionalSymbols = supportsScopedConditionalSymbols
                 }
                 for document in referencedProject.Documents {
                     cancellationToken.ThrowIfCancellationRequested()
@@ -1641,7 +1639,10 @@ class TranslateStage : IMigrationStage {
                         repositoryCompilations,
                         cancellationToken
                     )
-                    translationContext.TranslateAnalyzerSnippet = SnippetTranslator.Translate
+                    translationContext.TranslateAnalyzerSnippet = (source string) -> SnippetTranslator.Translate(
+                        source,
+                        translator.SupportsScopedConditionalSymbols
+                    )
                     let unit = translator.TranslateDocument(document, translationContext)
                     for diagnostic in translationContext.Diagnostics.Where(
                         (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported
