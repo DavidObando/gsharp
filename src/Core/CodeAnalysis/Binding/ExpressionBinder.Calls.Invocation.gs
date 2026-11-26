@@ -1721,33 +1721,7 @@ internal partial class ExpressionBinder {
             ce,
             isStatic: receiver == nil
         )
-        if PrefixBindingContext.Current is {} prefixCut &&
-            !prefixCut.LaterOverloadsPossible &&
-            receiver?.Type is {} recvType &&
-            (
-            recvType is StructSymbol ||
-                recvType is InterfaceSymbol ||
-                (
-                recvType is TypeParameterSymbol tpRecv &&
-                    HasProvenNonNullTypeParameterReceiver(receiver, tpRecv) &&
-                    (tpRecv.InterfaceConstraint != nil || tpRecv.ClassConstraint is StructSymbol)
-            )
-        ) {
-            var instanceMethods = MemberLookup.CollectSourceInstanceMethods(recvType, methodName)
-            if recvType is InterfaceSymbol ifaceRecv && IsInsideSameInterface(ifaceRecv.Definition ?? ifaceRecv) {
-                let privateOverloads = ifaceRecv.GetPrivateMethods(methodName)
-                if privateOverloads.Length > 0 {
-                    instanceMethods = instanceMethods.AddRange(privateOverloads)
-                }
-            }
-            if instanceMethods.Length == 1 && !instanceMethods[0].IsGeneric && $scope.TryLookupExtensionFunctions(
-                recvType,
-                methodName
-            )
-                .IsDefaultOrEmpty {
-                PrefixBindingContext.AddFixedSignatureCall(ce)
-            }
-        }
+        TryRecordFixedAccessorSignatureBeforeArguments(receiver, classSymbol, methodName, ce)
         let bindArgumentsAndDispatch = func () BoundExpression {
             let boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
             let deferredArrowLambdaIndices = List[int32]()
@@ -2006,6 +1980,93 @@ internal partial class ExpressionBinder {
         } finally {
             lastSelectedCallablePropertyLoad = prevSelectedProp
             lastSelectedIndexedCalleeLoad = prevSelectedIndexed
+        }
+    }
+
+    private func TryRecordFixedAccessorSignatureBeforeArguments(
+        receiver BoundExpression?,
+        classSymbol ImportedClassSymbol?,
+        methodName string,
+        ce CallExpressionSyntax
+    ) {
+        if PrefixBindingContext.Current is not{} prefixCut || prefixCut.LaterOverloadsPossible {
+            return
+        }
+        if classSymbol != nil {
+            let staticMethods = classSymbol.GetVisibleStaticCandidateMethods(methodName)
+            if staticMethods.Count == 1 && !staticMethods[0].IsGenericMethod {
+                PrefixBindingContext.AddFixedSignatureCall(ce)
+            }
+            return
+        }
+        if receiver?.Type is not{} recvType {
+            return
+        }
+        if string.Equals(methodName, "Invoke", StringComparison.Ordinal) &&
+            (
+            recvType is DelegateTypeSymbol || (recvType.ClrType is {} delClr && ClrTypeUtilities.IsDelegateType(delClr))
+        ) {
+            if $scope.TryLookupExtensionFunctions(recvType, methodName).IsDefaultOrEmpty {
+                PrefixBindingContext.AddFixedSignatureCall(ce)
+            }
+            return
+        }
+        if recvType is StructSymbol ||
+            recvType is InterfaceSymbol ||
+            (
+            recvType is TypeParameterSymbol tpRecv &&
+                HasProvenNonNullTypeParameterReceiver(receiver, tpRecv) &&
+                (tpRecv.InterfaceConstraint != nil || tpRecv.ClassConstraint is StructSymbol)
+        ) {
+            var instanceMethods = MemberLookup.CollectSourceInstanceMethods(recvType, methodName)
+            if recvType is InterfaceSymbol ifaceRecv && IsInsideSameInterface(ifaceRecv.Definition ?? ifaceRecv) {
+                let privateOverloads = ifaceRecv.GetPrivateMethods(methodName)
+                if privateOverloads.Length > 0 {
+                    instanceMethods = instanceMethods.AddRange(privateOverloads)
+                }
+            }
+            if instanceMethods.Length == 1 && !instanceMethods[0].IsGeneric && $scope.TryLookupExtensionFunctions(
+                recvType,
+                methodName
+            )
+                .IsDefaultOrEmpty {
+                PrefixBindingContext.AddFixedSignatureCall(ce)
+            }
+            return
+        }
+        var effectiveRecvType = recvType
+        if TryNormalizeSymbolicEnumerableReceiver(recvType, out var normalizedRecv) {
+            effectiveRecvType = normalizedRecv
+        }
+        let recvClr Type? = if effectiveRecvType is TypeParameterSymbol tpClr &&
+            HasProvenNonNullTypeParameterReceiver(receiver, tpClr) {
+            tpClr.ClrInterfaceConstraint?.ClrType ?? tpClr.ClassConstraint?.ClrType
+        } else {
+            effectiveRecvType.ClrType
+        }
+        if recvClr != nil {
+            var probeCount = 0
+            var singleMethod MethodInfo? = nil
+            for probe in this.memberLookup.CollectImportedMethodProbes(
+                nil,
+                recvClr,
+                methodName,
+                includeExtensions: true
+            ) {
+                probeCount += probe.Methods.Count
+                if probeCount == 1 && probe.Methods.Count == 1 {
+                    singleMethod = probe.Methods[0]
+                }
+                if probeCount > 1 {
+                    break
+                }
+            }
+            if probeCount == 1 &&
+                singleMethod != nil &&
+                !singleMethod.IsGenericMethod &&
+                $scope.TryLookupExtensionFunctions(recvType, methodName).IsDefaultOrEmpty {
+                PrefixBindingContext.AddFixedSignatureCall(ce)
+            }
         }
     }
 

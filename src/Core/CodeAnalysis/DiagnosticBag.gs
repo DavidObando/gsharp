@@ -768,6 +768,24 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
     }
 
+    /// Replaces the kind of the active call frame when its syntax matches [`syntax`](paramref),
+    /// returning the previous kind so the caller can restore it.
+    /// @param syntax The call syntax node.
+    /// @param kind The updated call kind.
+    /// @returns The previous call kind when replaced, or `null`.
+    internal func ReplaceCallFrameKind(syntax SyntaxNode?, kind PrefixCallKind) PrefixCallKind? {
+        if syntax == nil || callFrames is not{Count: > 0} frames {
+            return nil
+        }
+        let lastIndex = frames.Count - 1
+        let frame = frames[lastIndex]
+        if !object.ReferenceEquals(frame.Syntax, syntax) || frame.Kind == kind {
+            return nil
+        }
+        frames[lastIndex] = (frame.Syntax, kind)
+        return frame.Kind
+    }
+
     // ADR-0225 D6.5: the callee of the innermost call frame. A report outside a frame, or inside a
     // function literal of a call, has a simple-name premise, which holds whenever a member premise holds.
     // A fixed callee covers its own reports only: a report inside one of its arguments has another source.

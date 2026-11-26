@@ -6,11 +6,16 @@ package GSharp.Core.Tests.CodeAnalysis
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import MetadataReference = Microsoft.CodeAnalysis.MetadataReference
+import Microsoft.CodeAnalysis.CSharp
+import OutputKind = Microsoft.CodeAnalysis.OutputKind
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.IO
 import System.Linq
 import Xunit
 
@@ -3338,6 +3343,94 @@ func Main() {
 `
         AssertWitness(switchReturnSource.Replace("/*CUT*/", string.Empty), "GS0155")
         AssertFutureDependent(BindKeep(switchReturnSource), "GS0155", "later-overload")
+
+        // 26. Extensible source method group conversion failure in Nothing mode is FutureDependent when a
+        // later overload can match the target delegate signature.
+        const methodGroupPrefix = `package P
+
+func F(o object) int32 {
+    return 0
+}
+
+let f (int32) -> string = F
+`
+        const methodGroupWitness = `func F(i int32) string {
+    return ""
+}
+`
+        AssertWitness(methodGroupPrefix + methodGroupWitness, "GS0218", "GS0155")
+        AssertFutureDependent(
+            BindNothing(methodGroupPrefix, []string{string.Empty, methodGroupWitness}),
+            "GS0155",
+            "later-overload"
+        )
+
+        // 27. Imported CLR static, CLR instance, and delegate Invoke / direct calls record single-candidate
+        // non-generic fixed signatures before binding arguments.
+        let clrDir = Path.Combine(AppContext.BaseDirectory, "Adr0225ClrApi")
+        Directory.CreateDirectory(clrDir)
+        let clrDll = Path.Combine(clrDir, "Adr0225ClrApi.dll")
+        let csharpTree = CSharpSyntaxTree.ParseText(`using System;
+namespace ClrApi {
+    public sealed class Api {
+        public static void RunExpr(Func<int> f, Action g) {}
+        public void RunInstanceExpr(Func<int> f, Action g) {}
+    }
+}`)
+        let clrRefs = []MetadataReference{
+            MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(Action).Assembly.Location)
+        }
+        let clrCompilation = CSharpCompilation.Create(
+            "Adr0225ClrApi",
+            []Microsoft.CodeAnalysis.SyntaxTree{csharpTree},
+            clrRefs,
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        {
+            using let fs = File.Create(clrDll)
+            let emitResult = clrCompilation.Emit(fs)
+            Assert.True(emitResult.Success)
+        }
+        using let clrResolver = ReferenceResolver.WithRuntimeReferences([]string{clrDll})
+        const clrFixedSource = `package P
+
+import System
+import ClrApi
+
+func Use(c Action[Func[int32], Action], api Api) {
+    let v = int32(1)
+    Api.RunExpr(() -> v, () -> {
+        let badStatic int32 = "s"
+    })
+    api.RunInstanceExpr(() -> v, () -> {
+        let badInstance int32 = "s"
+    })
+    c.Invoke(() -> v, () -> {
+        let badInvoke int32 = "s"
+    })
+    c(() -> v, () -> {
+        let badCall int32 = "s"
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let clrCut = clrFixedSource.IndexOf("/*CUT*/", StringComparison.Ordinal)
+        Assert.True(clrCut >= 0)
+        let clrTree = SyntaxTree.Parse(SourceText.From(clrFixedSource.Replace("/*CUT*/", string.Empty), "prefix.gs"))
+        let clrKeep = Compilation(clrResolver, clrTree).BindPrefix(
+            clrTree,
+            clrCut,
+            PrefixBindOptions(PrefixRemainder.KeepDeclarations, includeScope: false)
+        )
+        let clrErrors = clrKeep.Diagnostics.Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").ToList()
+        Assert.Equal(4, clrErrors.Count)
+        Assert.All(clrErrors, (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality))
     }
 
     @Fact

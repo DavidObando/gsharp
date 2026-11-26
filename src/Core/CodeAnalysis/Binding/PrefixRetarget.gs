@@ -137,14 +137,29 @@ internal shared class PrefixRetarget {
             PrefixBindingContext.AddProvisional(syntax)
             return
         }
-        if PrefixBindingContext.LaterGlobalCanHide(syntax) {
-            if bound is BoundMethodGroupExpression group {
+        if bound is BoundMethodGroupExpression group {
+            if PrefixBindingContext.Current is {} cut && cut.LaterOverloadsPossible {
+                // In Nothing mode, a later overload can join any source method group.
+                PrefixBindingContext.AddProvisional(syntax)
+                return
+            }
+            if PrefixBindingContext.LaterGlobalCanHide(syntax) {
                 for candidate in group.Candidates {
                     if candidate.ContainingType == nil && candidate.Package != nil {
                         return
                     }
                 }
+                PrefixBindingContext.AddProvisional(syntax)
             }
+            return
+        }
+        if bound is BoundClrMethodGroupExpression &&
+            PrefixBindingContext.Current is {} clrCut &&
+            clrCut.LaterOverloadsPossible {
+            PrefixBindingContext.AddProvisional(syntax)
+            return
+        }
+        if PrefixBindingContext.LaterGlobalCanHide(syntax) {
             PrefixBindingContext.AddProvisional(syntax)
         }
     }
