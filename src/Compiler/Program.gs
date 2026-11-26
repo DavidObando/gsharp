@@ -477,7 +477,7 @@ open class Program {
                         // preserving the historical evaluate-mode driver protocol.
                         return ExecuteInMemory(compilation, parsed, referencePaths)
                     }
-                    return Emit(compilation, parsed, outputPath)
+                    return Emit(compilation, parsed, outputPath, referencePaths)
                 } finally {
                     (logger as IDisposable)?.Dispose()
                 }
@@ -616,23 +616,77 @@ open class Program {
             return Success
         }
 
-        /// Emitted channels and native slices reference their SDK runtime assemblies.
-        /// Under the SDK, MSBuild's
-        /// copy-local puts that assembly beside the app; a direct `gsc /out:`
-        /// invocation has no such step, so gsc copies each referenced runtime itself.
+        /// Emitted extensions, channels, and native slices reference their SDK
+        /// runtime assemblies. Under the SDK, MSBuild's copy-local puts those
+        /// assemblies beside the app; a direct `gsc /out:` invocation has no
+        /// such step, so gsc copies each transitively referenced runtime itself.
+        /// Explicit `/reference:` overrides take precedence over SDK-bundled
+        /// runtimes so override-only APIs are preserved at run time.
         /// A program whose PE has no corresponding AssemblyRef gets nothing extra.
-        /// A destination copy is refreshed only when the bundled runtime is newer.
+        /// A destination copy is refreshed whenever its contents differ from the
+        /// selected runtime.
         /// @param outputPath The emitted assembly.
         /// @param runtimeDirectory The bundled runtime directory from (cref:ResolveRuntimeDirectory).
-        private func CopyBundledRuntimesBeside(outputPath string, runtimeDirectory string?) {
-            CopyBundledRuntimeBeside(
-                outputPath,
+        /// @param referencePaths The resolved compilation reference paths (explicit `/r:` first).
+        private func CopyBundledRuntimesBeside(
+            outputPath string,
+            runtimeDirectory string?,
+            referencePaths IReadOnlyList[string]
+        ) {
+            let candidates = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
+            AddBundledCandidate(
+                candidates,
+                ReferenceResolver.FindBundledExtensionPath(AppContext.BaseDirectory, runtimeDirectory, false)
+            )
+            AddBundledCandidate(
+                candidates,
                 ReferenceResolver.FindBundledChannelsRuntimePath(AppContext.BaseDirectory, runtimeDirectory, false)
             )
-            CopyBundledRuntimeBeside(
-                outputPath,
+            AddBundledCandidate(
+                candidates,
                 ReferenceResolver.FindBundledValuesRuntimePath(AppContext.BaseDirectory, runtimeDirectory, false)
             )
+            if candidates.Count == 0 {
+                return
+            }
+            let overridden = HashSet[string](StringComparer.OrdinalIgnoreCase)
+            for refPath in referencePaths {
+                OverrideBundledCandidate(candidates, overridden, refPath)
+                if overridden.Count == candidates.Count {
+                    break
+                }
+            }
+            try {
+                let outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath))
+                if string.IsNullOrEmpty(outputDir) {
+                    return
+                }
+                let copied = HashSet[string](StringComparer.OrdinalIgnoreCase)
+                let queue = Queue[string]()
+                queue.Enqueue(outputPath)
+                while queue.Count > 0 {
+                    let currentPath = queue.Dequeue()
+                    using let peStream = File.OpenRead(currentPath)
+                    using let pe = PEReader(peStream)
+                    if !pe.HasMetadata {
+                        continue
+                    }
+                    let reader = pe.GetMetadataReader()
+                    for handle in reader.AssemblyReferences {
+                        let refName = reader.GetString(reader.GetAssemblyReference(handle).Name)
+                        if copied.Contains(refName) || !candidates.TryGetValue(refName, out var runtimePath) {
+                            continue
+                        }
+                        copied.Add(refName)
+                        queue.Enqueue(runtimePath)
+                        CopyBundledFileIfDifferent(runtimePath, outputDir, refName + ".dll")
+                    }
+                }
+            } catch (IOException) {
+                // Best effort: the program is still correct; only a direct-driver
+                // run from that folder would need the assembly placed manually.
+
+            } catch (UnauthorizedAccessException) { }
         }
 
         /// Gives the bundled runtime directory of one request (ADR-0223 D4): the /sdktoolsdir: switch, else
@@ -645,49 +699,98 @@ open class Program {
         private func ResolveRuntimeDirectory(parsed CommandLineArgs) string? ->
         parsed.SdkToolsDir ?? Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
 
-        private func CopyBundledRuntimeBeside(outputPath string, bundled string?) {
+        private func IsReferenceAssembly(reader MetadataReader) bool {
+            for attrHandle in reader.GetAssemblyDefinition().GetCustomAttributes() {
+                let attr = reader.GetCustomAttribute(attrHandle)
+                var ns = ""
+                var name = ""
+                if attr.Constructor.Kind == HandleKind.MemberReference {
+                    let memberRef = reader.GetMemberReference(cast[MemberReferenceHandle](attr.Constructor))
+                    if memberRef.Parent.Kind == HandleKind.TypeReference {
+                        let typeRef = reader.GetTypeReference(cast[TypeReferenceHandle](memberRef.Parent))
+                        ns = reader.GetString(typeRef.Namespace)
+                        name = reader.GetString(typeRef.Name)
+                    }
+                } else if attr.Constructor.Kind == HandleKind.MethodDefinition {
+                    let methodDef = reader.GetMethodDefinition(cast[MethodDefinitionHandle](attr.Constructor))
+                    let typeDef = reader.GetTypeDefinition(methodDef.GetDeclaringType())
+                    ns = reader.GetString(typeDef.Namespace)
+                    name = reader.GetString(typeDef.Name)
+                }
+                if ns == "System.Runtime.CompilerServices" && name == "ReferenceAssemblyAttribute" {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func OverrideBundledCandidate(
+            candidates Dictionary[string, string],
+            overridden HashSet[string],
+            candidatePath string
+        ) {
+            if string.IsNullOrEmpty(candidatePath) || !File.Exists(candidatePath) {
+                return
+            }
             try {
-                let outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath))
-                if bundled == nil || string.IsNullOrEmpty(outputDir) {
-                    return
-                }
-                let destination = Path.Combine(outputDir, Path.GetFileName(bundled))
-                if string.Equals(Path.GetFullPath(bundled), destination, StringComparison.OrdinalIgnoreCase) {
-                    return
-                }
-                // A copy from an earlier compile into the same folder is refreshed
-                // when the bundled runtime is newer — a stale runtime beside a fresh
-                // program fails at run time with a missing member.
-                if File.Exists(destination) && File.GetLastWriteTimeUtc(destination) >= File.GetLastWriteTimeUtc(
-                    bundled
-                ) {
-                    return
-                }
-                using let peStream = File.OpenRead(outputPath)
+                using let peStream = File.OpenRead(candidatePath)
                 using let pe = PEReader(peStream)
                 if !pe.HasMetadata {
                     return
                 }
                 let reader = pe.GetMetadataReader()
-                let runtimeName = Path.GetFileNameWithoutExtension(bundled)
-                for handle in reader.AssemblyReferences {
-                    if string.Equals(
-                        reader.GetString(reader.GetAssemblyReference(handle).Name),
-                        runtimeName,
-                        StringComparison.Ordinal
-                    ) {
-                        File.Copy(bundled, destination, overwrite: true)
-                        return
-                    }
+                if !reader.IsAssembly || IsReferenceAssembly(reader) {
+                    return
                 }
-            } catch (IOException) {
-                // Best effort: the program is still correct; only a direct-driver
-                // run from that folder would need the assembly placed manually.
-
-            } catch (UnauthorizedAccessException) { }
+                let asmName = reader.GetString(reader.GetAssemblyDefinition().Name)
+                if candidates.ContainsKey(asmName) && !overridden.Contains(asmName) {
+                    candidates[asmName] = candidatePath
+                    overridden.Add(asmName)
+                }
+            } catch (IOException) { } catch (BadImageFormatException) { } catch (UnauthorizedAccessException) { }
         }
 
-        private func Emit(compilation Compilation, args CommandLineArgs, outputPath string) int32 {
+        private func AddBundledCandidate(candidates Dictionary[string, string], bundled string?) {
+            if bundled == nil {
+                return
+            }
+            let name = Path.GetFileNameWithoutExtension(bundled)
+            if !string.IsNullOrEmpty(name) && !candidates.ContainsKey(name) {
+                candidates[name] = bundled
+            }
+        }
+
+        private func CopyBundledFileIfDifferent(bundled string, outputDir string, targetFileName string) {
+            let destination = Path.Combine(outputDir, targetFileName)
+            if string.Equals(Path.GetFullPath(bundled), destination, StringComparison.OrdinalIgnoreCase) {
+                return
+            }
+            // Refresh whenever contents differ so switching /reference: overrides
+            // (including to an older-dated DLL) never leaves a stale runtime beside
+            // the newly compiled assembly.
+            if File.Exists(destination) && FilesHaveSameContents(bundled, destination) {
+                return
+            }
+            File.Copy(bundled, destination, overwrite: true)
+        }
+
+        private func FilesHaveSameContents(firstPath string, secondPath string) bool {
+            let firstInfo = FileInfo(firstPath)
+            let secondInfo = FileInfo(secondPath)
+            if firstInfo.Length != secondInfo.Length {
+                return false
+            }
+            let firstBytes = File.ReadAllBytes(firstPath)
+            let secondBytes = File.ReadAllBytes(secondPath)
+            return firstBytes.AsSpan().SequenceEqual(secondBytes)
+        }
+
+        private func Emit(
+            compilation Compilation,
+            args CommandLineArgs,
+            outputPath string,
+            referencePaths IReadOnlyList[string]
+        ) int32 {
             let outputDir = Path.GetDirectoryName(outputPath)
             if !string.IsNullOrEmpty(outputDir) {
                 Directory.CreateDirectory(outputDir)
@@ -808,7 +911,7 @@ open class Program {
             if args.Target == OutputTarget.Exe {
                 WriteRuntimeConfig(outputPath, args.TargetFramework)
             }
-            CopyBundledRuntimesBeside(outputPath, ResolveRuntimeDirectory(args))
+            CopyBundledRuntimesBeside(outputPath, ResolveRuntimeDirectory(args), referencePaths)
             Console.WriteLine("Wrote $outputPath")
             if !string.IsNullOrEmpty(refOutputPath) {
                 Console.WriteLine("Wrote $refOutputPath")
