@@ -19,8 +19,9 @@ open class Issue6231DefineCommandLineTests {
             let source = Path.Combine(directory, "Program.gs")
             let output = Path.Combine(directory, "Probe.dll")
             let response = Path.Combine(directory, "symbols.rsp")
-            File.WriteAllText(source, `shared class Probe {
-    func Value() bool -> @defined("DEBUG") && @defined("TRACE") && !@defined("debug")
+            File.WriteAllText(source, `package DriverProbe
+shared class Probe {
+    public func Value() bool -> @defined("DEBUG") && @defined("TRACE") && !@defined("debug")
 }
 `)
             File.WriteAllLines(response, []string{"/d:TRACE"})
@@ -29,7 +30,7 @@ open class Issue6231DefineCommandLineTests {
             )
             Assert.Equal(0, result)
             let assembly = Assembly.Load(File.ReadAllBytes(output))
-            Assert.Equal(true, assembly.GetType("Probe")!!.GetMethod("Value")!!.Invoke(nil, nil))
+            Assert.Equal(true, assembly.GetType("DriverProbe.Probe")!!.GetMethod("Value")!!.Invoke(nil, nil))
         } finally {
             Directory.Delete(directory, recursive: true)
         }

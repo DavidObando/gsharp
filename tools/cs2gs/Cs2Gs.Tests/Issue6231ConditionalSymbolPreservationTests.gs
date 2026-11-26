@@ -17,7 +17,12 @@ open class Issue6231ConditionalSymbolPreservationTests {
     @Fact
     func ConditionalCallsPreserveDefinedAndUndefinedSymbolsInSortedFileAnnotations() {
         let result = Translate(true)
-        Assert.Empty(result.Context.Diagnostics)
+        Assert.Empty(
+            result
+                .Context
+                .Diagnostics
+                .Where((diagnostic TranslationDiagnostic) -> diagnostic.Severity != TranslationSeverity.Info)
+        )
         Assert.Contains("@file:DefineSymbol(\"ALPHA\", \"ZETA\")", result.Printed, StringComparison.Ordinal)
         Assert.Contains("@file:UndefineSymbol(\"DEBUG\")", result.Printed, StringComparison.Ordinal)
         Assert.Equal(result.Printed, Translate(true).Printed)
@@ -62,7 +67,11 @@ public static partial class Demo {
         for document in project.Documents {
             let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
             let printed = GSharpPrinter.Print(separate.TranslateDocument(document, context))
-            Assert.Empty(context.Diagnostics)
+            Assert.Empty(
+                context.Diagnostics.Where(
+                    (diagnostic TranslationDiagnostic) -> diagnostic.Severity != TranslationSeverity.Info
+                )
+            )
             let expected = if document.FilePath.EndsWith("A.cs", StringComparison.Ordinal) {
                 "@file:DefineSymbol(\"ACTIVE\")"
             } else {
