@@ -1019,7 +1019,14 @@ open class Compilation {
         let diagnostics = successor.GetDiagnostics(cancellationToken)
         let classified = ImmutableArray.CreateBuilder[ClassifiedDiagnostic](diagnostics.Length)
         let model = successor.GetSemanticModel(prefixTree)
-        let classifier = PrefixDiagnosticClassifier(this, tree, prefixTree, prefixCut, cancellationToken)
+        let classifier = PrefixDiagnosticClassifier(
+            this,
+            tree,
+            prefixTree,
+            prefixCut,
+            successor.ConditionalCompilation,
+            cancellationToken
+        )
         for diagnostic in diagnostics {
             classified.Add(classifier.Classify(diagnostic))
         }

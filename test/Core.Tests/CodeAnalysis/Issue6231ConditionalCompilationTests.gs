@@ -995,6 +995,202 @@ func Disabled() { let outside = 0 }
         )
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func PrefixLaterType_OnlyActiveKeptPartsHideImportedTypes(isPartial bool) {
+        const prefix = "package P\nimport System\nfunc Use() {\nlet n int32 = Console.Title\nlet done = 0\n"
+        let source = prefix +
+            "}\n@DefineSymbol(\"HIDE\") @If(@defined(\"HIDE\")) " +
+            (
+            if isPartial {
+                "partial "
+            } else {
+                ""
+            }
+        ) +
+            "class Console { shared { let Title int32 = 0 } }\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "hiding.gs"))
+        let compilation = Compilation(tree){IsLibrary = true}
+        for enabled in[]bool{false, true, false} {
+            compilation.PreprocessorSymbols = if enabled {
+                ImmutableHashSet.Create("HIDE")
+            } else {
+                nil
+            }
+            let errors = compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError).ToArray()
+            if enabled {
+                Assert.Empty(errors)
+            } else {
+                let error = Assert.Single(errors)
+                Assert.Equal("GS0155", error.Id)
+                Assert.Equal(
+                    TextSpan(source.IndexOf("Console.Title", StringComparison.Ordinal), 13),
+                    error.Location.Span
+                )
+            }
+            let declaration = tree.Root.DescendantNodes().OfType[StructDeclarationSyntax]().Single()
+            let model = compilation.GetSemanticModel(tree)
+            Assert.Equal(enabled, model.GetDeclaredSymbol(declaration) != nil)
+            for remainder in[]PrefixRemainder{PrefixRemainder.Nothing, PrefixRemainder.KeepDeclarations} {
+                let result = compilation.BindPrefix(tree, prefix.Length, PrefixBindOptions(remainder))
+                let access = result.SyntaxTree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().Single()
+                let hidden = enabled && remainder == PrefixRemainder.KeepDeclarations
+                let prefixModel = result.Compilation.GetSemanticModel(result.SyntaxTree)
+                Assert.Equal(
+                    if hidden {
+                        TypeSymbol.Int32
+                    } else {
+                        TypeSymbol.String
+                    },
+                    prefixModel.GetTypeInfo(access).Type
+                )
+                Assert.Equal("Title", prefixModel.GetSymbolInfo(access).Symbol!!.Name)
+                let reports = result.Diagnostics.Where((d ClassifiedDiagnostic) -> d.Diagnostic.IsError).ToArray()
+                if hidden {
+                    Assert.Empty(reports)
+                } else {
+                    let report = Assert.Single(reports)
+                    Assert.Equal("GS0155", report.Diagnostic.Id)
+                    Assert.Equal(
+                        TextSpan(source.IndexOf("Console.Title", StringComparison.Ordinal), 13),
+                        report.Diagnostic.Location.Span
+                    )
+                    Assert.Equal(
+                        if remainder == PrefixRemainder.Nothing {
+                            DiagnosticFinality.FutureDependent
+                        } else {
+                            DiagnosticFinality.Final
+                        },
+                        report.Finality
+                    )
+                    Assert.Equal(
+                        if remainder == PrefixRemainder.Nothing {
+                            "later-type"
+                        } else {
+                            ""
+                        },
+                        report.Reason
+                    )
+                }
+            }
+        }
+    }
+
+    @Theory
+    @InlineData("receiver", false)
+    @InlineData("receiver", true)
+    @InlineData("file", false)
+    @InlineData("statement", false)
+    @InlineData("intrinsic", false)
+    func PrefixLaterType_PremisesUseTheSuccessorsActivity(shape string, suppress bool) {
+        let statement = if shape == "statement" {
+            "@If(@defined(\"ACTIVE\")) { let prior = s.Length }\n"
+        } else {
+            ""
+        }
+        let value = if shape == "intrinsic" {
+            "@defined(\"ACTIVE\")"
+        } else {
+            "s.Length"
+        }
+        let target = if shape == "intrinsic" {
+            "string"
+        } else {
+            "bool"
+        }
+        let source = "func Use(s string) {\nlet isolated = @defined(\"LOCAL\")\n" +
+            statement +
+            "let b " +
+            target +
+            " = " +
+            value +
+            "\nlet first = 0\nlet second = 0\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "use.gs"))
+        let declarations = SyntaxTree.Parse(
+            SourceText.From(
+                if shape == "statement" || shape == "intrinsic" {
+                    ""
+                } else {
+                    "@file:DefineSymbol(\"LOCAL\")\n" +
+                        (
+                        if suppress {
+                            "@file:UndefineSymbol(\"ACTIVE\")\n"
+                        } else {
+                            ""
+                        }
+                    ) +
+                        (
+                        if shape == "file" {
+                            "@file:If(@defined(\"ACTIVE\"))\n"
+                        } else {
+                            ""
+                        }
+                    ) +
+                        "@If(@defined(\"ACTIVE\") && @defined(\"LOCAL\")) " +
+                        "func (self string) Length() System.Text.StringBuilder -> System.Text.StringBuilder()\n"
+                },
+                "receiver.gs"
+            )
+        )
+        let compilation = Compilation(tree, declarations){IsLibrary = true}
+        let options = PrefixBindOptions(PrefixRemainder.Nothing)
+        var previous PrefixBindResult? = nil
+        for enabled in[]bool{false, true, false} {
+            compilation.PreprocessorSymbols = if enabled {
+                ImmutableHashSet.Create("ACTIVE")
+            } else {
+                nil
+            }
+            let completeError = Assert.Single(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+            Assert.Equal("GS0155", completeError.Id)
+            let span = TextSpan(source.LastIndexOf(value, StringComparison.Ordinal), value.Length)
+            Assert.Equal(span, completeError.Location.Span)
+            for name in[]string{"first", "second"} {
+                let cut = source.IndexOf("let " + name, StringComparison.Ordinal) + ("let " + name + " = 0").Length
+                let scratch = compilation.BindPrefix(tree, cut, options)
+                let chained = compilation.BindPrefix(tree, cut, options, previous)
+                for result in[]PrefixBindResult{scratch, chained} {
+                    let report = Assert.Single(
+                        result.Diagnostics.Where((d ClassifiedDiagnostic) -> d.Diagnostic.IsError)
+                    )
+                    Assert.Equal("GS0155", report.Diagnostic.Id)
+                    Assert.Equal(span, report.Diagnostic.Location.Span)
+                    let active = enabled && !suppress && shape != "intrinsic"
+                    Assert.Equal(
+                        if active {
+                            DiagnosticFinality.FutureDependent
+                        } else {
+                            DiagnosticFinality.Final
+                        },
+                        report.Finality
+                    )
+                    Assert.Equal(
+                        if active {
+                            "later-type"
+                        } else {
+                            ""
+                        },
+                        report.Reason
+                    )
+                    let query = result
+                        .SyntaxTree
+                        .Root
+                        .DescendantNodes()
+                        .OfType[VariableDeclarationSyntax]()
+                        .Single((v VariableDeclarationSyntax) -> v.Identifier.ValueText == "isolated")
+                        .DescendantNodes()
+                        .OfType[DefinedExpressionSyntax]()
+                        .Single()
+                    let model = result.Compilation.GetSemanticModel(result.SyntaxTree)
+                    Assert.Equal(TypeSymbol.Bool, model.GetTypeInfo(query).Type)
+                    Assert.False(cast[bool](Assert.IsType[BoundLiteralExpression](model.GetBoundNode(query)).Value))
+                }
+                previous = chained
+            }
+        }
+    }
+
     @Fact
     func ScriptPrefixReuse_PreservesScopedQueriesAndRejectsChangedBaseSymbols() {
         const source = `@file:DefineSymbol("FILE")
