@@ -200,7 +200,7 @@ internal partial class StatementBinder {
 
     internal func BindStatement(syntax StatementSyntax) BoundStatement? {
         if !$scope.ConditionalCompilation.IsActive(syntax) {
-            return nil
+            return BoundBlockStatement(nil, ImmutableArray[BoundStatement].Empty)
         }
         // ADR-0169: guarantee the dispatch-level anchor so semantic-model and
         // analyzer queries can resolve this statement by its syntax.

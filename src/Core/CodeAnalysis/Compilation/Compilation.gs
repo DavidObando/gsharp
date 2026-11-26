@@ -188,7 +188,7 @@ open class Compilation {
                     return
                 }
                 preprocessorSymbols = normalized
-                conditionalCompilation = nil
+                Interlocked.Exchange(&conditionalCompilation, ConditionalCompilationMap(normalized))
                 ResetConsumerBindingState_Locked()
             } finally {
                 buildGate.Release()
@@ -200,14 +200,12 @@ open class Compilation {
 
     internal prop ConditionalCompilation ConditionalCompilationMap {
         get {
-            if conditionalCompilation == nil {
-                Interlocked.CompareExchange(
-                    &conditionalCompilation,
-                    ConditionalCompilationMap(preprocessorSymbols),
-                    nil
-                )
+            let current = Volatile.Read(&conditionalCompilation)
+            if current != nil {
+                return current
             }
-            return conditionalCompilation!!
+            let created = ConditionalCompilationMap(Volatile.Read(&preprocessorSymbols))
+            return Interlocked.CompareExchange(&conditionalCompilation, created, nil) ?? created
         }
     }
 

@@ -58,7 +58,7 @@ open partial class Parser {
         // to the regular dispatch and drop the annotations on the floor
         // after reporting via ReportAnnotationsNotAllowedOnStatement.
         var leadingAnnotations = ImmutableArray[AnnotationSyntax].Empty
-        if Current.Kind == SyntaxKind.AtToken {
+        if Current.Kind == SyntaxKind.AtToken && !LooksLikeDefinedExpressionStatement() {
             leadingAnnotations = ParseAnnotations()
             // ADR-0175 / issue #3824: `@Ann { … }` is the annotated-block
             // statement form, which gives `@SuppressDiagnostic` a scope

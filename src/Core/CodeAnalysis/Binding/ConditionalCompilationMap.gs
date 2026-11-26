@@ -114,6 +114,7 @@ internal class ConditionalCompilationMap {
                 var active = ancestorActive
                 var effective = inherited
                 var count = 0
+                var hasConditionalAnnotation = false
                 let definitions = Dictionary[string, bool](StringComparer.Ordinal)
                 for annotation in annotations {
                     if node is CompilationUnitSyntax &&
@@ -125,6 +126,7 @@ internal class ConditionalCompilationMap {
                         )
                     }
                     if IsIf(annotation) {
+                        hasConditionalAnnotation = true
                         count++
                         if count > 1 {
                             treeMap.Diagnostics.ReportConditionalInclusionInvalid(
@@ -161,7 +163,9 @@ internal class ConditionalCompilationMap {
                         (
                         node is TupleDeconstructionStatementSyntax or
                             NamedDeconstructionStatementSyntax or
-                            MultiAssignmentStatementSyntax
+                            MultiAssignmentStatementSyntax or
+                            PropertyAccessorSyntax or
+                            EventAccessorSyntax
                     ) &&
                         !IsIntrinsic(annotation) {
                         treeMap.Diagnostics.ReportAnnotationsNotAllowedOnStatement(annotation.Location)
@@ -169,6 +173,7 @@ internal class ConditionalCompilationMap {
                     if !IsDefinition(annotation) {
                         continue
                     }
+                    hasConditionalAnnotation = true
                     if !IsAllowedOwner(node, annotation, inclusion: false) {
                         treeMap.Diagnostics.ReportScopedSymbolInvalid(
                             annotation.Location,
@@ -207,7 +212,7 @@ internal class ConditionalCompilationMap {
                         }
                     }
                 }
-                if node is CompilationUnitSyntax || !annotations.IsDefaultOrEmpty {
+                if node is CompilationUnitSyntax || hasConditionalAnnotation {
                     treeMap.Regions.Add(Region(node, effective, active))
                 }
                 for var i = node.ChildCount - 1; i >= 0; i-- {
