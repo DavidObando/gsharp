@@ -436,7 +436,12 @@ internal class LambdaBinder {
             TypeSymbol.Void
         )
         let isAsync = syntax.IsAsync ||
-            (isAsyncIteratorReturnType(returnType) && IteratorDetection.ContainsYield(syntax.Body))
+            (
+            isAsyncIteratorReturnType(returnType) && IteratorDetection.ContainsActiveYield(
+                syntax.Body,
+                Scope.ConditionalCompilation
+            )
+        )
         // Issue #1918 / #3907: an `async func` may spell its return-type clause
         // as the explicit `Task` / `Task[T]` / `ValueTask` / `ValueTask[T]`
         // wrapper instead of the bare awaited result. DeclarationBinder has
@@ -2672,7 +2677,10 @@ internal class LambdaBinder {
         binderCtx.NonNullByRefVariables.RemoveWhere((v VariableSymbol) -> !v.IsReadOnly)
         this.binderCtx.CurrentFallthroughTarget = nil
         this.binderCtx.CurrentFallthroughAnchor = nil
-        this.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(bodySyntax)
+        this.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(
+            bodySyntax,
+            Scope.ConditionalCompilation
+        )
         return saved
     }
 

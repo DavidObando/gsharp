@@ -1845,9 +1845,7 @@ internal partial class OverloadResolver {
             parameterOffset: 1
         )
         let MakeExtensionCall = func (returnType TypeSymbol?) BoundCallExpression {
-            return BoundCallExpression(ce, extension, finalArguments, returnType){
-                MethodTypeArguments = extensionMethodTypeArguments
-            }
+            return CreatePossiblyElidedCall(ce, extension, finalArguments, returnType, extensionMethodTypeArguments)
         }
         if substitution != nil {
             var returnType = substituteType(extension.Type, substitution)
@@ -2402,6 +2400,9 @@ internal partial class OverloadResolver {
             convertedArgs.ToImmutable(),
             callableParameterNameAt
         )
+        if KnownAttributes.IsConditionallyElided(method, Scope.ConditionalCompilation.SymbolsAt(ce)) {
+            return CreatePossiblyElidedCall(ce, method, finalArguments, method.Type, methodTypeArguments)
+        }
         let MakeCall = func (returnTypeOverride TypeSymbol?) BoundUserInstanceCallExpression {
             let result = BoundUserInstanceCallExpression(
                 ce,

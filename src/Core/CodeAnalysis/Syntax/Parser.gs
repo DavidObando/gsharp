@@ -249,7 +249,7 @@ open partial class Parser {
         }
         let builder = ImmutableArray.CreateBuilder[AnnotationSyntax]()
         while Current.Kind == SyntaxKind.AtToken && Peek(1).Kind == SyntaxKind.IdentifierToken &&
-            (Peek(1).Text is "assembly" or "module") &&
+            (Peek(1).Text is "assembly" or "module" or "file") &&
             Peek(2).Kind == SyntaxKind.ColonToken {
             builder.Add(ParseAnnotation())
         }
@@ -443,8 +443,7 @@ open partial class Parser {
             // Forward the parsed annotations onto the declaration and clear
             // the local so the trailing `member.WithAnnotations(annotations)`
             // does not double-attach.
-            if declaration is VariableDeclarationSyntax variableDeclaration {
-                variableDeclaration.WithAnnotations(annotations)
+            if AttachDeclarationAnnotations(declaration, annotations) {
                 annotations = ImmutableArray[AnnotationSyntax].Empty
             }
             member = GlobalStatementSyntax(syntaxTree, declaration)
@@ -471,8 +470,7 @@ open partial class Parser {
             // so the binder picks them up via VariableDeclarationSyntax.
             if !annotations.IsDefaultOrEmpty &&
                 member is GlobalStatementSyntax wrappingGlobal &&
-                wrappingGlobal.Statement is VariableDeclarationSyntax forwardingDeclaration {
-                forwardingDeclaration.WithAnnotations(annotations)
+                AttachDeclarationAnnotations(wrappingGlobal.Statement, annotations) {
                 annotations = ImmutableArray[AnnotationSyntax].Empty
             }
         }
@@ -728,6 +726,7 @@ open partial class Parser {
                 "event",
                 "module",
                 "assembly",
+                "file",
                 "genericparam" {
                     return true
                 }

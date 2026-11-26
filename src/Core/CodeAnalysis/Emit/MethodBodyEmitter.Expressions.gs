@@ -27,6 +27,9 @@ import System.Reflection.Metadata.Ecma335
 /// statement/expression dispatch, and small shared helpers).
 internal partial class MethodBodyEmitter {
     private func EmitExpression(expression BoundExpression) {
+        if expression is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+            return
+        }
         this.EmitExpressionCore(expression)
         if !this.SuppressNativeProtocolValidation {
             this.EmitNativeProtocolValidation(expression.Type)

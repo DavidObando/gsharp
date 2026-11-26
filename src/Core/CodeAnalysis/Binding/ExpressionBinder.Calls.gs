@@ -24,6 +24,24 @@ import System.Runtime.CompilerServices
 import System.Threading
 
 internal partial class ExpressionBinder {
+    private func ApplyConditionalCallElision(expression BoundExpression) BoundExpression {
+        var target = expression
+        while target is BoundBlockExpression block {
+            target = block.Expression
+        }
+        if target is BoundCallOperationExpression call &&
+            (
+            call.IsElidedConditionalCall || KnownAttributes.IsConditionallyElided(
+                call.CalledFunction,
+                $scope.ConditionalCompilation.SymbolsAt(call.Syntax)
+            )
+        ) {
+            call.IsElidedConditionalCall = true
+            return call
+        }
+        return expression
+    }
+
     private func BindWithExpression(syntax WithExpressionSyntax) BoundExpression {
         let receiver = BindExpression(syntax.Receiver)
         return LowerCopyOrWith(receiver, syntax.Initializers, syntax.WithToken.Location, syntax)

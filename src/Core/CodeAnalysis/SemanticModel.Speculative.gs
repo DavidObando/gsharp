@@ -38,6 +38,9 @@ partial class SemanticModel {
     ) TypeInfo {
         cancellationToken.ThrowIfCancellationRequested()
         ArgumentNullException.ThrowIfNull(expression)
+        if !compilation.ConditionalCompilation.IsActiveAt(syntaxTree, position) {
+            return TypeInfo(nil)
+        }
         // The enclosing function, constructors and accessors included, is the context. The locals in scope come
         // from LookupSymbols either way, so the locals of top-level statements are visible too. The globals are
         // reachable through the parent scope.
@@ -63,7 +66,8 @@ partial class SemanticModel {
             expression,
             syntaxTree,
             inConstructorInitializer,
-            localTypeParameters
+            localTypeParameters,
+            compilation.ConditionalCompilation.SymbolsAt(syntaxTree, position)
         )
         return TypeInfo(type)
     }

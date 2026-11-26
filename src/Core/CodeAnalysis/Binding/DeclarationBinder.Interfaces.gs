@@ -86,7 +86,7 @@ internal partial class DeclarationBinder {
                     "only nongeneric protocols with synchronous by-value method slots are supported"
                 )
             }
-            for method in syntax.Methods {
+            for method in $scope.ConditionalCompilation.Filter(syntax.Methods) {
                 if method.TypeParameterList != nil ||
                     method.Body != nil ||
                     method.HasStaticModifier ||
@@ -224,7 +224,7 @@ internal partial class DeclarationBinder {
         let staticMethodsBuilder = ImmutableArray.CreateBuilder[FunctionSymbol]()
         let privateMethodsBuilder = ImmutableArray.CreateBuilder[FunctionSymbol]()
         let staticPrivateMethodsBuilder = ImmutableArray.CreateBuilder[FunctionSymbol]()
-        for methodSyntax in syntax.Methods {
+        for methodSyntax in $scope.ConditionalCompilation.Filter(syntax.Methods) {
             let methodName = methodSyntax.Identifier.ValueText
             // ADR-0089 / issue #755: detect a `static` modifier early — the
             // method is a static-virtual interface member. Static methods do
@@ -398,7 +398,12 @@ internal partial class DeclarationBinder {
                     isAsyncIteratorReturnType(returnType) &&
                         (
                         methodSyntax.HasSemicolonBody ||
-                            (methodSyntax.Body is {} body && IteratorDetection.ContainsYield(body))
+                            (
+                            methodSyntax.Body is {} body && IteratorDetection.ContainsActiveYield(
+                                body,
+                                $scope.ConditionalCompilation
+                            )
+                        )
                     )
                 )
                 methodSymbol.IsAsyncVoid = methodIsAsyncVoid
@@ -505,7 +510,7 @@ internal partial class DeclarationBinder {
             // ADR-0187 / issue #4350: interface indexers overload by
             // index-parameter signature, like struct and class indexers.
             let declaredIndexerSignatures = List[ImmutableArray[ParameterSymbol]]()
-            for propSyntax in syntax.Properties {
+            for propSyntax in $scope.ConditionalCompilation.Filter(syntax.Properties) {
                 // ADR-0149 (issue #944 follow-up): an interface indexer
                 // (`prop this[i int32] T`) is bound exactly like a
                 // struct/class indexer (ADR-0118) — CLR name "Item", carrying
@@ -737,7 +742,7 @@ internal partial class DeclarationBinder {
         // ADR-0052: bind interface event declarations.
         if !syntax.Events.IsDefaultOrEmpty {
             let eventsBuilder = ImmutableArray.CreateBuilder[EventSymbol]()
-            for eventSyntax in syntax.Events {
+            for eventSyntax in $scope.ConditionalCompilation.Filter(syntax.Events) {
                 let eventName = eventSyntax.Identifier.ValueText
                 if !seenNames.Add(eventName) {
                     Diagnostics.ReportSymbolAlreadyDeclared(eventSyntax.Identifier.Location, eventName)
@@ -879,7 +884,7 @@ internal partial class DeclarationBinder {
             let pendingStaticInitializers = List[
                 (Field FieldSymbol, InitSyntax ExpressionSyntax, FieldType TypeSymbol)
             ]()
-            for fieldSyntax in syntax.StaticFields {
+            for fieldSyntax in $scope.ConditionalCompilation.Filter(syntax.StaticFields) {
                 let fieldName = fieldSyntax.Identifier.ValueText
                 if !seenNames.Add(fieldName) {
                     Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName)
@@ -1058,7 +1063,7 @@ internal partial class DeclarationBinder {
             var staticIdx = 0
             var privateInstanceIdx = 0
             var privateStaticIdx = 0
-            for methodSyntax in syntax.Methods {
+            for methodSyntax in $scope.ConditionalCompilation.Filter(syntax.Methods) {
                 let isPrivate = methodSyntax.AccessibilityModifier != nil && string.Equals(
                     methodSyntax.AccessibilityModifier.Text,
                     "private",

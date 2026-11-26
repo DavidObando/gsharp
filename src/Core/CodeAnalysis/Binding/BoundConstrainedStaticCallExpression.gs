@@ -113,8 +113,8 @@ class BoundConstrainedStaticCallExpression : BoundCallOperationExpression {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    override prop Type TypeSymbol -> ReturnType ?? InterfaceMethod?.Type ?? ClrNullability.GetReturnTypeSymbol(
-        ClrMethod!!
+    override prop Type TypeSymbol -> GetConditionalCallType(
+        ReturnType ?? InterfaceMethod?.Type ?? ClrNullability.GetReturnTypeSymbol(ClrMethod!!)
     )
 
     /// Gets the type-parameter symbol that supplies the runtime receiver (the `T` in `T.M(...)`).

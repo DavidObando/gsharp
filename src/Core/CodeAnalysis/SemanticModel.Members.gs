@@ -82,6 +82,9 @@ partial class SemanticModel {
         cancellationToken CancellationToken = default(CancellationToken)
     ) ImmutableArray[Symbol] {
         cancellationToken.ThrowIfCancellationRequested()
+        if !compilation.ConditionalCompilation.IsActiveAt(syntaxTree, position) {
+            return ImmutableArray[Symbol].Empty
+        }
         index.Get(cancellationToken)
         let result = ImmutableArray.CreateBuilder[Symbol]()
         let receiver = UnwrapNullability(type)
@@ -820,6 +823,9 @@ partial class SemanticModel {
         cancellationToken CancellationToken = default(CancellationToken)
     ) ImmutableArray[Symbol] {
         cancellationToken.ThrowIfCancellationRequested()
+        if !compilation.IsActive(node) {
+            return ImmutableArray[Symbol].Empty
+        }
         index.Get(cancellationToken)
         // Without recording the candidates are unknown, and a group of the selected callee alone would
         // look complete. The query answers nothing instead.

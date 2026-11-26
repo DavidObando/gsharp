@@ -84,14 +84,15 @@ internal shared class PartialTypeMerger {
     func MergeStructs(
         declarations IEnumerable[StructDeclarationSyntax],
         packageByTree IReadOnlyDictionary[SyntaxTree, PackageSymbol],
-        diagnostics DiagnosticBag
+        diagnostics DiagnosticBag,
+        activeCode ConditionalCompilationMap? = nil
     ) IReadOnlyList[StructDeclarationSyntax] {
         let result = List[StructDeclarationSyntax]()
         for group in GroupByKey(declarations, packageByTree) {
             if group.Count == 1 {
                 // A lone declaration is not merged, but it may still contain
                 // `partial` NESTED types that must be merged among themselves.
-                result.Add(NormalizeNestedTypes(group[0], diagnostics))
+                result.Add(NormalizeNestedTypes(group[0], diagnostics, activeCode))
                 continue
             }
             let anyPartial = group.Any((d StructDeclarationSyntax) -> d.IsPartial)
@@ -100,10 +101,12 @@ internal shared class PartialTypeMerger {
                 // DeclareStructShell fires for the second and later parts. Do
                 // not merge or suppress it (but still normalize each one's
                 // nested types).
-                result.AddRange(group.Select((g StructDeclarationSyntax) -> NormalizeNestedTypes(g, diagnostics)))
+                result.AddRange(
+                    group.Select((g StructDeclarationSyntax) -> NormalizeNestedTypes(g, diagnostics, activeCode))
+                )
                 continue
             }
-            result.Add(MergeStructGroup(group, diagnostics))
+            result.Add(MergeStructGroup(group, diagnostics, activeCode))
         }
         // ADR-0192 / issue #4301: with every type's parts now concatenated into
         // one declaration, the declaring and implementing parts of each
@@ -118,9 +121,9 @@ internal shared class PartialTypeMerger {
         // merged, so the parsed tree (reused across compilations) keeps the
         // original parts.
         for var i = 0; i < result.Count; i++ {
-            result[i] = PartialMethodMerger.Normalize(result[i], diagnostics)
+            result[i] = PartialMethodMerger.Normalize(result[i], diagnostics, activeCode)
             // ADR-0195: then put every `shared class` in the shape the binder reads.
-            result[i] = SharedClassNormalizer.Normalize(result[i], diagnostics)
+            result[i] = SharedClassNormalizer.Normalize(result[i], diagnostics, activeCode)
         }
         return result
     }
@@ -231,7 +234,8 @@ internal shared class PartialTypeMerger {
     // ─────────────────────────────────────────────────────────────────────────
     private func MergeStructGroup(
         parts List[StructDeclarationSyntax],
-        diagnostics DiagnosticBag
+        diagnostics DiagnosticBag,
+        activeCode ConditionalCompilationMap? = nil
     ) StructDeclarationSyntax {
         let primary = parts[0]
         let name = primary.Identifier?.Text ?? string.Empty
@@ -315,7 +319,7 @@ internal shared class PartialTypeMerger {
         var deinit DeinitDeclarationSyntax? = nil
         for part in parts {
             let deinitializer DeinitDeclarationSyntax? = part.Deinitializer
-            if deinitializer == nil {
+            if deinitializer == nil || activeCode?.IsActive(deinitializer) == false {
                 continue
             }
             if deinit == nil {
@@ -370,7 +374,8 @@ internal shared class PartialTypeMerger {
             Deinitializer = deinit,
             NestedTypes = MergePartialNestedTypes(
                 Concat[StructDeclarationSyntax, MemberSyntax](parts, (p StructDeclarationSyntax) -> p.NestedTypes),
-                diagnostics
+                diagnostics,
+                activeCode
             ),
             TypeParameterList = primary.TypeParameterList,
             RefModifier = parts.Select((p StructDeclarationSyntax) -> p.RefModifier).FirstOrDefault(
@@ -696,11 +701,15 @@ internal shared class PartialTypeMerger {
     /// merged into one. The same node instance is returned when nothing changed
     /// (the common case), so a lone declaration without nested partials is passed
     /// through untouched.
-    private func NormalizeNestedTypes(node StructDeclarationSyntax, diagnostics DiagnosticBag) StructDeclarationSyntax {
+    private func NormalizeNestedTypes(
+        node StructDeclarationSyntax,
+        diagnostics DiagnosticBag,
+        activeCode ConditionalCompilationMap? = nil
+    ) StructDeclarationSyntax {
         if node.NestedTypes.IsDefaultOrEmpty {
             return node
         }
-        let merged = MergePartialNestedTypes(node.NestedTypes, diagnostics)
+        let merged = MergePartialNestedTypes(node.NestedTypes, diagnostics, activeCode)
         // ImmutableArray<T>.Equals compares the backing-array reference, so this
         // is true only when MergePartialNestedTypes returned the same instance
         // (nothing merged). Never mutate the parsed node in place (issue #4399).
@@ -715,9 +724,12 @@ internal shared class PartialTypeMerger {
     /// Non-partial members, enums, and singleton types are preserved in place and
     /// in first-appearance order; when no nested partial group exists the input
     /// array is returned unchanged (reference-equal) so callers can skip mutation.
-    private func MergePartialNestedTypes(nested ImmutableArray[MemberSyntax], diagnostics DiagnosticBag) ImmutableArray[
-        MemberSyntax
-    ] {
+    private func MergePartialNestedTypes(
+        nested ImmutableArray[MemberSyntax],
+        diagnostics DiagnosticBag,
+        activeCode ConditionalCompilationMap? = nil
+    ) ImmutableArray[MemberSyntax] {
+        var nested = activeCode?.Filter(nested) ?? nested
         if nested.IsDefaultOrEmpty {
             return nested
         }
@@ -735,7 +747,8 @@ internal shared class PartialTypeMerger {
         ) {
             mergedStructByName[(g[0].Identifier?.Text ?? string.Empty, GetArity(g[0]))] = MergeStructGroup(
                 g,
-                diagnostics
+                diagnostics,
+                activeCode
             )
         }
         for g in interfaceGroups.Where(
@@ -756,7 +769,7 @@ internal shared class PartialTypeMerger {
                     rebuilt?.Add(nested[i])
                     continue
                 }
-                let normalized = NormalizeNestedTypes(nestedStruct, diagnostics)
+                let normalized = NormalizeNestedTypes(nestedStruct, diagnostics, activeCode)
                 if rebuilt == nil && !object.ReferenceEquals(normalized, nestedStruct) {
                     rebuilt = ImmutableArray.CreateBuilder[MemberSyntax](nested.Length)
                     rebuilt.AddRange(nested, i)
@@ -783,7 +796,7 @@ internal shared class PartialTypeMerger {
                         // Later parts of the same group are dropped (already merged).
 
                     } else {
-                        result.Add(NormalizeNestedTypes(s, diagnostics))
+                        result.Add(NormalizeNestedTypes(s, diagnostics, activeCode))
                     }
                 }
                 case iface is InterfaceDeclarationSyntax {
