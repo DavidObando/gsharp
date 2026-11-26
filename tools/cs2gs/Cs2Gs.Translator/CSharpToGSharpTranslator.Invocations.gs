@@ -838,12 +838,21 @@ partial class CSharpToGSharpTranslator {
             out call GExpression,
             hostLocalAssignmentSeam bool
         ) {
+            let translatedReceiver = this.TranslateExpression(conditionalAccess.Expression)
             let receiver GExpression? = this.CaptureReceiverOnce(
-                this.TranslateExpression(conditionalAccess.Expression),
+                translatedReceiver,
                 conditionalAccess.Expression,
                 "a conditional-access helper call here has no enclosing evaluation seam to capture its receiver once."
             )
-            var helperReceiver GExpression? = NonNullAssertionExpression(receiver)
+            var helperReceiver GExpression? = if this.GuardedReceiverIsNarrowed(
+                conditionalAccess.Expression,
+                translatedReceiver,
+                receiver
+            ) {
+                receiver
+            } else {
+                cast[GExpression](NonNullAssertionExpression(receiver))
+            }
             if chainedReceiver != nil {
                 helperReceiver = this.TranslateWithConditionalReceiver(chainedReceiver, helperReceiver)
             }
@@ -883,6 +892,33 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             $guard = BinaryExpression(receiver, "!=", LiteralExpression.Null())
+        }
+
+        private func GuardedReceiverIsNarrowed(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            translatedReceiver GExpression?,
+            receiver GExpression?
+        ) bool {
+            if !object.ReferenceEquals(receiver, translatedReceiver) {
+                // CaptureReceiverOnce spilled into a fresh `let` local; `if receiver != nil` narrows it.
+                return true
+            }
+            if this.GSharpExpressionIsStaticallyNonNull(expression, translatedReceiver) {
+                return true
+            }
+            if receiver is not IdentifierExpression {
+                return false
+            }
+            let unwrapped = UnwrapParenthesesAndSuppressions(expression)
+            if unwrapped is not IdentifierNameSyntax {
+                return false
+            }
+            let symbol ISymbol? = this.context.GetSymbolInfo(unwrapped).Symbol
+            return (symbol is ILocalSymbol || symbol is IParameterSymbol) && !this.IsPrimaryConstructorFieldRead(
+                symbol!!,
+                unwrapped
+            ) &&
+                !this.IsSymbolReassigned(symbol, this.state.CurrentBodyScope)
         }
 
         private func TranslateWithConditionalReceiver(

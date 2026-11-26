@@ -566,6 +566,22 @@ shared class GSharpPrinter {
         0
     )
 
+    private func RequiresCastIntrinsicTarget(targetType GTypeReference?) bool -> switch targetType {
+        case _ is PointerTypeReference,
+        _ is FunctionPointerTypeReference,
+        _ is TupleTypeReference,
+        _ is NativeSliceTypeReference,
+        _ is ManagedReferenceTypeReference,
+        _ is ArrowTypeReference: true
+        case array is ArrayTypeReference: RequiresCastIntrinsicTarget(array.ElementType)
+        default: false
+    }
+
+    private func IsCastIntrinsicConversion(
+        expression GExpression?
+    ) bool -> expression is ConversionExpression conversion &&
+        (conversion.IsCheckedReferenceCast || RequiresCastIntrinsicTarget(conversion.TargetType))
+
     // Issue #4350 (review): a first-class Index/Range expression used as the
     // target of member access, a call, or an index keeps its grouping —
     // `(^i).Value` would otherwise print `^i.Value` (parsed `^(i.Value)`), and
@@ -706,7 +722,15 @@ shared class GSharpPrinter {
                 return "this"
             }
             case member is MemberAccessExpression {
-                return "${RenderPostfixTarget(member.Target, indent)}${(if member.IsArrow { "->" } else { "." })}${member.MemberName}"
+                let targetText = if member.IsArrow && IsCastIntrinsicConversion(member.Target) {
+                    // `gsc` desugars `expr->Member` to `(*expr).Member`, whose
+                    // `*CallExpression` rule would otherwise read `cast[*T](x)`
+                    // as a pointer cast to `**T`.
+                    "(${RenderExpression(member.Target, indent)})"
+                } else {
+                    RenderPostfixTarget(member.Target, indent)
+                }
+                return "$targetText${(if member.IsArrow { "->" } else { "." })}${member.MemberName}"
             }
             case invocation is InvocationExpression {
                 let typeArgs = if invocation.TypeArguments.Count == 0 {
@@ -779,7 +803,7 @@ shared class GSharpPrinter {
                 return RenderCollectionInitializer(collection, indent)
             }
             case conversion is ConversionExpression {
-                return if conversion.IsCheckedReferenceCast {
+                return if IsCastIntrinsicConversion(conversion) {
                     "cast[${RenderType(conversion.TargetType)}](${RenderExpression(conversion.Operand, indent)})"
                 } else {
                     "${RenderType(conversion.TargetType)}(${RenderExpression(conversion.Operand, indent)})"
@@ -830,7 +854,14 @@ shared class GSharpPrinter {
                     // binary operator — so a binary-expression operand (e.g. a
                     // stray `BinaryExpression` reaching here without an explicit
                     // `ParenthesizedExpression` wrapper) must be parenthesized.
-                    let operandText = RenderExpression(unary.Operand, indent, UnaryPrecedence)
+                    // Dereferencing `cast[*T](x)` must also parenthesize the
+                    // cast so `gsc`'s `*CallExpression` rule does not read it
+                    // as a cast to `**T` (issue #6245).
+                    let operandText = if unary.Operator == "*" && IsCastIntrinsicConversion(unary.Operand) {
+                        "(${RenderExpression(unary.Operand, indent)})"
+                    } else {
+                        RenderExpression(unary.Operand, indent, UnaryPrecedence)
+                    }
                     // Issue #1721: nested same-character prefix operators
                     // silently coalesce into a different token if printed with
                     // no separating space — `!!flag` (double logical negation)
