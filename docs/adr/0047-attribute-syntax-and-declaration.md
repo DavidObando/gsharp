@@ -140,6 +140,13 @@ The `@Attribute` annotation is the sole tag for this sugar. We do not adopt Kotl
 
 ### 6. Compiler-recognised attributes
 
+[ADR-0230](0230-scoped-conditional-symbol-definitions.md) specifies scoped symbol
+definitions and a restricted `file` target for compiler-intrinsic annotations.
+Conditional-call decisions use symbol state at the call's lexical position.
+[ADR-0231](0231-conditional-inclusion-and-symbol-queries.md) specifies conditional
+inclusion and the `@defined` expression intrinsic.
+These contracts require implementation and release before existing SDK consumers can use them.
+
 A small, closed set of attributes drive compiler behaviour today (the binder's hand-rolled recognisers). Going forward they are looked up by **type identity**, not by string name, and only after step 3 (§3) has bound the annotation to a `Type`. The recognised set in v1.0:
 
 | Attribute                              | Recognised position             | Compiler effect                         |

@@ -65,6 +65,216 @@ open class Adr0225PrefixBindReuseTests {
         )
     }
 
+    /// #6178: successive cuts in one member body of a script reuse the declarations, with the top-level
+    /// statements before and after the member unchanged, and report what a bind from scratch reports.
+    @Fact
+    func SuccessiveCutsInAMemberOfAScript_ReuseTheDeclarations() {
+        var checks = 0
+        var withGlobals = 0
+        var reusesWithGlobals = 0
+        var scratchTicks = 0L
+        var reusedTicks = 0L
+        let wrong = List[string]()
+        using let measurements = CompilationMeasurements.Start("test")
+        for file in SampleFiles() {
+            let tree = SyntaxTree.Parse(SourceText.From(File.ReadAllText(file), file))
+            if !tree.Root.Members.Any((m MemberSyntax) -> m is GlobalStatementSyntax) {
+                continue
+            }
+            let compilation = Compilation(tree)
+            for remainder in[]PrefixRemainder{PrefixRemainder.KeepDeclarations, PrefixRemainder.Nothing} {
+                for body in FunctionBodies(tree) {
+                    var previous PrefixBindResult? = nil
+                    for statement in body.Statements.Take(6) {
+                        let cut = statement.Span.End
+                        let options = PrefixBindOptions(remainder)
+                        var watch = System.Diagnostics.Stopwatch.StartNew()
+                        let scratch = compilation.BindPrefix(tree, cut, options)
+                        scratchTicks += watch.ElapsedTicks
+                        let reusesBefore = measurements.GetCounter("declarations.reuses")
+                        watch = System.Diagnostics.Stopwatch.StartNew()
+                        let reused = compilation.BindPrefix(tree, cut, options, previous)
+                        reusedTicks += watch.ElapsedTicks
+                        // A chained bind whose prefix keeps top-level statements is the case of #6178.
+                        if previous != nil &&
+                            reused.SyntaxTree.Root.Members.Any((m MemberSyntax) -> m is GlobalStatementSyntax) {
+                            withGlobals++
+                            if measurements.GetCounter("declarations.reuses") > reusesBefore {
+                                reusesWithGlobals++
+                            }
+                        }
+                        checks++
+                        if Describe(scratch) != Describe(reused) {
+                            wrong.Add(
+                                "${Path.GetFileName(file)} ${remainder} cut ${cut}:\n${Describe(scratch)}\n---\n${Describe(reused)}"
+                            )
+                        }
+                        previous = reused
+                    }
+                }
+            }
+        }
+        let reuses = measurements.GetCounter("declarations.reuses")
+        Console.WriteLine(
+            "#6178 script cuts: ${checks}, declaration reuses: ${reuses}, with top-level statements ${reusesWithGlobals} of ${withGlobals}, scratch ${scratchTicks * 1000 / System.Diagnostics.Stopwatch.Frequency} ms, chained ${reusedTicks * 1000 / System.Diagnostics.Stopwatch.Frequency} ms"
+        )
+        Assert.True(checks > 200, "checked ${checks} cuts")
+        Assert.True(wrong.Count == 0, string.Join("\n\n", wrong.Take(5)))
+        // Only the cuts that keep the declarations can reuse them (ADR-0225 D6.8), and the cuts in files
+        // that have no top-level statements in the prefix reuse them without #6178. Every chained cut whose prefix keeps top-level statements is the case of #6178.
+        Assert.True(withGlobals > 50, "${withGlobals} chained cuts keep top-level statements")
+        Assert.True(
+            reusesWithGlobals > withGlobals / 2,
+            "${reusesWithGlobals} declaration reuses in ${withGlobals} chained cuts that keep top-level statements"
+        )
+    }
+
+    /// #6178: a script whose open body starts to suspend (ADR-0174), and a script whose globals read a type of
+    /// another tree, report on chained cuts what a bind from scratch reports.
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ChainedCutsOfAScriptWithSuspensionOrAnotherTree_ReportWhatABindFromScratchReports(otherTree bool) {
+        let source = if otherTree {
+            "package P\n\nlet e = E()\nlet value = e.Message\n\nfunc F() {\n    let a = 1\n    let b int32 = value\n    let c = 2\n    let d = 3\n}\n"
+        } else {
+            "package P\n\nlet ch = chan[int32](1)\nlet run = func () {\n    Work()\n}\nWork()\nlet after = 0\n\nfunc Work() {\n    let a = 1\n    ch <- a\n    let b = 2\n    let c = 3\n}\n"
+        }
+        let tree = SyntaxTree.Parse(SourceText.From(source, "script.gs"))
+        let compilation = if otherTree {
+            Compilation(
+                SyntaxTree.Parse(SourceText.From("package P\n\npartial class E : System.Exception {\n}\n", "e.gs")),
+                tree
+            )
+        } else {
+            Compilation(tree)
+        }
+        let body = tree.Root.DescendantNodes().OfType[FunctionDeclarationSyntax]().Last().Body!!
+        for remainder in[]PrefixRemainder{PrefixRemainder.KeepDeclarations, PrefixRemainder.Nothing} {
+            var previous PrefixBindResult? = nil
+            for statement in body.Statements {
+                let options = PrefixBindOptions(remainder)
+                let scratch = compilation.BindPrefix(tree, statement.Span.End, options)
+                let reused = compilation.BindPrefix(tree, statement.Span.End, options, previous)
+                Assert.Equal(Describe(scratch), Describe(reused))
+                previous = reused
+            }
+        }
+    }
+
+    /// #6178: cuts in the top-level statements, and a function whose return type its body infers, bind on a
+    /// chain as from scratch.
+    @Theory
+    @InlineData(
+        "package P\n\nimport System.Math\n\nlet value = Abs(1)\n\n\n\nfunc Use() {\n    let x string = value\n}\n",
+        false
+    )
+    @InlineData(
+        "package P\n\nlet m = Make()\n\nfunc Make() {\n    let a = 1\n    return object {\n        let X = 1\n    }\n}\n",
+        true
+    )
+    @InlineData(
+        "package P\n\nlet unrelated = 1\n\nfunc Make() {\n    return object {\n        let X = 1\n    }\n}\n\nfunc Use() int32 {\n    return Make().X\n}\n",
+        true
+    )
+    func ChainedCutsOfAScriptThatLaterTextCanChange_ReportWhatABindFromScratchReports(source string, inBody bool) {
+        let tree = SyntaxTree.Parse(SourceText.From(source, "script.gs"))
+        let compilation = Compilation(tree)
+        let cuts = List[int32]()
+        if inBody {
+            let make = tree
+                .Root
+                .DescendantNodes()
+                .OfType[FunctionDeclarationSyntax]()
+                .First((f FunctionDeclarationSyntax) -> f.Identifier.ValueText == "Make")
+                .Body!!
+            cuts.Add(make.OpenBraceToken.Span.End)
+            for statement in make.Statements {
+                cuts.Add(statement.Span.End)
+            }
+        } else {
+            let start = source.IndexOf("Abs(1)", StringComparison.Ordinal) + "Abs(1)".Length
+            cuts.Add(start + 1)
+            cuts.Add(start + 2)
+            cuts.Add(start + 3)
+        }
+        var previous PrefixBindResult? = nil
+        for cut in cuts {
+            let options = PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+            let scratch = compilation.BindPrefix(tree, cut, options)
+            let reused = compilation.BindPrefix(tree, cut, options, previous)
+            Assert.Equal(Describe(scratch), Describe(reused))
+            previous = reused
+        }
+    }
+
+    /// #6178: a chain that moves from the top-level statements into a member body, a global of another tree
+    /// that reads a missing name, and an async iterator whose first `yield` arrives between cuts all bind as
+    /// from scratch. Each cut ends after a marker of the `|`-separated list.
+    @Theory
+    @InlineData(
+        "package P\n\nlet bad = missing\n\n\n\nfunc F() {\n    let a = 1\n    let b = 2\n}\n",
+        "",
+        "missing\n\n|missing\n\n\n|let a = 1|let b = 2"
+    )
+    @InlineData(
+        "package P\n\nlet x = 1\n\n\n\nfunc F() {\n    let a = 1\n    let b = 2\n}\n",
+        "package P\n\nlet bad = missing\n",
+        "x = 1\n\n|x = 1\n\n\n|let a = 1|let b = 2"
+    )
+    @InlineData(
+        "package P\n\nimport System.Collections.Generic\nimport System.IO\n\nlet unrelated = 1\n\nfunc Items() IAsyncEnumerable[int32] {\n    await using let s = MemoryStream()\n    let a = 1\n    yield a\n    let b = 2\n}\n",
+        "",
+        "int32] {|MemoryStream()|let a = 1|yield a|let b = 2"
+    )
+    func ChainedCutsOfAScriptAcrossItsParts_ReportWhatABindFromScratchReports(
+        source string,
+        other string,
+        markers string
+    ) {
+        let tree = SyntaxTree.Parse(SourceText.From(source, "script.gs"))
+        let compilation = if other.Length == 0 {
+            Compilation(tree)
+        } else {
+            Compilation(SyntaxTree.Parse(SourceText.From(other, "other.gs")), tree)
+        }
+        var previous PrefixBindResult? = nil
+        for marker in markers.Split('|') {
+            let cut = source.IndexOf(marker, StringComparison.Ordinal) + marker.Length
+            let options = PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+            let scratch = compilation.BindPrefix(tree, cut, options)
+            let reused = compilation.BindPrefix(tree, cut, options, previous)
+            Assert.Equal(Describe(scratch), Describe(reused))
+            previous = reused
+        }
+    }
+
+    /// #6178: a reused global of a script points at the new prefix tree, so the semantic model of the result
+    /// answers its declaration.
+    @Fact
+    func ReusedGlobalOfAScript_IsDeclaredInTheNewPrefixTree() {
+        const source = "package P\n\nlet total = 1\nlet more = total + 1\n\nfunc F() int32 {\n    let a = total\n    let b = a + 1\n    let c = b + 1\n    return c\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "script.gs"))
+        let compilation = Compilation(tree)
+        using let measurements = CompilationMeasurements.Start("test")
+        let options = PrefixBindOptions(PrefixRemainder.KeepDeclarations)
+        let first = compilation.BindPrefix(tree, source.IndexOf("    let b", StringComparison.Ordinal), options)
+        let second = compilation.BindPrefix(tree, source.IndexOf("    let c", StringComparison.Ordinal), options, first)
+        Assert.True(measurements.GetCounter("declarations.reuses") > 0)
+        let model = second.Compilation.GetSemanticModel(second.SyntaxTree)
+        let declaration = second
+            .SyntaxTree
+            .Root
+            .DescendantNodes()
+            .OfType[VariableDeclarationSyntax]()
+            .First((v VariableDeclarationSyntax) -> v.Identifier.ValueText == "total")
+        Assert.Equal("total", model.GetDeclaredSymbol(declaration)?.Name)
+        Assert.All(
+            Assert.IsAssignableFrom[Symbol](model.GetDeclaredSymbol(declaration)).DeclaringSyntaxNodes,
+            (n SyntaxNode) -> Assert.Same(second.SyntaxTree, n.SyntaxTree)
+        )
+    }
+
     /// A body that the open body makes suspending (ADR-0174) is reported as from scratch: the closed
     /// caller's report changes when the open body gets a channel operation.
     @Fact

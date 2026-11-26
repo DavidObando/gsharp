@@ -63,11 +63,14 @@ import System
 /// skeletons differ and forces a full rebuild (correctness-preserving
 /// over-invalidation).
 ///
-/// The single remaining outright bail is a file containing top-level statements
-/// (the synthesized `<Main>$` entry-point body): that body is bound
-/// from (cref:BoundGlobalScope.Statements) rather than from a
-/// member-declaration node, so it is not member-addressable for re-pointing.
-/// Such a file falls back to a full rebuild.
+/// A file containing top-level statements (the synthesized `<Main>$` entry-point
+/// body) is reused only when the previous and the edited tree share their text,
+/// as successive cuts of a prefix chain do (#6178, ADR-0225 D6.6). That body is
+/// bound from (cref:BoundGlobalScope.Statements) rather than from a
+/// member-declaration node, so the reused statements keep the previous tree's
+/// syntax; with a shared text their spans and text stay valid. The globals that
+/// the statements declare are re-pointed positionally. Otherwise such a file
+/// falls back to a full rebuild.
 internal shared class IncrementalGlobalScopeReuse {
     private enum EventAccessorKind {
         Add,
@@ -107,7 +110,13 @@ internal shared class IncrementalGlobalScopeReuse {
         // The edited file must not contain any construct this phase cannot
         // re-point soundly (top-level statements only — see remarks). Reject on
         // either side.
-        if ContainsUnsupportedConstruct(previousTree) || ContainsUnsupportedConstruct(updatedTree) {
+        // #6178: top-level statements are supported only when both trees share their text, which successive
+        // cuts of one prefix chain do (ADR-0225 D6.6). The bound global statements then keep valid spans
+        // and the same text, and the skeleton check below proves that the statements did not change.
+        let sharesText = object.ReferenceEquals(previousText, updatedText) &&
+            ReusableGlobalStatements($scope, previousTree, updatedTree)
+        if ContainsUnsupportedConstruct(previousTree, allowTopLevelStatements: sharesText) ||
+            ContainsUnsupportedConstruct(updatedTree, allowTopLevelStatements: sharesText) {
             return false
         }
         // Blank out every body-bearing member body and require everything else —
@@ -236,6 +245,36 @@ internal shared class IncrementalGlobalScopeReuse {
                 return false
             }
             typeAliasesToRepoint.Add((aliasSymbol, updated))
+        }
+        // #6178: the globals that top-level statements declare map positionally: the skeleton check proved
+        // that the statements are the same text, so their nodes are the same in document order.
+        let globalsToRepoint = List[(Symbol VariableSymbol, Updated SyntaxNode)]()
+        let previousGlobalNodes = GlobalStatementNodes(previousTree)
+        let updatedGlobalNodes = GlobalStatementNodes(updatedTree)
+        if previousGlobalNodes.Count != updatedGlobalNodes.Count {
+            return false
+        }
+        if previousGlobalNodes.Count > 0 {
+            let globalMap = Dictionary[SyntaxNode, SyntaxNode](ReferenceEqualityComparer.Instance)
+            for var i = 0; i < previousGlobalNodes.Count; i++ {
+                let before = previousGlobalNodes[i]
+                let after = updatedGlobalNodes[i]
+                if before.Kind != after.Kind ||
+                    before.Span.Start != after.Span.Start ||
+                    before.Span.Length != after.Span.Length {
+                    return false
+                }
+                globalMap[before] = after
+            }
+            for variable in $scope.Variables {
+                if variable.DeclaringSyntax is not{} declaration || declaration.SyntaxTree != previousTree {
+                    continue
+                }
+                if !globalMap.TryGetValue(declaration, out var updatedDeclaration) {
+                    return false
+                }
+                globalsToRepoint.Add((variable, updatedDeclaration))
+            }
         }
         let constructorsToRepoint = List[(Symbol ConstructorSymbol, Updated ConstructorDeclarationSyntax)]()
         let deinitsToRepoint = List[(Symbol DeinitSymbol, Updated DeinitDeclarationSyntax)]()
@@ -401,6 +440,9 @@ internal shared class IncrementalGlobalScopeReuse {
         for (symbol, updated) in importsToRepoint {
             symbol.RepointDeclaration(updated)
         }
+        for (symbol, updated) in globalsToRepoint {
+            symbol.RepointDeclaration(updated)
+        }
         for (symbol, updated) in functionsToRepoint {
             symbol.RepointDeclaration(updated)
         }
@@ -525,12 +567,80 @@ internal shared class IncrementalGlobalScopeReuse {
         }
     }
 
-    private func ContainsUnsupportedConstruct(tree SyntaxTree) bool {
+    // #6178: the reused global statements keep their bound form, so nothing that the open body can change
+    // may affect them. With nothing after the cut, or with the cut in the top-level statements, a report in
+    // them reads the provisional expressions of the prefix cut (ADR-0225 D6.8), which only a bind records.
+    // A suspending function (ADR-0174) can change how a retained call of it is bound, and a return type that
+    // a body infers can change with the open body, so neither may occur before or after the edit.
+    private func ReusableGlobalStatements(
+        $scope BoundGlobalScope,
+        previousTree SyntaxTree,
+        updatedTree SyntaxTree
+    ) bool {
+        // A later declaration or overload can still change what a retained statement resolved to, and only a
+        // bind records that (the cut in the top-level statements, or nothing kept). The reused statements carry
+        // the finality of the previous cut, so both cuts must rule it out.
+        if !KeepsEveryLaterDeclaration(previousTree) || !KeepsEveryLaterDeclaration(updatedTree) {
+            return false
+        }
+        // A return type that a body infers can change with the open body.
+        for function in EnumerateFunctionSymbols($scope) {
+            if function.IsSuspending || function.IsReturnTypeInferred {
+                return false
+            }
+        }
+        // A function without a return type whose body returns an anonymous object takes the object's type
+        // (DeclarationBinder), so the open body can change a signature; neither tree may have one.
+        if InfersAnonymousReturn(previousTree) || InfersAnonymousReturn(updatedTree) {
+            return false
+        }
+        // A function becomes an async iterator with its first `yield`, and the reused symbol keeps
+        // the earlier classification, so neither tree may have one.
+        for node in Descendants(previousTree.Root) {
+            if node.Kind == SyntaxKind.YieldStatement {
+                return false
+            }
+        }
+        for node in Descendants(updatedTree.Root) {
+            if node.Kind == SyntaxKind.YieldStatement ||
+                node.Kind == SyntaxKind.LeftArrowToken ||
+                node.Kind == SyntaxKind.GoStatement ||
+                node.Kind == SyntaxKind.ChannelReceiveExpression ||
+                node.Kind == SyntaxKind.ChannelSendStatement ||
+                node.Kind == SyntaxKind.SelectStatement ||
+                node.Kind == SyntaxKind.SuspendKeyword {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func KeepsEveryLaterDeclaration(tree SyntaxTree) bool {
+        return tree.Prefix is {} cut &&
+            cut.Remainder == PrefixRemainder.KeepDeclarations &&
+            !cut.LaterDeclarationsPossible &&
+            !cut.LaterOverloadsPossible
+    }
+
+    private func InfersAnonymousReturn(tree SyntaxTree) bool {
+        for node in Descendants(tree.Root) {
+            if node is FunctionDeclarationSyntax{Type: nil, Body: {} body} && Descendants(body).Any(
+                (n SyntaxNode) -> n is AnonymousClassExpressionSyntax
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ContainsUnsupportedConstruct(tree SyntaxTree, allowTopLevelStatements bool) bool {
         for node in Descendants(tree.Root) {
             // Top-level statements feed the synthesized <Main>$ entry-point body,
             // which is bound from BoundGlobalScope.Statements rather than from a
-            // member-declaration node — so it cannot be re-pointed. Bail.
-            if node is GlobalStatementSyntax {
+            // member-declaration node, so its bound statements keep the syntax of
+            // the previous tree. That is sound only when both trees share their
+            // text (#6178); otherwise bail.
+            if node is GlobalStatementSyntax && !allowTopLevelStatements {
                 return true
             }
             // ADR-0144: a `partial` type's symbol is bound from ONE synthetic
@@ -713,6 +823,26 @@ internal shared class IncrementalGlobalScopeReuse {
             }
         }
         return nil
+    }
+
+    // The nodes of the top-level statements of [`tree`](paramref), in document order.
+    private func GlobalStatementNodes(tree SyntaxTree) List[SyntaxNode] {
+        let nodes = List[SyntaxNode]()
+        for member in tree.Root.Members {
+            if member is GlobalStatementSyntax global {
+                AddInOrder(global, nodes)
+            }
+        }
+        return nodes
+    }
+
+    private func AddInOrder(node SyntaxNode, nodes List[SyntaxNode]) {
+        nodes.Add(node)
+        for child in node.GetChildren() {
+            if child != nil {
+                AddInOrder(child, nodes)
+            }
+        }
     }
 
     private func Descendants(root SyntaxNode) sequence[SyntaxNode] {
