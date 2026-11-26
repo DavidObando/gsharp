@@ -84,9 +84,12 @@ cat > "$WORKDIR/MyLib/Api.gs" <<'EOF'
 package MyLib
 
 import System
+import System.Threading
 
 /// A helper class exposing math and greeting utilities.
 class MathHelper {
+    private let gate object = Object()
+
     /// Greets the given name with a friendly message.
     func Greet(name string) string {
         return "Hello, " + name + "!"
@@ -94,6 +97,8 @@ class MathHelper {
 
     /// Returns the sum of two integers.
     func Add(a int32, b int32) int32 {
+        Monitor.Enter(gate)
+        defer Monitor.Exit(gate)
         return a + b
     }
 }
@@ -377,6 +382,154 @@ if [[ -f "$XML_FILE" ]]; then
 else
     echo "    WARN: XML docs file not present in package (doc generation pending)"
 fi
+
+# ============================================================================
+# Step 7: Issue #6249 — defer without runtime ref + bundled runtime packing
+# ============================================================================
+echo "==> Issue #6249: testing plain defer and bundled G# runtime packing"
+RUNTIME_LIB_DIR="$WORKDIR/RuntimeLib"
+mkdir -p "$RUNTIME_LIB_DIR"
+cp "$WORKDIR/MyLib/NuGet.config" "$RUNTIME_LIB_DIR/NuGet.config"
+ln -s "$WORKDIR/MyLib/packages" "$RUNTIME_LIB_DIR/packages"
+
+cat > "$RUNTIME_LIB_DIR/RuntimeLib.gsproj" <<EOF
+<Project Sdk="Gsharp.NET.Sdk/$VER">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>RuntimeLib</RootNamespace>
+    <PackageId>RuntimeLib</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Test</Authors>
+  </PropertyGroup>
+</Project>
+EOF
+
+cat > "$RUNTIME_LIB_DIR/Api.gs" <<'EOF'
+package RuntimeLib
+
+import System
+import System.Threading
+import Gsharp.Extensions.Sync
+import Gsharp.Values
+
+/// Uses plain synchronous defer, channels, values, and extensions.
+class RuntimeDemo {
+    private let gate object = Object()
+    private let store SyncMap[string, int32] = SyncMap[string, int32]()
+
+    func GuardedDefer(value int32) int32 {
+        Monitor.Enter(gate)
+        defer Monitor.Exit(gate)
+        return value + 1
+    }
+
+    func SendAndReceive(value int32) int32 {
+        let ch = chan[int32](1)
+        ch <- value
+        return <-ch
+    }
+
+    func PutAndGet(key string, value int32) int32 {
+        store.Store(key, value)
+        return store.Load(key)
+    }
+
+    func MakeBytes(text string) ByteString {
+        return ByteString.EncodeUtf8(text, Utf16Encoding.Strict)
+    }
+}
+EOF
+
+cd "$RUNTIME_LIB_DIR"
+dotnet pack -c Release --nologo -v:q
+
+RUNTIME_NUPKG=$(find bin -name "RuntimeLib.*.nupkg" | head -1)
+if [[ -z "$RUNTIME_NUPKG" ]]; then
+    echo "FAIL: dotnet pack did not produce RuntimeLib .nupkg"
+    exit 1
+fi
+
+python3 - "$WORKDIR/MyLib/$MYLIB_NUPKG" "$RUNTIME_LIB_DIR/$RUNTIME_NUPKG" <<'PY'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    names = set(archive.namelist())
+    for unwanted in (
+        "lib/net10.0/Gsharp.Extensions.dll",
+        "lib/net10.0/Gsharp.Runtime.Channels.dll",
+        "lib/net10.0/Gsharp.Runtime.Values.dll",
+    ):
+        assert unwanted not in names, f"MyLib unexpectedly packed {unwanted}"
+
+with zipfile.ZipFile(sys.argv[2]) as archive:
+    names = set(archive.namelist())
+    for required in (
+        "lib/net10.0/RuntimeLib.dll",
+        "lib/net10.0/Gsharp.Extensions.dll",
+        "lib/net10.0/Gsharp.Runtime.Channels.dll",
+        "lib/net10.0/Gsharp.Runtime.Values.dll",
+        "ref/net10.0/RuntimeLib.dll",
+        "ref/net10.0/Gsharp.Runtime.Values.dll",
+    ):
+        assert required in names, f"RuntimeLib missing {required}; got {sorted(names)}"
+PY
+
+echo "    RuntimeLib.nupkg bundled runtimes verified ✓"
+
+RUNTIME_CS_DIR="$WORKDIR/RuntimeCSharpConsumer"
+mkdir -p "$RUNTIME_CS_DIR/packages"
+cp "$RUNTIME_LIB_DIR/$RUNTIME_NUPKG" "$RUNTIME_CS_DIR/packages/"
+
+cat > "$RUNTIME_CS_DIR/NuGet.config" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="local" value="./packages" />
+  </packageSources>
+</configuration>
+EOF
+
+cat > "$RUNTIME_CS_DIR/RuntimeCSharpConsumer.csproj" <<EOF
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="RuntimeLib" Version="1.0.0" />
+  </ItemGroup>
+</Project>
+EOF
+
+cat > "$RUNTIME_CS_DIR/Program.cs" <<'EOF'
+using System;
+
+var demo = new RuntimeLib.RuntimeDemo();
+Console.WriteLine(demo.GuardedDefer(41));
+Console.WriteLine(demo.SendAndReceive(7));
+Console.WriteLine(demo.PutAndGet("k", 99));
+Console.WriteLine(demo.MakeBytes("hi").DecodeUtf8(Gsharp.Values.Utf8Decoding.Strict));
+EOF
+
+cd "$RUNTIME_CS_DIR"
+RUNTIME_CS_OUTPUT=$(dotnet run --nologo 2>&1)
+EXPECTED_RUNTIME_CS="42
+7
+99
+hi"
+
+if [[ "$RUNTIME_CS_OUTPUT" != "$EXPECTED_RUNTIME_CS" ]]; then
+    echo "FAIL: RuntimeCSharpConsumer output mismatch"
+    echo "Expected:"
+    echo "$EXPECTED_RUNTIME_CS"
+    echo "Got:"
+    echo "$RUNTIME_CS_OUTPUT"
+    exit 1
+fi
+echo "    RuntimeCSharpConsumer output matches ✓"
 
 echo ""
 echo "PASS: NuGet pack E2E — GSharp library packs and is consumable from C# and F#."

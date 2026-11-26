@@ -746,20 +746,19 @@
   "samples/Defer.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=3 sha256=DF608D716A4090AD"
+      "rows=3 sha256=6016328CBDC99B7D"
     ],
     "FieldDef": [
       "rows=1 sha256=5579EC743EC78BCA"
     ],
     "MemberRef": [
-      "rows=12 sha256=02DE825E2160E4F0"
+      "rows=9 sha256=26068C0FFA56921F"
     ],
     "MethodBodies": [
-      "rows=3 sha256=14DA29DBC47C5313"
+      "rows=3 sha256=98BE0E96592B0BB7"
     ],
     "MethodDef": [
       "rows=3 sha256=4B07CEBEEA674BF6"
@@ -768,7 +767,7 @@
       "rows=2 sha256=1A46BA779BB20A7E"
     ],
     "TypeRef": [
-      "rows=9 sha256=A9C55C390EF491A7"
+      "rows=8 sha256=4BBB68E79CFAF54E"
     ]
   },
   "samples/Deinit.gs": {
