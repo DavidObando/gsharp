@@ -35,7 +35,7 @@ class PrefixBindOptions {
 class ClassifiedDiagnostic {
     prop Diagnostic Diagnostic
     prop Finality DiagnosticFinality
-    prop Reason string          // "", "later-declaration", "later-member", "later-overload",
+    prop Reason string          // "", "later-declaration", "later-member", "later-overload", "later-type",
                                 // "rest-of-body", "rest-of-type", "rest-of-statement", "cut"
 }
 
@@ -151,7 +151,7 @@ Every premise is conditional on a prefix tree. A tree from `SyntaxTree.Parse` ha
    - A failed call is not recorded. It reports its own diagnostics, with the premise of its callee (D6.5).
    - Witnesses: a later `F(int32) int32` removes the `GS0155` of `let x int32 = F(1)` with `F(object) string`, also through an inferred local; it removes `GS0116` of `G(1)[0]` and of `for c in G(1)`, `GS0164` of `let (p, q) = G(1)`, and the condition's `GS0155`; a later `V(int32) Task` removes the `GS0124` of `let x = V(1)` and `await V(2)`; a later generic or default-parameter candidate is beaten by a later exact overload.
    - No witness, so these stay final: a later `GetAwaiter` does not make a type awaitable (G# awaits only a task, `GS0133`); a later receiver `GetEnumerator` does not make an imported type enumerable (the `foreach` binder reads the CLR type only); and a later, better receiver `operator` does not change an operator that resolved (`v + 1` keeps the first `func (a V) operator + (b object) int32`). A declared function or method has no inferred return type (an expression body without a return type is `void`), so a call of it cannot change through its body.
-   - A later source type that hides an imported type also changes a lookup that succeeds (`let x int32 = Console.Title` and a later `class Console`). The premise would make most diagnostics that use imported types future-dependent with `Nothing`, so it is not stated here (#6215).
+   - A later source type that hides an imported type also changes a lookup that succeeds (`let x int32 = Console.Title` and a later `class Console`). With `Nothing`, the classifier gives such a report its own reason, `later-type` (#6215), so that a host that does not expect later types to hide imported ones can treat it as final. The test is opt-in: an otherwise final report stays final only in a shape that the test follows, and every other report is `later-type`. The shape is a statement of a non-generic function body, in a non-generic type, outside function literals, lambdas and anonymous objects. That statement's header, every earlier or enclosing statement of the same body that names a name it reads in its header (a declaration, a write or a narrowing condition), and the parameters it reads use only: keyword types in their type clauses (`int32`, `[]string`, `bool?`, without type arguments); locals and parameters as bare names, and members of those that no source receiver function shares a name with; and function literals whose parameters and result have keyword types. A `return` also needs a keyword return type, and a `yield` is not followed. A read name that an earlier statement names inside a nested statement or function literal (a guard in a block or a branch, an assignment in a loop) is not followed either. Any other report, such as one that names a type, calls a function, reads a global or a field, uses a qualified name, or sits in a declaration, is `later-type`, because it can depend on a type that a later declaration hides. The test reads only the final trees, so a successor that reuses declarations or bodies answers as a bind from scratch. `later-overload` and the other premises win when they hold. With `KeepDeclarations`, every later type is present, so the premise does not hold. On the injected reports of the samples, 19 of 401 stay `Final` with `Nothing` (150 without this premise); widening the followed shapes is left to a follow-up.
 
 ## Consequences
 
@@ -172,6 +172,5 @@ Every premise is conditional on a prefix tree. A tree from `SyntaxTree.Parse` ha
 
 ## Follow-ups
 
-- A lookup that succeeds through an imported type that a later source type can hide (#6215, D6.8).
 - Reuse of the global scope for a file with top-level statements, the main shape of the samples (D6.6).
 - `GetSpeculativeStatementDiagnostics`, `GetSymbolInfo` of an imported constructor, the cost of `LookupMembers`, and `Diagnostic.Phase` (D6.7).

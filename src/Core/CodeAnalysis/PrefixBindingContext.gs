@@ -170,6 +170,37 @@ internal sealed class PrefixCut {
         }
     }
 
+    private var receiverFunctionNames HashSet[string]?
+
+    /// Returns the names of the receiver functions that the trees of the bind declare (#6215).
+    /// @returns The names.
+    internal func ReceiverFunctionNames() HashSet[string] {
+        lock provisionalGate {
+            if receiverFunctionNames is {} known {
+                return known
+            }
+        }
+        let names = HashSet[string](StringComparer.Ordinal)
+        for tree in ProvisionalTreeList() {
+            CollectReceiverFunctionNames(tree.Root, names)
+        }
+        lock provisionalGate {
+            receiverFunctionNames ??= names
+            return receiverFunctionNames!!
+        }
+    }
+
+    private func CollectReceiverFunctionNames(node SyntaxNode, names HashSet[string]) {
+        if node is FunctionDeclarationSyntax{IsExtension: true} function {
+            names.Add(function.Identifier.ValueText)
+        }
+        for child in node.GetChildren() {
+            if child is not SyntaxToken {
+                CollectReceiverFunctionNames(child, names)
+            }
+        }
+    }
+
     /// Returns the trees in which the bind recorded an expression or a name (#6179).
     /// @returns The trees.
     internal func ProvisionalTreeList() List[SyntaxTree] {
@@ -361,6 +392,10 @@ internal sealed class PrefixPremise {
         /// Gets the premise of an expression whose type a later declaration can change: a call that a later
         /// overload, member or receiver function can retarget, or a local whose type such a call infers (#6179).
         internal let LaterOverload PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "later-overload")
+
+        /// Gets the premise of a report that a later source type can change by hiding an imported type (#6215).
+        /// It holds only when nothing follows the cut.
+        internal let LaterType PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "later-type")
 
         /// Gets the premise of a check at the end of an open body.
         internal let RestOfBody PrefixPremise = PrefixPremise(DiagnosticFinality.FutureDependent, "rest-of-body")
@@ -746,6 +781,337 @@ internal shared class PrefixBindingContext {
 
     private func IsMemberName(node SyntaxNode) bool -> node.Parent is AccessorExpressionSyntax accessor &&
         object.ReferenceEquals(accessor.RightPart, node)
+
+    /// Returns a value that tells whether a later source type can change the report at
+    /// [`location`](paramref) by hiding an imported type, when nothing follows the cut (#6215).
+    /// @remarks The test is opt-in: a report counts as independent of later types only in a shape that it
+    /// can follow. The report is in a statement of a function body, outside function literals, and that
+    /// statement, the statements that declare the names it reads and the parameters it reads use only
+    /// keyword types in their type clauses, locals and parameters as bare names, and members of those.
+    /// Every other report, such as one that names a type, calls a function or reads a global, can depend
+    /// on a type that a later declaration hides.
+    /// @param cut The prefix cut.
+    /// @param location The location of the report.
+    /// @returns `true` when the report is not final.
+    internal func MayDependOnLaterType(cut PrefixCut, location TextLocation) bool {
+        if !cut.LaterOverloadsPossible {
+            return false
+        }
+        if cut.ProvisionalTree(location.Text) is not{} tree {
+            return true
+        }
+        let span = location.Span
+        var statement StatementSyntax? = nil
+        var function FunctionDeclarationSyntax? = nil
+        var supported = false
+        var node SyntaxNode = tree.Root
+        while true {
+            var next SyntaxNode? = nil
+            for child in node.GetChildren() {
+                if child.Span.Start <= span.Start && span.End <= child.Span.End && child.Span.Length > 0 {
+                    next = child
+                    break
+                }
+            }
+            if next == nil {
+                break
+            }
+            if next is FunctionDeclarationSyntax declaration {
+                function = declaration
+                statement = nil
+                supported = false
+            } else if function != nil && object.ReferenceEquals(next, function.Body) {
+                supported = true
+            } else if next is FunctionLiteralExpressionSyntax ||
+                next is LambdaExpressionSyntax ||
+                next is AnonymousClassExpressionSyntax ||
+                next is TypeClauseSyntax {
+                supported = false
+            } else if supported && next is StatementSyntax inner {
+                statement = inner
+            }
+            node = next
+        }
+        if !supported || statement == nil || function == nil {
+            return true
+        }
+        // A type parameter can take the spelling of a keyword type (`func F[string Stream]`).
+        for var ancestor SyntaxNode? = function; ancestor != nil; ancestor = tree.GetParent(ancestor!!) {
+            if ancestor is FunctionDeclarationSyntax{IsGeneric: true} ||
+                ancestor is StructDeclarationSyntax{TypeParameterList: {}} ||
+                ancestor is InterfaceDeclarationSyntax{TypeParameterList: {}} {
+                return true
+            }
+        }
+        return !IsIndependentOfLaterTypes(
+            statement,
+            function,
+            cut.ReceiverFunctionNames(),
+            4,
+            HashSet[object](ReferenceEqualityComparer.Instance)
+        )
+    }
+
+    // Whether the header of [`statement`](paramref) and what it reads can be shown not to depend on a type
+    // that a later declaration can hide.
+    private func IsIndependentOfLaterTypes(
+        statement StatementSyntax,
+        function FunctionDeclarationSyntax,
+        receiverNames HashSet[string],
+        depth int32,
+        visited HashSet[object]
+    ) bool {
+        if depth < 0 {
+            return false
+        }
+        if !visited.Add(statement) {
+            return true
+        }
+        if statement is ReturnStatementSyntax && function.Type is {} returnType && !IsKeywordTypeClause(returnType) {
+            return false
+        }
+        // A yielded value converts to the element type of the result, which the test does not follow.
+        if statement is YieldStatementSyntax {
+            return false
+        }
+        let reads = HashSet[string](StringComparer.Ordinal)
+        if !HeaderIsIndependent(statement, statement, false, reads, receiverNames) {
+            return false
+        }
+        for name in reads {
+            if !NameIsIndependent(name, statement, function, receiverNames, depth, visited) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // Walks the header of [`statement`](paramref) and collects the bare names that it reads. A shape that
+    // the walk does not know makes the header dependent.
+    private func HeaderIsIndependent(
+        statement StatementSyntax,
+        node SyntaxNode,
+        inExpression bool,
+        reads HashSet[string],
+        receiverNames HashSet[string]
+    ) bool {
+        for child in node.GetChildren() {
+            if child is SyntaxToken token {
+                if token.Kind != SyntaxKind.IdentifierToken || token.IsMissing {
+                    continue
+                }
+                if node is NameExpressionSyntax || node is CallExpressionSyntax {
+                    if !IsMemberOfQualifier(node) {
+                        reads.Add(token.ValueText)
+                    } else if receiverNames.Contains(token.ValueText) {
+                        // A source receiver function of that name can be the member, and its signature can
+                        // name a type that a later declaration hides.
+                        return false
+                    }
+                } else if node is AssignmentExpressionSyntax {
+                    reads.Add(token.ValueText)
+                } else if node is not VariableDeclarationSyntax {
+                    return false
+                }
+                continue
+            }
+            if !inExpression && child is StatementSyntax && !object.ReferenceEquals(child, statement) {
+                continue
+            }
+            // A function literal that states keyword types for its parameters and its result has a type that
+            // no later declaration changes, whatever its body does.
+            if child is FunctionLiteralExpressionSyntax literal {
+                if !HasKeywordSignature(literal) {
+                    return false
+                }
+                continue
+            }
+            if child is LambdaExpressionSyntax ||
+                child is AnonymousClassExpressionSyntax ||
+                child is GenericNameExpressionSyntax {
+                return false
+            }
+            if child is TypeClauseSyntax clause {
+                if !IsKeywordTypeClause(clause) {
+                    return false
+                }
+                continue
+            }
+            if !HeaderIsIndependent(statement, child, inExpression || child is ExpressionSyntax, reads, receiverNames) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // A bare name is independent when a parameter with a keyword type, or an earlier statement of the same
+    // function, declares it, and every earlier or enclosing statement that names it (a declaration, a
+    // write, or a condition that narrows it) is independent.
+    private func NameIsIndependent(
+        name string,
+        statement StatementSyntax,
+        function FunctionDeclarationSyntax,
+        receiverNames HashSet[string],
+        depth int32,
+        visited HashSet[object]
+    ) bool {
+        let tree = statement.SyntaxTree
+        let earlier = List[StatementSyntax]()
+        var current SyntaxNode = statement
+        while !object.ReferenceEquals(current, function.Body) && tree.GetParent(current) is {} parent {
+            if parent is StatementSyntax enclosing && parent is not BlockStatementSyntax {
+                earlier.Add(enclosing)
+            }
+            for sibling in parent.GetChildren() {
+                if sibling.Span.End <= statement.Span.Start && sibling is StatementSyntax before {
+                    earlier.Add(before)
+                }
+            }
+            current = parent
+        }
+        var found = false
+        for candidate in earlier {
+            // A narrowing or an assignment of the name inside a nested statement of an earlier statement (a
+            // block, a branch, a loop body) changes its type after that statement, and the header test does
+            // not see it.
+            let encloses = candidate.Span.Start <= statement.Span.Start && statement.Span.End <= candidate.Span.End
+            if !encloses && MentionsInNestedStatement(candidate, candidate, name) {
+                return false
+            }
+            let declared = HashSet[string](StringComparer.Ordinal)
+            CollectHeaderNames(candidate, candidate, false, declared, declared: true)
+            let read = HashSet[string](StringComparer.Ordinal)
+            CollectHeaderNames(candidate, candidate, false, read, declared: false)
+            if !declared.Contains(name) && !read.Contains(name) {
+                continue
+            }
+            found = found || declared.Contains(name)
+            if !IsIndependentOfLaterTypes(candidate, function, receiverNames, depth - 1, visited) {
+                return false
+            }
+        }
+        if found {
+            return true
+        }
+        for parameter in function.Parameters {
+            if parameter.Identifier?.ValueText == name {
+                return parameter.Type is {} type && IsKeywordTypeClause(type)
+            }
+        }
+        return false
+    }
+
+    // Whether an identifier [`name`](paramref) occurs in a nested statement or function literal of
+    // [`statement`](paramref), at any depth.
+    private func MentionsInNestedStatement(statement StatementSyntax, node SyntaxNode, name string) bool {
+        for child in node.GetChildren() {
+            if child is SyntaxToken {
+                continue
+            }
+            if (
+                child is StatementSyntax || child is FunctionLiteralExpressionSyntax || child is LambdaExpressionSyntax
+            ) &&
+                !object.ReferenceEquals(child, statement) && MentionsName(child, name) {
+                return true
+            }
+            if MentionsInNestedStatement(statement, child, name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func MentionsName(node SyntaxNode, name string) bool {
+        for child in node.GetChildren() {
+            if child is SyntaxToken token {
+                if token.Kind == SyntaxKind.IdentifierToken && token.ValueText == name {
+                    return true
+                }
+            } else if MentionsName(child, name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func HasKeywordSignature(literal FunctionLiteralExpressionSyntax) bool {
+        if literal.ReturnTypeClause is not{} returnType || !IsKeywordTypeClause(returnType) {
+            return false
+        }
+        for parameter in literal.Parameters {
+            if parameter.Type is not{} type || !IsKeywordTypeClause(type) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // A type clause whose identifiers are all keyword types, without type arguments: `int32`, `[]string`,
+    // `bool?`. No source type can hide one.
+    private func IsKeywordTypeClause(clause TypeClauseSyntax) bool {
+        if clause.TypeArguments != nil || clause.HasQualifier {
+            return false
+        }
+        for child in clause.GetChildren() {
+            if child is SyntaxToken token {
+                if token.Kind == SyntaxKind.IdentifierToken && !IsKeywordTypeName(token.ValueText) {
+                    return false
+                }
+            } else if child is TypeClauseSyntax nested {
+                if !IsKeywordTypeClause(nested) {
+                    return false
+                }
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func IsKeywordTypeName(name string) bool {
+        switch name {
+            case "bool",
+            "uint8",
+            "byte",
+            "int8",
+            "sbyte",
+            "int16",
+            "short",
+            "uint16",
+            "ushort",
+            "int32",
+            "int",
+            "uint32",
+            "uint",
+            "int64",
+            "long",
+            "uint64",
+            "ulong",
+            "nint",
+            "nuint",
+            "float32",
+            "float",
+            "float64",
+            "double",
+            "decimal",
+            "char",
+            "string",
+            "object" {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func IsMemberOfQualifier(node SyntaxNode) bool {
+        if node.Parent is not AccessorExpressionSyntax accessor {
+            return false
+        }
+        if object.ReferenceEquals(accessor.RightPart, node) {
+            return true
+        }
+        return accessor.Parent is AccessorExpressionSyntax outer && object.ReferenceEquals(outer.RightPart, accessor)
+    }
 
     /// Returns a value that tells whether a later declaration can change the type of
     /// [`variable`](paramref): the type is inferred from an expression whose type can change (#6179).

@@ -107,6 +107,14 @@ internal sealed class PrefixDiagnosticClassifier {
                 return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.FutureDependent, "rest-of-body")
             }
         }
+        // #6215: a later source type can hide an imported type that the report depends on. The test reads
+        // only the final trees, so a bind that reuses declarations or bodies answers as one from scratch.
+        if diagnostic.PrefixFinality == DiagnosticFinality.Final && PrefixBindingContext.MayDependOnLaterType(
+            prefixCut,
+            location
+        ) {
+            return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.FutureDependent, "later-type")
+        }
         return ClassifiedDiagnostic(diagnostic, diagnostic.PrefixFinality, diagnostic.PrefixReason)
     }
 

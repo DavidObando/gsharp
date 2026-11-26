@@ -73,7 +73,7 @@ class ClassifiedDiagnostic {
     }
 
     /// Gets the premise that can change after the cut, or an empty string for a final diagnostic.
-    /// @remarks The values are stable: `later-declaration`, `later-member`, `later-overload`, `rest-of-body`,
+    /// @remarks The values are stable: `later-declaration`, `later-member`, `later-overload`, `later-type`, `rest-of-body`,
     /// `rest-of-type`, `rest-of-statement` and `cut`. ADR-0225 defines them.
     prop Reason string {
         get;
