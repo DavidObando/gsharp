@@ -86,8 +86,9 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             let writeIndex = this.GetScopeWriteIndex($scope)
             let gotoIndex = this.GetScopeGotoIndex($scope)
-            let includeContinueGuards = effectiveTarget is ContinueStatementSyntax
-            if !TryGetEarliestAssignmentNarrowingSourceStart(
+            let includeContinueGuards = effectiveTarget is ContinueStatementSyntax || this.incrementorContinue != nil
+            if !TryGetNextAssignmentNarrowingSourceStart(
+                0,
                 symbol,
                 writeIndex,
                 gotoIndex,
@@ -116,57 +117,26 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func TryGetEarliestAssignmentNarrowingSourceStart(
-            symbol ISymbol,
-            writeIndex ScopeWriteIndex,
-            gotoIndex ScopeGotoIndex,
-            includeContinueGuards bool,
-            out earliestStart int32
-        ) bool {
-            earliestStart = int32.MaxValue
-            var found = false
-            let assignments = writeIndex.AssignmentsFor(symbol)
-            if assignments.Count > 0 {
-                CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
-                earliestStart = System.Math.Min(earliestStart, assignments[0].SpanStart)
-                found = true
-            }
-            let exitingGuards = gotoIndex.ExitingNullGuardsFor(symbol)
-            if exitingGuards.Count > 0 {
-                CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
-                earliestStart = System.Math.Min(earliestStart, exitingGuards[0].SpanStart)
-                found = true
-            }
-            if includeContinueGuards {
-                let binaryTests = gotoIndex.BinaryTestsFor(symbol)
-                if binaryTests.Count > 0 {
-                    CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
-                    earliestStart = System.Math.Min(earliestStart, binaryTests[0].SpanStart)
-                    found = true
-                }
-                let patterns = gotoIndex.PatternsFor(symbol)
-                if patterns.Count > 0 {
-                    CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
-                    earliestStart = System.Math.Min(earliestStart, patterns[0].SpanStart)
-                    found = true
-                }
-            }
-            return found
-        }
-
-        private func SpanContainsNodeInSortedList(
+        private func FindFirstNodeStartAtOrAfter(
             nodes IReadOnlyList[SyntaxNode],
-            span Microsoft.CodeAnalysis.Text.TextSpan
+            minPosition int32,
+            out start int32
         ) bool {
             if nodes.Count == 0 {
+                start = 0
                 return false
+            }
+            if minPosition <= nodes[0].SpanStart {
+                CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
+                start = nodes[0].SpanStart
+                return true
             }
             var low = 0
             var high = nodes.Count
             while low < high {
                 CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
                 let mid = low + (high - low) / 2
-                if nodes[mid].SpanStart < span.Start {
+                if nodes[mid].SpanStart < minPosition {
                     low = mid + 1
                 } else {
                     high = mid
@@ -174,34 +144,50 @@ partial class CSharpToGSharpTranslator {
             }
             if low < nodes.Count {
                 CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
-                return span.Contains(nodes[low].Span)
+                start = nodes[low].SpanStart
+                return true
             }
+            start = 0
             return false
         }
 
-        private func SpanContainsAssignmentNarrowingSource(
-            span Microsoft.CodeAnalysis.Text.TextSpan,
+        private func TryGetNextAssignmentNarrowingSourceStart(
+            minPosition int32,
             symbol ISymbol,
             writeIndex ScopeWriteIndex,
             gotoIndex ScopeGotoIndex,
-            includeContinueGuards bool
+            includeContinueGuards bool,
+            out nextStart int32
         ) bool {
-            if SpanContainsNodeInSortedList(writeIndex.AssignmentsFor(symbol), span) ||
-                SpanContainsNodeInSortedList(gotoIndex.ExitingNullGuardsFor(symbol), span) {
-                return true
+            nextStart = int32.MaxValue
+            var found = false
+            if FindFirstNodeStartAtOrAfter(writeIndex.AssignmentsFor(symbol), minPosition, out var assignmentStart) {
+                nextStart = System.Math.Min(nextStart, assignmentStart)
+                found = true
             }
-            return includeContinueGuards &&
-                (
-                SpanContainsNodeInSortedList(gotoIndex.BinaryTestsFor(symbol), span) ||
-                    SpanContainsNodeInSortedList(gotoIndex.PatternsFor(symbol), span)
-            )
+            if FindFirstNodeStartAtOrAfter(gotoIndex.ExitingNullGuardsFor(symbol), minPosition, out var guardStart) {
+                nextStart = System.Math.Min(nextStart, guardStart)
+                found = true
+            }
+            if includeContinueGuards {
+                if FindFirstNodeStartAtOrAfter(gotoIndex.BinaryTestsFor(symbol), minPosition, out var binaryStart) {
+                    nextStart = System.Math.Min(nextStart, binaryStart)
+                    found = true
+                }
+                if FindFirstNodeStartAtOrAfter(gotoIndex.PatternsFor(symbol), minPosition, out var patternStart) {
+                    nextStart = System.Math.Min(nextStart, patternStart)
+                    found = true
+                }
+            }
+            return found
         }
 
         private func FindFirstStatementIndexAtOrAfter(
             statements Microsoft.CodeAnalysis.SyntaxList[StatementSyntax],
-            position int32
+            position int32,
+            startIndex int32 = 0
         ) int32 {
-            var low = 0
+            var low = startIndex
             var high = statements.Count
             while low < high {
                 let mid = low + (high - low) / 2
@@ -224,31 +210,32 @@ partial class CSharpToGSharpTranslator {
             requireRuntimeNonNullProof bool,
             writeIndex ScopeWriteIndex?,
             gotoIndex ScopeGotoIndex?,
-            earliestSourceStart int32,
             includeContinueGuards bool
         ) SyntaxNode? {
             var proof = inherited
-            let start = if proof == nil && writeIndex != nil && gotoIndex != nil {
-                FindFirstStatementIndexAtOrAfter(statements, earliestSourceStart)
-            } else {
-                0
-            }
-            for var i = start; i < statements.Count; i++ {
+            var i = 0
+            while i < statements.Count {
+                if proof == nil && writeIndex != nil && gotoIndex != nil {
+                    let minPosition = statements[i].SpanStart
+                    if !TryGetNextAssignmentNarrowingSourceStart(
+                        minPosition,
+                        symbol,
+                        writeIndex,
+                        gotoIndex,
+                        includeContinueGuards,
+                        out var nextSourceStart
+                    ) ||
+                        nextSourceStart >= stopStart {
+                        break
+                    }
+                    i = FindFirstStatementIndexAtOrAfter(statements, nextSourceStart, i)
+                    if i >= statements.Count {
+                        break
+                    }
+                }
                 let statement = statements[i]
                 if statement.SpanStart >= stopStart {
                     break
-                }
-                if proof == nil &&
-                    writeIndex != nil &&
-                    gotoIndex != nil &&
-                    !SpanContainsAssignmentNarrowingSource(
-                    statement.Span,
-                    symbol,
-                    writeIndex,
-                    gotoIndex,
-                    includeContinueGuards
-                ) {
-                    continue
                 }
                 proof = this.GetGSharpAssignmentNarrowingProof(
                     statement,
@@ -258,6 +245,7 @@ partial class CSharpToGSharpTranslator {
                     proof,
                     requireRuntimeNonNullProof
                 )
+                i++
             }
             return proof
         }
@@ -274,7 +262,7 @@ partial class CSharpToGSharpTranslator {
             earliestSourceStart int32 = 0
         ) SyntaxNode? {
             var proof = inherited
-            let includeContinueGuards = effectiveTarget is ContinueStatementSyntax
+            let includeContinueGuards = effectiveTarget is ContinueStatementSyntax || this.incrementorContinue != nil
             let steps = this.GetStatementSteps(effectiveTarget, $scope)
             if $scope is StatementSyntax root && root is not BlockSyntax {
                 steps.Insert(0, ($scope, root))
@@ -296,7 +284,6 @@ partial class CSharpToGSharpTranslator {
                                 requireRuntimeNonNullProof,
                                 writeIndex,
                                 gotoIndex,
-                                earliestSourceStart,
                                 includeContinueGuards
                             )
                         }
@@ -311,27 +298,36 @@ partial class CSharpToGSharpTranslator {
                                 requireRuntimeNonNullProof,
                                 writeIndex,
                                 gotoIndex,
-                                earliestSourceStart,
                                 includeContinueGuards
                             )
                         }
                         case unit is CompilationUnitSyntax {
+                            var nextSourceStart int32 = earliestSourceStart
+                            var hasNextSource = writeIndex != nil && gotoIndex != nil
                             for global in unit.Members.OfType[GlobalStatementSyntax]() {
                                 let statement = global.Statement
                                 if statement.SpanStart >= step.Statement.SpanStart {
                                     break
                                 }
-                                if proof == nil &&
-                                    writeIndex != nil &&
-                                    gotoIndex != nil &&
-                                    !SpanContainsAssignmentNarrowingSource(
-                                    statement.Span,
-                                    symbol,
-                                    writeIndex,
-                                    gotoIndex,
-                                    includeContinueGuards
-                                ) {
-                                    continue
+                                if proof == nil && writeIndex != nil && gotoIndex != nil {
+                                    if hasNextSource && statement.Span.End <= nextSourceStart {
+                                        continue
+                                    }
+                                    if !TryGetNextAssignmentNarrowingSourceStart(
+                                        statement.SpanStart,
+                                        symbol,
+                                        writeIndex,
+                                        gotoIndex,
+                                        includeContinueGuards,
+                                        out nextSourceStart
+                                    ) ||
+                                        nextSourceStart >= step.Statement.SpanStart {
+                                        break
+                                    }
+                                    hasNextSource = true
+                                    if statement.Span.End <= nextSourceStart {
+                                        continue
+                                    }
                                 }
                                 proof = this.GetGSharpAssignmentNarrowingProof(
                                     statement,

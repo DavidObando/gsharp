@@ -390,11 +390,12 @@ open class Issue5633ConditionalLocalQueryTests {
         let probes = System.Collections.Generic.List[int64]()
         for links in[]int32{16, 64, 128, 256} {
             let body = StringBuilder()
+            body.AppendLine("p = q;")
             for var i = 0; i < links; i++ {
                 body.AppendLine("if (p != null) { _ = p.ToString(); }")
             }
             let printed = this.TranslateWithinBound(
-                "#nullable enable\nnamespace Demo { public static class P { public static int Run(object? p) {\n" +
+                "#nullable enable\nnamespace Demo { public static class P { public static int Run(object? p, object? q) {\n" +
                     body.ToString() + "return 0; } } }",
                 enabled: true,
                 measureWork: true
@@ -414,14 +415,49 @@ open class Issue5633ConditionalLocalQueryTests {
             )
         }
         Assert.True(
-            visits[1] <= visits[0] * 3 && visits[2] <= visits[1] * 3,
+            visits[0] > 0 && visits[1] <= visits[0] * 3 && visits[2] <= visits[1] * 3,
             "Repeated guards on the same nullable parameter must not rescan earlier statements quadratically: " +
                 "${visits[0]} -> ${visits[1]} -> ${visits[2]}."
         )
         Assert.True(
-            probes[1] <= probes[0] * 3 && probes[2] <= probes[1] * 3,
+            probes[0] > 0 && probes[1] <= probes[0] * 3 && probes[2] <= probes[1] * 3,
             "Repeated guards on the same nullable parameter must not probe source lists superlinearly: " +
                 "${probes[0]} -> ${probes[1]} -> ${probes[2]}."
+        )
+    }
+
+    @Fact
+    func NestedContinueIncrementor_PreservesGuardedParameterNarrowing() {
+        const source = `
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static void Use(object value) { _ = value.ToString(); }
+        public static int Run(object? p, bool flag)
+        {
+            int count = 0;
+            for (int i = 0; i < 2; i++, Use(p!))
+            {
+                if (p != null)
+                {
+                    count++;
+                    if (flag) continue;
+                }
+                return count;
+            }
+            return count;
+        }
+    }
+}`
+        let printed = this.TranslateWithinBound(source, enabled: true)
+        Assert.Contains("Use(p)\n", printed, StringComparison.Ordinal)
+        TranslationTestValidation.AssertBinds(printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(P.Run(\"v\", true))\nSystem.Console.WriteLine(P.Run(nil, true))",
+            "2" + Environment.NewLine + "0"
         )
     }
 
