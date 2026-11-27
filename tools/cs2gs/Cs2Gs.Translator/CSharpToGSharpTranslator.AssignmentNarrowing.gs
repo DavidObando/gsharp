@@ -4,6 +4,7 @@
 
 package Cs2Gs.Translator
 
+import CompilationMeasurements = GSharp.Core.CodeAnalysis.Compilation.CompilationMeasurements
 import Cs2Gs.CodeModel.Ast
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
@@ -83,13 +84,26 @@ partial class CSharpToGSharpTranslator {
             $scope SyntaxNode,
             requireRuntimeNonNullProof bool
         ) bool {
+            let writeIndex = this.GetScopeWriteIndex($scope)
+            let gotoIndex = this.GetScopeGotoIndex($scope)
+            if !TryGetEarliestAssignmentNarrowingSourceStart(
+                symbol,
+                writeIndex,
+                gotoIndex,
+                out var earliestSourceStart
+            ) {
+                return false
+            }
             let proof = this.GetGSharpAssignmentPrefixProof(
                 expression,
                 effectiveTarget,
                 symbol,
                 $scope,
                 nil,
-                requireRuntimeNonNullProof
+                requireRuntimeNonNullProof,
+                writeIndex,
+                gotoIndex,
+                earliestSourceStart
             )
             return proof != nil && this.AssignmentNarrowingSurvivesToRead(
                 symbol,
@@ -100,13 +114,131 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
+        private func TryGetEarliestAssignmentNarrowingSourceStart(
+            symbol ISymbol,
+            writeIndex ScopeWriteIndex,
+            gotoIndex ScopeGotoIndex,
+            out earliestStart int32
+        ) bool {
+            earliestStart = int32.MaxValue
+            var found = false
+            if writeIndex.Writes.TryGetValue(symbol, out var writes) {
+                for write in writes {
+                    if write is AssignmentExpressionSyntax && write.SpanStart < earliestStart {
+                        earliestStart = write.SpanStart
+                        found = true
+                    }
+                }
+            }
+            for binary in gotoIndex.BinaryTestsFor(symbol) {
+                if binary.SpanStart < earliestStart {
+                    earliestStart = binary.SpanStart
+                    found = true
+                }
+            }
+            for pattern in gotoIndex.PatternsFor(symbol) {
+                if pattern.SpanStart < earliestStart {
+                    earliestStart = pattern.SpanStart
+                    found = true
+                }
+            }
+            return found
+        }
+
+        private func SpanContainsAssignmentNarrowingSource(
+            span Microsoft.CodeAnalysis.Text.TextSpan,
+            symbol ISymbol,
+            writeIndex ScopeWriteIndex,
+            gotoIndex ScopeGotoIndex
+        ) bool {
+            if writeIndex.Writes.TryGetValue(symbol, out var writes) {
+                for write in writes {
+                    if write is AssignmentExpressionSyntax && span.Contains(write.Span) {
+                        return true
+                    }
+                }
+            }
+            for binary in gotoIndex.BinaryTestsFor(symbol) {
+                if span.Contains(binary.Span) {
+                    return true
+                }
+            }
+            for pattern in gotoIndex.PatternsFor(symbol) {
+                if span.Contains(pattern.Span) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func FindFirstStatementIndexAtOrAfter(
+            statements Microsoft.CodeAnalysis.SyntaxList[StatementSyntax],
+            position int32
+        ) int32 {
+            var low = 0
+            var high = statements.Count
+            while low < high {
+                let mid = low + (high - low) / 2
+                if statements[mid].Span.End <= position {
+                    low = mid + 1
+                } else {
+                    high = mid
+                }
+            }
+            return low
+        }
+
+        private func AdvanceAssignmentNarrowingStatementList(
+            statements Microsoft.CodeAnalysis.SyntaxList[StatementSyntax],
+            stopStart int32,
+            symbol ISymbol,
+            expression ExpressionSyntax,
+            $scope SyntaxNode,
+            inherited SyntaxNode?,
+            requireRuntimeNonNullProof bool,
+            writeIndex ScopeWriteIndex?,
+            gotoIndex ScopeGotoIndex?,
+            earliestSourceStart int32
+        ) SyntaxNode? {
+            var proof = inherited
+            let start = if proof == nil && writeIndex != nil && gotoIndex != nil {
+                FindFirstStatementIndexAtOrAfter(statements, earliestSourceStart)
+            } else {
+                0
+            }
+            for var i = start; i < statements.Count; i++ {
+                let statement = statements[i]
+                if statement.SpanStart >= stopStart {
+                    break
+                }
+                if proof == nil &&
+                    writeIndex != nil &&
+                    gotoIndex != nil &&
+                    !SpanContainsAssignmentNarrowingSource(statement.Span, symbol, writeIndex, gotoIndex) {
+                    continue
+                }
+                proof = this.GetGSharpAssignmentNarrowingProof(
+                    statement,
+                    symbol,
+                    expression,
+                    $scope,
+                    proof,
+                    requireRuntimeNonNullProof
+                )
+            }
+            return proof
+        }
+
         private func GetGSharpAssignmentPrefixProof(
             expression ExpressionSyntax,
             effectiveTarget SyntaxNode,
             symbol ISymbol,
             $scope SyntaxNode,
             inherited SyntaxNode?,
-            requireRuntimeNonNullProof bool
+            requireRuntimeNonNullProof bool,
+            writeIndex ScopeWriteIndex? = nil,
+            gotoIndex ScopeGotoIndex? = nil,
+            earliestSourceStart int32 = 0
         ) SyntaxNode? {
             var proof = inherited
             let steps = this.GetStatementSteps(effectiveTarget, $scope)
@@ -114,27 +246,67 @@ partial class CSharpToGSharpTranslator {
                 steps.Insert(0, ($scope, root))
             }
             for step in steps {
-                let statements IEnumerable[StatementSyntax] = switch step.Owner {
-                    case block is BlockSyntax: block.Statements
-                    case section is SwitchSectionSyntax: section.Statements
-                    case unit is CompilationUnitSyntax: unit
-                        .Members
-                        .OfType[GlobalStatementSyntax]()
-                        .Select((global GlobalStatementSyntax) -> global.Statement)
-                    default: Enumerable.Empty[StatementSyntax]()
-                }
-                for statement in statements {
-                    if statement.SpanStart >= step.Statement.SpanStart {
-                        break
+                if proof != nil ||
+                    writeIndex == nil ||
+                    gotoIndex == nil ||
+                    step.Statement.SpanStart > earliestSourceStart {
+                    switch step.Owner {
+                        case block is BlockSyntax {
+                            proof = this.AdvanceAssignmentNarrowingStatementList(
+                                block.Statements,
+                                step.Statement.SpanStart,
+                                symbol,
+                                expression,
+                                $scope,
+                                proof,
+                                requireRuntimeNonNullProof,
+                                writeIndex,
+                                gotoIndex,
+                                earliestSourceStart
+                            )
+                        }
+                        case section is SwitchSectionSyntax {
+                            proof = this.AdvanceAssignmentNarrowingStatementList(
+                                section.Statements,
+                                step.Statement.SpanStart,
+                                symbol,
+                                expression,
+                                $scope,
+                                proof,
+                                requireRuntimeNonNullProof,
+                                writeIndex,
+                                gotoIndex,
+                                earliestSourceStart
+                            )
+                        }
+                        case unit is CompilationUnitSyntax {
+                            for global in unit.Members.OfType[GlobalStatementSyntax]() {
+                                let statement = global.Statement
+                                if statement.SpanStart >= step.Statement.SpanStart {
+                                    break
+                                }
+                                if proof == nil &&
+                                    writeIndex != nil &&
+                                    gotoIndex != nil &&
+                                    !SpanContainsAssignmentNarrowingSource(
+                                    statement.Span,
+                                    symbol,
+                                    writeIndex,
+                                    gotoIndex
+                                ) {
+                                    continue
+                                }
+                                proof = this.GetGSharpAssignmentNarrowingProof(
+                                    statement,
+                                    symbol,
+                                    expression,
+                                    $scope,
+                                    proof,
+                                    requireRuntimeNonNullProof
+                                )
+                            }
+                        }
                     }
-                    proof = this.GetGSharpAssignmentNarrowingProof(
-                        statement,
-                        symbol,
-                        expression,
-                        $scope,
-                        proof,
-                        requireRuntimeNonNullProof
-                    )
                 }
                 var transferredLoopBody = false
                 let nativePost = step.Statement is ForStatementSyntax nativeLoop && nativeLoop.Incrementors.Any(
@@ -351,6 +523,7 @@ partial class CSharpToGSharpTranslator {
             inherited SyntaxNode?,
             requireRuntimeNonNullProof bool
         ) SyntaxNode? {
+            CompilationMeasurements.Count("translation.assignment_narrowing_statement_visits")
             if statement is LocalFunctionStatementSyntax || this.IsDroppedStatementOrLoopClause(statement) {
                 return inherited
             }

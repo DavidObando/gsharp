@@ -321,6 +321,7 @@ open class Issue5633ConditionalLocalQueryTests {
     @InlineData(true)
     func IndependentLocalCensuses_IndexWorkScalesWithSourceSize(guards bool) {
         let work = System.Collections.Generic.List[int64]()
+        let assignmentVisits = System.Collections.Generic.List[int64]()
         for links in[]int32{16, 128, 256, 512} {
             let body = StringBuilder()
             for var i = 0; i <= links; i++ {
@@ -353,9 +354,12 @@ open class Issue5633ConditionalLocalQueryTests {
                 continue
             }
             let scanned = this.ScopeCensusWork()
+            let narrowingVisits = this.translationWork["assignment_narrowing_statement_visits"]
             work.Add(scanned)
+            assignmentVisits.Add(narrowingVisits)
             this.output.WriteLine(
-                "$links independent writes: $scanned visits; ${this.translationWork["reassignment_write_probes"]} write probes"
+                "$links independent writes: $scanned visits; ${this.translationWork["reassignment_write_probes"]} write probes; " +
+                    "$narrowingVisits assignment-narrowing visits; ${this.translationAllocatedBytes} allocated bytes"
             )
             for counter in this.translationWork {
                 if counter.Key.StartsWith("guard", StringComparison.Ordinal) || counter.Key.StartsWith(
@@ -373,6 +377,36 @@ open class Issue5633ConditionalLocalQueryTests {
         Assert.True(
             work[0] > 0 && work[1] <= work[0] * 3 && work[2] <= work[1] * 3,
             "Independent writes need a per-symbol census, not a shared list rescanned for every local: ${work[0]} -> ${work[1]} -> ${work[2]}."
+        )
+        Assert.True(
+            assignmentVisits[1] <= assignmentVisits[0] * 3 && assignmentVisits[2] <= assignmentVisits[1] * 3,
+            "Independent guarded locals must not rescan preceding statements for assignment narrowing: ${assignmentVisits[0]} -> ${assignmentVisits[1]} -> ${assignmentVisits[2]}."
+        )
+    }
+
+    @Fact
+    func AssignmentNarrowingAfterUnrelatedGuardedLocals_PreservesProof() {
+        let body = StringBuilder()
+        for var i = 0; i < 64; i++ {
+            body.AppendLine("var u$i = p; if (u$i != null) { _ = u$i.ToString(); }")
+        }
+        body.AppendLine("object? assigned = p;")
+        body.AppendLine("assigned = new object();")
+        body.AppendLine("var a = assigned.ToString();")
+        body.AppendLine("object? guarded = p;")
+        body.AppendLine("if (guarded == null) return \"null\";")
+        body.AppendLine("var b = guarded.ToString();")
+        body.AppendLine("return (a != null && b != null) ? \"ok\" : \"bad\";")
+        let source = "#nullable enable\nnamespace Demo { public static class P { public static string Run(object? p) {\n" +
+            body.ToString() + "} } }"
+        let printed = this.TranslateWithinBound(source, enabled: true)
+        Assert.DoesNotContain("assigned!!", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("guarded!!", printed, StringComparison.Ordinal)
+        TranslationTestValidation.AssertBinds(printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(P.Run(nil))\nSystem.Console.WriteLine(P.Run(\"v\"))",
+            "null" + Environment.NewLine + "ok"
         )
     }
 
@@ -1094,7 +1128,8 @@ namespace Demo
                         "scope_write_indexes",
                         "scope_write_candidates",
                         "scope_guard_indexes",
-                        "scope_guard_candidates"
+                        "scope_guard_candidates",
+                        "assignment_narrowing_statement_visits"
                     } {
                         this.translationWork[counter] = measurements.GetCounter("translation." + counter)
                     }
