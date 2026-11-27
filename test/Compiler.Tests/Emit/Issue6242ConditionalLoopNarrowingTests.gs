@@ -986,4 +986,210 @@ Console.Write(Read(1, "xy"))`
         IlVerifier.Verify(program, []string{library})
         Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
     }
+
+    @Fact
+    func Driver_InlineOutVarReceiver_LiteralReceiver_AndImportedReceiverMismatch_RejectWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let outVarSource = `import System
+import System.Diagnostics
+class Probe {
+    @Conditional("A")
+    func Keep(tag string, value string?) {}
+    func Keep(tag int32, value string?) {}
+}
+func Make(out tag int32) Probe {
+    tag = 1
+    return Probe()
+}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let tag = "x"
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        Make(out var tag).Keep(tag, (s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codeOut, outputOut) = fixture.TryCompile(outVarSource, "ConditionalLoopOutVarRecv6242", executable: true)
+        Assert.NotEqual(0, codeOut)
+        Assert.Contains("GS0158", outputOut)
+
+        let extLib = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalExtRecv6242 {
+    public static class Ext {
+        [Conditional("EXT_6242")]
+        public static void Keep(this int self, string? value) {}
+        [Conditional("EXT_6242")]
+        public static void Keep2(this int self, string? value, string tag) {}
+        public static void Keep2(this string self, string? value, object tag) {}
+    }
+}`, "ConditionalExtRecvLib6242")
+        let literalRecvSource = `import System
+import ConditionalExtRecv6242
+func (self string) Keep(value string?) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        "x".Keep((s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codeLit, outputLit) = fixture.TryCompile(
+            literalRecvSource,
+            "ConditionalLoopLitRecv6242",
+            executable: true,
+            "/r:" + extLib
+        )
+        Assert.NotEqual(0, codeLit)
+        Assert.Contains("GS0158", outputLit)
+
+        let mismatchRecvSource = `import System
+import ConditionalExtRecv6242
+func Read(r string, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        r.Keep2((s = nil), "x")
+    }
+    return 0
+}
+Console.Write(Read("a", "xy"))`
+        let (codeMismatch, outputMismatch) = fixture.TryCompile(
+            mismatchRecvSource,
+            "ConditionalLoopMismatchRecv6242",
+            executable: true,
+            "/r:" + extLib
+        )
+        Assert.NotEqual(0, codeMismatch)
+        Assert.Contains("GS0158", outputMismatch)
+    }
+
+    @Fact
+    func Driver_NestedTypePrivateMethod_AllowNullInstance_AndStructuralProjection_RejectWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let nestedPrivateSource = `import System
+import System.Diagnostics
+class Outer {
+    private func Keep(value string?) {}
+    class Inner {
+        func Read(o Outer, input string?) int32 {
+            var s = input
+            if s == nil { return 0 }
+            for var i = 0; i < 2; i++ {
+                Console.Write(s.Length)
+                o.Keep((s = nil))
+            }
+            return 0
+        }
+    }
+}
+@Conditional("A")
+func (self Outer) Keep(value string?) {}
+Console.Write(Outer.Inner().Read(Outer(), "xy"))`
+        let (codeNested, outputNested) = fixture.TryCompile(
+            nestedPrivateSource,
+            "ConditionalLoopNestedPriv6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeNested)
+        Assert.Contains("GS0158", outputNested)
+
+        let allowNullSource = `import System
+import System.Diagnostics
+import System.Diagnostics.CodeAnalysis
+class Holder {
+    func Keep(@AllowNull value string) {}
+}
+@Conditional("A")
+func (self Holder) Keep(value string?) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let h = Holder()
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        h.Keep((s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codeAllowNull, outputAllowNull) = fixture.TryCompile(
+            allowNullSource,
+            "ConditionalLoopAllowNull6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeAllowNull)
+        Assert.Contains("GS0158", outputAllowNull)
+
+        let structuralSource = `import System
+import System.Diagnostics
+import System.Text
+class CapSource {
+    var Capacity int32 = 1
+    var Length int32 = 1
+}
+@Conditional("A")
+func Keep(sb StringBuilder, value string?) {}
+func Keep(obj object, value string?) {}
+func Read(cap CapSource, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        Keep(cap, (s = nil))
+    }
+    return 0
+}
+Console.Write(Read(CapSource(), "xy"))`
+        let (codeStruct, outputStruct) = fixture.TryCompile(
+            structuralSource,
+            "ConditionalLoopStructural6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeStruct)
+        Assert.Contains("GS0158", outputStruct)
+    }
+
+    @Fact
+    func Driver_ExtensionOverloadRanking_IncludesReceiverType_ForSourceAndImported() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalExtRank6242 {
+    public static class Ext {
+        [Conditional("EXT_6242")]
+        public static void KeepImp(this string self, string? value) {}
+        public static void KeepImp(this object self, string? value) {}
+    }
+}`, "ConditionalExtRankLib6242")
+        let source = `import System
+import System.Diagnostics
+import ConditionalExtRank6242
+@Conditional("A")
+func (self string) KeepSrc(value string?) {}
+func (self object) KeepSrc(value string?) {}
+func Read(r string, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    var once = true
+    while once {
+        r.KeepSrc((s = nil))
+        r.KeepImp((s = nil))
+        Console.Write(s.Length)
+        once = false
+    }
+    return s.Length
+}
+Console.Write(Read("a", "xy"))`
+        let program = fixture.Compile(source, "ConditionalLoopExtRankAbsent6242", executable: true, "/r:" + library)
+        IlVerifier.Verify(program, []string{library})
+        Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
+    }
 }

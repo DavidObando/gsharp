@@ -17137,6 +17137,13 @@ internal partial class StatementBinder {
                     written.Add(targetName.IdentifierToken.ValueText)
                 }
             }
+            case refArg is RefArgumentExpressionSyntax {
+                if refArg.IsInlineDeclaration && refArg.DeclarationIdentifier is {} declId {
+                    written.Add(declId.ValueText)
+                } else if refArg.Expression is NameExpressionSyntax refName {
+                    written.Add(refName.IdentifierToken.ValueText)
+                }
+            }
             default { }
         }
         for child in node.GetChildren() {
@@ -17389,21 +17396,40 @@ internal partial class StatementBinder {
             if staticAccess {
                 return false
             }
+            let effectiveRecvSym = recv.Symbol ??
+                (
+                if recv.Clr is {} recvClr {
+                    TypeSymbol.FromClrTypeWithoutNullability(recvClr, NullabilityFreeReason.ResolvedTypeName)
+                } else {
+                    default(TypeSymbol?)
+                }
+            )
+            if effectiveRecvSym == nil {
+                return false
+            }
+            let extArgSpecs = if argSpecs != nil {
+                let withRecv = List[ConditionalCallArgSpec](argSpecs.Count + 1)
+                let recvTypes = List[TypeSymbol](1)
+                recvTypes.Add(effectiveRecvSym)
+                withRecv.Add(ConditionalCallArgSpec(recvTypes, nil, false, RefKind.None))
+                withRecv.AddRange(argSpecs)
+                withRecv
+            } else {
+                default(List[ConditionalCallArgSpec]?)
+            }
             var extFound = false
-            if recv.Symbol is {} recvSym {
-                let extFns = $scope.TryLookupExtensionFunctions(recvSym, name)
-                if !extFns.IsDefaultOrEmpty {
-                    let matching = List[FunctionSymbol]()
-                    for extFn in extFns {
-                        if FunctionMatchesConditionalCall(extFn, call, argCount, argSpecs, skipFirst: true) {
-                            matching.Add(extFn)
-                        }
+            let extFns = $scope.TryLookupExtensionFunctions(effectiveRecvSym, name)
+            if !extFns.IsDefaultOrEmpty {
+                let matching = List[FunctionSymbol]()
+                for extFn in extFns {
+                    if FunctionMatchesConditionalCall(extFn, call, argCount, argSpecs, skipFirst: true) {
+                        matching.Add(extFn)
                     }
-                    for extFn in FilterDominatedSourceOverloads(matching, argSpecs, skipFirst: true) {
-                        extFound = true
-                        if !KnownAttributes.IsConditionallyElided(extFn, $scope.ConditionalCompilation, call) {
-                            return false
-                        }
+                }
+                for extFn in FilterDominatedSourceOverloads(matching, extArgSpecs, skipFirst: false) {
+                    extFound = true
+                    if !KnownAttributes.IsConditionallyElided(extFn, $scope.ConditionalCompilation, call) {
+                        return false
                     }
                 }
             }
@@ -17414,11 +17440,20 @@ internal partial class StatementBinder {
                     continue
                 }
                 let extParams = impExt.GetParameters()
-                if extParams.Length > 0 && ClrExtensionReceiverCanApply(recv.Symbol, extParams[0].ParameterType) {
-                    matchingImpExts.Add(impExt)
+                if extParams.Length == 0 ||
+                    !ClrExtensionReceiverCanApply(effectiveRecvSym, extParams[0].ParameterType) {
+                    continue
                 }
+                if !extParams[0].ParameterType.ContainsGenericParameters {
+                    let extRecvType = ClrNullability.GetParameterTypeSymbol(extParams[0])
+                    if !Conversion.Classify(effectiveRecvSym, extRecvType).IsImplicit &&
+                        !conversions.HasUserDefinedImplicitConversion(effectiveRecvSym, extRecvType) {
+                        continue
+                    }
+                }
+                matchingImpExts.Add(impExt)
             }
-            for impExt in FilterDominatedClrOverloads(matchingImpExts, nil, argSpecs, skipFirst: true) {
+            for impExt in FilterDominatedClrOverloads(matchingImpExts, nil, extArgSpecs, skipFirst: false) {
                 extFound = true
                 if !KnownAttributes.IsConditionallyElided(impExt, $scope.ConditionalCompilation, call) {
                     return false
@@ -17815,16 +17850,18 @@ internal partial class StatementBinder {
         return true
     }
 
-    private func IsAccessibleSourceConditionalMethod(method FunctionSymbol, owner StructSymbol) bool {
-        if method.Accessibility != Accessibility.Private {
-            return true
-        }
-        let enclosing = function?.ReceiverType ?? function?.StaticOwnerType ?? function?.LexicalEnclosingType
-        return enclosing != nil && object.ReferenceEquals(enclosing, owner)
-    }
+    private func IsAccessibleSourceConditionalMethod(
+        method FunctionSymbol,
+        owner StructSymbol
+    ) bool -> AccessibilityChecker.IsAccessible(method.Accessibility, owner, function)
 
     private func IsAccessibleClrConditionalMethod(method MethodInfo) bool {
         if method.IsPublic {
+            return true
+        }
+        if (method.IsAssembly || method.IsFamilyOrAssembly) && binderCtx.CanAccessInternalMembers(
+            method.DeclaringType?.Assembly
+        ) {
             return true
         }
         if method.IsFamily || method.IsFamilyOrAssembly {
@@ -17966,7 +18003,7 @@ internal partial class StatementBinder {
             if !ConditionalArgRefKindCompatible(spec.RefKind, param.RefKind) {
                 return false
             }
-            if !ConditionalArgTypeCompatible(spec, param.Type) {
+            if !ConditionalArgTypeCompatible(spec, param.Type, sourceParam: param) {
                 return false
             }
         }
@@ -18040,7 +18077,7 @@ internal partial class StatementBinder {
                     param,
                     ImmutableArray[TypeSymbol?].Empty
                 )
-                if !ConditionalArgTypeCompatible(spec, paramType) {
+                if !ConditionalArgTypeCompatible(spec, paramType, clrParam: param) {
                     return false
                 }
             }
@@ -18219,8 +18256,9 @@ internal partial class StatementBinder {
                 return false
             }
             // Conservatively decline pruning when either candidate requires a non-built-in
-            // (user-defined or constant-narrowing) conversion.
-            if !Conversion.Classify(argType, b).IsImplicit || !Conversion.Classify(argType, w).IsImplicit {
+            // (user-defined, constant-narrowing, or structural-projection) conversion.
+            if !Conversion.ClassifyNonStructural(argType, b).IsImplicit || !Conversion.ClassifyNonStructural(argType, w)
+                .IsImplicit {
                 return false
             }
             // Shared numeric-target ranking (e.g. signed `int64` over unsigned `uint64` for `uint32`).
@@ -18268,7 +18306,12 @@ internal partial class StatementBinder {
         return true
     }
 
-    private func ConditionalArgTypeCompatible(spec ConditionalCallArgSpec, paramType TypeSymbol) bool {
+    private func ConditionalArgTypeCompatible(
+        spec ConditionalCallArgSpec,
+        paramType TypeSymbol,
+        sourceParam ParameterSymbol? = nil,
+        clrParam ParameterInfo? = nil
+    ) bool {
         if TypeSymbol.ContainsTypeParameter(paramType) {
             return true
         }
@@ -18281,6 +18324,9 @@ internal partial class StatementBinder {
         if spec.PossibleTypes is not{} possibleTypes {
             return true
         }
+        let clrAllowsNull = clrParam != nil && clrParam.GetCustomAttributesData().Any(
+            (a CustomAttributeData) -> a.AttributeType.FullName == "System.Diagnostics.CodeAnalysis.AllowNullAttribute"
+        )
         for argType in possibleTypes {
             if TypeSymbol.ContainsTypeParameter(argType) {
                 return true
@@ -18289,6 +18335,15 @@ internal partial class StatementBinder {
                 argType,
                 paramType
             ) {
+                return true
+            }
+            if sourceParam != nil && ConversionClassifier.AcceptsNilAnnotatedArgument(sourceParam, argType, paramType) {
+                return true
+            }
+            if clrAllowsNull && argType is NullableTypeSymbol nullableArg && !NullableLifting.IsAnyValueTypeNullable(
+                nullableArg
+            ) &&
+                Conversion.Classify(nullableArg.UnderlyingType, paramType).IsIdentity {
                 return true
             }
         }
