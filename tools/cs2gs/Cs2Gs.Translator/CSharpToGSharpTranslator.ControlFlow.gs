@@ -2225,6 +2225,10 @@ partial class CSharpToGSharpTranslator {
             public let Writes Dictionary[ISymbol, List[SyntaxNode]] = Dictionary[ISymbol, List[SyntaxNode]](
                 SymbolEqualityComparer.Default
             )
+            public let Assignments Dictionary[ISymbol, List[AssignmentExpressionSyntax]] = Dictionary[
+                ISymbol,
+                List[AssignmentExpressionSyntax]
+            ](SymbolEqualityComparer.Default)
             public let Declarations Dictionary[string, List[ISymbol]] = Dictionary[string, List[ISymbol]](
                 StringComparer.Ordinal
             )
@@ -2234,6 +2238,14 @@ partial class CSharpToGSharpTranslator {
             public let ReadonlyAddresses Dictionary[ISymbol, List[SyntaxNode]] = Dictionary[ISymbol, List[SyntaxNode]](
                 SymbolEqualityComparer.Default
             )
+
+            public func AssignmentsFor(symbol ISymbol?) IReadOnlyList[AssignmentExpressionSyntax] {
+                return if symbol != nil && this.Assignments.TryGetValue(symbol, out var candidates) {
+                    cast[IReadOnlyList[AssignmentExpressionSyntax]](candidates)
+                } else {
+                    Array.Empty[AssignmentExpressionSyntax]()
+                }
+            }
         }
 
         private func GetScopeWriteIndex(scope_ SyntaxNode) ScopeWriteIndex {
@@ -2263,6 +2275,15 @@ partial class CSharpToGSharpTranslator {
                 }
                 if target != nil {
                     this.IndexScopeWriteTarget(index.Writes, bindings, node, target)
+                    if node is AssignmentExpressionSyntax assignment &&
+                        CSharpToGSharpTranslator.UnwrapParenthesesAndSuppressions(assignment.Left) is {} directTarget &&
+                        this.ScopeBoundSymbol(bindings, directTarget) is {} assignedSymbol {
+                        if !index.Assignments.TryGetValue(assignedSymbol, out var assignments) {
+                            assignments = List[AssignmentExpressionSyntax]()
+                            index.Assignments.Add(assignedSymbol, assignments)
+                        }
+                        assignments.Add(assignment)
+                    }
                 }
                 let declaredName string? = switch node {
                     case declaration is VariableDeclaratorSyntax: declaration.Identifier.ValueText
