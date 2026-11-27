@@ -1606,4 +1606,92 @@ Console.Write(Read("xy"))`
         IlVerifier.Verify(program)
         Assert.Equal(Encoding.UTF8.GetBytes("212"), fixture.RunBytes(program))
     }
+
+    @Fact
+    func Driver_MultiPathSameRoot_ImplicitMember_AndPredicateContractGuard_RejectWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let multiPathSource = `import System
+import System.Diagnostics
+open class Base {}
+class Derived : Base {
+    var Tag object = "x"
+}
+@Conditional("A")
+func Keep(h Derived, tag string, value string?) {}
+@Conditional("A")
+func Keep(h Base, tag object, value string?) {}
+func Keep(h Derived, tag object, value string?) {}
+func Touch(h Derived) { h.Tag = Object() }
+func Read(holder Base, input string?) int32 {
+    var s = input
+    if holder is not Derived || holder.Tag is not string || s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        Keep(holder, holder.Tag, (s = nil))
+        Touch(holder)
+    }
+    return 0
+}
+Console.Write(Read(Derived(), "xy"))`
+        let (codeMulti, outputMulti) = fixture.TryCompile(
+            multiPathSource,
+            "ConditionalLoopMultiPathSameRoot6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeMulti)
+        Assert.Contains("GS0158", outputMulti)
+
+        let implicitMemberSource = `import System
+import System.Diagnostics
+@Conditional("A")
+func Keep(tag string, value string?) {}
+func Keep(tag object, value string?) {}
+class Owner {
+    var Tag object = "x"
+    func Reset() { Tag = Object() }
+    func Read(input string?) int32 {
+        var s = input
+        if Tag is not string || s == nil { return 0 }
+        for var i = 0; i < 2; i++ {
+            Console.Write(s.Length)
+            Keep(Tag, (s = nil))
+            Reset()
+        }
+        return 0
+    }
+}
+Console.Write(Owner().Read("xy"))`
+        let (codeImplicit, outputImplicit) = fixture.TryCompile(
+            implicitMemberSource,
+            "ConditionalLoopImplicitMember6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeImplicit)
+        Assert.Contains("GS0158", outputImplicit)
+
+        let predicateGuardSource = `import System
+import System.Diagnostics
+@Conditional("A")
+func Keep(tag object?, value string?) {}
+func Keep(tag string, value string?) {}
+func Read(tag string?, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        if !string.IsNullOrEmpty(tag) {
+            Keep(tag, (s = nil))
+        }
+    }
+    return 0
+}
+Console.Write(Read("x", "xy"))`
+        let (codePred, outputPred) = fixture.TryCompile(
+            predicateGuardSource,
+            "ConditionalLoopPredicateGuard6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codePred)
+        Assert.Contains("GS0158", outputPred)
+    }
 }

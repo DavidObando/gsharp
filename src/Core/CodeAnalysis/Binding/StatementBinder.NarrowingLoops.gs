@@ -17013,55 +17013,58 @@ internal partial class StatementBinder {
     private func IsElidedConditionalCallInRegion(
         callExpression ExpressionSyntax,
         effects RegionEffects,
-        isDeclaredInRegion Func[string, bool]
+        isDeclaredInRegion Func[string, bool],
+        hasConditionCall bool
     ) bool {
         if inConditionalCallProbe || effects.ContainsMemberTypeTest {
             return false
         }
-        let narrowedReadRoots = HashSet[string](StringComparer.Ordinal)
+        let matchingNarrowedPaths = HashSet[AccessPath]()
         if HasLoopSensitiveOperand(
             callExpression,
             effects,
             isDeclaredInRegion,
-            narrowedReadRoots,
+            hasConditionCall,
+            matchingNarrowedPaths,
             isTopLevelCall: true
         ) {
             return false
         }
-        // Exhaustively cover selective entry-narrowing invalidation:
-        // 0 narrowed reads -> 1 state (invariant); 1 narrowed read -> 2 states (entry & cleared);
-        // 2+ distinct narrowed reads -> conservatively decline elision rather than risking mixed states.
-        if narrowedReadRoots.Count > 1 {
+        // Exhaustively cover selective entry-narrowing invalidation across all distinct
+        // AccessPath facts (including member paths, inherited CLR members, and implicit members):
+        // 0 matching facts -> 1 state; 1 matching fact -> 2 states (entry & cleared);
+        // 2+ distinct facts -> conservatively decline elision rather than risking mixed states.
+        if matchingNarrowedPaths.Count > 1 {
             return false
         }
         if !TryProbeElidedConditionalCall(callExpression, clearNarrowings: false) {
             return false
         }
-        if narrowedReadRoots.Count == 1 && !TryProbeElidedConditionalCall(callExpression, clearNarrowings: true) {
+        if matchingNarrowedPaths.Count == 1 && !TryProbeElidedConditionalCall(callExpression, clearNarrowings: true) {
             return false
         }
         return true
     }
 
-    private func RootVariableHasActiveNarrowing(name string) bool {
-        if $scope.TryLookupSymbol(name) is not VariableSymbol variable {
-            return false
-        }
+    private func CollectMatchingActiveNarrowingPaths(name string, matchingPaths HashSet[AccessPath]) {
+        let lookedUp = $scope.TryLookupSymbol(name) as VariableSymbol
         for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
             for path in binderCtx.NarrowedVariables[i].Keys {
-                if SameRoot(path.Root, variable) {
-                    return true
+                if (lookedUp != nil && SameRoot(path.Root, lookedUp)) ||
+                    path.Root.Name == name ||
+                    (!path.Members.IsDefaultOrEmpty && path.Members.Any((m PathMember) -> m.Name == name)) {
+                    matchingPaths.Add(path)
                 }
             }
         }
-        return false
     }
 
     private func HasLoopSensitiveOperand(
         node SyntaxNode?,
         effects RegionEffects,
         isDeclaredInRegion Func[string, bool],
-        narrowedReadRoots HashSet[string],
+        hasConditionCall bool,
+        matchingNarrowedPaths HashSet[AccessPath],
         isAccessorRight bool = false,
         isTopLevelCall bool = false
     ) bool {
@@ -17078,15 +17081,17 @@ internal partial class StatementBinder {
                     parenthesized.Expression,
                     effects,
                     isDeclaredInRegion,
-                    narrowedReadRoots,
+                    hasConditionCall,
+                    matchingNarrowedPaths,
                     isAccessorRight,
                     isTopLevelCall
                 )
             }
             case accessor is AccessorExpressionSyntax {
                 // Any member access in an argument or nested receiver is sensitive when the loop
-                // or an enclosing region contains a member/element nil guard (`holder.Tag != nil`).
-                if !isTopLevelCall && effects.NilCompareOperandPaths.Count > 0 {
+                // or an enclosing region contains a member/element nil guard (`holder.Tag != nil`)
+                // or a predicate-contract call guard (`if !string.IsNullOrEmpty(holder.Tag)`).
+                if !isTopLevelCall && (effects.NilCompareOperandPaths.Count > 0 || hasConditionCall) {
                     return true
                 }
                 if !isAccessorRight {
@@ -17094,7 +17099,8 @@ internal partial class StatementBinder {
                         accessor.LeftPart,
                         effects,
                         isDeclaredInRegion,
-                        narrowedReadRoots,
+                        hasConditionCall,
+                        matchingNarrowedPaths,
                         isAccessorRight: false
                     ) {
                         return true
@@ -17107,31 +17113,45 @@ internal partial class StatementBinder {
                                 leftCall.Callee,
                                 effects,
                                 isDeclaredInRegion,
-                                narrowedReadRoots
+                                hasConditionCall,
+                                matchingNarrowedPaths
                             ) {
                                 return true
                             }
                             for arg in leftCall.Arguments {
-                                if HasLoopSensitiveOperand(arg, effects, isDeclaredInRegion, narrowedReadRoots) {
+                                if HasLoopSensitiveOperand(
+                                    arg,
+                                    effects,
+                                    isDeclaredInRegion,
+                                    hasConditionCall,
+                                    matchingNarrowedPaths
+                                ) {
                                     return true
                                 }
                             }
                         }
                         case leftIndex is IndexExpressionSyntax {
-                            if effects.NilCompareOperandPaths.Count > 0 {
+                            if effects.NilCompareOperandPaths.Count > 0 || hasConditionCall {
                                 return true
                             }
                             if HasLoopSensitiveOperand(
                                 leftIndex.Target,
                                 effects,
                                 isDeclaredInRegion,
-                                narrowedReadRoots,
+                                hasConditionCall,
+                                matchingNarrowedPaths,
                                 isAccessorRight: true
                             ) {
                                 return true
                             }
                             for idx in leftIndex.Indices {
-                                if HasLoopSensitiveOperand(idx, effects, isDeclaredInRegion, narrowedReadRoots) {
+                                if HasLoopSensitiveOperand(
+                                    idx,
+                                    effects,
+                                    isDeclaredInRegion,
+                                    hasConditionCall,
+                                    matchingNarrowedPaths
+                                ) {
                                     return true
                                 }
                             }
@@ -17142,7 +17162,8 @@ internal partial class StatementBinder {
                                 accessor.LeftPart,
                                 effects,
                                 isDeclaredInRegion,
-                                narrowedReadRoots
+                                hasConditionCall,
+                                matchingNarrowedPaths
                             ) {
                                 return true
                             }
@@ -17153,17 +17174,24 @@ internal partial class StatementBinder {
                     accessor.RightPart,
                     effects,
                     isDeclaredInRegion,
-                    narrowedReadRoots,
+                    hasConditionCall,
+                    matchingNarrowedPaths,
                     isAccessorRight: true,
                     isTopLevelCall: isTopLevelCall
                 )
             }
             case _ is IndexExpressionSyntax {
-                if effects.NilCompareOperandPaths.Count > 0 {
+                if effects.NilCompareOperandPaths.Count > 0 || hasConditionCall {
                     return true
                 }
                 for child in node.GetChildren() {
-                    if HasLoopSensitiveOperand(child, effects, isDeclaredInRegion, narrowedReadRoots) {
+                    if HasLoopSensitiveOperand(
+                        child,
+                        effects,
+                        isDeclaredInRegion,
+                        hasConditionCall,
+                        matchingNarrowedPaths
+                    ) {
                         return true
                     }
                 }
@@ -17174,24 +17202,48 @@ internal partial class StatementBinder {
                     return true
                 }
                 if call.Callee != nil &&
-                    HasLoopSensitiveOperand(call.Callee, effects, isDeclaredInRegion, narrowedReadRoots) {
+                    HasLoopSensitiveOperand(
+                    call.Callee,
+                    effects,
+                    isDeclaredInRegion,
+                    hasConditionCall,
+                    matchingNarrowedPaths
+                ) {
                     return true
                 }
                 for arg in call.Arguments {
-                    if HasLoopSensitiveOperand(arg, effects, isDeclaredInRegion, narrowedReadRoots) {
+                    if HasLoopSensitiveOperand(
+                        arg,
+                        effects,
+                        isDeclaredInRegion,
+                        hasConditionCall,
+                        matchingNarrowedPaths
+                    ) {
                         return true
                     }
                 }
                 return false
             }
             case named is NamedArgumentExpressionSyntax {
-                return HasLoopSensitiveOperand(named.Expression, effects, isDeclaredInRegion, narrowedReadRoots)
+                return HasLoopSensitiveOperand(
+                    named.Expression,
+                    effects,
+                    isDeclaredInRegion,
+                    hasConditionCall,
+                    matchingNarrowedPaths
+                )
             }
             case assign is AssignmentExpressionSyntax {
                 if isDeclaredInRegion(assign.IdentifierToken.ValueText) {
                     return true
                 }
-                return HasLoopSensitiveOperand(assign.Expression, effects, isDeclaredInRegion, narrowedReadRoots)
+                return HasLoopSensitiveOperand(
+                    assign.Expression,
+                    effects,
+                    isDeclaredInRegion,
+                    hasConditionCall,
+                    matchingNarrowedPaths
+                )
             }
             case name is NameExpressionSyntax {
                 if isAccessorRight {
@@ -17199,6 +17251,11 @@ internal partial class StatementBinder {
                 }
                 let text = name.IdentifierToken.ValueText
                 if isDeclaredInRegion(text) {
+                    return true
+                }
+                // A condition call (e.g. `if !string.IsNullOrEmpty(tag)`) can narrow a non-type
+                // variable/member read via `[NotNullWhen]` / `[MemberNotNullWhen]`.
+                if hasConditionCall && ResolveTypeName(text) == nil {
                     return true
                 }
                 for test in effects.TypeTests {
@@ -17214,14 +17271,18 @@ internal partial class StatementBinder {
                 if effects.NilCompareOperandNames.Contains(text) {
                     return true
                 }
-                if RootVariableHasActiveNarrowing(text) {
-                    narrowedReadRoots.Add(text)
-                }
+                CollectMatchingActiveNarrowingPaths(text, matchingNarrowedPaths)
                 return false
             }
             default {
                 for child in node.GetChildren() {
-                    if HasLoopSensitiveOperand(child, effects, isDeclaredInRegion, narrowedReadRoots) {
+                    if HasLoopSensitiveOperand(
+                        child,
+                        effects,
+                        isDeclaredInRegion,
+                        hasConditionCall,
+                        matchingNarrowedPaths
+                    ) {
                         return true
                     }
                 }
