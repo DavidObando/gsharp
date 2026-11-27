@@ -22,15 +22,11 @@ import System.Linq
 /// in any result: names and call sites are in source order of the walk.
 internal sealed class RegionEffectScanner {
     private let activeCode ConditionalCompilationMap?
-    private let isElidedConditionalCall(
-        (CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?, RegionEffects, Func[string, bool]) -> bool
-    )?
+    private let isElidedConditionalCall((ExpressionSyntax, RegionEffects, Func[string, bool]) -> bool)?
 
     internal init(
         activeCode ConditionalCompilationMap? = nil,
-        isElidedConditionalCall(
-            (CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?, RegionEffects, Func[string, bool]) -> bool
-        )? = nil
+        isElidedConditionalCall((ExpressionSyntax, RegionEffects, Func[string, bool]) -> bool)? = nil
     ) {
         this.activeCode = activeCode
         this.isElidedConditionalCall = isElidedConditionalCall
@@ -42,6 +38,7 @@ internal sealed class RegionEffectScanner {
     private var enclosingScopes List[ScopeFrame] = List[ScopeFrame]()
     private var enclosingTypeTests List[RegionTypeTest] = List[RegionTypeTest]()
     private var enclosingWrites List[RegionWrite] = List[RegionWrite]()
+    private var enclosingNilCompareNames HashSet[string] = HashSet[string](StringComparer.Ordinal)
     private var enclosingContainsMemberTypeTest bool = false
     private var current RegionEffects = RegionEffects()
     private var closureDepth int32 = 0
@@ -180,6 +177,7 @@ internal sealed class RegionEffectScanner {
         let savedEnclosing = enclosingScopes
         let savedEnclosingTypeTests = enclosingTypeTests
         let savedEnclosingWrites = enclosingWrites
+        let savedEnclosingNilCompares = enclosingNilCompareNames
         let savedEnclosingMemberTypeTest = enclosingContainsMemberTypeTest
         let savedCurrent = current
         let savedClosure = closureDepth
@@ -201,6 +199,13 @@ internal sealed class RegionEffectScanner {
                 nextWrites.AddRange(savedCurrent.Writes)
                 enclosingWrites = nextWrites
             }
+            if savedCurrent.NilCompareOperandNames.Count > 0 {
+                let nextNilCompares = HashSet[string](enclosingNilCompareNames, StringComparer.Ordinal)
+                for n in savedCurrent.NilCompareOperandNames {
+                    nextNilCompares.Add(n)
+                }
+                enclosingNilCompareNames = nextNilCompares
+            }
             enclosingContainsMemberTypeTest = enclosingContainsMemberTypeTest || savedCurrent.ContainsMemberTypeTest
         }
         scopes = List[ScopeFrame]()
@@ -217,6 +222,7 @@ internal sealed class RegionEffectScanner {
         enclosingScopes = savedEnclosing
         enclosingTypeTests = savedEnclosingTypeTests
         enclosingWrites = savedEnclosingWrites
+        enclosingNilCompareNames = savedEnclosingNilCompares
         enclosingContainsMemberTypeTest = savedEnclosingMemberTypeTest
         current = savedCurrent
         closureDepth = savedClosure
@@ -292,6 +298,43 @@ internal sealed class RegionEffectScanner {
             if enclosingScopes[i].Names.Contains(name) {
                 return true
             }
+        }
+        return false
+    }
+
+    private func BuildConditionalEffectsContext() RegionEffects {
+        if enclosingTypeTests.Count == 0 &&
+            enclosingWrites.Count == 0 &&
+            enclosingNilCompareNames.Count == 0 &&
+            !enclosingContainsMemberTypeTest {
+            return current
+        }
+        let combined = RegionEffects()
+        combined.TypeTests.AddRange(enclosingTypeTests)
+        combined.TypeTests.AddRange(current.TypeTests)
+        combined.Writes.AddRange(enclosingWrites)
+        combined.Writes.AddRange(current.Writes)
+        for n in enclosingNilCompareNames {
+            combined.NilCompareOperandNames.Add(n)
+        }
+        for n in current.NilCompareOperandNames {
+            combined.NilCompareOperandNames.Add(n)
+        }
+        combined.ContainsMemberTypeTest = enclosingContainsMemberTypeTest || current.ContainsMemberTypeTest
+        return combined
+    }
+
+    private func IsCandidateConditionalCallExpression(expression ExpressionSyntax?) bool {
+        let unwrapped = UnwrapParentheses(expression)
+        if unwrapped is CallExpressionSyntax{Callee: nil} {
+            return true
+        }
+        if unwrapped is AccessorExpressionSyntax accessor {
+            var current = accessor
+            while current.RightPart is AccessorExpressionSyntax nested {
+                current = nested
+            }
+            return current.RightPart is CallExpressionSyntax{Callee: nil}
         }
         return false
     }
@@ -388,6 +431,24 @@ internal sealed class RegionEffectScanner {
             default { }
         }
         switch kind {
+            case SyntaxKind.ExpressionStatement {
+                let expr = cast[ExpressionStatementSyntax](node).Expression
+                if isElidedConditionalCall != nil &&
+                    IsCandidateConditionalCallExpression(expr) &&
+                    isElidedConditionalCall(expr, BuildConditionalEffectsContext(), IsDeclaredInRegionOrEnclosing) {
+                    return
+                }
+                Visit(expr)
+            }
+            case SyntaxKind.DeferStatement {
+                let expr = cast[DeferStatementSyntax](node).Expression
+                if isElidedConditionalCall != nil &&
+                    IsCandidateConditionalCallExpression(expr) &&
+                    isElidedConditionalCall(expr, BuildConditionalEffectsContext(), IsDeclaredInRegionOrEnclosing) {
+                    return
+                }
+                Visit(expr)
+            }
             case SyntaxKind.NameOfExpression { }
             case SyntaxKind.ReturnStatement {
                 let returnStatement = cast[ReturnStatementSyntax](node)
@@ -2577,19 +2638,6 @@ internal sealed class RegionEffectScanner {
         }
     }
 
-    private func BuildConditionalEffectsContext() RegionEffects {
-        if enclosingTypeTests.Count == 0 && enclosingWrites.Count == 0 && !enclosingContainsMemberTypeTest {
-            return current
-        }
-        let combined = RegionEffects()
-        combined.TypeTests.AddRange(enclosingTypeTests)
-        combined.TypeTests.AddRange(current.TypeTests)
-        combined.Writes.AddRange(enclosingWrites)
-        combined.Writes.AddRange(current.Writes)
-        combined.ContainsMemberTypeTest = enclosingContainsMemberTypeTest || current.ContainsMemberTypeTest
-        return combined
-    }
-
     // [`receiver`](paramref) is the part before the dot that this accessor follows, or `nil` at the start of a chain.
     private func VisitAccessor(
         accessor AccessorExpressionSyntax,
@@ -2598,21 +2646,6 @@ internal sealed class RegionEffectScanner {
         prefix RegionReceiverPath?
     ) {
         let isRightPartOfAccessor = receiver != nil
-        if !isRightPartOfAccessor &&
-            isElidedConditionalCall != nil &&
-            TryMatchTerminalCall(accessor, out var terminalCall, out _, out var terminalPath) &&
-            !(
-            terminalPath?.RootName is {} rootName && !IsDeclared(rootName) && IsDeclaredInRegionOrEnclosing(rootName)
-        ) &&
-            isElidedConditionalCall(
-            terminalCall!!,
-            accessor,
-            terminalPath,
-            BuildConditionalEffectsContext(),
-            IsDeclaredInRegionOrEnclosing
-        ) {
-            return
-        }
         // `a.M(args)` is a call. `a.b` and `a.b.M()` read the member `b`: an unknown getter (rule W5). In
         // `a.b.c`, `a.M().b` and `a.b[i].c` the name `b`, the call `M()` and the index `b[i]` are the left part of
         // the accessor that follows `a.`, and `a` is their receiver.
@@ -2651,44 +2684,6 @@ internal sealed class RegionEffectScanner {
         Visit(right)
     }
 
-    private func TryMatchTerminalCall(
-        accessor AccessorExpressionSyntax,
-        out terminalCall CallExpressionSyntax?,
-        out receiverExpression ExpressionSyntax?,
-        out receiverPath RegionReceiverPath?
-    ) bool {
-        var current = accessor
-        var path = BuildConditionalReceiverPath(current.LeftPart)
-        var lastReceiver ExpressionSyntax = current.LeftPart
-        while current.RightPart is AccessorExpressionSyntax nested {
-            path = AppendPath(path, nested.LeftPart)
-            lastReceiver = nested.LeftPart
-            current = nested
-        }
-        if current.RightPart is CallExpressionSyntax call && call.Callee == nil {
-            terminalCall = call
-            receiverExpression = if object.ReferenceEquals(current, accessor) {
-                accessor.LeftPart
-            } else {
-                lastReceiver
-            }
-            receiverPath = path
-            return true
-        }
-        terminalCall = nil
-        receiverExpression = nil
-        receiverPath = nil
-        return false
-    }
-
-    private func BuildConditionalReceiverPath(expression ExpressionSyntax?) RegionReceiverPath? {
-        let current = UnwrapParentheses(expression)
-        if current is AssignmentExpressionSyntax assignment {
-            return OriginOf(assignment.IdentifierToken.ValueText)
-        }
-        return BuildPath(current)
-    }
-
     private func VisitCall(
         call CallExpressionSyntax,
         receiver ExpressionSyntax?,
@@ -2701,13 +2696,6 @@ internal sealed class RegionEffectScanner {
             if Active() {
                 RecordConversion(operand, TypeOrigin(call.TypeArgumentList!!.Arguments[0]), allowExplicit: true)
             }
-            return
-        }
-        if receiver == nil &&
-            call.Callee == nil &&
-            isElidedConditionalCall != nil &&
-            !IsDeclaredInRegionOrEnclosing(call.Identifier.ValueText) &&
-            isElidedConditionalCall(call, nil, nil, BuildConditionalEffectsContext(), IsDeclaredInRegionOrEnclosing) {
             return
         }
         if Active() {

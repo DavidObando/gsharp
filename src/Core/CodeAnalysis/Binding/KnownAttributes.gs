@@ -519,33 +519,6 @@ internal shared class KnownAttributes {
         return sawConditional
     }
 
-    /// Checks conditional symbols on an imported CLR method, including overridden base methods.
-    /// @param method The called CLR method.
-    /// @param environments The syntax-derived environments.
-    /// @param syntax The call's lexical location.
-    /// @returns Whether no conditional symbol keeps the call.
-    internal func IsConditionallyElided(
-        method MethodInfo,
-        environments ConditionalCompilationMap,
-        syntax SyntaxNode?
-    ) bool {
-        CompilationMeasurements.Count("conditional.calls.checked")
-        let symbols = ConditionalSymbols(method)
-        if symbols.IsDefaultOrEmpty {
-            return false
-        }
-        var active ImmutableHashSet[string]? = nil
-        for symbol in symbols {
-            if symbol != nil {
-                active ??= environments.SymbolsAt(syntax)
-                if active.Contains(symbol) {
-                    return false
-                }
-            }
-        }
-        return true
-    }
-
     private func ConditionalSymbols(function Symbol) sequence[string?] {
         if function is ImportedFunctionSymbol imported {
             for symbol in ConditionalSymbols(imported.Method) {

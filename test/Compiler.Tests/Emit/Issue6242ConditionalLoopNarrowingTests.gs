@@ -692,7 +692,7 @@ Console.Write(Impl().Read("xy"))`
     }
 
     @Fact
-    func Driver_ReceiverChainWrite_MakesLaterArgumentUncertain_AndRejectsWithGS0158() {
+    func Driver_ReceiverChainWrite_MatchesActualBindingElision_AndRejectsWhenSymbolDefined() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let source = `import System
 import System.Diagnostics
@@ -710,9 +710,18 @@ func Read(input string?) int32 {
     return 0
 }
 Console.Write(Read("xy"))`
-        let (code, output) = fixture.TryCompile(source, "ConditionalLoopRecvWrite6242", executable: true)
-        Assert.NotEqual(0, code)
-        Assert.Contains("GS0158", output)
+        let program = fixture.Compile(source, "ConditionalLoopRecvWriteAbsent6242", executable: true)
+        IlVerifier.Verify(program)
+        Assert.Equal(Encoding.UTF8.GetBytes("220"), fixture.RunBytes(program))
+
+        let (codePresent, outputPresent) = fixture.TryCompile(
+            source,
+            "ConditionalLoopRecvWritePresent6242",
+            executable: true,
+            "/define:A"
+        )
+        Assert.NotEqual(0, codePresent)
+        Assert.Contains("GS0158", outputPresent)
     }
 
     @Fact
@@ -1396,5 +1405,125 @@ Console.Write(Demo.Read("a", "xy"))`
         let program = fixture.Compile(source, "ConditionalLoopPrecedenceAbsent6242", executable: true, "/r:" + library)
         IlVerifier.Verify(program, []string{library})
         Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
+    }
+
+    @Fact
+    func Driver_ExplicitInterfaceSource_DerivedHiding_AndVariadicOverloads_PreserveNarrowing() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalVariadic6242 {
+    public static class Probe {
+        [Conditional("EXT_6242")]
+        public static void Keep(string? value) {}
+        public static void Keep(params int[] values) {}
+    }
+}`, "ConditionalVariadicLib6242")
+        let source = `import System
+import System.Diagnostics
+import ConditionalVariadic6242
+interface IKeep {
+    func Keep(value string?);
+}
+class Holder : IKeep {
+    @Conditional("A")
+    func Keep(value object?) {}
+    func (IKeep) Keep(value string?) {}
+}
+open class Base {
+    func Keep(value string?) {}
+}
+class Derived : Base {
+    @Conditional("A")
+    func Keep(value string?) {}
+}
+@Conditional("A")
+func KeepVar(value string?) {}
+func KeepVar(values ...int32) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let h = Holder()
+    let d = Derived()
+    var once = true
+    while once {
+        h.Keep((s = nil))
+        d.Keep((s = nil))
+        KeepVar((s = nil))
+        Probe.Keep((s = nil))
+        Console.Write(s.Length)
+        once = false
+    }
+    return s.Length
+}
+Console.Write(Read("xy"))`
+        let program = fixture.Compile(
+            source,
+            "ConditionalLoopExplicitHidingVariadic6242",
+            executable: true,
+            "/r:" + library
+        )
+        IlVerifier.Verify(program, []string{library})
+        Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
+    }
+
+    @Fact
+    func Driver_GenericConstraintFailureFallback_AndUnfilledRequiredParam_RejectWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalConstraintFallback6242 {
+    public sealed class Probe {
+        [Conditional("EXT_6242")]
+        public void Keep<T>(T value) where T : struct {}
+        [Conditional("EXT_6242")]
+        public void KeepReq(int required, string? value = null) {}
+    }
+}`, "ConditionalConstraintFallbackLib6242")
+        let constraintSource = `import System
+import ConditionalConstraintFallback6242
+func (self Probe) Keep(value string?) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let p = Probe()
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        p.Keep((s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codeConstraint, outputConstraint) = fixture.TryCompile(
+            constraintSource,
+            "ConditionalLoopConstraintFallback6242",
+            executable: true,
+            "/r:" + library
+        )
+        Assert.NotEqual(0, codeConstraint)
+        Assert.Contains("GS0158", outputConstraint)
+
+        let unfilledSource = `import System
+import ConditionalConstraintFallback6242
+func (self Probe) KeepReq(value string?) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let p = Probe()
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        p.KeepReq(value: (s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codeUnfilled, outputUnfilled) = fixture.TryCompile(
+            unfilledSource,
+            "ConditionalLoopUnfilledReq6242",
+            executable: true,
+            "/r:" + library
+        )
+        Assert.NotEqual(0, codeUnfilled)
+        Assert.Contains("GS0158", outputUnfilled)
     }
 }
