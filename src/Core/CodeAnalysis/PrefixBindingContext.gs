@@ -374,9 +374,11 @@ internal sealed class PrefixCut {
                 return true
             }
             if excludeCallLambdas && outer.Start < next.Span.Start && next.Span.End <= outer.End {
-                if fixedCallSpan is {} callSpan &&
-                    next is ExpressionSyntax nextExpr &&
-                    PrefixBindingContext.EnclosingCallOfArgumentExact(nextExpr.SyntaxTree, nextExpr, callSpan) {
+                if next is ExpressionSyntax nextExpr && PrefixBindingContext.IsFixedSignatureArgument(
+                    this,
+                    nextExpr,
+                    fixedCallSpan
+                ) {
                     return true
                 }
                 if next is FunctionLiteralExpressionSyntax {
@@ -1076,12 +1078,33 @@ internal shared class PrefixBindingContext {
                 (
                 parent is MemberFieldAssignmentExpressionSyntax memFld && object.ReferenceEquals(memFld.Value, current)
             ) ||
-                (parent is AssignmentExpressionSyntax assign && object.ReferenceEquals(assign.Expression, current)) {
+                (parent is AssignmentExpressionSyntax assign && object.ReferenceEquals(assign.Expression, current)) ||
+                (
+                parent is NullCoalescingAssignmentExpressionSyntax nullAssign && object.ReferenceEquals(
+                    nullAssign.Value,
+                    current
+                )
+            ) ||
+                (
+                parent is EventSubscriptionExpressionSyntax eventSub && object.ReferenceEquals(eventSub.Value, current)
+            ) {
                 return parent
             }
             return nil
         }
         return nil
+    }
+
+    internal func IsFixedSignatureArgument(cut PrefixCut?, expression ExpressionSyntax, fixedCallSpan TextSpan?) bool {
+        if EnclosingCallOfArgument(expression.SyntaxTree, expression) is not{} enclosingCall {
+            return false
+        }
+        if fixedCallSpan is {} callSpan &&
+            enclosingCall.Span.Start == callSpan.Start &&
+            enclosingCall.Span.End == callSpan.End {
+            return true
+        }
+        return cut != nil && cut.IsFixedSignatureCall(enclosingCall)
     }
 
     internal func EnclosingCallOfArgumentExact(tree SyntaxTree, expression SyntaxNode, callSpan TextSpan) bool {
@@ -1090,7 +1113,7 @@ internal shared class PrefixBindingContext {
             call.Span.End == callSpan.End
     }
 
-    private func EnclosingCallOfArgument(tree SyntaxTree, expression SyntaxNode) SyntaxNode? {
+    internal func EnclosingCallOfArgument(tree SyntaxTree, expression SyntaxNode) SyntaxNode? {
         var current SyntaxNode = expression
         while true {
             if TryStepContextualResultParent(tree, current, includeNamedArguments: true) is {} nextParent {
@@ -1149,7 +1172,8 @@ internal shared class PrefixBindingContext {
             report: report,
             declaredSpans: nil,
             excludeCallLambdas: excludeCallLambdas,
-            fixedCallSpan: fixedCallSpan
+            fixedCallSpan: fixedCallSpan,
+            cut: cut
         )
         if names.Count == 0 {
             return false
@@ -1298,7 +1322,8 @@ internal shared class PrefixBindingContext {
         report TextSpan? = nil,
         declaredSpans Dictionary[string, TextSpan]? = nil,
         excludeCallLambdas bool = false,
-        fixedCallSpan TextSpan? = nil
+        fixedCallSpan TextSpan? = nil,
+        cut PrefixCut? = nil
     ) {
         if skipSubtree != nil && object.ReferenceEquals(node, skipSubtree) {
             return
@@ -1322,7 +1347,8 @@ internal shared class PrefixBindingContext {
                             report,
                             declaredSpans,
                             excludeCallLambdas,
-                            fixedCallSpan
+                            fixedCallSpan,
+                            cut
                         )
                     }
                 }
@@ -1349,9 +1375,8 @@ internal shared class PrefixBindingContext {
                 continue
             }
             if excludeCallLambdas &&
-                fixedCallSpan is {} callArgSpan &&
                 child is ExpressionSyntax exprChild &&
-                EnclosingCallOfArgumentExact(exprChild.SyntaxTree, exprChild, callArgSpan) {
+                IsFixedSignatureArgument(cut, exprChild, fixedCallSpan) {
                 continue
             }
             if child is LambdaExpressionSyntax l {
@@ -1372,7 +1397,8 @@ internal shared class PrefixBindingContext {
                                     report,
                                     declaredSpans,
                                     excludeCallLambdas,
-                                    fixedCallSpan
+                                    fixedCallSpan,
+                                    cut
                                 )
                             }
                             let blockReturns = List[ReturnStatementSyntax]()
@@ -1394,7 +1420,8 @@ internal shared class PrefixBindingContext {
                                     report,
                                     declaredSpans,
                                     excludeCallLambdas,
-                                    fixedCallSpan
+                                    fixedCallSpan,
+                                    cut
                                 )
                             }
                         }
@@ -1412,7 +1439,8 @@ internal shared class PrefixBindingContext {
                 report,
                 declaredSpans,
                 excludeCallLambdas,
-                fixedCallSpan
+                fixedCallSpan,
+                cut
             )
         }
     }
@@ -1872,9 +1900,8 @@ internal shared class PrefixBindingContext {
                 continue
             }
             if excludeCallLambdas &&
-                fixedCallSpan is {} callArgSpan &&
                 child is ExpressionSyntax exprChild &&
-                EnclosingCallOfArgumentExact(exprChild.SyntaxTree, exprChild, callArgSpan) {
+                IsFixedSignatureArgument(cut, exprChild, fixedCallSpan) {
                 continue
             }
             if excludeCallLambdas && child is LambdaExpressionSyntax lambdaChild {

@@ -1161,11 +1161,7 @@ internal partial class OverloadResolver {
             } else if symbol is VariableSymbol varSym &&
                 !(varSym is GlobalVariableSymbol && PrefixBindingContext.LaterGlobalCanHide(syntax)) &&
                 !PrefixBindingContext.IsProvisionalVariable(varSym) &&
-                (
-                varSym.Type is FunctionTypeSymbol ||
-                    varSym.Type is DelegateTypeSymbol ||
-                    (varSym.Type.ClrType is {} varClr && ClrTypeUtilities.IsDelegateType(varClr))
-            ) {
+                IsCallableValueType(narrowedCallTargetType ?? varSym.Type) {
                 PrefixBindingContext.AddFixedSignatureCall(syntax)
                 previousFixedFrameKind = Diagnostics.ReplaceCallFrameKind(syntax, PrefixCallKind.Fixed)
             }
@@ -1858,12 +1854,13 @@ internal partial class OverloadResolver {
             }
         ) as FunctionTypeSymbol
         if variable != nil && fnType != nil {
-            // ADR-0225 D6.5: no later text changes the signature of a local or a parameter.
+            // ADR-0225 D6.5: no later text changes the signature of a local, parameter, or non-hidden variable.
             let fixedDiagnostics = Diagnostics
             let fixedPushed = fixedDiagnostics.PushCallFrame(
                 syntax,
                 // #6179: a local whose type a call infers changes with that call.
-                if variable is LocalVariableSymbol && !PrefixBindingContext.IsProvisionalVariable(variable) {
+                if !(variable is GlobalVariableSymbol && PrefixBindingContext.LaterGlobalCanHide(syntax)) &&
+                    !PrefixBindingContext.IsProvisionalVariable(variable) {
                     PrefixCallKind.Fixed
                 } else {
                     PrefixCallKind.Name
@@ -1899,13 +1896,12 @@ internal partial class OverloadResolver {
             }
         ) as DelegateTypeSymbol
         if namedDelegateVar != nil && namedDelegateSym != nil {
-            // ADR-0225 D6.5: no later text changes the signature of a local or a parameter.
+            // ADR-0225 D6.5: no later text changes the signature of a local, parameter, or non-hidden variable.
             let fixedDiagnostics = Diagnostics
             let fixedPushed = fixedDiagnostics.PushCallFrame(
                 syntax,
-                if namedDelegateVar is LocalVariableSymbol && !PrefixBindingContext.IsProvisionalVariable(
-                    namedDelegateVar
-                ) {
+                if !(namedDelegateVar is GlobalVariableSymbol && PrefixBindingContext.LaterGlobalCanHide(syntax)) &&
+                    !PrefixBindingContext.IsProvisionalVariable(namedDelegateVar) {
                     PrefixCallKind.Fixed
                 } else {
                     PrefixCallKind.Name

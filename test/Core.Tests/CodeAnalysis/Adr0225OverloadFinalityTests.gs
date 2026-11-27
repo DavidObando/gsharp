@@ -4203,6 +4203,142 @@ func Run(a int32, f () -> int32) {
             "GS0155",
             "later-declaration"
         )
+
+        // 38. Null-guarded and null-conditional calls to a nullable source delegate parameter stay Final
+        // despite provisional expressions in sibling arguments.
+        const nullableDelegateSource = `package P
+
+delegate Runner(a () -> object, b () -> void);
+
+func Use(c Runner?) {
+    let v = int32(1)
+    if c != nil {
+        c(() -> v, () -> {
+            let badNarrowed int32 = "s"
+        })
+    }
+    c?(() -> v, () -> {
+        let badConditional int32 = "s"
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let nullableDelegateKeep = BindKeep(nullableDelegateSource)
+        let nullableDelegateErrors = nullableDelegateKeep
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(2, nullableDelegateErrors.Count)
+        Assert.All(
+            nullableDelegateErrors,
+            (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality)
+        )
+
+        // 39. Null-coalescing assignment and event subscription inherit a provisional receiver's type.
+        const compoundTargetLambdaSource = `package P
+
+class BoxInt {
+    prop Handler ((int32) -> void)? {
+        get;
+        set;
+    }
+    event Changed Action[int32]?
+}
+
+class BoxStr {
+    prop Handler ((string) -> void)? {
+        get;
+        set;
+    }
+    event Changed Action[string]?
+}
+
+func Make(i int32) BoxInt {
+    return BoxInt()
+}
+
+func Use() {
+    let b = Make(int32(1))
+    b.Handler ??= (x) -> {
+        let s string = x
+    }
+    b.Changed += (x) -> {
+        let t string = x
+    }
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+func Make(s string) BoxStr {
+    return BoxStr()
+}
+`
+        AssertWitness(compoundTargetLambdaSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        let compoundTargetKeep = BindKeep(compoundTargetLambdaSource)
+        let compoundTargetErrors = compoundTargetKeep
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(2, compoundTargetErrors.Count)
+        Assert.All(
+            compoundTargetErrors,
+            (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.FutureDependent, d.Finality)
+        )
+        Assert.All(compoundTargetErrors, (d ClassifiedDiagnostic) -> Assert.Equal("later-overload", d.Reason))
+
+        // 40. Fixed-signature subcalls inside an overloaded call's header argument remain shielded
+        // even when written as an expression-bodied or block-returned lambda.
+        const nestedFixedCallSource = `package P
+
+class Closed {
+    shared {
+        func Make(f () -> object) int32 {
+            return 1
+        }
+        func Apply(a () -> int32, b (int32) -> int32) {
+        }
+        func Apply(a () -> string, b (string) -> int32) {
+        }
+    }
+}
+
+func Use() {
+    Closed.Apply(() -> Closed.Make(() -> int32(1)), (x) -> {
+        let badExpr int32 = "s"
+        return 0
+    })
+    Closed.Apply(() -> {
+        return Closed.Make(() -> int32(1))
+    }, (x) -> {
+        let badRet int32 = "s"
+        return 0
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let nestedFixedCallKeep = BindKeep(nestedFixedCallSource)
+        let nestedFixedCallErrors = nestedFixedCallKeep
+            .Diagnostics
+            .Where((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155")
+            .ToList()
+        Assert.Equal(2, nestedFixedCallErrors.Count)
+        Assert.All(
+            nestedFixedCallErrors,
+            (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality)
+        )
     }
 
     @Fact
