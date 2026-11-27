@@ -103,17 +103,17 @@ import System.Diagnostics
 
 partial class Widget {
     @Conditional("DEBUG")
-    partial func Describe() string;
+    partial func Describe();
 }
 `, "Widget.gs"))
         let implementingFile = SyntaxTree.Parse(SourceText.From(`package App
 import System.Text
 
 partial class Widget {
-    partial func Describe() string {
+    partial func Describe() {
         let sb = StringBuilder()
         sb.Append("built")
-        return sb.ToString()
+        System.Console.WriteLine(sb.ToString())
     }
 }
 
@@ -122,14 +122,13 @@ let m = t.GetMethod("Describe")
 System.Console.WriteLine(m!!.GetCustomAttributes(typeof(System.Diagnostics.ConditionalAttribute), false).Length)
 
 let w = Widget()
-System.Console.WriteLine(w.Describe())
+w.Describe()
 `, "Widget.g.gs"))
         let output = CompileLoadInvokeCaptureStdout(
             []SyntaxTree{declaringFile, implementingFile},
             "Adr0192-CrossFileImports"
         )
-        Assert.Contains("1", output)
-        Assert.Contains("built", output)
+        Assert.Equal("1" + Environment.NewLine, output)
     }
 
     @Fact
@@ -580,13 +579,13 @@ import System
 
 partial class Marked {
     @Obsolete("use Next")
-    partial func Legacy() int32;
+    partial func Legacy();
 }
 
 partial class Marked {
     @System.Diagnostics.Conditional("DEBUG")
-    partial func Legacy() int32 {
-        return 1
+    partial func Legacy() {
+        Console.WriteLine("must not run")
     }
 }
 
@@ -594,6 +593,7 @@ let t = typeof(Marked)
 let m = t.GetMethod("Legacy")
 Console.WriteLine(m!!.GetCustomAttributes(typeof(ObsoleteAttribute), false).Length)
 Console.WriteLine(m!!.GetCustomAttributes(typeof(System.Diagnostics.ConditionalAttribute), false).Length)
+Marked().Legacy()
 `
         let output = CompileLoadInvokeCaptureStdout(source, "Adr0192-UnionedAttributes")
         let lines = NonEmptyLines(output)

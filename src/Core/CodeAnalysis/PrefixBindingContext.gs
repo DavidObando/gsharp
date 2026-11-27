@@ -4,6 +4,7 @@
 
 package GSharp.Core.CodeAnalysis
 
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
@@ -171,32 +172,42 @@ internal sealed class PrefixCut {
     }
 
     private var receiverFunctionNames HashSet[string]?
+    private var receiverFunctionActivity ConditionalCompilationMap?
 
-    /// Returns the names of the receiver functions that the trees of the bind declare (#6215).
+    /// Returns the names of active receiver functions that the trees of the bind declare (#6215).
+    /// @param activeCode The activity map of the prefix compilation.
     /// @returns The names.
-    internal func ReceiverFunctionNames() HashSet[string] {
+    internal func ReceiverFunctionNames(activeCode ConditionalCompilationMap) HashSet[string] {
         lock provisionalGate {
-            if receiverFunctionNames is {} known {
+            if object.ReferenceEquals(receiverFunctionActivity, activeCode) && receiverFunctionNames is {} known {
                 return known
             }
         }
         let names = HashSet[string](StringComparer.Ordinal)
         for tree in ProvisionalTreeList() {
-            CollectReceiverFunctionNames(tree.Root, names)
+            CollectReceiverFunctionNames(tree.Root, names, activeCode)
         }
         lock provisionalGate {
-            receiverFunctionNames ??= names
-            return receiverFunctionNames!!
+            receiverFunctionNames = names
+            receiverFunctionActivity = activeCode
+            return names
         }
     }
 
-    private func CollectReceiverFunctionNames(node SyntaxNode, names HashSet[string]) {
+    private func CollectReceiverFunctionNames(
+        node SyntaxNode,
+        names HashSet[string],
+        activeCode ConditionalCompilationMap
+    ) {
+        if !activeCode.IsActive(node) {
+            return
+        }
         if node is FunctionDeclarationSyntax{IsExtension: true} function {
             names.Add(function.Identifier.ValueText)
         }
         for child in node.GetChildren() {
             if child is not SyntaxToken {
-                CollectReceiverFunctionNames(child, names)
+                CollectReceiverFunctionNames(child, names, activeCode)
             }
         }
     }
@@ -743,9 +754,13 @@ internal shared class PrefixBindingContext {
         node SyntaxNode,
         inExpression bool,
         names HashSet[string],
-        declared bool
+        declared bool,
+        activeCode ConditionalCompilationMap? = nil
     ) {
         for child in node.GetChildren() {
+            if activeCode != nil && !activeCode.IsActive(child) {
+                continue
+            }
             if child is SyntaxToken token {
                 if token.Kind == SyntaxKind.IdentifierToken && !token.IsMissing && IsNameOfKind(node, declared) {
                     names.Add(token.ValueText)
@@ -758,7 +773,7 @@ internal shared class PrefixBindingContext {
             if child is FunctionLiteralExpressionSyntax {
                 continue
             }
-            CollectHeaderNames(statement, child, inExpression || child is ExpressionSyntax, names, declared)
+            CollectHeaderNames(statement, child, inExpression || child is ExpressionSyntax, names, declared, activeCode)
         }
     }
 
@@ -792,8 +807,13 @@ internal shared class PrefixBindingContext {
     /// on a type that a later declaration hides.
     /// @param cut The prefix cut.
     /// @param location The location of the report.
+    /// @param activeCode The activity map of the prefix compilation.
     /// @returns `true` when the report is not final.
-    internal func MayDependOnLaterType(cut PrefixCut, location TextLocation) bool {
+    internal func MayDependOnLaterType(
+        cut PrefixCut,
+        location TextLocation,
+        activeCode ConditionalCompilationMap
+    ) bool {
         if !cut.LaterOverloadsPossible {
             return false
         }
@@ -846,9 +866,10 @@ internal shared class PrefixBindingContext {
         return !IsIndependentOfLaterTypes(
             statement,
             function,
-            cut.ReceiverFunctionNames(),
+            cut.ReceiverFunctionNames(activeCode),
             4,
-            HashSet[object](ReferenceEqualityComparer.Instance)
+            HashSet[object](ReferenceEqualityComparer.Instance),
+            activeCode
         )
     }
 
@@ -859,7 +880,8 @@ internal shared class PrefixBindingContext {
         function FunctionDeclarationSyntax,
         receiverNames HashSet[string],
         depth int32,
-        visited HashSet[object]
+        visited HashSet[object],
+        activeCode ConditionalCompilationMap
     ) bool {
         if depth < 0 {
             return false
@@ -875,11 +897,11 @@ internal shared class PrefixBindingContext {
             return false
         }
         let reads = HashSet[string](StringComparer.Ordinal)
-        if !HeaderIsIndependent(statement, statement, false, reads, receiverNames) {
+        if !HeaderIsIndependent(statement, statement, false, reads, receiverNames, activeCode) {
             return false
         }
         for name in reads {
-            if !NameIsIndependent(name, statement, function, receiverNames, depth, visited) {
+            if !NameIsIndependent(name, statement, function, receiverNames, depth, visited, activeCode) {
                 return false
             }
         }
@@ -893,9 +915,17 @@ internal shared class PrefixBindingContext {
         node SyntaxNode,
         inExpression bool,
         reads HashSet[string],
-        receiverNames HashSet[string]
+        receiverNames HashSet[string],
+        activeCode ConditionalCompilationMap
     ) bool {
+        // The intrinsic has no name lookup that a later type can hide.
+        if node is DefinedExpressionSyntax {
+            return true
+        }
         for child in node.GetChildren() {
+            if !activeCode.IsActive(child) {
+                continue
+            }
             if child is SyntaxToken token {
                 if token.Kind != SyntaxKind.IdentifierToken || token.IsMissing {
                     continue
@@ -937,7 +967,14 @@ internal shared class PrefixBindingContext {
                 }
                 continue
             }
-            if !HeaderIsIndependent(statement, child, inExpression || child is ExpressionSyntax, reads, receiverNames) {
+            if !HeaderIsIndependent(
+                statement,
+                child,
+                inExpression || child is ExpressionSyntax,
+                reads,
+                receiverNames,
+                activeCode
+            ) {
                 return false
             }
         }
@@ -953,7 +990,8 @@ internal shared class PrefixBindingContext {
         function FunctionDeclarationSyntax,
         receiverNames HashSet[string],
         depth int32,
-        visited HashSet[object]
+        visited HashSet[object],
+        activeCode ConditionalCompilationMap
     ) bool {
         let tree = statement.SyntaxTree
         let earlier = List[StatementSyntax]()
@@ -963,7 +1001,9 @@ internal shared class PrefixBindingContext {
                 earlier.Add(enclosing)
             }
             for sibling in parent.GetChildren() {
-                if sibling.Span.End <= statement.Span.Start && sibling is StatementSyntax before {
+                if sibling.Span.End <= statement.Span.Start && sibling is StatementSyntax before && activeCode.IsActive(
+                    before
+                ) {
                     earlier.Add(before)
                 }
             }
@@ -975,18 +1015,18 @@ internal shared class PrefixBindingContext {
             // block, a branch, a loop body) changes its type after that statement, and the header test does
             // not see it.
             let encloses = candidate.Span.Start <= statement.Span.Start && statement.Span.End <= candidate.Span.End
-            if !encloses && MentionsInNestedStatement(candidate, candidate, name) {
+            if !encloses && MentionsInNestedStatement(candidate, candidate, name, activeCode) {
                 return false
             }
             let declared = HashSet[string](StringComparer.Ordinal)
-            CollectHeaderNames(candidate, candidate, false, declared, declared: true)
+            CollectHeaderNames(candidate, candidate, false, declared, declared: true, activeCode: activeCode)
             let read = HashSet[string](StringComparer.Ordinal)
-            CollectHeaderNames(candidate, candidate, false, read, declared: false)
+            CollectHeaderNames(candidate, candidate, false, read, declared: false, activeCode: activeCode)
             if !declared.Contains(name) && !read.Contains(name) {
                 continue
             }
             found = found || declared.Contains(name)
-            if !IsIndependentOfLaterTypes(candidate, function, receiverNames, depth - 1, visited) {
+            if !IsIndependentOfLaterTypes(candidate, function, receiverNames, depth - 1, visited, activeCode) {
                 return false
             }
         }
@@ -1003,31 +1043,39 @@ internal shared class PrefixBindingContext {
 
     // Whether an identifier [`name`](paramref) occurs in a nested statement or function literal of
     // [`statement`](paramref), at any depth.
-    private func MentionsInNestedStatement(statement StatementSyntax, node SyntaxNode, name string) bool {
+    private func MentionsInNestedStatement(
+        statement StatementSyntax,
+        node SyntaxNode,
+        name string,
+        activeCode ConditionalCompilationMap
+    ) bool {
         for child in node.GetChildren() {
-            if child is SyntaxToken {
+            if child is SyntaxToken || !activeCode.IsActive(child) {
                 continue
             }
             if (
                 child is StatementSyntax || child is FunctionLiteralExpressionSyntax || child is LambdaExpressionSyntax
             ) &&
-                !object.ReferenceEquals(child, statement) && MentionsName(child, name) {
+                !object.ReferenceEquals(child, statement) && MentionsName(child, name, activeCode) {
                 return true
             }
-            if MentionsInNestedStatement(statement, child, name) {
+            if MentionsInNestedStatement(statement, child, name, activeCode) {
                 return true
             }
         }
         return false
     }
 
-    private func MentionsName(node SyntaxNode, name string) bool {
+    private func MentionsName(node SyntaxNode, name string, activeCode ConditionalCompilationMap) bool {
         for child in node.GetChildren() {
+            if !activeCode.IsActive(child) {
+                continue
+            }
             if child is SyntaxToken token {
                 if token.Kind == SyntaxKind.IdentifierToken && token.ValueText == name {
                     return true
                 }
-            } else if MentionsName(child, name) {
+            } else if MentionsName(child, name, activeCode) {
                 return true
             }
         }

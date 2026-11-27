@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Syntax
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
@@ -25,6 +26,8 @@ open partial class Parser {
 
     private var tokens ImmutableArray[SyntaxToken]
     private var position int32
+    // Token identities survive speculative resets and token-index shifts.
+    private var definedStatementLookahead Dictionary[SyntaxToken, bool]?
 
     // The token index, bag index, and diagnostic of the last GS0005 from MatchToken.
     // Other diagnostics can come between two failed matches at one token. The bag
@@ -249,7 +252,7 @@ open partial class Parser {
         }
         let builder = ImmutableArray.CreateBuilder[AnnotationSyntax]()
         while Current.Kind == SyntaxKind.AtToken && Peek(1).Kind == SyntaxKind.IdentifierToken &&
-            (Peek(1).Text is "assembly" or "module") &&
+            (Peek(1).Text is "assembly" or "module" or "file") &&
             Peek(2).Kind == SyntaxKind.ColonToken {
             builder.Add(ParseAnnotation())
         }
@@ -340,7 +343,11 @@ open partial class Parser {
         // ADR-0047 / issue #141: Kotlin-style annotation lead-ins precede any
         // other modifier on a declaration. We collect them once and then
         // attach the list to whichever member node ParseMember produces.
-        var annotations = ParseAnnotations()
+        var annotations = if LooksLikeDefinedExpressionStatement() {
+            ImmutableArray[AnnotationSyntax].Empty
+        } else {
+            ParseAnnotations()
+        }
         var accessibilityModifier SyntaxToken? = nil
         if Current.Kind == SyntaxKind.PublicKeyword ||
             Current.Kind == SyntaxKind.InternalKeyword ||
@@ -443,8 +450,7 @@ open partial class Parser {
             // Forward the parsed annotations onto the declaration and clear
             // the local so the trailing `member.WithAnnotations(annotations)`
             // does not double-attach.
-            if declaration is VariableDeclarationSyntax variableDeclaration {
-                variableDeclaration.WithAnnotations(annotations)
+            if AttachDeclarationAnnotations(declaration, annotations) {
                 annotations = ImmutableArray[AnnotationSyntax].Empty
             }
             member = GlobalStatementSyntax(syntaxTree, declaration)
@@ -471,12 +477,87 @@ open partial class Parser {
             // so the binder picks them up via VariableDeclarationSyntax.
             if !annotations.IsDefaultOrEmpty &&
                 member is GlobalStatementSyntax wrappingGlobal &&
-                wrappingGlobal.Statement is VariableDeclarationSyntax forwardingDeclaration {
-                forwardingDeclaration.WithAnnotations(annotations)
+                AttachDeclarationAnnotations(wrappingGlobal.Statement, annotations) {
                 annotations = ImmutableArray[AnnotationSyntax].Empty
             }
         }
         return member.WithAnnotations(annotations)
+    }
+
+    private func LooksLikeDefinedExpressionStatement() bool {
+        if Current.Kind != SyntaxKind.AtToken || Peek(1).Text != "defined" || Peek(
+            2
+        ).Kind != SyntaxKind.OpenParenthesisToken {
+            return false
+        }
+        let cache = definedStatementLookahead ?? Dictionary[SyntaxToken, bool]()
+        definedStatementLookahead = cache
+        if cache.TryGetValue(Current, out var cached) {
+            return cached
+        }
+        let starts = List[SyntaxToken]()
+        let Remember = func (result bool) bool {
+            for token in starts {
+                cache[token] = result
+            }
+            return result
+        }
+        var offset = 0
+        while true {
+            starts.Add(Peek(offset))
+            offset += 2
+            var depth = 0
+            while true {
+                CompilationMeasurements.Count("parser.defined-lookahead.tokens")
+                let kind = Peek(offset).Kind
+                if kind == SyntaxKind.EndOfFileToken {
+                    return Remember(true)
+                }
+                if kind == SyntaxKind.OpenParenthesisToken {
+                    depth++
+                } else if kind == SyntaxKind.CloseParenthesisToken {
+                    depth--
+                }
+                offset++
+                if depth == 0 {
+                    break
+                }
+            }
+            if Peek(offset).Kind != SyntaxKind.AtToken || Peek(offset + 1).Text != "defined" || Peek(
+                offset + 2
+            ).Kind != SyntaxKind.OpenParenthesisToken {
+                break
+            }
+        }
+        let next = Peek(offset)
+        // A declaration head keeps the ordinary attribute spelling; other continuations start an expression.
+        return Remember(
+            !(
+                (
+                    next.Kind is SyntaxKind.AtToken or
+                        SyntaxKind.OpenBraceToken or
+                        SyntaxKind.FuncKeyword or
+                        SyntaxKind.LetKeyword or
+                        SyntaxKind.VarKeyword or
+                        SyntaxKind.ConstKeyword or
+                        SyntaxKind.PublicKeyword or
+                        SyntaxKind.InternalKeyword or
+                        SyntaxKind.PrivateKeyword or
+                        SyntaxKind.ProtectedKeyword
+                ) ||
+                    IsFunctionColorModifier(next.Kind) ||
+                    TryDetectAggregateDeclarationHead(offset) ||
+                    (
+                    next.Kind == SyntaxKind.IdentifierToken &&
+                        (
+                        next.Text == "type" ||
+                            next.Text == "delegate" ||
+                            next.Text == "partial" ||
+                            next.Text == "unsafe"
+                    )
+                )
+            )
+        )
     }
 
     /// Parses zero or more Kotlin-style annotations (ADR-0047) at the current
@@ -728,6 +809,7 @@ open partial class Parser {
                 "event",
                 "module",
                 "assembly",
+                "file",
                 "genericparam" {
                     return true
                 }

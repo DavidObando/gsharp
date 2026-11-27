@@ -48,14 +48,23 @@ internal shared class FriendAssemblyDeclarations {
     /// binder (issue #2237).
     /// @param syntaxTrees The syntax trees making up the compilation.
     /// @returns The non-`InternalsVisibleTo` assembly-level annotations, in source order.
-    func CollectOtherAnnotations(syntaxTrees ImmutableArray[SyntaxTree]) ImmutableArray[AnnotationSyntax] {
+    func CollectOtherAnnotations(
+        syntaxTrees ImmutableArray[SyntaxTree],
+        activeCode ConditionalCompilationMap
+    ) ImmutableArray[AnnotationSyntax] {
         if syntaxTrees.IsDefaultOrEmpty {
             return ImmutableArray[AnnotationSyntax].Empty
         }
         let builder = ImmutableArray.CreateBuilder[AnnotationSyntax]()
         for tree in syntaxTrees {
+            if !activeCode.IsActive(tree.Root) {
+                continue
+            }
             let annotations = tree.Root?.FileAttributes ?? ImmutableArray[AnnotationSyntax].Empty
             for annotation in annotations {
+                if annotation.Target?.KindIdentifier.ValueText == "file" {
+                    continue
+                }
                 let name = annotation.GetNameText()
                 if annotation.Target?.KindIdentifier.ValueText == "assembly" &&
                     (
@@ -79,13 +88,20 @@ internal shared class FriendAssemblyDeclarations {
     /// @param syntaxTrees The syntax trees making up the compilation.
     /// @param diagnostics The bag to report malformed declarations to.
     /// @returns The distinct, ordinal-compared set of declared friend-assembly names.
-    func Collect(syntaxTrees ImmutableArray[SyntaxTree], diagnostics DiagnosticBag) ImmutableArray[string] {
+    func Collect(
+        syntaxTrees ImmutableArray[SyntaxTree],
+        diagnostics DiagnosticBag,
+        activeCode ConditionalCompilationMap
+    ) ImmutableArray[string] {
         if syntaxTrees.IsDefaultOrEmpty {
             return ImmutableArray[string].Empty
         }
         let friends = ImmutableArray.CreateBuilder[string]()
         let seen = HashSet[string](StringComparer.Ordinal)
         for tree in syntaxTrees {
+            if !activeCode.IsActive(tree.Root) {
+                continue
+            }
             let annotations = tree.Root?.AssemblyAttributes ?? ImmutableArray[AnnotationSyntax].Empty
             for annotation in annotations {
                 let name = annotation.GetNameText()

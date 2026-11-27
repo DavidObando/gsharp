@@ -290,5 +290,6 @@ enum SyntaxKind {
     MemberCollectionElement,
     ByteStringToken,
     Utf8StringToken,
-    YieldKeyword
+    YieldKeyword,
+    DefinedExpression
 }

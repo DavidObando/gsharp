@@ -65,7 +65,8 @@ partial class Binder {
             preprocessorSymbols ImmutableHashSet[string]?,
             isLibrary bool,
             submission SubmissionBindingOptions?,
-            consumerAssemblyName string?
+            consumerAssemblyName string?,
+            conditionalCompilation ConditionalCompilationMap
         ) BoundGlobalScope -> BindGlobalScopeWithRoot(
             previous: nil,
             syntaxTrees,
@@ -78,6 +79,7 @@ partial class Binder {
                     SubmissionBinding.ConfigureRootScope(root, submission)
                 }
                 root.SetConsumerAssemblyName(consumerAssemblyName)
+                root.ConditionalCompilation = conditionalCompilation
             }
         )
 

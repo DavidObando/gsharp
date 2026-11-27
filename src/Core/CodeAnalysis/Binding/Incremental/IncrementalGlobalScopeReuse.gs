@@ -102,6 +102,10 @@ internal shared class IncrementalGlobalScopeReuse {
         if $scope.Previous != nil || $scope.HasNativeProtocols {
             return false
         }
+        // Inclusion can change declaration-time iterator classification inside an otherwise body-only edit.
+        if HasConditionalInclusion(previousTree) || HasConditionalInclusion(updatedTree) {
+            return false
+        }
         let previousText SourceText? = previousTree.Text
         let updatedText SourceText? = updatedTree.Text
         if previousText == nil || updatedText == nil {
@@ -130,6 +134,15 @@ internal shared class IncrementalGlobalScopeReuse {
             return false
         }
         if !string.Equals(previousSkeleton, updatedSkeleton, StringComparison.Ordinal) {
+            return false
+        }
+        let conditionalCompilation = $scope.ConditionalCompilation
+        if conditionalCompilation == nil {
+            return false
+        }
+        let structuralDiagnostics = DiagnosticBag()
+        conditionalCompilation.Validate(updatedTree, structuralDiagnostics)
+        if structuralDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) {
             return false
         }
         // Skeleton equality guarantees identical structure, hence identical
@@ -567,6 +580,15 @@ internal shared class IncrementalGlobalScopeReuse {
         }
     }
 
+    private func HasConditionalInclusion(tree SyntaxTree) bool {
+        for node in tree.Root.DescendantNodesAndSelf() {
+            if node is AnnotationSyntax annotation && ConditionalCompilationMap.IsIf(annotation) {
+                return true
+            }
+        }
+        return false
+    }
+
     // #6178: the reused global statements keep their bound form, so nothing that the open body can change
     // may affect them. With nothing after the cut, or with the cut in the top-level statements, a report in
     // them reads the provisional expressions of the prefix cut (ADR-0225 D6.8), which only a bind records.
@@ -643,6 +665,7 @@ internal shared class IncrementalGlobalScopeReuse {
             if node is GlobalStatementSyntax && !allowTopLevelStatements {
                 return true
             }
+
             // ADR-0144: a `partial` type's symbol is bound from ONE synthetic
             // declaration that PartialTypeMerger builds by merging every part
             // (across files) during the full bind. The body-only positional

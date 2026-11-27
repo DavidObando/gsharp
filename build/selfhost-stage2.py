@@ -165,10 +165,10 @@ ALLOWED_IMPORT_TARGETS = {
         "bfddf78318f0ff1f89b6129a527838031625d098b450ac6729040b440d9b67cb",
     ("src/Sdk/Gsharp.NET.Sdk.Bootstrap/build/Gsharp.NET.Sdk.Bootstrap.targets",
      "_GsharpCreateCoreCompileInputsCache"):
-        "231402dc60a522d4fde916f1b7936c34f7bb6382f38b85f568f5ebc92a8f0492",
+        "de41ffef6497e86fceabf271e83964ab1feb369048c9df4039df24a89f9c4c40",
     ("src/Sdk/Gsharp.NET.Sdk.Bootstrap/build/Gsharp.NET.Sdk.Bootstrap.targets",
      "CoreCompile"):
-        "da5835b156c1c1b1137ec64b2d33c273868a60c58b695f73c266ea1fcbc1c8dd",
+        "53bb1085d7e17a8de749de0a87d3e5f402e11f63f7100383357282c3f4a519df",
     ("src/Sdk/Gsharp.NET.Sdk.Bootstrap/build/Gsharp.NET.Sdk.Bootstrap.targets",
      "_PopulateGsharpDocFileItems"):
         "b093eb333e93fb6f1f4403e1fbc4fcb65e352749bf40aeb1a7f62d6d2a6b9879",

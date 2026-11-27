@@ -661,6 +661,9 @@ abstract class BoundTreeRewriter {
     /// @param node The call expression to rewrite.
     /// @returns The rewritten call expression.
     protected open func RewriteCallExpression(node BoundCallExpression) BoundExpression {
+        if node.IsElidedConditionalCall {
+            return node
+        }
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < node.Arguments.Length; i++ {
             let oldArgument = node.Arguments[i]
@@ -737,6 +740,9 @@ abstract class BoundTreeRewriter {
     protected open func RewriteConstrainedStaticCallExpression(
         node BoundConstrainedStaticCallExpression
     ) BoundExpression {
+        if node.IsElidedConditionalCall {
+            return node
+        }
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < node.Arguments.Length; i++ {
             let oldArgument = node.Arguments[i]
@@ -1292,6 +1298,9 @@ abstract class BoundTreeRewriter {
     /// @param node The imported call expression to rewrite.
     /// @returns The rewritten imported call expression.
     protected open func RewriteImportedCallExpression(node BoundImportedCallExpression) BoundExpression {
+        if node.IsElidedConditionalCall {
+            return node
+        }
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < node.Arguments.Length; i++ {
             let oldArgument = node.Arguments[i]
@@ -1330,6 +1339,9 @@ abstract class BoundTreeRewriter {
     protected open func RewriteImportedInstanceCallExpression(
         node BoundImportedInstanceCallExpression
     ) BoundExpression {
+        if node.IsElidedConditionalCall {
+            return node
+        }
         let newReceiver = RewriteExpression(node.Receiver)
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < node.Arguments.Length; i++ {
@@ -1740,6 +1752,9 @@ abstract class BoundTreeRewriter {
     /// @param node The node to rewrite.
     /// @returns The rewritten node.
     protected open func RewriteClrStaticCallExpression(node BoundClrStaticCallExpression) BoundExpression {
+        if node.IsElidedConditionalCall {
+            return node
+        }
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < node.Arguments.Length; i++ {
             let oldArg = node.Arguments[i]
@@ -2038,6 +2053,9 @@ abstract class BoundTreeRewriter {
     /// @param node The node to rewrite.
     /// @returns The rewritten node.
     protected open func RewriteUserInstanceCallExpression(node BoundUserInstanceCallExpression) BoundExpression {
+        if node.IsElidedConditionalCall {
+            return node
+        }
         let receiver = RewriteExpression(node.Receiver)
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < node.Arguments.Length; i++ {
@@ -2081,6 +2099,9 @@ abstract class BoundTreeRewriter {
     /// @param node The node to rewrite.
     /// @returns The rewritten node.
     protected open func RewriteBaseInterfaceCallExpression(node BoundBaseInterfaceCallExpression) BoundExpression {
+        if node.IsElidedConditionalCall {
+            return node
+        }
         let receiver = RewriteExpression(node.Receiver)
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < node.Arguments.Length; i++ {

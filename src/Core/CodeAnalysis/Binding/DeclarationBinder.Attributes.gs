@@ -368,6 +368,9 @@ internal partial class DeclarationBinder {
         // attribute class has a single Symbol instance).
         let applications = Dictionary[(Type TypeSymbol, Target AttributeTargetKind), int32]()
         for annotation in annotations {
+            if ConditionalCompilationMap.IsIntrinsic(annotation) {
+                continue
+            }
             // Phase 4 of #141 / ADR-0047 §5: the `@Attribute` marker on a
             // class declaration is sugar — it does NOT participate in the
             // emitted CustomAttribute table. The struct binder consumes it
@@ -988,8 +991,8 @@ internal partial class DeclarationBinder {
         value = nil
         type = nil
         switch syntax {
-            case literal is LiteralExpressionSyntax {
-                if bindExpression(literal) is BoundLiteralExpression bl {
+            case LiteralExpressionSyntax, DefinedExpressionSyntax {
+                if bindExpression(syntax) is BoundLiteralExpression bl {
                     value = bl.Value
                     type = bl.Type
                     return true

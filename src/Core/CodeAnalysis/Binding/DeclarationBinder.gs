@@ -514,6 +514,9 @@ internal partial class DeclarationBinder {
         let members = ImmutableArray.CreateBuilder[EnumMemberSymbol]()
         var nextValue = 0
         for memberSyntax in syntax.Members {
+            if !$scope.ConditionalCompilation.IsActive(memberSyntax) {
+                continue
+            }
             let memberName = memberSyntax.Identifier.ValueText
             if !seenMemberNames.Add(memberName) {
                 Diagnostics.ReportDuplicateEnumMember(memberSyntax.Identifier.Location, memberName, name)

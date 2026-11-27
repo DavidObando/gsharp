@@ -22,18 +22,24 @@ shared class IteratorDetection {
     /// @returns `true` when the body's own lexical scope contains a yield.
     func ContainsYield(body SyntaxNode) bool -> ContainsYieldSyntax(body)
 
-    private func ContainsYieldSyntax(node SyntaxNode?) bool {
-        if node == nil {
+    internal func ContainsActiveYield(body SyntaxNode, activeCode ConditionalCompilationMap) bool ->
+    ContainsYieldSyntax(body, activeCode)
+
+    private func ContainsYieldSyntax(node SyntaxNode?, activeCode ConditionalCompilationMap? = nil) bool {
+        if node == nil || activeCode?.IsActive(node) == false {
             return false
         }
         for child in node.GetChildren() {
+            if activeCode?.IsActive(child) == false {
+                continue
+            }
             if child is YieldStatementSyntax {
                 return true
             }
             if (child is FunctionDeclarationSyntax or FunctionLiteralExpressionSyntax or LambdaExpressionSyntax) {
                 continue
             }
-            if ContainsYieldSyntax(child) {
+            if ContainsYieldSyntax(child, activeCode) {
                 return true
             }
         }

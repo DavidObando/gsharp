@@ -110,6 +110,7 @@ internal shared class RegionEffectKindTable {
                 SyntaxKind.CheckedExpression,
                 SyntaxKind.UncheckedExpression,
                 SyntaxKind.LiteralExpression,
+                SyntaxKind.DefinedExpression,
                 SyntaxKind.NameExpression,
                 SyntaxKind.GenericNameExpression,
                 SyntaxKind.ArrayCreationExpression,

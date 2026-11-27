@@ -293,18 +293,76 @@ On a named delegate, annotations target the delegate type by default. Use `@retu
 
 Compiler-synthesized attributes such as `CompilerGenerated`, `Extension`, `AsyncStateMachine`, `Nullable`, and `NullableContext` are reserved. `@DllImport` opts a function into P/Invoke (see [Unmanaged interop (P/Invoke)](#unmanaged-interop-pinvoke) below); the historical blanket-rejection at `GS0211` no longer fires.
 
-### Scoped conditional symbol design
+### Scoped conditional symbols
 
-ADR-0230 specifies compiler-intrinsic `@DefineSymbol("NAME")` and
-`@UndefineSymbol("NAME")` annotations on files, eligible declarations, and blocks.
-The nearest enclosing annotation determines each symbol's state.
-The contract also includes `/define:`, `/d:`, and SDK `DefineConstants` forwarding.
-ADR-0231 specifies the `@defined("NAME")` constant expression and `@If(predicate)`
-conditional inclusion. Inclusion checks inherited symbol state before adding the
-annotated node's own definitions. Ordinary `if` still checks both arms.
-These accepted contracts require implementation and are not supported by the
-published 0.5.803 SDK. They do not introduce runtime variables or textual preprocessing.
-Ordinary annotated blocks retain their existing variable scopes.
+The development compiler implements scoped conditional symbols (ADR-0230) and
+semantic conditional inclusion (ADR-0231). These features are not supported by
+the published 0.5.803 SDK.
+
+`@DefineSymbol("NAME")` and `@UndefineSymbol("NAME")` set compile-time symbol state
+on eligible declarations and ordinary blocks. Use `@file:` after imports for a
+file-wide override. The nearest enclosing override wins independently for each
+symbol; leaving that scope restores the outer state. A local declaration's
+annotation affects its initializer, not subsequent statements.
+
+```gsharp
+import System.Diagnostics
+
+@file:UndefineSymbol("DEBUG")
+
+func report() {
+    @DefineSymbol("DEBUG")
+    {
+        Debug.WriteLine("This call is included.")
+    }
+    Debug.WriteLine("This call and its arguments are omitted.")
+}
+```
+
+Symbols are case-sensitive, valid identifier names without an `@` prefix.
+`true` and `false` are not symbol names. Annotation arguments must be string
+literals. Defining and undefining the same name on one owner is an error.
+Definitions create neither runtime variables nor CLR attributes.
+
+`@defined("NAME")` is an intrinsic constant boolean expression, not a function
+lookup. A user function named `defined` does not affect it.
+`@If(predicate)` includes a file, eligible declaration, or block only when its
+predicate is true:
+
+```gsharp
+@If(@defined("WINDOWS") && !@defined("MINIMAL"))
+func platformName() string -> "Windows"
+
+@If(!@defined("WINDOWS") || @defined("MINIMAL"))
+func platformName() string -> "Other"
+```
+
+Predicates support `@defined`, boolean literals, `!`, `&&`, `||`, and parentheses.
+They use strictly enclosing symbol state: a definition on the annotated node
+cannot enable that node. Inactive code must still parse, but contributes no
+declarations, binding errors, flow effects, or emitted code. Ordinary `if` still
+checks both arms, even when its condition uses `@defined`. Annotated blocks
+retain ordinary variable and disposal scopes.
+
+Supply base symbols with repeatable `/define:DEBUG,TRACE` or `/d:FEATURE`
+compiler switches. Commas and semicolons separate names; invalid individual
+names produce warnings and are ignored. Missing switch values are errors.
+The raw compiler defines no symbols implicitly.
+
+SDK projects forward their evaluated `DefineConstants` property:
+
+```xml
+<PropertyGroup>
+  <DefineConstants>DEBUG;TRACE;FEATURE</DefineConstants>
+</PropertyGroup>
+```
+
+The SDK also accepts comma and whitespace separators. Symbol changes invalidate
+incremental compilation, and the language server reads the same response-file
+symbols. No additional Debug, Trace, or framework defaults are introduced.
+cs2gs preserves source-file conditional-call symbol state; an old or unknown
+destination SDK produces an explicit unsupported-translation diagnostic instead
+of unsupported annotation syntax.
 
 ## By-ref pointers (`&` / `*` / `*T`)
 

@@ -1225,7 +1225,8 @@ partial class Binder {
             let bindingMethod = CreateRichBindingMethod(method, classToOuterTypeParameters, out var bindingParameterMap)
             let child = Binder($scope, bindingMethod)
             child.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(
-                method.Declaration!!.Body
+                method.Declaration!!.Body,
+                child.$scope.ConditionalCompilation
             )
             let body = child.statements.BindBlockStatement(method.Declaration!!.Body!!)
             // ADR-0225: a label after the cut of an open body can still resolve a goto.
@@ -6922,6 +6923,9 @@ partial class Binder {
             let parentScope = CreateRootScope(references, preprocessorSymbols)
             configureRoot?(parentScope)
             let binder = Binder(parentScope, function: nil)
+            for tree in syntaxTrees {
+                binder.$scope.ConditionalCompilation.Validate(tree, binder.Diagnostics)
+            }
             binder.binderCtx.IsLibrary = isLibrary
             binder.binderCtx.SourceNullableConstraintDepth++
             binder.$scope.GetStructuralAdapterRegistry().ProtocolCoverage = nativeCoverage
@@ -7001,8 +7005,11 @@ partial class Binder {
                     binder.$scope.SetCurrentReferencingSyntaxTree(previousTree)
                 }
             }
-            let importDeclarations = syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
-                .OfType[ImportSyntax]()
+            let activeMembers = syntaxTrees
+                .SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
+                .Where((member MemberSyntax) -> binder.$scope.ConditionalCompilation.IsActive(member))
+                .ToArray()
+            let importDeclarations = activeMembers.OfType[ImportSyntax]()
             for import_ in importDeclarations {
                 binder.BindImport(import_)
             }
@@ -7011,10 +7018,7 @@ partial class Binder {
             // their members can reference delegates. Signatures are bound after all
             // interface/enum/struct shells exist, making delegate constraints,
             // parameters, and returns independent of syntax-tree order.
-            let delegateDeclarations = syntaxTrees
-                .SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
-                .OfType[DelegateDeclarationSyntax]()
-                .ToList()
+            let delegateDeclarations = activeMembers.OfType[DelegateDeclarationSyntax]().ToList()
             let declaredDelegates = List[(Syntax DelegateDeclarationSyntax, Symbol DelegateTypeSymbol)]()
             for delegateSyntax in delegateDeclarations {
                 let owningPackage = packageByTree[delegateSyntax.SyntaxTree]
@@ -7032,8 +7036,7 @@ partial class Binder {
                 }
             }
             let interfaceDeclarations = PartialTypeMerger.MergeInterfaces(
-                syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
-                    .OfType[InterfaceDeclarationSyntax](),
+                activeMembers.OfType[InterfaceDeclarationSyntax](),
                 packageByTree,
                 binder.Diagnostics
             )
@@ -7058,8 +7061,7 @@ partial class Binder {
                     declaredInterfaces.Add((ifaceSyntax, sym))
                 }
             }
-            let enumDeclarations = syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
-                .OfType[EnumDeclarationSyntax]()
+            let enumDeclarations = activeMembers.OfType[EnumDeclarationSyntax]()
             for enumSyntax in enumDeclarations {
                 let owningPackage = packageByTree[enumSyntax.SyntaxTree]
                 binder.declarations.ValidateTopLevelProtected(enumSyntax.AccessibilityModifier)
@@ -7085,10 +7087,10 @@ partial class Binder {
             // literal site later binds to a parameterless construction of the
             // synthesized class (see ExpressionBinder.BindRichAnonymousClassExpression).
             let mergedStructDeclarations = PartialTypeMerger.MergeStructs(
-                syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
-                    .OfType[StructDeclarationSyntax](),
+                activeMembers.OfType[StructDeclarationSyntax](),
                 packageByTree,
-                binder.Diagnostics
+                binder.Diagnostics,
+                binder.$scope.ConditionalCompilation
             )
             var anonClassCounter = 0
             let richAnonymousClasses = List[
@@ -7115,7 +7117,8 @@ partial class Binder {
                         &anonClassCounter,
                         enclosingTypeParameters: ImmutableArray[TypeParameterListSyntax].Empty,
                         inUnsafeContext: false,
-                        unsafeMergedSpans: unsafeMergedSpans
+                        unsafeMergedSpans: unsafeMergedSpans,
+                        activeCode: binder.$scope.ConditionalCompilation
                     )
                 }
             }
@@ -7153,8 +7156,7 @@ partial class Binder {
                 }
             }
             // Issue #5358: bind declared type aliases after all type shells exist.
-            let typeAliasDeclarations = syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
-                .OfType[TypeAliasDeclarationSyntax]()
+            let typeAliasDeclarations = activeMembers.OfType[TypeAliasDeclarationSyntax]()
             let declaredTypeAliases = ImmutableArray.CreateBuilder[TypeAliasSymbol]()
             for typeAlias in typeAliasDeclarations {
                 let owningPackage = packageByTree[typeAlias.SyntaxTree]
@@ -7253,8 +7255,7 @@ partial class Binder {
             }
             binder.declarations.BindPendingConstInitializers()
             binder.declarations.BindPendingParameterDefaultValues()
-            let functionDeclarations = syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
-                .OfType[FunctionDeclarationSyntax]()
+            let functionDeclarations = activeMembers.OfType[FunctionDeclarationSyntax]()
             for function in functionDeclarations {
                 let owningPackage = packageByTree[function.SyntaxTree]
                 binder.declarations.ValidateTopLevelProtected(function.AccessibilityModifier)
@@ -7310,6 +7311,7 @@ partial class Binder {
             let globalStatements = syntaxTrees
                 .OrderBy((st SyntaxTree) -> st.Text?.FileName ?? string.Empty, StringComparer.Ordinal)
                 .SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
+                .Where((member MemberSyntax) -> binder.$scope.ConditionalCompilation.IsActive(member))
                 .OfType[GlobalStatementSyntax]()
                 .ToArray()
             // ADR-0066 deferred decision D4 (mirrors C# CS8805): top-level
@@ -7348,7 +7350,8 @@ partial class Binder {
                 let entryPointReturnType = InferTopLevelEntryPointReturnType(
                     globalStatements,
                     binder.Diagnostics,
-                    out var awaitFound
+                    out var awaitFound,
+                    binder.$scope.ConditionalCompilation
                 )
                 synthesizedEntryPoint = FunctionSymbol(
                     name: "<Main>$$",
@@ -7390,7 +7393,10 @@ partial class Binder {
                     // narrowing-lift guard must see whether ANY of them contains
                     // a goto/label, not just the one currently being bound.
                     tlsBinder.binderCtx.FunctionContainsUserGotoOrLabel = topLevelStatementsBuilt.Any(
-                        (statement StatementSyntax) -> StatementBinder.ContainsUserGotoOrLabel(statement)
+                        (statement StatementSyntax) -> StatementBinder.ContainsUserGotoOrLabel(
+                            statement,
+                            tlsBinder.$scope.ConditionalCompilation
+                        )
                     )
                     statements.AddRange(
                         tlsBinder.statements.BindStatementList(
@@ -7497,7 +7503,10 @@ partial class Binder {
             // `[assembly: ...]`. Must run before the diagnostics snapshot below
             // so any reported diagnostics (e.g. "attribute type not found") are
             // captured.
-            let otherFileAnnotations = FriendAssemblyDeclarations.CollectOtherAnnotations(syntaxTrees)
+            let otherFileAnnotations = FriendAssemblyDeclarations.CollectOtherAnnotations(
+                syntaxTrees,
+                binder.$scope.ConditionalCompilation
+            )
             let boundFileAttributes = binder.declarations.BindAttributes(
                 otherFileAnnotations,
                 AttributeTargetKind.Assembly,
@@ -7552,6 +7561,7 @@ partial class Binder {
             result.HasExplicitConsumerAssemblyName = binder.$scope.HasExplicitConsumerAssemblyName
             result.SourceNullableAnnotationErrors = binder.binderCtx.SourceNullableAnnotationErrors
             result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet[string].Empty
+            result.ConditionalCompilation = binder.$scope.ConditionalCompilation
             result.DeclaredTypeAliases = declaredTypeAliases.ToImmutable()
             result.AliasDeclaringPackages = binder.$scope.GetAliasDeclaringPackages()
             result.AssemblyAttributes = boundAssemblyAttributes
@@ -7584,7 +7594,11 @@ partial class Binder {
             // declarations report through binder.Diagnostics above, but that bag
             // was already snapshotted into `diagnostics`, so append here too.
             let friendDiagnostics = DiagnosticBag()
-            let friendAssemblies = FriendAssemblyDeclarations.Collect(syntaxTrees, friendDiagnostics)
+            let friendAssemblies = FriendAssemblyDeclarations.Collect(
+                syntaxTrees,
+                friendDiagnostics,
+                binder.$scope.ConditionalCompilation
+            )
             result.FriendAssemblies = friendAssemblies
             if friendDiagnostics.Any() {
                 result = BoundGlobalScope(
@@ -8497,7 +8511,10 @@ partial class Binder {
             convenienceConstructor ConstructorSymbol?
         ) BodyBindResult {
             let binder = Binder(parentScope, member)
-            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(bodySyntax)
+            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(
+                bodySyntax,
+                binder.$scope.ConditionalCompilation
+            )
             let body = if blockSyntax != nil {
                 binder.statements.BindBlockStatement(blockSyntax)
             } else {
@@ -8942,7 +8959,10 @@ partial class Binder {
                 // block contains a goto/label, not just the one currently being
                 // bound.
                 binder.binderCtx.FunctionContainsUserGotoOrLabel = initBlocks.Any(
-                    (b StaticInitializerBlockSyntax) -> StatementBinder.ContainsUserGotoOrLabel(b.Body)
+                    (b StaticInitializerBlockSyntax) -> StatementBinder.ContainsUserGotoOrLabel(
+                        b.Body,
+                        binder.$scope.ConditionalCompilation
+                    )
                 )
                 let staticInitBodies = initBlocks.Select(
                     (b StaticInitializerBlockSyntax) -> cast[StatementSyntax](b.Body)
@@ -9008,7 +9028,8 @@ partial class Binder {
             expression ExpressionSyntax?,
             referencingTree SyntaxTree,
             inConstructorInitializer bool = false,
-            additionalTypeParameters IEnumerable[TypeParameterSymbol]? = nil
+            additionalTypeParameters IEnumerable[TypeParameterSymbol]? = nil,
+            conditionalSymbols ImmutableHashSet[string]? = nil
         ) TypeSymbol? {
             if globalScope == nil || expression == nil {
                 return nil
@@ -9020,6 +9041,9 @@ partial class Binder {
                     globalScope.PreprocessorSymbols,
                     preserveLatestImportSyntaxTrees: true
                 )
+                if conditionalSymbols != nil {
+                    parentScope.ConditionalCompilation = ConditionalCompilationMap(conditionalSymbols)
+                }
                 let binder = Binder(parentScope, containingFunction)
                 let previousPackage = parentScope.SetCurrentDeclaringPackage(containingFunction?.Package?.Name)
                 let previousTree = parentScope.SetCurrentReferencingSyntaxTree(referencingTree)
@@ -11515,8 +11539,12 @@ partial class Binder {
             ref counter int32,
             enclosingTypeParameters ImmutableArray[TypeParameterListSyntax],
             inUnsafeContext bool = false,
-            unsafeMergedSpans HashSet[(SourceText, TextSpan)]? = nil
+            unsafeMergedSpans HashSet[(SourceText, TextSpan)]? = nil,
+            activeCode ConditionalCompilationMap? = nil
         ) {
+            if activeCode?.IsActive(node) == false {
+                return
+            }
             var enclosingTypeParameters = enclosingTypeParameters
             var inUnsafeContext = inUnsafeContext
             let declaredTypeParameters TypeParameterListSyntax? = switch node {
@@ -11562,7 +11590,8 @@ partial class Binder {
                     &counter,
                     enclosingTypeParameters,
                     inUnsafeContext,
-                    unsafeMergedSpans
+                    unsafeMergedSpans,
+                    activeCode
                 )
             }
         }
@@ -11783,13 +11812,14 @@ partial class Binder {
         private func InferTopLevelEntryPointReturnType(
             globalStatements IReadOnlyList[GlobalStatementSyntax],
             diagnostics DiagnosticBag,
-            out awaitFound bool
+            out awaitFound bool,
+            activeCode ConditionalCompilationMap
         ) TypeSymbol {
             var firstBare ReturnStatementSyntax? = nil
             var firstValue ReturnStatementSyntax? = nil
             var localAwaitFound = false
             for gs in globalStatements {
-                CollectTopLevelReturnsAndAwaits(gs.Statement, &firstBare, &firstValue, &localAwaitFound)
+                CollectTopLevelReturnsAndAwaits(gs.Statement, &firstBare, &firstValue, &localAwaitFound, activeCode)
             }
             awaitFound = localAwaitFound
             if firstBare != nil && firstValue != nil {
@@ -11824,9 +11854,10 @@ partial class Binder {
             node SyntaxNode?,
             ref firstBare ReturnStatementSyntax?,
             ref firstValue ReturnStatementSyntax?,
-            ref awaitFound bool
+            ref awaitFound bool,
+            activeCode ConditionalCompilationMap
         ) {
-            if node == nil {
+            if node == nil || !activeCode.IsActive(node) {
                 return
             }
             if node is FunctionLiteralExpressionSyntax || node is LambdaExpressionSyntax {
@@ -11875,12 +11906,12 @@ partial class Binder {
                 // The return expression itself may contain an `await` (e.g.
                 // `return await Task.FromResult(0)`) — recurse so D3 sees it.
                 if ret.Expression != nil {
-                    CollectTopLevelReturnsAndAwaits(ret.Expression, &firstBare, &firstValue, &awaitFound)
+                    CollectTopLevelReturnsAndAwaits(ret.Expression, &firstBare, &firstValue, &awaitFound, activeCode)
                 }
                 return
             }
             for child in node.GetChildren() {
-                CollectTopLevelReturnsAndAwaits(child, &firstBare, &firstValue, &awaitFound)
+                CollectTopLevelReturnsAndAwaits(child, &firstBare, &firstValue, &awaitFound, activeCode)
             }
         }
 
@@ -11891,6 +11922,9 @@ partial class Binder {
             preserveLatestImportSyntaxTrees bool
         ) BoundScope {
             let parent = CreateRootScope(references ?? globalScope?.References, preprocessorSymbols)
+            if globalScope?.ConditionalCompilation is {} conditionalCompilation {
+                parent.ConditionalCompilation = conditionalCompilation
+            }
             if globalScope?.HasExplicitConsumerAssemblyName == true {
                 parent.SetConsumerAssemblyName(globalScope.ConsumerAssemblyName)
             }

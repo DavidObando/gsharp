@@ -78,8 +78,9 @@ Permit the annotations on:
 - A local function or local `let`, `var`, or `const` declaration.
 - An ordinary annotated block.
 
-Local-function placement requires extending the parser's existing statement-annotation acceptance.
-The current parser accepts annotated blocks and local variable declarations, but rejects annotations before local functions.
+Native local functions use `let Local = func(...) ReturnType { ... }`.
+The local declaration owns the annotation, which covers its function initializer and body.
+Preserve annotations on asynchronous bindings, deconstructions, and multi-variable declarations as well.
 
 The scope is the annotated declaration or block, including its initializers and nested bodies.
 For example, a local-variable annotation covers its initializer, not later sibling statements.

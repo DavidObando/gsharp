@@ -68,8 +68,7 @@ open partial class CompilationUnitSyntax : SyntaxNode {
         get;
     }
 
-    /// Gets all file-level `@assembly:` and `@module:` annotations
-    /// in source order.
+    /// Gets all file-header assembly, module, and intrinsic file annotations in source order.
     prop FileAttributes ImmutableArray[AnnotationSyntax] {
         get;
     }

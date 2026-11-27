@@ -2095,23 +2095,32 @@ internal partial class StatementBinder {
         while current != nil {
             switch current {
                 case fn is FunctionDeclarationSyntax {
-                    return fn.Body != nil && IteratorDetection.ContainsYield(fn.Body)
+                    return fn.Body != nil && IteratorDetection.ContainsActiveYield(
+                        fn.Body,
+                        $scope.ConditionalCompilation
+                    )
                 }
                 case lit is FunctionLiteralExpressionSyntax {
-                    return IteratorDetection.ContainsYield(lit.Body)
+                    return IteratorDetection.ContainsActiveYield(lit.Body, $scope.ConditionalCompilation)
                 }
                 case lam is LambdaExpressionSyntax {
-                    return IteratorDetection.ContainsYield(lam.Body)
+                    return IteratorDetection.ContainsActiveYield(lam.Body, $scope.ConditionalCompilation)
                 }
                 case acc is PropertyAccessorSyntax {
-                    return acc.Body != nil && IteratorDetection.ContainsYield(acc.Body)
+                    return acc.Body != nil && IteratorDetection.ContainsActiveYield(
+                        acc.Body,
+                        $scope.ConditionalCompilation
+                    )
                 }
                 default {
                     current = current.Parent
                 }
             }
         }
-        return function!!.Declaration?.Body is {} declaredBody && IteratorDetection.ContainsYield(declaredBody)
+        return function!!.Declaration?.Body is {} declaredBody && IteratorDetection.ContainsActiveYield(
+            declaredBody,
+            $scope.ConditionalCompilation
+        )
     }
 
     private func BindReturnStatement(syntax ReturnStatementSyntax) BoundStatement {
@@ -2716,7 +2725,10 @@ internal partial class StatementBinder {
         /// leaks ((cref:ApplyEarlyExitPatternVariables)), backward-jump span lookup
         /// ((cref:EnterBackwardJumpSpanIfFirstStatement)), and loop-exit facts
         /// ((cref:RecordLoopExitFacts)).
-        internal func ContainsUserGotoOrLabel(node SyntaxNode?) bool {
+        internal func ContainsUserGotoOrLabel(node SyntaxNode?, activeCode ConditionalCompilationMap? = nil) bool {
+            if node != nil && activeCode?.IsActive(node) == false {
+                return false
+            }
             switch node {
                 case nil {
                     return false
@@ -2735,14 +2747,17 @@ internal partial class StatementBinder {
                 }
             }
             for child in node!!.GetChildren() {
-                if ContainsUserGotoOrLabel(child) {
+                if ContainsUserGotoOrLabel(child, activeCode) {
                     return true
                 }
             }
             return false
         }
 
-        private func ContainsUserLabel(node SyntaxNode?) bool {
+        private func ContainsUserLabel(node SyntaxNode?, activeCode ConditionalCompilationMap? = nil) bool {
+            if node != nil && activeCode?.IsActive(node) == false {
+                return false
+            }
             switch node {
                 case nil {
                     return false
@@ -2757,7 +2772,7 @@ internal partial class StatementBinder {
                     return false
                 }
             }
-            return node!!.GetChildren().Any(ContainsUserLabel)
+            return node!!.GetChildren().Any((child SyntaxNode) -> ContainsUserLabel(child, activeCode))
         }
 
         internal func IsHandlerRegionPrefix(

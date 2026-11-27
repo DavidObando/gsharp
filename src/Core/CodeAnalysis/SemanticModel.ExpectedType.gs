@@ -35,6 +35,9 @@ partial class SemanticModel {
     /// or the type is an error or `void`.
     func GetExpectedType(position int32, cancellationToken CancellationToken = default(CancellationToken)) TypeSymbol? {
         cancellationToken.ThrowIfCancellationRequested()
+        if !compilation.ConditionalCompilation.IsActiveAt(syntaxTree, position) {
+            return nil
+        }
         let path = List[SyntaxNode]()
         var node SyntaxNode = syntaxTree.Root
         while true {
