@@ -53,7 +53,7 @@ class BoundClrStaticCallExpression : BoundCallOperationExpression {
     /// ```
     private var _type TypeSymbol
 
-    override prop Type TypeSymbol -> _type
+    override prop Type TypeSymbol -> GetConditionalCallType(_type)
 
     /// Gets the static CLR method to call.
     prop Method MethodInfo {

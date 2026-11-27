@@ -6,9 +6,11 @@ package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import GSharp.Tests
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
@@ -1018,24 +1020,56 @@ func DebugLog() {
     @Fact
     func Conditional_Call_Is_Elided_When_Symbol_Not_Defined() {
         // Issue #176 / ADR-0047 §6: when no preprocessor symbol matches any
-        // of the function's `[Conditional("SYMBOL")]` applications, the call
-        // is replaced by a no-op and argument evaluation is suppressed.
+        // conditional attribute, retain active operands for semantic queries
+        // but suppress both argument evaluation and the called body.
         let source = `import System.Diagnostics
 
+class Effects { shared { var Count int32 } }
+func Message() string {
+    Effects.Count++
+    return "hello"
+}
 @Conditional("DEBUG")
 func DebugLog(message string) {
+    Effects.Count += 10
 }
 
-func Main() {
-    DebugLog("hello")
+func Run() {
+    DebugLog(Message())
 }`
         let tree = SyntaxTree.Parse(SourceText.From(source))
         let globalScope = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
         let program = Binder.BindProgram(globalScope)
-        let main = program.Functions.Keys.Single((f FunctionSymbol) -> f.Name == "Main" && f.Declaration != nil)
+        let main = program.Functions.Keys.Single((f FunctionSymbol) -> f.Name == "Run" && f.Declaration != nil)
         let call = FindCalls(program.Functions[main]).Single()
         Assert.True(call.IsConditionalElided)
-        Assert.Empty(call.Arguments)
+        let argument = Assert.IsType[BoundCallExpression](Assert.Single(call.Arguments))
+        Assert.Equal("Message", argument.Function.Name)
+        Assert.Equal(TypeSymbol.String, argument.Type)
+        let compilation = Compilation(tree){IsLibrary = true}
+        Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.IsError))
+        let model = compilation.GetSemanticModel(tree)
+        let argumentSyntax = tree
+            .Root
+            .DescendantNodesAndSelf()
+            .OfType[CallExpressionSyntax]()
+            .Single((node CallExpressionSyntax) -> node.Identifier.Text == "Message")
+        Assert.True(compilation.IsActive(argumentSyntax))
+        Assert.IsType[BoundCallExpression](model.GetBoundNode(argumentSyntax))
+        Assert.Equal(TypeSymbol.String, model.GetTypeInfo(argumentSyntax).Type)
+        Assert.Equal("Message", model.GetSymbolInfo(argumentSyntax).Symbol?.Name)
+        let executionSource = source + "\nRun()\nEffects.Count"
+        let omitted = EmittedOracle.Evaluate(executionSource)
+        Assert.Empty(omitted.Diagnostics)
+        Assert.Equal(0, omitted.Value)
+        let included = EmittedOracle.Evaluate(
+            executionSource.Replace(
+                "import System.Diagnostics",
+                "import System.Diagnostics\n@file:DefineSymbol(\"DEBUG\")"
+            )
+        )
+        Assert.Empty(included.Diagnostics)
+        Assert.Equal(11, included.Value)
     }
 
     @Fact

@@ -316,6 +316,15 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         problem string
     ) -> Report(location, DiagnosticDescriptors.NullabilityScopeAnnotationInvalid, annotationName, problem)
 
+    internal func ReportScopedSymbolInvalid(location TextLocation, problem string) ->
+    Report(location, DiagnosticDescriptors.ScopedSymbolInvalid, problem)
+
+    internal func ReportConditionalInclusionInvalid(location TextLocation, problem string) ->
+    Report(location, DiagnosticDescriptors.ConditionalInclusionInvalid, problem)
+
+    internal func ReportDefinedExpressionInvalid(location TextLocation) ->
+    Report(location, DiagnosticDescriptors.DefinedExpressionInvalid)
+
     /// ADR-0055: reports an interpolation hole whose alignment clause
     /// (`${expr,alignment}`) is not a constant integer.
     /// @param location The text location of the offending hole.

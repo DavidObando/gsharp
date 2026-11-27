@@ -381,9 +381,9 @@ internal partial class DeclarationBinder {
             function.TypeParameters = typeParameters
             function.IsAsync = syntax.IsAsync ||
                 (
-                isAsyncIteratorReturnType(type) && syntax.Body is {} functionBody && IteratorDetection.ContainsYield(
-                    functionBody
-                )
+                isAsyncIteratorReturnType(type) &&
+                    syntax.Body is {} functionBody &&
+                    IteratorDetection.ContainsActiveYield(functionBody, $scope.ConditionalCompilation)
             )
             function.IsAsyncVoid = isAsyncVoid
             function.SuspendingKind = if syntax.IsSuspend {
@@ -438,7 +438,12 @@ internal partial class DeclarationBinder {
         )
         function.TypeParameters = typeParameters
         function.IsAsync = syntax.IsAsync ||
-            (isAsyncIteratorReturnType(type) && syntax.Body is {} body && IteratorDetection.ContainsYield(body))
+            (
+            isAsyncIteratorReturnType(type) && syntax.Body is {} body && IteratorDetection.ContainsActiveYield(
+                body,
+                $scope.ConditionalCompilation
+            )
+        )
         function.IsAsyncVoid = isAsyncVoid
         function.SuspendingKind = if syntax.IsSuspend {
             SuspendingKind.Declared
@@ -765,9 +770,11 @@ internal partial class DeclarationBinder {
         return FunctionReturnBindingResult(type, typeIsValueTask, returnRefKind, isAsyncVoid)
     }
 
-    private func BindFunctionAttributes(syntax FunctionDeclarationSyntax, type TypeSymbol) ImmutableArray[
-        BoundAttribute
-    ] {
+    private func BindFunctionAttributes(
+        syntax FunctionDeclarationSyntax,
+        type TypeSymbol,
+        declarationDescription string = "a function declaration"
+    ) ImmutableArray[BoundAttribute] {
         // Issue #141 / ADR-0047: resolve annotation lead-ins for this
         // declaration. We do this once per function regardless of whether
         // it is an extension, a method, or a free function — diagnostics
@@ -776,7 +783,7 @@ internal partial class DeclarationBinder {
             syntax.Annotations,
             AttributeTargetKind.Method,
             Binder.FunctionDeclarationAllowedTargets,
-            "a function declaration",
+            declarationDescription,
             AttributeTargets.Method
         )
         // Issue #176 / ADR-0047 §6: a function marked `@Conditional`

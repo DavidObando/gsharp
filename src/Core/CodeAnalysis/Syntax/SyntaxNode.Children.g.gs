@@ -2874,6 +2874,79 @@ partial class DeferStatementSyntax {
     }
 }
 
+partial class DefinedExpressionSyntax {
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop SpanPlan int32 -> 1
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            var count = 0
+            if IsPresent(AtToken) {
+                count++
+            }
+            if IsPresent(Identifier) {
+                count++
+            }
+            if IsPresent(OpenParenthesis) {
+                count++
+            }
+            count += SeparatedLength(Arguments)
+            if IsPresent(CloseParenthesis) {
+                count++
+            }
+            return count
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        var remaining = index
+        if remaining >= 0 {
+            let child0 = AtToken
+            if IsPresent(child0) {
+                if remaining == 0 {
+                    return child0
+                }
+                remaining--
+            }
+            let child1 = Identifier
+            if IsPresent(child1) {
+                if remaining == 0 {
+                    return child1
+                }
+                remaining--
+            }
+            let child2 = OpenParenthesis
+            if IsPresent(child2) {
+                if remaining == 0 {
+                    return child2
+                }
+                remaining--
+            }
+            let child3 = SeparatedItems(Arguments)
+            if remaining < child3.Length {
+                return child3[remaining]
+            }
+            remaining -= child3.Length
+            let child4 = CloseParenthesis
+            if IsPresent(child4) {
+                if remaining == 0 {
+                    return child4
+                }
+                remaining--
+            }
+        }
+        throw ArgumentOutOfRangeException(nameof(index))
+    }
+}
+
 partial class DeinitDeclarationSyntax {
     /// ```xmldoc
     /// <inheritdoc />
@@ -3809,14 +3882,74 @@ partial class EventAccessorSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop SpanPlan int32 -> 1
+    internal override prop SpanPlan int32 -> 7
 
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        for itemAnnotations in Annotations {
+            builder.Add(itemAnnotations)
+        }
+        if IsPresent(AccessorKeyword) {
+            builder.Add(AccessorKeyword)
+        }
+        if IsPresent(Body) {
+            builder.Add(Body!!)
+        }
+        if IsPresent(SemicolonToken) {
+            builder.Add(SemicolonToken!!)
+        }
+        return builder.ToImmutable()
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        for item0 in Annotations {
+            let start0 = item0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = AccessorKeyword
+        if IsPresent(node1) {
+            let start1 = node1.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = Body
+        if IsPresent(node2) {
+            let start2 = node2!!.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = SemicolonToken
+        if IsPresent(node3) {
+            let start3 = node3!!.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
         get {
             var count = 0
+            count += Annotations.Length
             if IsPresent(AccessorKeyword) {
                 count++
             }
@@ -3833,32 +3966,59 @@ partial class EventAccessorSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func GetChild(index int32) SyntaxNode {
+    internal override func PropertyChild(index int32) SyntaxNode {
         var remaining = index
         if remaining >= 0 {
-            let child0 = AccessorKeyword
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0
-                }
-                remaining--
+            let child0 = Annotations
+            if remaining < child0.Length {
+                return child0[remaining]
             }
-            let child1 = Body
+            remaining -= child0.Length
+            let child1 = AccessorKeyword
             if IsPresent(child1) {
                 if remaining == 0 {
-                    return child1!!
+                    return child1
                 }
                 remaining--
             }
-            let child2 = SemicolonToken
+            let child2 = Body
             if IsPresent(child2) {
                 if remaining == 0 {
                     return child2!!
                 }
                 remaining--
             }
+            let child3 = SemicolonToken
+            if IsPresent(child3) {
+                if remaining == 0 {
+                    return child3!!
+                }
+                remaining--
+            }
         }
         throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
     }
 }
 
@@ -8824,6 +8984,7 @@ partial class MultiAssignmentStatementSyntax {
     internal override prop ChildCount int32 {
         get {
             var count = 0
+            count += Annotations.Length
             count += SeparatedLength(Targets)
             if IsPresent(OperatorToken) {
                 count++
@@ -8839,23 +9000,28 @@ partial class MultiAssignmentStatementSyntax {
     internal override func GetChild(index int32) SyntaxNode {
         var remaining = index
         if remaining >= 0 {
-            let child0 = SeparatedItems(Targets)
+            let child0 = Annotations
             if remaining < child0.Length {
                 return child0[remaining]
             }
             remaining -= child0.Length
-            let child1 = OperatorToken
-            if IsPresent(child1) {
+            let child1 = SeparatedItems(Targets)
+            if remaining < child1.Length {
+                return child1[remaining]
+            }
+            remaining -= child1.Length
+            let child2 = OperatorToken
+            if IsPresent(child2) {
                 if remaining == 0 {
-                    return child1
+                    return child2
                 }
                 remaining--
             }
-            let child2 = SeparatedItems(Values)
-            if remaining < child2.Length {
-                return child2[remaining]
+            let child3 = SeparatedItems(Values)
+            if remaining < child3.Length {
+                return child3[remaining]
             }
-            remaining -= child2.Length
+            remaining -= child3.Length
         }
         throw ArgumentOutOfRangeException(nameof(index))
     }
@@ -9108,6 +9274,7 @@ partial class NamedDeconstructionStatementSyntax {
     internal override prop ChildCount int32 {
         get {
             var count = 0
+            count += Annotations.Length
             if IsPresent(Keyword) {
                 count++
             }
@@ -9134,43 +9301,48 @@ partial class NamedDeconstructionStatementSyntax {
     internal override func GetChild(index int32) SyntaxNode {
         var remaining = index
         if remaining >= 0 {
-            let child0 = Keyword
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0
-                }
-                remaining--
+            let child0 = Annotations
+            if remaining < child0.Length {
+                return child0[remaining]
             }
-            let child1 = OpenBraceToken
+            remaining -= child0.Length
+            let child1 = Keyword
             if IsPresent(child1) {
                 if remaining == 0 {
                     return child1
                 }
                 remaining--
             }
-            let child2 = SeparatedItems(Fields)
-            if remaining < child2.Length {
-                return child2[remaining]
-            }
-            remaining -= child2.Length
-            let child3 = CloseBraceToken
-            if IsPresent(child3) {
+            let child2 = OpenBraceToken
+            if IsPresent(child2) {
                 if remaining == 0 {
-                    return child3
+                    return child2
                 }
                 remaining--
             }
-            let child4 = EqualsToken
+            let child3 = SeparatedItems(Fields)
+            if remaining < child3.Length {
+                return child3[remaining]
+            }
+            remaining -= child3.Length
+            let child4 = CloseBraceToken
             if IsPresent(child4) {
                 if remaining == 0 {
                     return child4
                 }
                 remaining--
             }
-            let child5 = Initializer
+            let child5 = EqualsToken
             if IsPresent(child5) {
                 if remaining == 0 {
                     return child5
+                }
+                remaining--
+            }
+            let child6 = Initializer
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6
                 }
                 remaining--
             }
@@ -9888,14 +10060,118 @@ partial class PropertyAccessorSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop SpanPlan int32 -> 1
+    internal override prop SpanPlan int32 -> 7
 
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        for itemAnnotations in Annotations {
+            builder.Add(itemAnnotations)
+        }
+        if IsPresent(AccessibilityModifier) {
+            builder.Add(AccessibilityModifier!!)
+        }
+        if IsPresent(AccessorKeyword) {
+            builder.Add(AccessorKeyword)
+        }
+        if IsPresent(OpenParenToken) {
+            builder.Add(OpenParenToken!!)
+        }
+        if IsPresent(ParameterIdentifier) {
+            builder.Add(ParameterIdentifier!!)
+        }
+        if IsPresent(CloseParenToken) {
+            builder.Add(CloseParenToken!!)
+        }
+        if IsPresent(Body) {
+            builder.Add(Body!!)
+        }
+        if IsPresent(SemicolonToken) {
+            builder.Add(SemicolonToken!!)
+        }
+        return builder.ToImmutable()
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        for item0 in Annotations {
+            let start0 = item0.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = AccessibilityModifier
+        if IsPresent(node1) {
+            let start1 = node1!!.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = AccessorKeyword
+        if IsPresent(node2) {
+            let start2 = node2.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = OpenParenToken
+        if IsPresent(node3) {
+            let start3 = node3!!.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = ParameterIdentifier
+        if IsPresent(node4) {
+            let start4 = node4!!.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        let node5 = CloseParenToken
+        if IsPresent(node5) {
+            let start5 = node5!!.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = Body
+        if IsPresent(node6) {
+            let start6 = node6!!.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        let node7 = SemicolonToken
+        if IsPresent(node7) {
+            let start7 = node7!!.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
         get {
             var count = 0
+            count += Annotations.Length
             if IsPresent(AccessibilityModifier) {
                 count++
             }
@@ -9924,60 +10200,87 @@ partial class PropertyAccessorSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func GetChild(index int32) SyntaxNode {
+    internal override func PropertyChild(index int32) SyntaxNode {
         var remaining = index
         if remaining >= 0 {
-            let child0 = AccessibilityModifier
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0!!
-                }
-                remaining--
+            let child0 = Annotations
+            if remaining < child0.Length {
+                return child0[remaining]
             }
-            let child1 = AccessorKeyword
+            remaining -= child0.Length
+            let child1 = AccessibilityModifier
             if IsPresent(child1) {
                 if remaining == 0 {
-                    return child1
+                    return child1!!
                 }
                 remaining--
             }
-            let child2 = OpenParenToken
+            let child2 = AccessorKeyword
             if IsPresent(child2) {
                 if remaining == 0 {
-                    return child2!!
+                    return child2
                 }
                 remaining--
             }
-            let child3 = ParameterIdentifier
+            let child3 = OpenParenToken
             if IsPresent(child3) {
                 if remaining == 0 {
                     return child3!!
                 }
                 remaining--
             }
-            let child4 = CloseParenToken
+            let child4 = ParameterIdentifier
             if IsPresent(child4) {
                 if remaining == 0 {
                     return child4!!
                 }
                 remaining--
             }
-            let child5 = Body
+            let child5 = CloseParenToken
             if IsPresent(child5) {
                 if remaining == 0 {
                     return child5!!
                 }
                 remaining--
             }
-            let child6 = SemicolonToken
+            let child6 = Body
             if IsPresent(child6) {
                 if remaining == 0 {
                     return child6!!
                 }
                 remaining--
             }
+            let child7 = SemicolonToken
+            if IsPresent(child7) {
+                if remaining == 0 {
+                    return child7!!
+                }
+                remaining--
+            }
         }
         throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
     }
 }
 
@@ -12455,6 +12758,7 @@ partial class TupleDeconstructionStatementSyntax {
     internal override prop ChildCount int32 {
         get {
             var count = 0
+            count += Annotations.Length
             if IsPresent(Keyword) {
                 count++
             }
@@ -12481,43 +12785,48 @@ partial class TupleDeconstructionStatementSyntax {
     internal override func GetChild(index int32) SyntaxNode {
         var remaining = index
         if remaining >= 0 {
-            let child0 = Keyword
-            if IsPresent(child0) {
-                if remaining == 0 {
-                    return child0
-                }
-                remaining--
+            let child0 = Annotations
+            if remaining < child0.Length {
+                return child0[remaining]
             }
-            let child1 = OpenParenToken
+            remaining -= child0.Length
+            let child1 = Keyword
             if IsPresent(child1) {
                 if remaining == 0 {
                     return child1
                 }
                 remaining--
             }
-            let child2 = SeparatedItems(Identifiers)
-            if remaining < child2.Length {
-                return child2[remaining]
-            }
-            remaining -= child2.Length
-            let child3 = CloseParenToken
-            if IsPresent(child3) {
+            let child2 = OpenParenToken
+            if IsPresent(child2) {
                 if remaining == 0 {
-                    return child3
+                    return child2
                 }
                 remaining--
             }
-            let child4 = EqualsToken
+            let child3 = SeparatedItems(Identifiers)
+            if remaining < child3.Length {
+                return child3[remaining]
+            }
+            remaining -= child3.Length
+            let child4 = CloseParenToken
             if IsPresent(child4) {
                 if remaining == 0 {
                     return child4
                 }
                 remaining--
             }
-            let child5 = Initializer
+            let child5 = EqualsToken
             if IsPresent(child5) {
                 if remaining == 0 {
                     return child5
+                }
+                remaining--
+            }
+            let child6 = Initializer
+            if IsPresent(child6) {
+                if remaining == 0 {
+                    return child6
                 }
                 remaining--
             }

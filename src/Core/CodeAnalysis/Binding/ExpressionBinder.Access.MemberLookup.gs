@@ -3010,8 +3010,9 @@ internal partial class ExpressionBinder {
                         return BoundErrorExpression(outerSyntax)
                     }
                     var resultSlot LocalVariableSymbol? = nil
-                    if resultType is NullableTypeSymbol nullableResult &&
-                        nullableResult.UnderlyingType?.ClrType is {IsValueType: true} {
+                    if resultType is NullableTypeSymbol nullableResult && ReflectionMetadataEmitter.IsValueTypeSymbol(
+                        nullableResult.UnderlyingType
+                    ) {
                         let resultSlotName = "$$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(
                             CultureInfo.InvariantCulture
                         )

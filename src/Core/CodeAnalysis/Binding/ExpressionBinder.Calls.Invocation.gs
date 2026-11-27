@@ -1529,6 +1529,7 @@ internal partial class ExpressionBinder {
                 ) ??
                     bound
             }
+            bound = ApplyConditionalCallElision(bound)
             binderCtx.CompleteCall(bound, ce.Arguments, receiver, receiverSyntax, ce)
             CallCandidateRecorder.Stamp(frame, bound)
             // #6179: a later member or receiver function can retarget the call.

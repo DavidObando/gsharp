@@ -85,6 +85,7 @@ struct SemanticTokenModifier : IEquatable[SemanticTokenModifier] {
         prop Static SemanticTokenModifier -> SemanticTokenModifier("static")
         prop Async SemanticTokenModifier -> SemanticTokenModifier("async")
         prop Deprecated SemanticTokenModifier -> SemanticTokenModifier("deprecated")
+        prop Inactive SemanticTokenModifier -> SemanticTokenModifier("inactive")
     }
 }
 

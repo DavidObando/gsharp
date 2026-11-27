@@ -4793,6 +4793,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 case expressionStatement is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax {
                     if this.IsDroppedStatementOrLoopClause(expressionStatement) {
+                        this.RecordConditionalInvocation(expressionStatement.Expression)
                         return Array.Empty[GStatement]()
                     }
                     return this.TranslateExpressionStatements(expressionStatement.Expression)

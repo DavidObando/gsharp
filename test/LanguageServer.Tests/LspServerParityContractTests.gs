@@ -43,7 +43,7 @@ open class LspServerParityContractTests {
   "semanticTokensProvider":{
     "legend":{
       "tokenTypes":["namespace","type","struct","interface","enum","enumMember","typeParameter","parameter","variable","property","function","method","keyword","string","number","operator","comment","event"],
-      "tokenModifiers":["declaration","definition","readonly","static","async","deprecated"]
+      "tokenModifiers":["declaration","definition","readonly","static","async","deprecated","inactive"]
     },
     "full":{"delta":false},
     "range":true

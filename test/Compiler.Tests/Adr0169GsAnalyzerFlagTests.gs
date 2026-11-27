@@ -7,10 +7,12 @@ package GSharp.Compiler.Tests
 import GSharp.Compiler
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Analyzers
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Immutable
 import System.IO
+import System.Linq
 import Xunit
 
 /// ADR-0169: gsc's `/gsanalyzer:<path>` flag loads G# diagnostic
@@ -20,6 +22,47 @@ import Xunit
 /// on-disk path is passed to `/gsanalyzer:` — the host's load context
 /// unifies it with the already-loaded copy, so the driver sees the same types.
 open class Adr0169GsAnalyzerFlagTests {
+    @Theory
+    @InlineData("Debug.WriteLine(Compute(value))", false)
+    @InlineData("Debug.WriteLine(Compute(value))", true)
+    @InlineData("Build(value).LogSlice(Compute(value))", false)
+    @InlineData("Build(value).LogSlice(Compute(value))", true)
+    func GsAnalyzer_ReportsRetainedBoundOperandLocations(call string, enabled bool) {
+        let source = "import System.Diagnostics\n" +
+            (
+            if enabled {
+                "@file:DefineSymbol(\"DEBUG\")\n"
+            } else {
+                ""
+            }
+        ) +
+            `@Conditional("DEBUG") func (self slice[int32]) LogSlice(value int32) {}
+func Compute(value int32) int32 -> value
+func Build(value int32) slice[int32] -> slice[int32]{value}
+func Read(value int32) {
+    CALL
+    @If(false) { Missing(Compute(absent)) }
+}`.Replace("CALL", call, StringComparison.Ordinal)
+        let (exit, output, error) = RunGsc(source, "/gsanalyzer:$ProbeAssemblyPath")
+        Assert.True(exit == 0, output + error)
+        let diagnostics = output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where((line string) -> line.Contains("warning TESTGSA02:", StringComparison.Ordinal))
+            .ToArray()
+        let computeStart = source.IndexOf("Compute(value)", StringComparison.Ordinal)
+        let expected = []string{
+            "Bound active source at " + computeStart.ToString() + " with length " + "Compute(value)".Length.ToString() +
+                ".",
+            "Bound active source at " + (computeStart + "Compute(".Length).ToString() +
+                " with length " +
+                "value".Length.ToString() + "."
+        }
+        Assert.Equal(expected.Length, diagnostics.Length)
+        for message in expected {
+            Assert.Single(diagnostics.Where((line string) -> line.EndsWith(message, StringComparison.Ordinal)))
+        }
+    }
+
     @Fact
     func GsAnalyzer_MissingValue_ReturnsError() {
         let (exit, _, err) = RunGsc(Source, "/gsanalyzer:")
@@ -93,7 +136,9 @@ func Pong() int32 {
 `
 
         private func RunGsc(source string, extraArgs ...string)(ExitCode int32, Output string, ErrorOutput string) {
-            let directory = Directory.CreateTempSubdirectory("gsanalyzer-tests")
+            let directory = Directory.CreateDirectory(
+                Path.Combine(AppContext.BaseDirectory, "gsanalyzer-tests-" + Guid.NewGuid().ToString("N"))
+            )
             let sourcePath = Path.Combine(directory.FullName, "app.gs")
             File.WriteAllText(sourcePath, source)
             let outputPath = Path.Combine(directory.FullName, "app.dll")
@@ -139,6 +184,53 @@ class Adr0169ProbeAnalyzer : GSharpDiagnosticAnalyzer {
             (ctx SyntaxNodeAnalysisContext) -> ctx.ReportDiagnostic(Diagnostic.Create(Rule, ctx.Node.Location)),
             SyntaxKind.CallExpression
         )
+    }
+
+    /// Reports exact active operand locations through gsc's bound-node analyzer dispatch.
+    @GSharpDiagnosticAnalyzer
+    class Adr0169BoundOperandProbeAnalyzer : GSharpDiagnosticAnalyzer {
+        /// ```xmldoc
+        /// <inheritdoc />
+        /// ```
+        override prop SupportedDiagnostics ImmutableArray[DiagnosticDescriptor] -> ImmutableArray.Create(Rule)
+
+        /// ```xmldoc
+        /// <inheritdoc />
+        /// ```
+        override func Initialize(context AnalysisContext) {
+            context.RegisterBoundNodeAction(Analyze, BoundNodeKind.CallExpression, BoundNodeKind.VariableExpression)
+        }
+
+        private func Analyze(context BoundNodeAnalysisContext) {
+            if context.ContainingFunction?.Name != "Read" {
+                return
+            }
+            var report = false
+            if context.BoundNode is BoundCallExpression call {
+                report = call.Function.Name == "Compute"
+            } else if context.BoundNode is BoundVariableExpression variable &&
+                variable.Variable.Name == "value" &&
+                variable.Syntax?.Parent is CallExpressionSyntax parent {
+                report = parent.Identifier.Text == "Compute"
+            }
+            if report {
+                let syntax = context.BoundNode.Syntax!!
+                context.ReportDiagnostic(
+                    Diagnostic.Create(Rule, syntax.Location, syntax.Span.Start, syntax.Span.Length)
+                )
+            }
+        }
+
+        shared {
+            private let Rule DiagnosticDescriptor = DiagnosticDescriptor(
+                "TESTGSA02",
+                "Bound operand probe",
+                "Bound active source at {0} with length {1}.",
+                "Testing",
+                DiagnosticSeverity.Warning,
+                isEnabledByDefault: true
+            )
+        }
     }
 
     shared {

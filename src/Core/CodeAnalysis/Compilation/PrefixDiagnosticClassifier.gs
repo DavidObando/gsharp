@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Compilation
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
@@ -19,6 +20,7 @@ internal sealed class PrefixDiagnosticClassifier {
     private let source Compilation
     private let sourceTree SyntaxTree
     private let prefixCut PrefixCut
+    private let activeCode ConditionalCompilationMap
     private let cancellationToken CancellationToken
     private let prefixTree SyntaxTree
     private let prefixParse HashSet[Diagnostic]
@@ -31,11 +33,13 @@ internal sealed class PrefixDiagnosticClassifier {
         sourceTree SyntaxTree,
         prefixTree SyntaxTree,
         prefixCut PrefixCut,
+        activeCode ConditionalCompilationMap,
         cancellationToken CancellationToken
     ) {
         this.source = source
         this.sourceTree = sourceTree
         this.prefixCut = prefixCut
+        this.activeCode = activeCode
         this.prefixTree = prefixTree
         this.cancellationToken = cancellationToken
         prefixParse = HashSet[Diagnostic](prefixTree.Diagnostics, ReferenceEqualityComparer.Instance)
@@ -111,7 +115,8 @@ internal sealed class PrefixDiagnosticClassifier {
         // only the final trees, so a bind that reuses declarations or bodies answers as one from scratch.
         if diagnostic.PrefixFinality == DiagnosticFinality.Final && PrefixBindingContext.MayDependOnLaterType(
             prefixCut,
-            location
+            location,
+            activeCode
         ) {
             return ClassifiedDiagnostic(diagnostic, DiagnosticFinality.FutureDependent, "later-type")
         }

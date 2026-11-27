@@ -42,6 +42,9 @@ partial class SemanticModel {
     /// @returns The enclosing symbol, or null.
     func GetEnclosingSymbol(position int32, cancellationToken CancellationToken = default(CancellationToken)) Symbol? {
         cancellationToken.ThrowIfCancellationRequested()
+        if !compilation.ConditionalCompilation.IsActiveAt(syntaxTree, position) {
+            return nil
+        }
         index.Get(cancellationToken)
         return EnclosingSymbolOf(FindInnermostNode(position), cancellationToken)
     }
@@ -106,6 +109,9 @@ partial class SemanticModel {
         cancellationToken CancellationToken = default(CancellationToken)
     ) ImmutableArray[Symbol] {
         cancellationToken.ThrowIfCancellationRequested()
+        if !compilation.ConditionalCompilation.IsActiveAt(syntaxTree, position) {
+            return ImmutableArray[Symbol].Empty
+        }
         index.Get(cancellationToken)
         let result = ImmutableArray.CreateBuilder[Symbol]()
         let seen = HashSet[string](StringComparer.Ordinal)

@@ -4,8 +4,23 @@
 
 package GSharp.Core.CodeAnalysis.Syntax
 
+import System.Collections.Immutable
+
 /// Represents a single `get`, `set`, or `init` accessor inside a property body (ADR-0051, issue #946).
+@SyntaxChildSourceOrder
 partial class PropertyAccessorSyntax : SyntaxNode {
+    /// Gets the compiler-only accessor annotations.
+    prop Annotations ImmutableArray[AnnotationSyntax] {
+        get;
+        private set;
+    }
+
+    internal func WithAnnotations(annotations ImmutableArray[AnnotationSyntax]) PropertyAccessorSyntax {
+        Annotations = annotations
+        InvalidateCachedSpan()
+        return this
+    }
+
     /// Initializes a new instance of the (cref:PropertyAccessorSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param accessibilityModifier The optional accessor accessibility modifier.
@@ -25,6 +40,7 @@ partial class PropertyAccessorSyntax : SyntaxNode {
         body BlockStatementSyntax?,
         semicolonToken SyntaxToken?
     ) : base(syntaxTree) {
+        Annotations = ImmutableArray[AnnotationSyntax].Empty
         AccessibilityModifier = accessibilityModifier
         AccessorKeyword = accessorKeyword
         OpenParenToken = openParenToken

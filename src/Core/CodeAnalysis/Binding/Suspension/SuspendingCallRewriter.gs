@@ -66,6 +66,16 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    protected override func RewriteExpression(node BoundExpression) BoundExpression {
+        if node is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+            return node
+        }
+        return base.RewriteExpression(node)
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     protected override func RewriteBlockStatement(node BoundBlockStatement) BoundStatement {
         // Issue #6249: StatementBinder wraps every `defer` body in a cleanup
         // shield because inferred suspension is unknown at bind time. Remove

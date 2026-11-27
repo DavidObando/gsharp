@@ -506,7 +506,7 @@ internal partial class StatementBinder {
         if statement is BoundExpressionStatement exprStmt {
             callExpr = exprStmt.Expression
         }
-        if callExpr == nil {
+        if callExpr == nil || callExpr is BoundCallOperationExpression{IsElidedConditionalCall: true} {
             return
         }
         var memberNames ImmutableArray[string]
@@ -2342,7 +2342,7 @@ internal partial class StatementBinder {
         if !binderCtx.FunctionContainsUserGotoOrLabel || statement == nil {
             return false
         }
-        let finder = UserLabelFinder()
+        let finder = UserLabelFinder($scope.ConditionalCompilation)
         finder.VisitStatement(statement)
         return finder.Found
     }
@@ -2351,7 +2351,7 @@ internal partial class StatementBinder {
         if !binderCtx.FunctionContainsUserGotoOrLabel || expression == nil {
             return false
         }
-        let finder = UserLabelFinder()
+        let finder = UserLabelFinder($scope.ConditionalCompilation)
         finder.VisitExpression(expression)
         return finder.Found
     }
@@ -2366,6 +2366,12 @@ internal partial class StatementBinder {
     }
 
     private class UserLabelFinder : BoundTreeWalker {
+        private let activeCode ConditionalCompilationMap
+
+        init(activeCode ConditionalCompilationMap) {
+            this.activeCode = activeCode
+        }
+
         prop Found bool {
             get;
             private set;
@@ -2379,7 +2385,7 @@ internal partial class StatementBinder {
                 Found = true
                 return
             }
-            if node.Syntax != nil && ContainsUserLabel(node.Syntax) {
+            if node.Syntax != nil && ContainsUserLabel(node.Syntax, activeCode) {
                 Found = true
                 return
             }
@@ -2390,7 +2396,7 @@ internal partial class StatementBinder {
             if Found || node == nil || node is BoundFunctionLiteralExpression {
                 return
             }
-            if node.Syntax != nil && ContainsUserLabel(node.Syntax) {
+            if node.Syntax != nil && ContainsUserLabel(node.Syntax, activeCode) {
                 Found = true
                 return
             }
@@ -2725,7 +2731,9 @@ internal partial class StatementBinder {
         exitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]],
         includeNullableNullCoalescing bool = false
     ) {
-        if node == nil || processed.Contains(node) {
+        if node == nil || node is BoundCallOperationExpression{IsElidedConditionalCall: true} || processed.Contains(
+            node
+        ) {
             return
         }
         switch node {
@@ -7532,6 +7540,9 @@ internal partial class StatementBinder {
         }
 
         private func ProcessExpression(node BoundExpression) {
+            if node is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+                return
+            }
             if IsCallableType(node.Type) ||
                 node is BoundCallOperationExpression or
                 BoundFunctionLiteralExpression or
@@ -13745,6 +13756,9 @@ internal partial class StatementBinder {
         }
 
         internal func HasShallowExpressionEffects(node BoundExpression) bool {
+            if node is BoundCallOperationExpression{IsElidedConditionalCall: true} {
+                return false
+            }
             if IsStableSystemIndexOperation(node) {
                 return false
             }
@@ -13779,7 +13793,7 @@ internal partial class StatementBinder {
                 return false
             }
             return switch node {
-                case _ is BoundCallExpression{IsConditionalElided: true}: false
+                case _ is BoundCallOperationExpression{IsElidedConditionalCall: true}: false
                 case _ is BoundCallOperationExpression or
                     BoundClrConstructorCallExpression or
                     BoundConstructorChainingExpression or

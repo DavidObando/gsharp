@@ -6232,7 +6232,10 @@ public class Demo
                     document.FilePath,
                     cancellationToken: cancellationToken
                 )
-                let translator = CSharpToGSharpTranslator(){ConditionalCompilation = conditionalCompilation}
+                let translator = CSharpToGSharpTranslator(){
+                    ConditionalCompilation = conditionalCompilation,
+                    SupportsScopedConditionalSymbols = true
+                }
                 let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
                 inspect?.Invoke(context)
                 Assert.Equal(

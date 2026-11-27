@@ -43,8 +43,9 @@ abstract class BoundNode {
     }
 
     /// Gets this node's immediate child statements, expressions and patterns,
-    /// in the order (cref:BoundTreeWalker) visits them — the Roslyn
+    /// in source visitation order — the Roslyn
     /// `IOperation.ChildOperations` analogue (ADR-0169, issue #4436).
+    /// Includes retained operands and receiver preludes of omitted conditional calls.
     /// Helper nodes that are not themselves statements, expressions or
     /// patterns (a switch arm, a catch clause) are transparent: their own
     /// children are listed in their place. Three shapes follow Roslyn's
@@ -163,9 +164,9 @@ abstract class BoundNode {
     }
 
     /// Records the statements, expressions and patterns one level below a
-    /// root, in the order the default walker visits them, with the
+    /// root, in source visitation order, with the
     /// operation-tree overrides described on (cref:ChildNodes).
-    private class NodeCollector : BoundTreeWalker {
+    private class NodeCollector : BoundSemanticTreeWalker {
         private let root BoundNode
 
         init(root BoundNode) {

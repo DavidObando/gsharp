@@ -554,6 +554,19 @@ open partial class Parser {
 
     private func ParsePrimaryExpression() ExpressionSyntax {
         switch Current.Kind {
+            case SyntaxKind.AtToken {
+                let atToken = NextToken()
+                let identifier = MatchToken(SyntaxKind.IdentifierToken)
+                if identifier.Text != "defined" {
+                    Diagnostics.ReportUnexpectedToken(identifier.Location, identifier.Kind, SyntaxKind.IdentifierToken)
+                }
+                let openToken = MatchToken(SyntaxKind.OpenParenthesisToken)
+                let arguments = ParseArguments()
+                let close = MatchToken(SyntaxKind.CloseParenthesisToken)
+                return ParsePostfixChain(
+                    DefinedExpressionSyntax(syntaxTree, atToken, identifier, openToken, arguments, close)
+                )
+            }
             case SyntaxKind.OpenBraceToken {
                 // Issue #3355: a block with a trailing expression is a
                 // general primary expression. Statement-body parsers consume

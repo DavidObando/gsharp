@@ -57,18 +57,14 @@ open class GsharpTestProjectRunner {
         }
         // The child runs from the repository root (#6029), so keep a relative work directory's meaning.
         let workDir = Path.GetFullPath(workDir)
-        let sdk = if project.SdkVersion != nil {
-            (FindNupkgForVersion(project.SdkVersion), project.SdkVersion!!)
-        } else {
-            ResolveLocalSdkPackage(this.RepoRoot) ?? ResolveDefaultSdkPackage(this.RepoRoot)
-        }
+        let sdk = this.ResolveSdkPackage(project.SdkVersion)
         if sdk == nil {
             return GsharpTestRunResult.Unavailable(
                 "No locally-built Gsharp.NET.Sdk nupkg was found under out/bin/<Config>/nupkgs/."
             )
         }
-        if sdk.NupkgPath != nil {
-            EnsureInLocalFeed(this.RepoRoot, sdk.NupkgPath)
+        if sdk.NupkgPath is {} nupkgPath {
+            EnsureInLocalFeed(this.RepoRoot, nupkgPath)
         }
         Directory.CreateDirectory(workDir)
         WriteIsolationBoundary(workDir)
@@ -138,8 +134,10 @@ open class GsharpTestProjectRunner {
         return GsharpTestRunResult.Ran(exit, output, trxPath, results)
     }
 
-    private func FindNupkgForVersion(version string?) string? {
-        return FindLocalPackageVersion(this.RepoRoot, SdkPackageId, version)
+    internal func ResolveSdkPackage(version string?)(NupkgPath string?, Version string)? -> if version != nil {
+        (FindLocalPackageVersion(this.RepoRoot, SdkPackageId, version), version)
+    } else {
+        ResolveLocalSdkPackage(this.RepoRoot) ?? ResolveDefaultSdkPackage(this.RepoRoot)
     }
 
     private func RunDotnet(arguments IReadOnlyList[string], workingDirectory string)(Exit int32, Output string) {

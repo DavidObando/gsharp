@@ -145,9 +145,13 @@ partial class CSharpToGSharpTranslator {
                 this.context.SemanticModel.GetConstantValue(invocation) is {HasValue: true, Value: string name} {
                 return LiteralExpression.String(name)
             }
-            if this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol invokedMethod &&
-                this.MethodMayRequireManagedReferenceArrayProjection(invokedMethod) {
-                this.TryGetManagedReferenceArrayProjectedMethod(invocation, out _)
+            if this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol invokedMethod {
+                if invokedMethod.IsConditional {
+                    this.ConditionalInvocations.Add(invocation)
+                }
+                if this.MethodMayRequireManagedReferenceArrayProjection(invokedMethod) {
+                    this.TryGetManagedReferenceArrayProjectedMethod(invocation, out _)
+                }
             }
             var target GExpression?
             var typeArguments IReadOnlyList[GTypeReference]? = nil
@@ -838,6 +842,7 @@ partial class CSharpToGSharpTranslator {
             out call GExpression,
             hostLocalAssignmentSeam bool
         ) {
+            this.RecordConditionalInvocation(invocation!!)
             let translatedReceiver = this.TranslateExpression(conditionalAccess.Expression)
             let receiver GExpression? = this.CaptureReceiverOnce(
                 translatedReceiver,

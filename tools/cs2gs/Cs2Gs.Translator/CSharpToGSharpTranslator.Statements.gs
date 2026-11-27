@@ -7477,16 +7477,10 @@ partial class CSharpToGSharpTranslator {
             }
             let tree = expression.SyntaxTree
             var hasCondition = false
-            for var current IMethodSymbol? = method; current != nil; current = current?.OverriddenMethod {
-                for attribute in current.GetAttributes() {
-                    if attribute.AttributeClass?.ToDisplayString() == "System.Diagnostics.ConditionalAttribute" &&
-                        attribute.ConstructorArguments.Length == 1 &&
-                        attribute.ConstructorArguments[0].Value is string name {
-                        hasCondition = true
-                        if this.context.IsPreprocessorSymbolDefined(tree, expression.SpanStart, name) {
-                            return false
-                        }
-                    }
+            for name in CSharpToGSharpTranslator.GetConditionalMethodSymbols(method) {
+                hasCondition = true
+                if this.context.IsPreprocessorSymbolDefined(tree, expression.SpanStart, name) {
+                    return false
                 }
             }
             return hasCondition
@@ -7494,6 +7488,7 @@ partial class CSharpToGSharpTranslator {
 
         private func TranslateExpressionStatement(expression ExpressionSyntax?) GStatement? {
             if expression != nil && this.IsElidedInvocation(expression) {
+                this.RecordConditionalInvocation(expression)
                 return nil
             }
             if expression is ConditionalAccessExpressionSyntax conditionalAccess &&
@@ -8061,6 +8056,7 @@ partial class CSharpToGSharpTranslator {
             GStatement
         ]? {
             if expression != nil && this.IsElidedInvocation(expression) {
+                this.RecordConditionalInvocation(expression)
                 return Array.Empty[GStatement]()
             }
             if expression is AssignmentExpressionSyntax assignment && assignment.IsKind(

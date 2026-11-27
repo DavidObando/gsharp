@@ -165,6 +165,20 @@ func F() {
         /// every concrete (cref:SyntaxNode) subclass in the Core assembly
         /// (verified by (cref:Corpus_CoversEveryConcreteSyntaxNodeType)).
         private let Snippets IReadOnlyList[string] = []string{`package p
+@file:DefineSymbol("A")
+@If(@defined("A"))
+func Query() bool -> @defined("A")
+class Item { var Value int32 }
+func Locals() {
+    @DefineSymbol("TUPLE") let (a, b) = (1, 2)
+    @DefineSymbol("NAMED") let { Value = local } = Item{Value: 1}
+    @DefineSymbol("MULTI") let c, let d = 1, 2
+}
+class Accessors {
+    prop Value int32 { @DefineSymbol("GET") get { return 1 } }
+    event Changed () -> void { @DefineSymbol("ADD") add {} remove {} }
+}
+`, `package p
 func View(ref value int32) ref readonly int32 { return ref value }
 class Box {
  var value int32
