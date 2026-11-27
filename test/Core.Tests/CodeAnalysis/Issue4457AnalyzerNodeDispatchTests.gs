@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
@@ -18,6 +19,145 @@ import Xunit
 
 /// Issue #4457: bound-node actions follow Roslyn's operation-tree traversal.
 open class Issue4457AnalyzerNodeDispatchTests {
+    @Theory
+    @InlineData("Debug.WriteLine(Compute(value))", false)
+    @InlineData("Debug.WriteLine(Compute(value))", true)
+    @InlineData("Make(value).Log(Compute(value))", false)
+    @InlineData("Make(value).Log(Compute(value))", true)
+    @InlineData("MaybeMake(value)?.Log(Compute(value))", false)
+    @InlineData("MaybeMake(value)?.Log(Compute(value))", true)
+    @InlineData("Build(value).LogSlice(Compute(value))", false)
+    @InlineData("Build(value).LogSlice(Compute(value))", true)
+    func NodeActions_VisitActiveConditionalOperandsAndOriginalReceiverPreludes(call string, enabled bool) {
+        let source = `import System.Diagnostics
+class Sink { @Conditional("DEBUG") func Log(value int32) {} }
+@Conditional("DEBUG") func (self slice[int32]) LogSlice(value int32) {}
+func Compute(value int32) int32 -> value
+func Make(value int32) Sink -> Sink()
+func MaybeMake(value int32) Sink? -> Sink()
+func Build(value int32) slice[int32] -> slice[int32]{value}
+func Read(value int32) {
+    CALL
+    @If(false) { Missing(Compute(absent)) }
+}`.Replace("CALL", call, StringComparison.Ordinal)
+        let tree = SyntaxTree.Parse(SourceText.From(source, "active-operands.gs"))
+        let compilation = Compilation(tree){
+            IsLibrary = true,
+            PreprocessorSymbols = if enabled {
+                ImmutableHashSet.Create("DEBUG")
+            } else {
+                ImmutableHashSet[string].Empty
+            }
+        }
+        let probe = Run(compilation)
+        let model = compilation.GetSemanticModel(tree)
+        let read = tree
+            .Root
+            .Members
+            .OfType[FunctionDeclarationSyntax]()
+            .Single((node FunctionDeclarationSyntax) -> node.Identifier.Text == "Read")
+        let activeComputeStart = source.IndexOf("Compute(value)", StringComparison.Ordinal)
+        let activeCall = read
+            .DescendantNodesAndSelf()
+            .OfType[CallExpressionSyntax]()
+            .Single((node CallExpressionSyntax) -> node.Span.Start == activeComputeStart)
+        let boundCompute = Assert.IsAssignableFrom[BoundCallOperationExpression](model.GetBoundNode(activeCall))
+        Assert.Equal(TypeSymbol.Int32, model.GetTypeInfo(activeCall).Type)
+        let callbacks = probe
+            .RetainedNodes
+            .OfType[BoundCallOperationExpression]()
+            .Where((node BoundCallOperationExpression) -> node.CalledFunction.Name == "Compute")
+            .ToArray()
+        let callback = Assert.Single(callbacks)
+        Assert.Same(boundCompute, callback)
+        Assert.Equal(activeComputeStart, callback.Syntax!!.Span.Start)
+        Assert.Equal("Compute(value)".Length, callback.Syntax!!.Span.Length)
+
+        let outer = read
+            .DescendantNodesAndSelf()
+            .OfType[CallExpressionSyntax]()
+            .Single((node CallExpressionSyntax) -> node.Identifier.Text is "WriteLine" or "Log" or "LogSlice")
+        let operation = Assert.IsAssignableFrom[BoundExpression](model.GetBoundNode(outer))
+        var callOperation = operation
+        while callOperation is BoundBlockExpression block {
+            callOperation = block.Expression
+        }
+        let conditional = Assert.IsAssignableFrom[BoundCallOperationExpression](callOperation)
+        Assert.Equal(!enabled, conditional.IsElidedConditionalCall)
+        if !enabled && call.StartsWith("Build(", StringComparison.Ordinal) {
+            Assert.NotEmpty(conditional.ElidedSourceStatements)
+        }
+        Assert.Same(
+            boundCompute,
+            Assert.Single(
+                operation
+                    .Descendants()
+                    .OfType[BoundCallOperationExpression]()
+                    .Where((node BoundCallOperationExpression) -> node.CalledFunction.Name == "Compute")
+            )
+        )
+        Assert.Same(
+            boundCompute,
+            Assert.Single(
+                operation
+                    .ChildNodes
+                    .SelectMany((node BoundNode) -> node.DescendantsAndSelf())
+                    .OfType[BoundCallOperationExpression]()
+                    .Where((node BoundCallOperationExpression) -> node.CalledFunction.Name == "Compute")
+            )
+        )
+
+        let expectedValues = read
+            .DescendantNodesAndSelf()
+            .OfType[NameExpressionSyntax]()
+            .Where((node NameExpressionSyntax) -> node.IdentifierToken.Text == "value")
+            .Select((node NameExpressionSyntax) -> node.Span.Start)
+            .OrderBy((start int32) -> start)
+            .ToArray()
+        Assert.Equal(
+            if call.StartsWith("Debug.", StringComparison.Ordinal) {
+                1
+            } else {
+                2
+            },
+            expectedValues.Length
+        )
+        Assert.Equal(
+            expectedValues,
+            probe
+                .RetainedNodes
+                .OfType[BoundVariableExpression]()
+                .Where((node BoundVariableExpression) -> node.Variable.Name == "value")
+                .Select((node BoundVariableExpression) -> node.Syntax!!.Span.Start)
+                .OrderBy((start int32) -> start)
+                .ToArray()
+        )
+        if !call.StartsWith("Debug.", StringComparison.Ordinal) {
+            let factory = Assert.Single(
+                probe
+                    .RetainedNodes
+                    .OfType[BoundCallOperationExpression]()
+                    .Where(
+                    (node BoundCallOperationExpression) -> node.CalledFunction.Name is "Make" or "MaybeMake" or "Build"
+                )
+            )
+            Assert.Equal(source.IndexOf(call, StringComparison.Ordinal), factory.Syntax!!.Span.Start)
+            Assert.Equal(call.IndexOf(')') + 1, factory.Syntax!!.Span.Length)
+        }
+        let inactiveCompute = read
+            .DescendantNodesAndSelf()
+            .OfType[CallExpressionSyntax]()
+            .Single(
+            (node CallExpressionSyntax) -> node.Identifier.Text == "Compute" && node.Span.Start != activeComputeStart
+        )
+        Assert.False(compilation.IsActive(inactiveCompute))
+        Assert.Null(model.GetBoundNode(inactiveCompute))
+        Assert.DoesNotContain(
+            probe.RetainedNodes,
+            (node BoundNode) -> node.Syntax?.Span.Start == inactiveCompute.Span.Start
+        )
+    }
+
     @Fact
     func NodeActions_EnterFunctionLiterals_AndVisitAssignmentTargetBeforeValue() {
         const source = `package App
@@ -113,6 +253,11 @@ let userNested = func() int32 {
         init() {
             Events = List[string]()
             MarkContainingFunctions = List[string]()
+            RetainedNodes = List[BoundNode]()
+        }
+
+        prop RetainedNodes List[BoundNode] {
+            get;
         }
 
         prop Events List[string] {
@@ -145,6 +290,9 @@ let userNested = func() int32 {
         }
 
         private func Analyze(context BoundNodeAnalysisContext) {
+            if context.ContainingFunction?.Name == "Read" {
+                RetainedNodes.Add(context.BoundNode)
+            }
             switch context.BoundNode {
                 case assignment is BoundAssignmentExpression when context.ContainingFunction?.Name == "Outer" &&
                     assignment.Variable.Name == "total" {
@@ -184,8 +332,12 @@ let userNested = func() int32 {
         private func Run(source string) ProbeAnalyzer -> Run(SyntaxTree.Parse(SourceText.From(source, "app.gs")))
 
         private func Run(trees ...SyntaxTree) ProbeAnalyzer {
-            let probe = ProbeAnalyzer()
             let compilation = Compilation(trees)
+            return Run(compilation)
+        }
+
+        private func Run(compilation Compilation) ProbeAnalyzer {
+            let probe = ProbeAnalyzer()
             Assert.Empty(compilation.BoundProgram.Diagnostics.Where((d Diagnostic) -> d.IsError))
             GSharpAnalyzerDriver.Run(compilation, ImmutableArray.Create[GSharpDiagnosticAnalyzer](probe))
             return probe
