@@ -39,6 +39,7 @@ internal sealed class RegionEffectScanner {
     private var enclosingTypeTests List[RegionTypeTest] = List[RegionTypeTest]()
     private var enclosingWrites List[RegionWrite] = List[RegionWrite]()
     private var enclosingNilCompareNames HashSet[string] = HashSet[string](StringComparer.Ordinal)
+    private var enclosingNilComparePaths List[RegionReceiverPath?] = List[RegionReceiverPath?]()
     private var enclosingContainsMemberTypeTest bool = false
     private var current RegionEffects = RegionEffects()
     private var closureDepth int32 = 0
@@ -178,6 +179,7 @@ internal sealed class RegionEffectScanner {
         let savedEnclosingTypeTests = enclosingTypeTests
         let savedEnclosingWrites = enclosingWrites
         let savedEnclosingNilCompares = enclosingNilCompareNames
+        let savedEnclosingNilComparePaths = enclosingNilComparePaths
         let savedEnclosingMemberTypeTest = enclosingContainsMemberTypeTest
         let savedCurrent = current
         let savedClosure = closureDepth
@@ -206,6 +208,14 @@ internal sealed class RegionEffectScanner {
                 }
                 enclosingNilCompareNames = nextNilCompares
             }
+            if savedCurrent.NilCompareOperandPaths.Count > 0 {
+                let nextNilPaths = List[RegionReceiverPath?](
+                    enclosingNilComparePaths.Count + savedCurrent.NilCompareOperandPaths.Count
+                )
+                nextNilPaths.AddRange(enclosingNilComparePaths)
+                nextNilPaths.AddRange(savedCurrent.NilCompareOperandPaths)
+                enclosingNilComparePaths = nextNilPaths
+            }
             enclosingContainsMemberTypeTest = enclosingContainsMemberTypeTest || savedCurrent.ContainsMemberTypeTest
         }
         scopes = List[ScopeFrame]()
@@ -223,6 +233,7 @@ internal sealed class RegionEffectScanner {
         enclosingTypeTests = savedEnclosingTypeTests
         enclosingWrites = savedEnclosingWrites
         enclosingNilCompareNames = savedEnclosingNilCompares
+        enclosingNilComparePaths = savedEnclosingNilComparePaths
         enclosingContainsMemberTypeTest = savedEnclosingMemberTypeTest
         current = savedCurrent
         closureDepth = savedClosure
@@ -306,6 +317,7 @@ internal sealed class RegionEffectScanner {
         if enclosingTypeTests.Count == 0 &&
             enclosingWrites.Count == 0 &&
             enclosingNilCompareNames.Count == 0 &&
+            enclosingNilComparePaths.Count == 0 &&
             !enclosingContainsMemberTypeTest {
             return current
         }
@@ -320,6 +332,8 @@ internal sealed class RegionEffectScanner {
         for n in current.NilCompareOperandNames {
             combined.NilCompareOperandNames.Add(n)
         }
+        combined.NilCompareOperandPaths.AddRange(enclosingNilComparePaths)
+        combined.NilCompareOperandPaths.AddRange(current.NilCompareOperandPaths)
         combined.ContainsMemberTypeTest = enclosingContainsMemberTypeTest || current.ContainsMemberTypeTest
         return combined
     }

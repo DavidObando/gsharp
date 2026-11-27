@@ -17018,96 +17018,180 @@ internal partial class StatementBinder {
         if inConditionalCallProbe || effects.ContainsMemberTypeTest {
             return false
         }
-        if HasLoopSensitiveOperand(callExpression, effects, isDeclaredInRegion) {
+        let narrowedReadRoots = HashSet[string](StringComparer.Ordinal)
+        if HasLoopSensitiveOperand(
+            callExpression,
+            effects,
+            isDeclaredInRegion,
+            narrowedReadRoots,
+            isTopLevelCall: true
+        ) {
+            return false
+        }
+        // Exhaustively cover selective entry-narrowing invalidation:
+        // 0 narrowed reads -> 1 state (invariant); 1 narrowed read -> 2 states (entry & cleared);
+        // 2+ distinct narrowed reads -> conservatively decline elision rather than risking mixed states.
+        if narrowedReadRoots.Count > 1 {
             return false
         }
         if !TryProbeElidedConditionalCall(callExpression, clearNarrowings: false) {
             return false
         }
-        if HasAnyActiveNarrowings() && !TryProbeElidedConditionalCall(callExpression, clearNarrowings: true) {
+        if narrowedReadRoots.Count == 1 && !TryProbeElidedConditionalCall(callExpression, clearNarrowings: true) {
             return false
         }
         return true
+    }
+
+    private func RootVariableHasActiveNarrowing(name string) bool {
+        if $scope.TryLookupSymbol(name) is not VariableSymbol variable {
+            return false
+        }
+        for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
+            for path in binderCtx.NarrowedVariables[i].Keys {
+                if SameRoot(path.Root, variable) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private func HasLoopSensitiveOperand(
         node SyntaxNode?,
         effects RegionEffects,
         isDeclaredInRegion Func[string, bool],
-        isAccessorRight bool = false
+        narrowedReadRoots HashSet[string],
+        isAccessorRight bool = false,
+        isTopLevelCall bool = false
     ) bool {
         if node == nil {
             return false
         }
         switch node {
+            case _ is LabeledStatementSyntax, _ is GotoStatementSyntax {
+                // Avoid leaking function-wide label/goto registrations from speculative probes.
+                return true
+            }
             case parenthesized is ParenthesizedExpressionSyntax {
-                return HasLoopSensitiveOperand(parenthesized.Expression, effects, isDeclaredInRegion, isAccessorRight)
+                return HasLoopSensitiveOperand(
+                    parenthesized.Expression,
+                    effects,
+                    isDeclaredInRegion,
+                    narrowedReadRoots,
+                    isAccessorRight,
+                    isTopLevelCall
+                )
             }
             case accessor is AccessorExpressionSyntax {
+                // Any member access in an argument or nested receiver is sensitive when the loop
+                // or an enclosing region contains a member/element nil guard (`holder.Tag != nil`).
+                if !isTopLevelCall && effects.NilCompareOperandPaths.Count > 0 {
+                    return true
+                }
                 if !isAccessorRight {
-                    if HasLoopSensitiveOperand(accessor.LeftPart, effects, isDeclaredInRegion, isAccessorRight: false) {
+                    if HasLoopSensitiveOperand(
+                        accessor.LeftPart,
+                        effects,
+                        isDeclaredInRegion,
+                        narrowedReadRoots,
+                        isAccessorRight: false
+                    ) {
                         return true
                     }
                 } else {
                     switch accessor.LeftPart {
                         case leftCall is CallExpressionSyntax {
                             if leftCall.Callee != nil &&
-                                HasLoopSensitiveOperand(leftCall.Callee, effects, isDeclaredInRegion) {
+                                HasLoopSensitiveOperand(
+                                leftCall.Callee,
+                                effects,
+                                isDeclaredInRegion,
+                                narrowedReadRoots
+                            ) {
                                 return true
                             }
                             for arg in leftCall.Arguments {
-                                if HasLoopSensitiveOperand(arg, effects, isDeclaredInRegion) {
+                                if HasLoopSensitiveOperand(arg, effects, isDeclaredInRegion, narrowedReadRoots) {
                                     return true
                                 }
                             }
                         }
                         case leftIndex is IndexExpressionSyntax {
+                            if effects.NilCompareOperandPaths.Count > 0 {
+                                return true
+                            }
                             if HasLoopSensitiveOperand(
                                 leftIndex.Target,
                                 effects,
                                 isDeclaredInRegion,
+                                narrowedReadRoots,
                                 isAccessorRight: true
                             ) {
                                 return true
                             }
                             for idx in leftIndex.Indices {
-                                if HasLoopSensitiveOperand(idx, effects, isDeclaredInRegion) {
+                                if HasLoopSensitiveOperand(idx, effects, isDeclaredInRegion, narrowedReadRoots) {
                                     return true
                                 }
                             }
                         }
                         case _ is NameExpressionSyntax { }
                         default {
-                            if HasLoopSensitiveOperand(accessor.LeftPart, effects, isDeclaredInRegion) {
+                            if HasLoopSensitiveOperand(
+                                accessor.LeftPart,
+                                effects,
+                                isDeclaredInRegion,
+                                narrowedReadRoots
+                            ) {
                                 return true
                             }
                         }
                     }
                 }
-                return HasLoopSensitiveOperand(accessor.RightPart, effects, isDeclaredInRegion, isAccessorRight: true)
+                return HasLoopSensitiveOperand(
+                    accessor.RightPart,
+                    effects,
+                    isDeclaredInRegion,
+                    narrowedReadRoots,
+                    isAccessorRight: true,
+                    isTopLevelCall: isTopLevelCall
+                )
+            }
+            case _ is IndexExpressionSyntax {
+                if effects.NilCompareOperandPaths.Count > 0 {
+                    return true
+                }
+                for child in node.GetChildren() {
+                    if HasLoopSensitiveOperand(child, effects, isDeclaredInRegion, narrowedReadRoots) {
+                        return true
+                    }
+                }
+                return false
             }
             case call is CallExpressionSyntax {
                 if !isAccessorRight && call.Callee == nil && isDeclaredInRegion(call.Identifier.ValueText) {
                     return true
                 }
-                if call.Callee != nil && HasLoopSensitiveOperand(call.Callee, effects, isDeclaredInRegion) {
+                if call.Callee != nil &&
+                    HasLoopSensitiveOperand(call.Callee, effects, isDeclaredInRegion, narrowedReadRoots) {
                     return true
                 }
                 for arg in call.Arguments {
-                    if HasLoopSensitiveOperand(arg, effects, isDeclaredInRegion) {
+                    if HasLoopSensitiveOperand(arg, effects, isDeclaredInRegion, narrowedReadRoots) {
                         return true
                     }
                 }
                 return false
             }
             case named is NamedArgumentExpressionSyntax {
-                return HasLoopSensitiveOperand(named.Expression, effects, isDeclaredInRegion)
+                return HasLoopSensitiveOperand(named.Expression, effects, isDeclaredInRegion, narrowedReadRoots)
             }
             case assign is AssignmentExpressionSyntax {
                 if isDeclaredInRegion(assign.IdentifierToken.ValueText) {
                     return true
                 }
-                return HasLoopSensitiveOperand(assign.Expression, effects, isDeclaredInRegion)
+                return HasLoopSensitiveOperand(assign.Expression, effects, isDeclaredInRegion, narrowedReadRoots)
             }
             case name is NameExpressionSyntax {
                 if isAccessorRight {
@@ -17127,11 +17211,17 @@ internal partial class StatementBinder {
                         return true
                     }
                 }
-                return effects.NilCompareOperandNames.Contains(text)
+                if effects.NilCompareOperandNames.Contains(text) {
+                    return true
+                }
+                if RootVariableHasActiveNarrowing(text) {
+                    narrowedReadRoots.Add(text)
+                }
+                return false
             }
             default {
                 for child in node.GetChildren() {
-                    if HasLoopSensitiveOperand(child, effects, isDeclaredInRegion) {
+                    if HasLoopSensitiveOperand(child, effects, isDeclaredInRegion, narrowedReadRoots) {
                         return true
                     }
                 }

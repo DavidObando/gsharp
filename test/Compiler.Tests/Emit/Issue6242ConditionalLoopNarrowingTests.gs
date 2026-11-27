@@ -1526,4 +1526,84 @@ Console.Write(Read("xy"))`
         Assert.NotEqual(0, codeUnfilled)
         Assert.Contains("GS0158", outputUnfilled)
     }
+
+    @Fact
+    func Driver_SelectiveInvalidation_MemberNilGuard_AndLabeledBlockArgument_HandledSoundly() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let selectiveSource = `import System
+import System.Diagnostics
+@Conditional("A")
+func Keep(a string, b string, value string?) {}
+@Conditional("A")
+func Keep(a object, b object, value string?) {}
+func Keep(a object, b string, value string?) {}
+func Read(xIn object, yIn object, input string?) int32 {
+    var x = xIn
+    var y = yIn
+    var s = input
+    if x is not string || y is not string || s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        Keep(x, y, (s = nil))
+        x = Object()
+    }
+    return 0
+}
+Console.Write(Read("a", "b", "xy"))`
+        let (codeSel, outputSel) = fixture.TryCompile(
+            selectiveSource,
+            "ConditionalLoopSelectiveInvalid6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeSel)
+        Assert.Contains("GS0158", outputSel)
+
+        let memberNilSource = `import System
+import System.Diagnostics
+class Holder(Tag string?) {}
+@Conditional("A")
+func Keep(tag object?, value string?) {}
+func Keep(tag string, value string?) {}
+func Read(holder Holder, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        if holder.Tag != nil {
+            Keep(holder.Tag, (s = nil))
+        }
+    }
+    return 0
+}
+Console.Write(Read(Holder("x"), "xy"))`
+        let (codeMemberNil, outputMemberNil) = fixture.TryCompile(
+            memberNilSource,
+            "ConditionalLoopMemberNilGuard6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeMemberNil)
+        Assert.Contains("GS0158", outputMemberNil)
+
+        let labeledArgSource = `import System
+func Use(value int32) {
+    Console.Write(value)
+}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    var once = true
+    while once {
+        Use({
+            L: Console.Write(s.Length)
+            1
+        })
+        once = false
+    }
+    return s.Length
+}
+Console.Write(Read("xy"))`
+        let program = fixture.Compile(labeledArgSource, "ConditionalLoopLabeledArg6242", executable: true)
+        IlVerifier.Verify(program)
+        Assert.Equal(Encoding.UTF8.GetBytes("212"), fixture.RunBytes(program))
+    }
 }
