@@ -176,7 +176,7 @@ NamedDeconstructionStatement
 NamedTupleElement
 NilKeyword
 NotPattern
-NullCoalescingAssignmentStatement
+NullCoalescingAssignmentExpression
 NumberToken
 ObjectCreationExpression
 OpenBraceToken
