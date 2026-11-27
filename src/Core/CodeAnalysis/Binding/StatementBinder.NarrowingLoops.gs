@@ -17290,6 +17290,24 @@ internal partial class StatementBinder {
             return false
         }
         let argCount = call.Arguments.Count
+        let scopeFunctions = $scope.TryLookupFunctions(name)
+        if !scopeFunctions.IsDefaultOrEmpty {
+            let localMatching = List[FunctionSymbol]()
+            for fn in scopeFunctions {
+                if (fn.IsLocalFunction || fn.LocalDeclaration != nil) &&
+                    FunctionMatchesConditionalCall(fn, call, argCount, argSpecs, skipFirst: false) {
+                    localMatching.Add(fn)
+                }
+            }
+            if localMatching.Count > 0 {
+                for fn in FilterDominatedSourceOverloads(localMatching, argSpecs, skipFirst: false) {
+                    if !KnownAttributes.IsConditionallyElided(fn, $scope.ConditionalCompilation, call) {
+                        return false
+                    }
+                }
+                return true
+            }
+        }
         var found = false
         let owner = function?.ReceiverType ?? function?.StaticOwnerType ?? function?.LexicalEnclosingType
         if owner != nil {
@@ -17300,12 +17318,16 @@ internal partial class StatementBinder {
             if !CheckOwnerConditionalMethods(owner, name, argCount, argSpecs, call, ref found) {
                 return false
             }
+            if found {
+                return true
+            }
         }
-        let scopeFunctions = $scope.TryLookupFunctions(name)
         if !scopeFunctions.IsDefaultOrEmpty {
             let matching = List[FunctionSymbol]()
             for fn in scopeFunctions {
-                if FunctionMatchesConditionalCall(fn, call, argCount, argSpecs, skipFirst: false) {
+                if !fn.IsLocalFunction &&
+                    fn.LocalDeclaration == nil &&
+                    FunctionMatchesConditionalCall(fn, call, argCount, argSpecs, skipFirst: false) {
                     matching.Add(fn)
                 }
             }
@@ -17314,6 +17336,9 @@ internal partial class StatementBinder {
                 if !KnownAttributes.IsConditionallyElided(fn, $scope.ConditionalCompilation, call) {
                     return false
                 }
+            }
+            if found {
+                return true
             }
         }
         for importedType in binderCtx.GetStaticImportTypes() {
@@ -17376,26 +17401,6 @@ internal partial class StatementBinder {
         let visited = HashSet[TypeSymbol]()
         var importedExts List[MethodInfo]? = nil
         for recv in receivers {
-            visited.Clear()
-            var recvFound = false
-            if !CheckReceiverConditionalMethods(
-                recv,
-                name,
-                staticAccess,
-                argCount,
-                argSpecs,
-                call,
-                visited,
-                ref recvFound
-            ) {
-                return false
-            }
-            if recvFound {
-                continue
-            }
-            if staticAccess {
-                return false
-            }
             let effectiveRecvSym = recv.Symbol ??
                 (
                 if recv.Clr is {} recvClr {
@@ -17404,6 +17409,31 @@ internal partial class StatementBinder {
                     default(TypeSymbol?)
                 }
             )
+            if effectiveRecvSym is FunctionTypeSymbol && name == "Invoke" {
+                return false
+            }
+            // Step 1: direct instance/static methods (excluding inherited CLR base/Object/Enum on source types).
+            visited.Clear()
+            var step1Found = false
+            if !CheckReceiverConditionalMethods(
+                recv,
+                name,
+                staticAccess,
+                argCount,
+                argSpecs,
+                call,
+                visited,
+                ref step1Found,
+                includeInheritedClrFallback: staticAccess
+            ) {
+                return false
+            }
+            if step1Found {
+                continue
+            }
+            if staticAccess {
+                return false
+            }
             if effectiveRecvSym == nil {
                 return false
             }
@@ -17417,7 +17447,8 @@ internal partial class StatementBinder {
             } else {
                 default(List[ConditionalCallArgSpec]?)
             }
-            var extFound = false
+            // Step 2: source extension methods (take precedence over inherited CLR base/Object/Enum and imported extensions).
+            var srcExtFound = false
             let extFns = $scope.TryLookupExtensionFunctions(effectiveRecvSym, name)
             if !extFns.IsDefaultOrEmpty {
                 let matching = List[FunctionSymbol]()
@@ -17427,12 +17458,34 @@ internal partial class StatementBinder {
                     }
                 }
                 for extFn in FilterDominatedSourceOverloads(matching, extArgSpecs, skipFirst: false) {
-                    extFound = true
+                    srcExtFound = true
                     if !KnownAttributes.IsConditionallyElided(extFn, $scope.ConditionalCompilation, call) {
                         return false
                     }
                 }
             }
+            if srcExtFound {
+                continue
+            }
+            // Step 3: inherited CLR base / System.Object / System.Enum fallbacks on source types.
+            visited.Clear()
+            var inheritedClrFound = false
+            if !CheckSourceInheritedClrFallbackConditionalMethods(
+                effectiveRecvSym,
+                name,
+                argCount,
+                argSpecs,
+                call,
+                visited,
+                ref inheritedClrFound
+            ) {
+                return false
+            }
+            if inheritedClrFound {
+                continue
+            }
+            // Step 4: imported extension methods.
+            var impExtFound = false
             importedExts ??= MemberLookup(binderCtx).CollectImportedExtensionMethods(name)
             let matchingImpExts = List[MethodInfo]()
             for impExt in importedExts {
@@ -17454,12 +17507,12 @@ internal partial class StatementBinder {
                 matchingImpExts.Add(impExt)
             }
             for impExt in FilterDominatedClrOverloads(matchingImpExts, nil, extArgSpecs, skipFirst: false) {
-                extFound = true
+                impExtFound = true
                 if !KnownAttributes.IsConditionallyElided(impExt, $scope.ConditionalCompilation, call) {
                     return false
                 }
             }
-            if !extFound {
+            if !impExtFound {
                 return false
             }
         }
@@ -17546,12 +17599,37 @@ internal partial class StatementBinder {
             receiverPath.RootName is {} singleRoot &&
             !receiverPath.RootIsCall &&
             receiverPath.RootType == nil {
+            if $scope.TryLookupSymbol(singleRoot) is VariableSymbol recvVar {
+                let types = List[ReceiverType]()
+                types.Add(ReceiverType(recvVar.Type, recvVar.Type.ClrType))
+                if recvVar.Type is NullableTypeSymbol nullableRecv {
+                    types.Add(ReceiverType(nullableRecv.UnderlyingType, nullableRecv.UnderlyingType.ClrType))
+                }
+                if binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(recvVar)) is {} narrowed {
+                    types.Add(ReceiverType(narrowed, narrowed.ClrType))
+                }
+                for test in effects.TypeTests {
+                    if test.Name == singleRoot {
+                        if TestedTypeWithArguments(test, out var testsConstant) is {} tested {
+                            types.Add(ReceiverType(tested, tested.ClrType))
+                        } else if !testsConstant {
+                            return nil
+                        }
+                    }
+                }
+                return Distinct(types)
+            }
             return ResolveNamedReceiverTypesForEffects(singleRoot, effects)
         }
         let savedSubst = substituteGenericStepTypes
         try {
             substituteGenericStepTypes = true
-            return ResolveReceiverPath(receiverPath, effects)
+            return ResolveReceiverPath(
+                receiverPath,
+                effects,
+                keepNullableValueAtEnd: true,
+                keepReferenceNullabilityAtEnd: true
+            )
         } finally {
             substituteGenericStepTypes = savedSubst
         }
@@ -17591,6 +17669,82 @@ internal partial class StatementBinder {
         )
     }
 
+    private func CheckSourceInheritedClrFallbackConditionalMethods(
+        receiverSymbol TypeSymbol,
+        name string,
+        argCount int32,
+        argSpecs List[ConditionalCallArgSpec]?,
+        call CallExpressionSyntax,
+        visited HashSet[TypeSymbol],
+        ref found bool
+    ) bool {
+        let unwrapped = if receiverSymbol is NullableTypeSymbol nullableRef && !NullableLifting.IsAnyValueTypeNullable(
+            nullableRef
+        ) {
+            nullableRef.UnderlyingType
+        } else {
+            receiverSymbol
+        }
+        switch unwrapped {
+            case declared is StructSymbol {
+                if declared.GetHierarchy().Last().ImportedBaseType is {} impBase {
+                    if !CheckReceiverConditionalMethods(
+                        ReceiverType(impBase, impBase.ClrType),
+                        name,
+                        staticAccess: false,
+                        argCount,
+                        argSpecs,
+                        call,
+                        visited,
+                        ref found
+                    ) {
+                        return false
+                    }
+                    if found {
+                        return true
+                    }
+                }
+                return CheckReceiverConditionalMethods(
+                    ReceiverType(TypeSymbol.Object, typeof(object)),
+                    name,
+                    staticAccess: false,
+                    argCount,
+                    argSpecs,
+                    call,
+                    visited,
+                    ref found
+                )
+            }
+            case _ is InterfaceSymbol {
+                return CheckReceiverConditionalMethods(
+                    ReceiverType(TypeSymbol.Object, typeof(object)),
+                    name,
+                    staticAccess: false,
+                    argCount,
+                    argSpecs,
+                    call,
+                    visited,
+                    ref found
+                )
+            }
+            case _ is EnumSymbol {
+                return CheckReceiverConditionalMethods(
+                    ReceiverType(nil, typeof(Enum)),
+                    name,
+                    staticAccess: false,
+                    argCount,
+                    argSpecs,
+                    call,
+                    visited,
+                    ref found
+                )
+            }
+            default {
+                return true
+            }
+        }
+    }
+
     private func CheckReceiverConditionalMethods(
         receiver ReceiverType,
         name string,
@@ -17600,7 +17754,8 @@ internal partial class StatementBinder {
         call CallExpressionSyntax,
         visited HashSet[TypeSymbol],
         ref found bool,
-        onlyDefaultInterfaceMethods bool = false
+        onlyDefaultInterfaceMethods bool = false,
+        includeInheritedClrFallback bool = true
     ) bool {
         if receiver.Symbol is {} sym {
             if !visited.Add(sym) {
@@ -17611,6 +17766,40 @@ internal partial class StatementBinder {
             }
         }
         switch receiver.Symbol {
+            case nullableValue is NullableTypeSymbol when NullableLifting.IsAnyValueTypeNullable(nullableValue) {
+                if !staticAccess &&
+                    nullableValue.UnderlyingType.ClrType is {} underlyingClr &&
+                    ReflectionType(underlyingClr) is {} reflectedUnderlying {
+                    try {
+                        let nullableClr = typeof(Nullable[_]).MakeGenericType(reflectedUnderlying)
+                        return CheckReceiverConditionalMethods(
+                            ReceiverType(nil, nullableClr),
+                            name,
+                            staticAccess: false,
+                            argCount,
+                            argSpecs,
+                            call,
+                            visited,
+                            ref found
+                        )
+                    } catch (ex Exception) { }
+                }
+                return true
+            }
+            case nullableRef is NullableTypeSymbol {
+                return CheckReceiverConditionalMethods(
+                    ReceiverType(nullableRef.UnderlyingType, nullableRef.UnderlyingType.ClrType),
+                    name,
+                    staticAccess,
+                    argCount,
+                    argSpecs,
+                    call,
+                    visited,
+                    ref found,
+                    onlyDefaultInterfaceMethods,
+                    includeInheritedClrFallback
+                )
+            }
             case declared is StructSymbol {
                 let matching = List[FunctionSymbol]()
                 for level in declared.GetHierarchy() {
@@ -17637,7 +17826,8 @@ internal partial class StatementBinder {
                                 call,
                                 visited,
                                 ref found,
-                                onlyDefaultInterfaceMethods: true
+                                onlyDefaultInterfaceMethods: true,
+                                includeInheritedClrFallback: false
                             ) {
                                 return false
                             }
@@ -17652,7 +17842,8 @@ internal partial class StatementBinder {
                                 call,
                                 visited,
                                 ref found,
-                                onlyDefaultInterfaceMethods: true
+                                onlyDefaultInterfaceMethods: true,
+                                includeInheritedClrFallback: false
                             ) {
                                 return false
                             }
@@ -17665,7 +17856,7 @@ internal partial class StatementBinder {
                         return false
                     }
                 }
-                if declared.GetHierarchy().Last().ImportedBaseType is {} impBase {
+                if includeInheritedClrFallback && declared.GetHierarchy().Last().ImportedBaseType is {} impBase {
                     if !CheckReceiverConditionalMethods(
                         ReceiverType(impBase, nil),
                         name,
@@ -17678,6 +17869,21 @@ internal partial class StatementBinder {
                     ) {
                         return false
                     }
+                }
+                return true
+            }
+            case _ is EnumSymbol {
+                if includeInheritedClrFallback {
+                    return CheckReceiverConditionalMethods(
+                        ReceiverType(nil, typeof(Enum)),
+                        name,
+                        staticAccess,
+                        argCount,
+                        argSpecs,
+                        call,
+                        visited,
+                        ref found
+                    )
                 }
                 return true
             }

@@ -1192,4 +1192,209 @@ Console.Write(Read("a", "xy"))`
         IlVerifier.Verify(program, []string{library})
         Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
     }
+
+    @Fact
+    func Driver_SourceExtensionBeatsInheritedClrBase_AndReceiverNullabilityPreserved_RejectWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let baseLib = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalBase6242 {
+    public class Base {
+        [Conditional("EXT_6242")]
+        public void Keep(string? value) {}
+    }
+    public static class NullableExt {
+        [Conditional("EXT_6242")]
+        public static void GetValueOrDefault(this int self, int fallback) {}
+    }
+}`, "ConditionalBaseLib6242")
+        let sourceExtOverBase = `import System
+import ConditionalBase6242
+class Probe : Base {}
+func (self Probe) Keep(value string?) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let p = Probe()
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        p.Keep((s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codeBase, outputBase) = fixture.TryCompile(
+            sourceExtOverBase,
+            "ConditionalLoopSrcExtOverBase6242",
+            executable: true,
+            "/r:" + baseLib
+        )
+        Assert.NotEqual(0, codeBase)
+        Assert.Contains("GS0158", outputBase)
+
+        let nullableRefRecv = `import System
+import System.Diagnostics
+@Conditional("A")
+func (self string) Keep(value string?) {}
+func (self object?) Keep(value string?) {}
+func Read(r string?, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        r.Keep((s = nil))
+    }
+    return 0
+}
+Console.Write(Read(nil, "xy"))`
+        let (codeNullRef, outputNullRef) = fixture.TryCompile(
+            nullableRefRecv,
+            "ConditionalLoopNullRefRecv6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeNullRef)
+        Assert.Contains("GS0158", outputNullRef)
+
+        let nullableValRecv = `import System
+import ConditionalBase6242
+func Read(n int32?, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        let _ = n.GetValueOrDefault({ s = nil; 1 })
+    }
+    return 0
+}
+Console.Write(Read(nil, "xy"))`
+        let (codeNullVal, outputNullVal) = fixture.TryCompile(
+            nullableValRecv,
+            "ConditionalLoopNullValRecv6242",
+            executable: true,
+            "/r:" + baseLib
+        )
+        Assert.NotEqual(0, codeNullVal)
+        Assert.Contains("GS0158", outputNullVal)
+    }
+
+    @Fact
+    func Driver_InheritedObjectEnum_AndFunctionTypeInvoke_RejectWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let extLib = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalFallback6242 {
+    public static class Ext {
+        [Conditional("EXT_6242")]
+        public static void GetHashCode(this object self) {}
+        [Conditional("EXT_6242")]
+        public static void Invoke(this object self, object? value) {}
+    }
+}`, "ConditionalFallbackLib6242")
+        let classObjSource = `import System
+import ConditionalFallback6242
+class Item {}
+func Make(x string?) Item -> Item()
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        let _ = Make((s = nil)).GetHashCode()
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codeClass, outputClass) = fixture.TryCompile(
+            classObjSource,
+            "ConditionalLoopClassObj6242",
+            executable: true,
+            "/r:" + extLib
+        )
+        Assert.NotEqual(0, codeClass)
+        Assert.Contains("GS0158", outputClass)
+
+        let enumSource = `import System
+import ConditionalFallback6242
+enum Color { Red }
+func Make(x string?) Color -> Color.Red
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        let _ = Make((s = nil)).GetHashCode()
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codeEnum, outputEnum) = fixture.TryCompile(
+            enumSource,
+            "ConditionalLoopEnumObj6242",
+            executable: true,
+            "/r:" + extLib
+        )
+        Assert.NotEqual(0, codeEnum)
+        Assert.Contains("GS0158", outputEnum)
+
+        let fnInvokeSource = `import System
+import ConditionalFallback6242
+class Payload {
+    var Value int32 = 1
+}
+func Read(f (Payload?) -> void, input Payload?) int32 {
+    var p = input
+    if p == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(p.Value)
+        f.Invoke((p = nil))
+    }
+    return 0
+}
+Console.Write(Read((x Payload?) -> {}, Payload()))`
+        let (codeFn, outputFn) = fixture.TryCompile(
+            fnInvokeSource,
+            "ConditionalLoopFnInvoke6242",
+            executable: true,
+            "/r:" + extLib
+        )
+        Assert.NotEqual(0, codeFn)
+        Assert.Contains("GS0158", outputFn)
+    }
+
+    @Fact
+    func Driver_SiblingMemberBeatsPackageFunction_AndSourceExtBeatsImportedExt_PreserveNarrowing() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+namespace ConditionalImpExtCollision6242 {
+    public static class Ext {
+        public static void Keep(this string self, string? value) {}
+    }
+}`, "ConditionalImpExtCollisionLib6242")
+        let source = `import System
+import System.Diagnostics
+import ConditionalImpExtCollision6242
+func Keep(value string?) {}
+@Conditional("A")
+func (self string) Keep(value string?) {}
+shared class Demo {
+    @Conditional("A")
+    func Keep(value string?) {}
+    func Read(r string, input string?) int32 {
+        var s = input
+        if s == nil { return 0 }
+        var once = true
+        while once {
+            Keep((s = nil))
+            r.Keep((s = nil))
+            Console.Write(s.Length)
+            once = false
+        }
+        return s.Length
+    }
+}
+Console.Write(Demo.Read("a", "xy"))`
+        let program = fixture.Compile(source, "ConditionalLoopPrecedenceAbsent6242", executable: true, "/r:" + library)
+        IlVerifier.Verify(program, []string{library})
+        Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
+    }
 }
