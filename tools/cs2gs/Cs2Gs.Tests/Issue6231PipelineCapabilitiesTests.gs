@@ -125,7 +125,7 @@ class Issue6231PipelineCapabilitiesTests {
 
     @Fact
     func SdkCapability_DetectsScopedConditionalSymbolsInRealPackedSdk() {
-        let repoRoot = GsharpTestProjectRunner.TryFindRepoRoot()
+        let repoRoot = GsharpTestProjectRunner.FindAssemblyRepoRoot()
         Assert.False(string.IsNullOrEmpty(repoRoot))
         let sdk = GsharpTestProjectRunner.ResolveLocalPackage(repoRoot, "Gsharp.NET.Sdk", "Release")
         if sdk == nil {
