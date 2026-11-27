@@ -22,14 +22,20 @@ import System.Linq
 /// in any result: names and call sites are in source order of the walk.
 internal sealed class RegionEffectScanner {
     private let activeCode ConditionalCompilationMap?
+    private let isElidedConditionalCall((CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?) -> bool)?
 
-    internal init(activeCode ConditionalCompilationMap? = nil) {
+    internal init(
+        activeCode ConditionalCompilationMap? = nil,
+        isElidedConditionalCall((CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?) -> bool)? = nil
+    ) {
         this.activeCode = activeCode
+        this.isElidedConditionalCall = isElidedConditionalCall
     }
 
     private let topLevelCache Dictionary[SyntaxNode, RegionEffects] = Dictionary[SyntaxNode, RegionEffects]()
     private let nestedCache Dictionary[SyntaxNode, RegionEffects] = Dictionary[SyntaxNode, RegionEffects]()
     private var scopes List[ScopeFrame] = List[ScopeFrame]()
+    private var enclosingScopes List[ScopeFrame] = List[ScopeFrame]()
     private var current RegionEffects = RegionEffects()
     private var closureDepth int32 = 0
     // The names that a pattern or a binding declared anywhere in the region so far. A pattern variable
@@ -116,14 +122,15 @@ internal sealed class RegionEffectScanner {
         }
         // A loop with no part that runs once has the same region at the top level and nested.
         let sameWhenNested = !HasPartsThatRunOnce(node)
-        if sameWhenNested && nestedCache.TryGetValue(node, out var nested) {
+        if sameWhenNested && nestedCache.TryGetValue(node, out var nested) &&
+            (isElidedConditionalCall == nil || nested.Calls.Count == 0) {
             topLevelCache.Add(node, nested)
             return nested
         }
         let result = ScanFresh(node, true, iterationRunsUserCode)
         topLevelCache.Add(node, result)
         if sameWhenNested {
-            nestedCache.Add(node, result)
+            nestedCache[node] = result
         }
         return result
     }
@@ -162,9 +169,16 @@ internal sealed class RegionEffectScanner {
 
     private func ScanFresh(node SyntaxNode, topLevel bool, iterationRunsUserCode bool = true) RegionEffects {
         let savedScopes = scopes
+        let savedEnclosing = enclosingScopes
         let savedCurrent = current
         let savedClosure = closureDepth
         let savedPatterns = patternNames
+        if !topLevel {
+            let nextEnclosing = List[ScopeFrame](enclosingScopes.Count + savedScopes.Count)
+            nextEnclosing.AddRange(enclosingScopes)
+            nextEnclosing.AddRange(savedScopes)
+            enclosingScopes = nextEnclosing
+        }
         scopes = List[ScopeFrame]()
         scopes.Add(ScopeFrame())
         current = RegionEffects()
@@ -176,6 +190,7 @@ internal sealed class RegionEffectScanner {
         Regions++
         let result = current
         scopes = savedScopes
+        enclosingScopes = savedEnclosing
         current = savedCurrent
         closureDepth = savedClosure
         patternNames = savedPatterns
@@ -236,6 +251,18 @@ internal sealed class RegionEffectScanner {
     private func IsDeclared(name string) bool {
         for var i = scopes.Count - 1; i >= 0; i-- {
             if scopes[i].Names.Contains(name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func IsDeclaredInRegionOrEnclosing(name string) bool {
+        if IsDeclared(name) {
+            return true
+        }
+        for var i = enclosingScopes.Count - 1; i >= 0; i-- {
+            if enclosingScopes[i].Names.Contains(name) {
                 return true
             }
         }
@@ -2531,6 +2558,15 @@ internal sealed class RegionEffectScanner {
         prefix RegionReceiverPath?
     ) {
         let isRightPartOfAccessor = receiver != nil
+        if !isRightPartOfAccessor &&
+            isElidedConditionalCall != nil &&
+            TryMatchTerminalCall(accessor, out var terminalCall, out var terminalReceiver, out var terminalPath) &&
+            !(
+            terminalPath?.RootName is {} rootName && !IsDeclared(rootName) && IsDeclaredInRegionOrEnclosing(rootName)
+        ) &&
+            isElidedConditionalCall(terminalCall!!, terminalReceiver, terminalPath) {
+            return
+        }
         // `a.M(args)` is a call. `a.b` and `a.b.M()` read the member `b`: an unknown getter (rule W5). In
         // `a.b.c`, `a.M().b` and `a.b[i].c` the name `b`, the call `M()` and the index `b[i]` are the left part of
         // the accessor that follows `a.`, and `a` is their receiver.
@@ -2569,6 +2605,44 @@ internal sealed class RegionEffectScanner {
         Visit(right)
     }
 
+    private func TryMatchTerminalCall(
+        accessor AccessorExpressionSyntax,
+        out terminalCall CallExpressionSyntax?,
+        out receiverExpression ExpressionSyntax?,
+        out receiverPath RegionReceiverPath?
+    ) bool {
+        var current = accessor
+        var path = BuildConditionalReceiverPath(current.LeftPart)
+        var lastReceiver ExpressionSyntax = current.LeftPart
+        while current.RightPart is AccessorExpressionSyntax nested {
+            path = AppendPath(path, nested.LeftPart)
+            lastReceiver = nested.LeftPart
+            current = nested
+        }
+        if current.RightPart is CallExpressionSyntax call && call.Callee == nil {
+            terminalCall = call
+            receiverExpression = if object.ReferenceEquals(current, accessor) {
+                accessor.LeftPart
+            } else {
+                lastReceiver
+            }
+            receiverPath = path
+            return true
+        }
+        terminalCall = nil
+        receiverExpression = nil
+        receiverPath = nil
+        return false
+    }
+
+    private func BuildConditionalReceiverPath(expression ExpressionSyntax?) RegionReceiverPath? {
+        let current = UnwrapParentheses(expression)
+        if current is AssignmentExpressionSyntax assignment {
+            return OriginOf(assignment.IdentifierToken.ValueText)
+        }
+        return BuildPath(current)
+    }
+
     private func VisitCall(
         call CallExpressionSyntax,
         receiver ExpressionSyntax?,
@@ -2581,6 +2655,13 @@ internal sealed class RegionEffectScanner {
             if Active() {
                 RecordConversion(operand, TypeOrigin(call.TypeArgumentList!!.Arguments[0]), allowExplicit: true)
             }
+            return
+        }
+        if receiver == nil &&
+            call.Callee == nil &&
+            isElidedConditionalCall != nil &&
+            !IsDeclaredInRegionOrEnclosing(call.Identifier.ValueText) &&
+            isElidedConditionalCall(call, nil, nil) {
             return
         }
         if Active() {

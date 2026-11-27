@@ -23,7 +23,7 @@ internal partial class StatementBinder {
 
     private func GetRegionScanner() RegionEffectScanner {
         if regionScanner == nil {
-            regionScanner = RegionEffectScanner($scope.ConditionalCompilation)
+            regionScanner = RegionEffectScanner($scope.ConditionalCompilation, IsElidedConditionalCallInRegion)
         }
         return regionScanner!!
     }
@@ -17003,5 +17003,467 @@ internal partial class StatementBinder {
             }
         } catch (ex NotSupportedException) { }
         return nil
+    }
+
+    // Issue #6242: target-aware omitted-call decision for raw loop-effect scans, sharing
+    // KnownAttributes.IsConditionallyElided with binding and flow. Returns true only when
+    // every candidate method that can bind the call is elided at the call's lexical site.
+    private func IsElidedConditionalCallInRegion(
+        call CallExpressionSyntax,
+        receiver ExpressionSyntax?,
+        receiverPath RegionReceiverPath?
+    ) bool {
+        if call.Callee != nil {
+            return false
+        }
+        let name = call.Identifier.ValueText
+        if string.IsNullOrEmpty(name) {
+            return false
+        }
+        let argCount = call.Arguments.Count
+        if receiver == nil {
+            return IsElidedBareConditionalCall(call, name, argCount)
+        }
+        return IsElidedMemberConditionalCall(call, name, argCount, receiver, receiverPath)
+    }
+
+    private func IsElidedBareConditionalCall(call CallExpressionSyntax, name string, argCount int32) bool {
+        let symbol = $scope.TryLookupSymbol(name)
+        if symbol is VariableSymbol || symbol is TypeSymbol {
+            return false
+        }
+        if TryResolveBareFallbackMember(name, out _, out _, out _, out _) {
+            return false
+        }
+        var found = false
+        let owner = function?.ReceiverType ?? function?.StaticOwnerType ?? function?.LexicalEnclosingType
+        if owner != nil {
+            if TypeHasNonMethodMember(owner, name, staticAccess: false) ||
+                TypeHasNonMethodMember(owner, name, staticAccess: true) {
+                return false
+            }
+            if !CheckOwnerConditionalMethods(owner, name, argCount, call, ref found) {
+                return false
+            }
+        }
+        let scopeFunctions = $scope.TryLookupFunctions(name)
+        if !scopeFunctions.IsDefaultOrEmpty {
+            for fn in scopeFunctions {
+                if !FunctionArityMatches(fn, argCount, skipFirst: false) {
+                    continue
+                }
+                found = true
+                if !KnownAttributes.IsConditionallyElided(fn, $scope.ConditionalCompilation, call) {
+                    return false
+                }
+            }
+        }
+        for importedType in binderCtx.GetStaticImportTypes() {
+            if TypeHasNonMethodMember(importedType, name, staticAccess: true) {
+                return false
+            }
+            for method in importedType.StaticMethods {
+                if method.Name == name && FunctionArityMatches(method, argCount, skipFirst: false) {
+                    found = true
+                    if !KnownAttributes.IsConditionallyElided(method, $scope.ConditionalCompilation, call) {
+                        return false
+                    }
+                }
+            }
+        }
+        for clrType in $scope.EnumerateStaticImportClrTypes() {
+            if ReflectionType(clrType) is {} reflected {
+                for member in reflected.GetMember(
+                    name,
+                    BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy
+                ) {
+                    if member is MethodInfo clrMethod {
+                        if ClrMethodArityMatches(clrMethod, argCount, skipFirst: false) {
+                            found = true
+                            if !KnownAttributes.IsConditionallyElided(clrMethod, $scope.ConditionalCompilation, call) {
+                                return false
+                            }
+                        }
+                    } else if member is FieldInfo || member is PropertyInfo || member is EventInfo {
+                        return false
+                    }
+                }
+            }
+        }
+        return found
+    }
+
+    private func IsElidedMemberConditionalCall(
+        call CallExpressionSyntax,
+        name string,
+        argCount int32,
+        receiver ExpressionSyntax,
+        receiverPath RegionReceiverPath?
+    ) bool {
+        let receivers = ResolveConditionalCallReceivers(receiver, receiverPath, out var staticAccess)
+        if receivers == nil || receivers.Count == 0 {
+            return false
+        }
+        var found = false
+        for recv in receivers {
+            if !CheckReceiverConditionalMethods(recv, name, staticAccess, argCount, call, ref found) {
+                return false
+            }
+        }
+        if !staticAccess {
+            for recv in receivers {
+                if recv.Symbol is {} recvSym {
+                    let extFns = $scope.TryLookupExtensionFunctions(recvSym, name)
+                    if !extFns.IsDefaultOrEmpty {
+                        for extFn in extFns {
+                            if !FunctionArityMatches(extFn, argCount, skipFirst: true) {
+                                continue
+                            }
+                            found = true
+                            if !KnownAttributes.IsConditionallyElided(extFn, $scope.ConditionalCompilation, call) {
+                                return false
+                            }
+                        }
+                    }
+                }
+            }
+            let importedExts = MemberLookup(binderCtx).CollectImportedExtensionMethods(name)
+            for impExt in importedExts {
+                if !ClrMethodArityMatches(impExt, argCount, skipFirst: true) {
+                    continue
+                }
+                let extParams = impExt.GetParameters()
+                if extParams.Length == 0 {
+                    continue
+                }
+                var applies = false
+                for recv in receivers {
+                    if ClrExtensionReceiverCanApply(recv.Symbol, extParams[0].ParameterType) {
+                        applies = true
+                        break
+                    }
+                }
+                if !applies {
+                    continue
+                }
+                found = true
+                if !KnownAttributes.IsConditionallyElided(impExt, $scope.ConditionalCompilation, call) {
+                    return false
+                }
+            }
+        }
+        return found
+    }
+
+    private func ResolveConditionalCallReceivers(
+        receiver ExpressionSyntax,
+        receiverPath RegionReceiverPath?,
+        out staticAccess bool
+    ) List[ReceiverType]? {
+        staticAccess = false
+        var unwrappedReceiver = receiver
+        while unwrappedReceiver is ParenthesizedExpressionSyntax parenthesized {
+            unwrappedReceiver = parenthesized.Expression
+        }
+        if unwrappedReceiver is NameExpressionSyntax{IdentifierToken: {ValueText: "this"}} &&
+            (receiverPath == nil || receiverPath.Steps.Length == 0) {
+            if function?.ReceiverType is {} ownerType {
+                let list = List[ReceiverType]()
+                list.Add(ReceiverType(ownerType, ownerType.ClrType))
+                return list
+            }
+            return nil
+        }
+        if receiverPath == nil {
+            return nil
+        }
+        if receiverPath.RootName is {} rootName && !receiverPath.RootIsCall && receiverPath.RootType == nil {
+            let isVariable = TryLookupRegionVariableType(rootName) != nil
+            if !isVariable {
+                if receiverPath.Steps.Length == 0 {
+                    if ResolveTypeName(rootName) is {} typeSym {
+                        staticAccess = true
+                        let list = List[ReceiverType]()
+                        list.Add(ReceiverType(typeSym, typeSym.ClrType))
+                        return list
+                    }
+                } else {
+                    var allMembers = true
+                    let parts = List[string]()
+                    parts.Add(rootName)
+                    for step in receiverPath.Steps {
+                        if step.Kind == RegionReceiverStepKind.Member && step.Name is {} stepName {
+                            parts.Add(stepName)
+                        } else {
+                            allMembers = false
+                            break
+                        }
+                    }
+                    if allMembers {
+                        let fullName = string.Join(".", parts)
+                        if ResolveTypeName(fullName) is {} qualifiedSym {
+                            staticAccess = true
+                            let list = List[ReceiverType]()
+                            list.Add(ReceiverType(qualifiedSym, qualifiedSym.ClrType))
+                            return list
+                        }
+                        if $scope.References?.TryResolveType(fullName, out var clrType) == true && clrType != nil {
+                            staticAccess = true
+                            let list = List[ReceiverType]()
+                            list.Add(ReceiverType(nil, clrType))
+                            return list
+                        }
+                    }
+                }
+            }
+        }
+        let emptyEffects = RegionEffects()
+        if receiverPath.Steps.Length == 0 &&
+            receiverPath.RootName is {} singleRoot &&
+            !receiverPath.RootIsCall &&
+            receiverPath.RootType == nil {
+            return ResolveNamedReceiverTypesForEffects(singleRoot, emptyEffects)
+        }
+        let savedSubst = substituteGenericStepTypes
+        try {
+            substituteGenericStepTypes = true
+            return ResolveReceiverPath(receiverPath, emptyEffects)
+        } finally {
+            substituteGenericStepTypes = savedSubst
+        }
+    }
+
+    private func CheckOwnerConditionalMethods(
+        owner TypeSymbol,
+        name string,
+        argCount int32,
+        call CallExpressionSyntax,
+        ref found bool
+    ) bool {
+        if !CheckReceiverConditionalMethods(
+            ReceiverType(owner, owner.ClrType),
+            name,
+            staticAccess: false,
+            argCount,
+            call,
+            ref found
+        ) {
+            return false
+        }
+        return CheckReceiverConditionalMethods(
+            ReceiverType(owner, owner.ClrType),
+            name,
+            staticAccess: true,
+            argCount,
+            call,
+            ref found
+        )
+    }
+
+    private func CheckReceiverConditionalMethods(
+        receiver ReceiverType,
+        name string,
+        staticAccess bool,
+        argCount int32,
+        call CallExpressionSyntax,
+        ref found bool
+    ) bool {
+        if receiver.Symbol is {} sym && TypeHasNonMethodMember(sym, name, staticAccess) {
+            return false
+        }
+        switch receiver.Symbol {
+            case declared is StructSymbol {
+                for level in declared.GetHierarchy() {
+                    let methods = if staticAccess {
+                        level.StaticMethods
+                    } else {
+                        level.Methods
+                    }
+                    for m in methods {
+                        if m.Name == name && FunctionArityMatches(m, argCount, skipFirst: false) {
+                            found = true
+                            if !KnownAttributes.IsConditionallyElided(m, $scope.ConditionalCompilation, call) {
+                                return false
+                            }
+                        }
+                    }
+                }
+                if declared.GetHierarchy().Last().ImportedBaseType is {} impBase {
+                    if !CheckReceiverConditionalMethods(
+                        ReceiverType(impBase, nil),
+                        name,
+                        staticAccess,
+                        argCount,
+                        call,
+                        ref found
+                    ) {
+                        return false
+                    }
+                }
+                return true
+            }
+            case contract is InterfaceSymbol {
+                for level in contract.SelfAndAllBaseInterfaces() {
+                    level.EnsureMembersResolved()
+                    let methods = if staticAccess {
+                        level.GetStaticMethods(name)
+                    } else {
+                        level.GetMethods(name)
+                    }
+                    for m in methods {
+                        if FunctionArityMatches(m, argCount, skipFirst: false) {
+                            found = true
+                            if !KnownAttributes.IsConditionallyElided(m, $scope.ConditionalCompilation, call) {
+                                return false
+                            }
+                        }
+                    }
+                }
+                return true
+            }
+            default { }
+        }
+        let clr = receiver.Clr ?? receiver.Symbol?.ClrType
+        if clr == nil || ReflectionType(clr) is not{} reflected {
+            return true
+        }
+        let flags = BindingFlags.Public |
+        BindingFlags.NonPublic |
+        BindingFlags.FlattenHierarchy |
+        (
+            if staticAccess {
+                BindingFlags.Static
+            } else {
+                BindingFlags.Instance
+            }
+        )
+        for member in reflected.GetMember(name, flags) {
+            if member is MethodInfo clrMethod {
+                if ClrMethodArityMatches(clrMethod, argCount, skipFirst: false) {
+                    found = true
+                    if !KnownAttributes.IsConditionallyElided(clrMethod, $scope.ConditionalCompilation, call) {
+                        return false
+                    }
+                }
+            } else if member is FieldInfo || member is PropertyInfo || member is EventInfo {
+                return false
+            }
+        }
+        if reflected.IsInterface && !staticAccess {
+            for baseIface in reflected.GetInterfaces() {
+                for member in baseIface.GetMember(name, flags) {
+                    if member is MethodInfo clrMethod {
+                        if ClrMethodArityMatches(clrMethod, argCount, skipFirst: false) {
+                            found = true
+                            if !KnownAttributes.IsConditionallyElided(clrMethod, $scope.ConditionalCompilation, call) {
+                                return false
+                            }
+                        }
+                    } else if member is FieldInfo || member is PropertyInfo || member is EventInfo {
+                        return false
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    private func TypeHasNonMethodMember(type TypeSymbol, name string, staticAccess bool) bool {
+        switch type {
+            case declared is StructSymbol {
+                for level in declared.GetHierarchy() {
+                    if staticAccess {
+                        if level.StaticFields.Any((f FieldSymbol) -> f.Name == name) || level.StaticProperties.Any(
+                            (p PropertySymbol) -> p.Name == name
+                        ) ||
+                            level.StaticEvents.Any((e EventSymbol) -> e.Name == name) {
+                            return true
+                        }
+                    } else {
+                        if level.Fields.Any((f FieldSymbol) -> f.Name == name) || level.Properties.Any(
+                            (p PropertySymbol) -> p.Name == name
+                        ) ||
+                            level.Events.Any((e EventSymbol) -> e.Name == name) {
+                            return true
+                        }
+                    }
+                }
+            }
+            case contract is InterfaceSymbol {
+                for level in contract.SelfAndAllBaseInterfaces() {
+                    level.EnsureMembersResolved()
+                    if staticAccess {
+                        if level.GetStaticField(name) != nil || level.Properties.Any(
+                            (p PropertySymbol) -> p.IsStatic && p.Name == name
+                        ) ||
+                            level.Events.Any((e EventSymbol) -> e.IsStatic && e.Name == name) {
+                            return true
+                        }
+                    } else {
+                        if level.Properties.Any((p PropertySymbol) -> !p.IsStatic && p.Name == name) ||
+                            level.Events.Any((e EventSymbol) -> !e.IsStatic && e.Name == name) {
+                            return true
+                        }
+                    }
+                }
+            }
+            default { }
+        }
+        return false
+    }
+
+    private func FunctionArityMatches(fn FunctionSymbol, argCount int32, skipFirst bool) bool {
+        let start = if skipFirst {
+            1
+        } else {
+            0
+        }
+        if fn.Parameters.Length < start {
+            return false
+        }
+        var minArgs = 0
+        var isVariadic = false
+        for var i = start; i < fn.Parameters.Length; i++ {
+            let p = fn.Parameters[i]
+            if p.IsVariadic {
+                isVariadic = true
+            } else if !p.HasExplicitDefaultValue {
+                minArgs++
+            }
+        }
+        let maxArgs = if isVariadic {
+            int32.MaxValue
+        } else {
+            fn.Parameters.Length - start
+        }
+        return argCount >= minArgs && argCount <= maxArgs
+    }
+
+    private func ClrMethodArityMatches(method MethodInfo, argCount int32, skipFirst bool) bool {
+        let parameters = method.GetParameters()
+        let start = if skipFirst {
+            1
+        } else {
+            0
+        }
+        if parameters.Length < start {
+            return false
+        }
+        var minArgs = 0
+        var isVariadic = false
+        for var i = start; i < parameters.Length; i++ {
+            let p = parameters[i]
+            if ClrOverloadResolution.IsParamsArrayParameter(p) {
+                isVariadic = true
+            } else if !p.IsOptional {
+                minArgs++
+            }
+        }
+        let maxArgs = if isVariadic {
+            int32.MaxValue
+        } else {
+            parameters.Length - start
+        }
+        return argCount >= minArgs && argCount <= maxArgs
     }
 }
