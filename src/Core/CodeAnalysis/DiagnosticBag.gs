@@ -561,18 +561,37 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             }
             var dependsOnCandidate = false
             var found = false
+            var skipSubtree SyntaxNode? = nil
             for argument in arguments {
                 let argumentSpan = argument.Span
                 if argumentSpan.Start <= span.Start && span.End <= argumentSpan.End {
                     found = true
-                    let value = if argument is NamedArgumentExpressionSyntax named {
+                    var value = if argument is NamedArgumentExpressionSyntax named {
                         named.Expression
                     } else {
                         argument
                     }
-                    dependsOnCandidate = (argumentSpan.Start == span.Start && argumentSpan.End == span.End) ||
-                        (value.Span.Start == span.Start && value.Span.End == span.End) ||
-                        PrefixBindingContext.IsTypedByCandidate(value)
+                    while value is RefArgumentExpressionSyntax ||
+                        value is ParenthesizedExpressionSyntax ||
+                        value is CheckedExpressionSyntax {
+                        if value is RefArgumentExpressionSyntax{Expression: {} refInner} {
+                            value = refInner
+                        } else if value is ParenthesizedExpressionSyntax paren {
+                            value = paren.Expression
+                        } else if value is CheckedExpressionSyntax checkedExpr {
+                            value = checkedExpr.Expression
+                        } else {
+                            break
+                        }
+                    }
+                    skipSubtree = PrefixBindingContext.FindContainingContextualLambda(value, span)
+                    let strictFunctionLiteral = HasStrictEnclosingFunctionLiteral(value, span)
+                    dependsOnCandidate = !strictFunctionLiteral &&
+                        (
+                        (argumentSpan.Start == span.Start && argumentSpan.End == span.End) ||
+                            (value.Span.Start == span.Start && value.Span.End == span.End) ||
+                            PrefixBindingContext.IsBodyTypedByCandidate(value)
+                    )
                     break
                 }
             }
@@ -582,17 +601,52 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             if PrefixBindingContext.ClassifyCallResolution(location, frame.Kind) is {} premise {
                 return premise
             }
+            if PrefixBindingContext.ProvisionalPremise(
+                frame.Syntax.Location,
+                skipSubtree,
+                excludeCallLambdas: true
+            ) is {} framePremise {
+                return framePremise
+            }
             // A fixed callee does not change, but the call itself can be a typed argument of an outer call.
             span = frame.Syntax.Span
         }
         return nil
     }
 
-    // #6179: a report on the call itself, outside its arguments, while the binder resolves it (an obsolete
-    // or experimental candidate): a later, better candidate can remove it. The binder reports it before it
-    // knows whether the call can change, so any call whose callee can get a candidate counts.
+    private func HasStrictEnclosingFunctionLiteral(root ExpressionSyntax, span TextSpan) bool {
+        if root is FunctionLiteralExpressionSyntax && !(root.Span.Start == span.Start && root.Span.End == span.End) {
+            return true
+        }
+        var node SyntaxNode = root
+        while true {
+            var next SyntaxNode? = nil
+            for child in node.GetChildren() {
+                if child is not SyntaxToken &&
+                    child.Span.Start <= span.Start &&
+                    span.End <= child.Span.End &&
+                    child.Span.Length > 0 {
+                    next = child
+                    break
+                }
+            }
+            if next == nil {
+                return false
+            }
+            if next is FunctionLiteralExpressionSyntax &&
+                !(next.Span.Start == span.Start && next.Span.End == span.End) {
+                return true
+            }
+            node = next
+        }
+        return false
+    }
+
+    // #6179, #6229: a report on the call itself, outside its arguments, while the binder resolves it (an
+    // obsolete or experimental candidate): a later, better candidate can remove it. The binder reports it
+    // before it knows whether the call can change, so any call whose callee can get a candidate counts.
     private func CalleePremise(location TextLocation) PrefixPremise? {
-        if PrefixBindingContext.Current is not{} cut || !cut.LaterOverloadsPossible {
+        if PrefixBindingContext.Current is not{} cut {
             return nil
         }
         let frames = callFrames!!
@@ -607,6 +661,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
         let arguments = if frame.Syntax is CallExpressionSyntax call {
             call.Arguments
+        } else if frame.Syntax is BaseClassCallExpressionSyntax baseClassCall {
+            baseClassCall.Call.Arguments
+        } else if frame.Syntax is BaseInterfaceCallExpressionSyntax baseInterfaceCall {
+            baseInterfaceCall.Arguments
         } else {
             return nil
         }
@@ -615,7 +673,24 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 return nil
             }
         }
-        return PrefixPremise.LaterOverload
+        if cut.LaterOverloadsPossible {
+            return PrefixPremise.LaterOverload
+        }
+        if frame.Kind == PrefixCallKind.Name {
+            if PrefixBindingContext.LaterLocalCanHide(location) {
+                return PrefixPremise.LaterOverload
+            }
+            if PrefixBindingContext.LaterGlobalCanHide(frame.Syntax) &&
+                !(
+                frame.Syntax is CallExpressionSyntax simpleCall && PrefixBindingContext.HasTopLevelFunction(
+                    cut,
+                    simpleCall.Identifier.ValueText
+                )
+            ) {
+                return PrefixPremise.LaterOverload
+            }
+        }
+        return nil
     }
 
     // ADR-0225: the premises of the reports in progress, innermost last. It is null outside a prefix bind.
@@ -727,6 +802,24 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
     }
 
+    /// Replaces the kind of the active call frame when its syntax matches [`syntax`](paramref),
+    /// returning the previous kind so the caller can restore it.
+    /// @param syntax The call syntax node.
+    /// @param kind The updated call kind.
+    /// @returns The previous call kind when replaced, or `null`.
+    internal func ReplaceCallFrameKind(syntax SyntaxNode?, kind PrefixCallKind) PrefixCallKind? {
+        if syntax == nil || callFrames is not{Count: > 0} frames {
+            return nil
+        }
+        let lastIndex = frames.Count - 1
+        let frame = frames[lastIndex]
+        if !object.ReferenceEquals(frame.Syntax, syntax) || frame.Kind == kind {
+            return nil
+        }
+        frames[lastIndex] = (frame.Syntax, kind)
+        return frame.Kind
+    }
+
     // ADR-0225 D6.5: the callee of the innermost call frame. A report outside a frame, or inside a
     // function literal of a call, has a simple-name premise, which holds whenever a member premise holds.
     // A fixed callee covers its own reports only: a report inside one of its arguments has another source.
@@ -742,7 +835,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         if frame.Kind == PrefixCallKind.Fixed && frame.Syntax is CallExpressionSyntax call {
             let span = location.Span
             for argument in call.Arguments {
-                let argumentSpan = argument.Span
+                let argumentSpan = if argument is NamedArgumentExpressionSyntax named {
+                    named.Expression.Span
+                } else {
+                    argument.Span
+                }
                 if argumentSpan.Start <= span.Start &&
                     span.End <= argumentSpan.End &&
                     (argumentSpan.Start != span.Start || argumentSpan.End != span.End) {

@@ -569,23 +569,36 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The text location.
     /// @param fieldName The field name.
     /// @param type The containing type.
-    func ReportUndefinedFieldOnType(location TextLocation, fieldName string, type TypeSymbol) -> Report(
-        location,
-        DiagnosticDescriptors.UndefinedFieldOnType,
-        type,
-        fieldName
-    )
+    func ReportUndefinedFieldOnType(location TextLocation, fieldName string, type TypeSymbol) {
+        let stack List[PrefixPremise]? = premises
+        let pushed = (stack == nil || stack.Count == 0) &&
+            PrefixBindingContext.Current is {} cut &&
+            cut.LaterOverloadsPossible &&
+            PushPremiseIf(PrefixBindingContext.CanHierarchyGrow(type), PrefixPremise.LaterMember)
+        Report(location, DiagnosticDescriptors.UndefinedFieldOnType, type, fieldName)
+        PopPremiseIf(pushed)
+    }
 
     /// Reports that a relational pattern operator is not defined for a type.
     /// @param location The text location.
     /// @param op The operator kind.
     /// @param type The operand type.
-    func ReportRelationalPatternOperatorUndefined(location TextLocation, op SyntaxKind, type TypeSymbol) -> Report(
-        location,
-        DiagnosticDescriptors.RelationalPatternOperatorUndefined,
-        SyntaxFacts.GetTextOrEmpty(op),
-        type
-    )
+    func ReportRelationalPatternOperatorUndefined(
+        location TextLocation,
+        op SyntaxKind,
+        type TypeSymbol
+    ) -> if op == SyntaxKind.EqualsEqualsToken ||
+        op == SyntaxKind.BangEqualsToken {
+        ReportFailedLookup(
+            location,
+            DiagnosticDescriptors.RelationalPatternOperatorUndefined,
+            PrefixLookupKind.Member,
+            SyntaxFacts.GetTextOrEmpty(op),
+            type
+        )
+    } else {
+        Report(location, DiagnosticDescriptors.RelationalPatternOperatorUndefined, SyntaxFacts.GetTextOrEmpty(op), type)
+    }
 
     /// Reports that a list pattern was used on a non-array/slice type.
     /// @param location The text location.

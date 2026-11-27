@@ -3129,6 +3129,13 @@ internal partial class ExpressionBinder {
             overloads.BindCallArgumentsForLayoutRecovery(synthesizedCall.Arguments)
             return BoundErrorExpression(nil)
         }
+        if PrefixBindingContext.Current is {} prefixCut &&
+            !prefixCut.LaterOverloadsPossible &&
+            ifaceOverloads.Length == 1 &&
+            !ifaceOverloads[0].IsGeneric {
+            PrefixBindingContext.AddFixedSignatureCall(syntax)
+            PrefixBindingContext.AddFixedSignatureCall(synthesizedCall)
+        }
         let arguments = BindBaseCallArguments(synthesizedCall)
         let selected FunctionSymbol? = overloads.SelectInstanceOverloadOrReport(
             ifaceOverloads,
@@ -3340,6 +3347,13 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportUnableToFindFunction(synthesizedCall.Location, methodName)
             return BoundErrorExpression(nil)
         }
+        if PrefixBindingContext.Current is {} prefixCut &&
+            !prefixCut.LaterOverloadsPossible &&
+            candidates.Count == 1 &&
+            !candidates[0].IsGenericMethod {
+            PrefixBindingContext.AddFixedSignatureCall(syntax)
+            PrefixBindingContext.AddFixedSignatureCall(synthesizedCall)
+        }
         let arguments = BindBaseCallArguments(synthesizedCall)
         let receiver = BoundVariableExpression(nil, thisParameter)
         if TryResolveAndBindClrInstanceCall(
@@ -3491,6 +3505,15 @@ internal partial class ExpressionBinder {
             overloads.BindCallArgumentsForLayoutRecovery(ce.Arguments)
             return BoundErrorExpression(nil)
         }
+        if PrefixBindingContext.Current is {} prefixCut &&
+            !prefixCut.LaterOverloadsPossible &&
+            baseOverloads.Length == 1 &&
+            !baseOverloads[0].IsGeneric {
+            PrefixBindingContext.AddFixedSignatureCall(callSyntax)
+            if !object.ReferenceEquals(callSyntax, ce) {
+                PrefixBindingContext.AddFixedSignatureCall(ce)
+            }
+        }
         let arguments = BindBaseCallArguments(ce)
         let method FunctionSymbol? = overloads.SelectInstanceOverloadOrReport(
             baseOverloads,
@@ -3622,6 +3645,15 @@ internal partial class ExpressionBinder {
             overloads.BindCallArgumentsForLayoutRecovery(ce.Arguments)
             result = BoundErrorExpression(nil)
             return true
+        }
+        if PrefixBindingContext.Current is {} prefixCut &&
+            !prefixCut.LaterOverloadsPossible &&
+            candidates.Count == 1 &&
+            !candidates[0].IsGenericMethod {
+            PrefixBindingContext.AddFixedSignatureCall(ce)
+            if callSyntax != nil && !object.ReferenceEquals(callSyntax, ce) {
+                PrefixBindingContext.AddFixedSignatureCall(callSyntax)
+            }
         }
         let arguments = BindBaseCallArguments(ce)
         if GetBaseAccessThisParameter() is not{} thisParameter {

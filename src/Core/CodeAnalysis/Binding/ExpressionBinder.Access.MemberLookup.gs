@@ -3561,6 +3561,8 @@ internal partial class ExpressionBinder {
         // implementation.
         target = PlatformCoercion.InsertCheck(target, diagnosticLocation, "an indexer receiver")
         let targetType = target.Type
+        // #6229: a later indexer of an incomplete type in the target's hierarchy can be better.
+        PrefixRetarget.NoteIndexTarget(indexSyntax.Parent ?? indexSyntax, targetType)
         let permissionReceiver = receiverCapabilitySource ?? target
         let isReadOnlyReceiver = RefCapabilities.IsReadOnlyValueReference(permissionReceiver)
         let hasNarrowedTarget = target is not BoundVariableExpression targetVariable ||

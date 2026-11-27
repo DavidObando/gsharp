@@ -1149,64 +1149,68 @@ internal partial class OverloadResolver {
         let prebindDiagMark = Diagnostics.Count
         let rollbackPrebind = captureCallArgumentPrebindRollback?(syntax)
         let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
-        for argument in syntax.Arguments {
-            // Issue #343: a named-argument wrapper carries the value expression
-            // we want to bind; unwrap it so the value is bound on its own.
-            let argSyntax = UnwrapNamedArgumentValue(argument)
-            let lambdaSyntax = GetLambdaArgumentSyntax(argSyntax)
-            recordDeferredArgumentSnapshot?(argSyntax)
-            var boundArgument BoundExpression
-            if argSyntax is RefArgumentExpressionSyntax refArg {
-                // The first binding pass has no resolved parameter for inline out arguments.
-                boundArgument = bindRefArgumentExpression(refArg, nil)
-            } else if layoutOk &&
-                bindLambdaWithTarget != nil &&
-                lambdaSyntax is {} deferredLambda &&
-                IsUntypedArrowLambda(deferredLambda) {
-                // Issue #951: defer; bind once the parameter delegate target is
-                // known (per-position loop below). A placeholder carrying the
-                // lambda syntax keeps argument positions aligned.
-                (
-                    (
-                        if deferredArrowLambdas == nil {
-                            (deferredArrowLambdas = HashSet[LambdaExpressionSyntax]())
-                        } else {
-                            deferredArrowLambdas
-                        }
-                    )!!
-                ).Add(deferredLambda)
-                boundArgument = BoundErrorExpression(deferredLambda)
-            } else {
-                boundArgument = if layoutOk {
-                    BindOverloadArgumentValue(argSyntax)
-                } else {
-                    bindExpression(argSyntax)
+        var previousFixedFrameKind PrefixCallKind? = nil
+        if PrefixBindingContext.Current is {} prefixCut && !prefixCut.LaterOverloadsPossible && resolvedType == nil {
+            if symbol is FunctionSymbol {
+                let fnOverloads = Scope.TryLookupFunctions(syntax.Identifier.ValueText)
+                if fnOverloads.Length == 1 &&
+                    !fnOverloads[0].IsGeneric &&
+                    !HasEnclosingMemberCallableCandidate(syntax.Identifier.ValueText) {
+                    PrefixBindingContext.AddFixedSignatureCall(syntax)
                 }
+            } else if symbol is VariableSymbol varSym &&
+                !(varSym is GlobalVariableSymbol && PrefixBindingContext.LaterGlobalCanHide(syntax)) &&
+                !PrefixBindingContext.IsProvisionalVariable(varSym) &&
+                IsCallableValueType(narrowedCallTargetType ?? varSym.Type) {
+                PrefixBindingContext.AddFixedSignatureCall(syntax)
+                previousFixedFrameKind = Diagnostics.ReplaceCallFrameKind(syntax, PrefixCallKind.Fixed)
             }
-            ApplySubExpressionNarrowingEffects(argSyntax, boundArgument)
-            boundArguments.Add(boundArgument)
         }
-        let initialArguments = boundArguments.ToImmutable()
-        let overloadDiagMark = Diagnostics.Count
-        var result = BindCallExpressionAfterArguments(
-            syntax,
-            resolvedType,
-            argumentNames,
-            boundArguments,
-            deferredArrowLambdas,
-            rollbackPrebind,
-            prebindDiagMark,
-            symbol,
-            narrowedCallTargetType,
-            preArgumentsNarrowing
-        )
-        if layoutOk && conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
-            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
-            result = BindCallExpressionAfterArguments(
+        try {
+            for argument in syntax.Arguments {
+                // Issue #343: a named-argument wrapper carries the value expression
+                // we want to bind; unwrap it so the value is bound on its own.
+                let argSyntax = UnwrapNamedArgumentValue(argument)
+                let lambdaSyntax = GetLambdaArgumentSyntax(argSyntax)
+                recordDeferredArgumentSnapshot?(argSyntax)
+                var boundArgument BoundExpression
+                if argSyntax is RefArgumentExpressionSyntax refArg {
+                    // The first binding pass has no resolved parameter for inline out arguments.
+                    boundArgument = bindRefArgumentExpression(refArg, nil)
+                } else if layoutOk &&
+                    bindLambdaWithTarget != nil &&
+                    lambdaSyntax is {} deferredLambda &&
+                    IsUntypedArrowLambda(deferredLambda) {
+                    // Issue #951: defer; bind once the parameter delegate target is
+                    // known (per-position loop below). A placeholder carrying the
+                    // lambda syntax keeps argument positions aligned.
+                    (
+                        (
+                            if deferredArrowLambdas == nil {
+                                (deferredArrowLambdas = HashSet[LambdaExpressionSyntax]())
+                            } else {
+                                deferredArrowLambdas
+                            }
+                        )!!
+                    ).Add(deferredLambda)
+                    boundArgument = BoundErrorExpression(deferredLambda)
+                } else {
+                    boundArgument = if layoutOk {
+                        BindOverloadArgumentValue(argSyntax)
+                    } else {
+                        bindExpression(argSyntax)
+                    }
+                }
+                ApplySubExpressionNarrowingEffects(argSyntax, boundArgument)
+                boundArguments.Add(boundArgument)
+            }
+            let initialArguments = boundArguments.ToImmutable()
+            let overloadDiagMark = Diagnostics.Count
+            var result = BindCallExpressionAfterArguments(
                 syntax,
                 resolvedType,
                 argumentNames,
-                refreshedArguments.ToBuilder(),
+                boundArguments,
                 deferredArrowLambdas,
                 rollbackPrebind,
                 prebindDiagMark,
@@ -1214,24 +1218,43 @@ internal partial class OverloadResolver {
                 narrowedCallTargetType,
                 preArgumentsNarrowing
             )
-        }
-        if !layoutOk {
-            Diagnostics.TruncateTo(layoutDiagMark)
-            layoutNarrowingRollback?.Invoke()
-            RestoreNarrowingBindSnapshot(layoutPreArgumentsNarrowing)
-            for argument in syntax.Arguments {
-                Scope.RemoveVariablesDeclaredInSpan(argument.SyntaxTree, argument.Span)
+            if layoutOk && conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+                Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+                result = BindCallExpressionAfterArguments(
+                    syntax,
+                    resolvedType,
+                    argumentNames,
+                    refreshedArguments.ToBuilder(),
+                    deferredArrowLambdas,
+                    rollbackPrebind,
+                    prebindDiagMark,
+                    symbol,
+                    narrowedCallTargetType,
+                    preArgumentsNarrowing
+                )
             }
-            return if result is BoundErrorExpression {
-                result
-            } else {
-                BoundErrorExpression.FindFailedCall(result) ?? BoundErrorExpression(nil)
+            if !layoutOk {
+                Diagnostics.TruncateTo(layoutDiagMark)
+                layoutNarrowingRollback?.Invoke()
+                RestoreNarrowingBindSnapshot(layoutPreArgumentsNarrowing)
+                for argument in syntax.Arguments {
+                    Scope.RemoveVariablesDeclaredInSpan(argument.SyntaxTree, argument.Span)
+                }
+                return if result is BoundErrorExpression {
+                    result
+                } else {
+                    BoundErrorExpression.FindFailedCall(result) ?? BoundErrorExpression(nil)
+                }
+            }
+            if syntax.NullableQuestionToken != nil {
+                intersectNarrowingWithSnapshot?(preArgumentsNarrowing)
+            }
+            return result
+        } finally {
+            if previousFixedFrameKind is {} oldFrameKind {
+                let _ = Diagnostics.ReplaceCallFrameKind(syntax, oldFrameKind)
             }
         }
-        if syntax.NullableQuestionToken != nil {
-            intersectNarrowingWithSnapshot?(preArgumentsNarrowing)
-        }
-        return result
     }
 
     private func BindCallExpressionAfterArguments(
@@ -1831,12 +1854,13 @@ internal partial class OverloadResolver {
             }
         ) as FunctionTypeSymbol
         if variable != nil && fnType != nil {
-            // ADR-0225 D6.5: no later text changes the signature of a local or a parameter.
+            // ADR-0225 D6.5: no later text changes the signature of a local, parameter, or non-hidden variable.
             let fixedDiagnostics = Diagnostics
             let fixedPushed = fixedDiagnostics.PushCallFrame(
                 syntax,
                 // #6179: a local whose type a call infers changes with that call.
-                if variable is LocalVariableSymbol && !PrefixBindingContext.IsProvisionalVariable(variable) {
+                if !(variable is GlobalVariableSymbol && PrefixBindingContext.LaterGlobalCanHide(syntax)) &&
+                    !PrefixBindingContext.IsProvisionalVariable(variable) {
                     PrefixCallKind.Fixed
                 } else {
                     PrefixCallKind.Name
@@ -1872,13 +1896,12 @@ internal partial class OverloadResolver {
             }
         ) as DelegateTypeSymbol
         if namedDelegateVar != nil && namedDelegateSym != nil {
-            // ADR-0225 D6.5: no later text changes the signature of a local or a parameter.
+            // ADR-0225 D6.5: no later text changes the signature of a local, parameter, or non-hidden variable.
             let fixedDiagnostics = Diagnostics
             let fixedPushed = fixedDiagnostics.PushCallFrame(
                 syntax,
-                if namedDelegateVar is LocalVariableSymbol && !PrefixBindingContext.IsProvisionalVariable(
-                    namedDelegateVar
-                ) {
+                if !(namedDelegateVar is GlobalVariableSymbol && PrefixBindingContext.LaterGlobalCanHide(syntax)) &&
+                    !PrefixBindingContext.IsProvisionalVariable(namedDelegateVar) {
                     PrefixCallKind.Fixed
                 } else {
                     PrefixCallKind.Name

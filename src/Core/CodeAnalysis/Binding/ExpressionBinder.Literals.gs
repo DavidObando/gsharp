@@ -4373,10 +4373,15 @@ internal partial class ExpressionBinder {
                 out var failure
             )
             if handler == nil {
+                let pushed = Diagnostics.PushPremiseIf(
+                    PrefixBindingContext.InterpolationHolesAreProvisional(interp.Syntax),
+                    PrefixPremise.LaterOverload
+                )
                 Diagnostics.ReportInterpolatedStringHandlerArgument(
                     location,
                     failure ?? "unable to create the interpolated string handler"
                 )
+                Diagnostics.PopPremiseIf(pushed)
                 continue
             }
             handlerSlots.Add((i, interp, handler))

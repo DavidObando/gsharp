@@ -1541,11 +1541,15 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// construct a list/set/dictionary type that supports `Add`.
     /// @param location The source location of the initializer.
     /// @param type The non-collection target type.
-    func ReportTypeNotCollectionInitializable(location TextLocation, type TypeSymbol) -> Report(
-        location,
-        DiagnosticDescriptors.TypeNotCollectionInitializable,
-        type
-    )
+    func ReportTypeNotCollectionInitializable(location TextLocation, type TypeSymbol) {
+        let stack List[PrefixPremise]? = premises
+        let pushed = (stack == nil || stack.Count == 0) &&
+            PrefixBindingContext.Current is {} cut &&
+            cut.LaterOverloadsPossible &&
+            PushPremiseIf(PrefixBindingContext.CanHierarchyGrow(type), PrefixPremise.LaterMember)
+        Report(location, DiagnosticDescriptors.TypeNotCollectionInitializable, type)
+        PopPremiseIf(pushed)
+    }
 
     /// Issue #988: GS0389 — a type parameter is constructed (`T()`) but it
     /// carries no `init()` default-constructor constraint, so the compiler

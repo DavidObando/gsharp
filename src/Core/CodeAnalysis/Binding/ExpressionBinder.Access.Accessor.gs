@@ -4075,6 +4075,22 @@ internal partial class ExpressionBinder {
             ce,
             isStatic: true
         )
+        if PrefixBindingContext.Current is {} prefixCut &&
+            !prefixCut.LaterOverloadsPossible &&
+            (structSym != nil || ifaceSym != nil) {
+            let staticMethods = TypeMemberModel.GetMethods(
+                ownerType,
+                methodName,
+                if structSym != nil {
+                    MemberQuery.InheritedStatic(MemberKinds.Method)
+                } else {
+                    MemberQuery.Static(MemberKinds.Method)
+                }
+            )
+            if staticMethods.Length == 1 && !staticMethods[0].IsGeneric {
+                PrefixBindingContext.AddFixedSignatureCall(ce)
+            }
+        }
         let bindStaticArgumentsAndDispatch = func () BoundExpression {
             let boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
             var deferredStaticLambdaIndices List[int32]? = nil

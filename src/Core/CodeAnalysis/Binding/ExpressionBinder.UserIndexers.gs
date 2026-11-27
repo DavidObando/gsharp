@@ -606,6 +606,10 @@ internal partial class ExpressionBinder {
         returnsPreviousValue bool = false
     ) BoundExpression? {
         var target = target
+        // #6229: a later indexer of an incomplete type in the target's hierarchy can be better.
+        if indexSyntaxes.Count > 0 && indexSyntaxes[0].Parent is {} indexNode {
+            PrefixRetarget.NoteIndexTarget(indexNode, target.Type)
+        }
         if (target.Type is ImportedTypeSymbol or NullabilityAnnotatedTypeSymbol) &&
             target.Type.ClrType is {} clrTarget {
             return TryBindMultiIndexClrAssignment(

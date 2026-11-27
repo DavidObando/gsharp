@@ -1960,21 +1960,27 @@ internal partial class ExpressionBinder {
     }
 
     private func BindNameExpression(syntax NameExpressionSyntax) BoundExpression {
-        let bound = BindNameExpressionUnrecorded(syntax)
-        // #6179: a local whose type a later declaration can change gives its references that premise.
-        PrefixRetarget.NoteName(syntax, bound)
+        let bound = BindNameExpressionUnrecorded(syntax, out var isResolvedVariable)
+        // #6179, #6229: a local whose type a later declaration can change, or a non-variable name
+        // that a later local or global can hide, gives its references that premise.
+        PrefixRetarget.NoteName(syntax, bound, isResolvedVariable)
         return bound
     }
 
-    private func BindNameExpressionUnrecorded(syntax NameExpressionSyntax) BoundExpression {
+    private func BindNameExpressionUnrecorded(
+        syntax NameExpressionSyntax,
+        out isResolvedVariable bool
+    ) BoundExpression {
         let name = syntax.IdentifierToken.ValueText
         if syntax.IdentifierToken.IsMissing {
             // This means the token was inserted by the parser. We already
             // reported error so we can just return an error expression.
+            isResolvedVariable = false
             return BoundErrorExpression(nil)
         }
         if binderCtx.InConstructorInitializer && name == "this" {
             Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(syntax.IdentifierToken.Location, name)
+            isResolvedVariable = false
             return BoundErrorExpression(nil)
         }
         let variable VariableSymbol? = BindVariableReference(
@@ -1983,6 +1989,7 @@ internal partial class ExpressionBinder {
             suppressNotAVariable: true,
             suppressUndefinedVariable: true
         )
+        isResolvedVariable = variable != nil
         if variable == nil {
             if binderCtx.InConstructorInitializer &&
                 ($scope.TryLookupSymbol(name) is ImplicitFieldVariableSymbol or ImplicitPropertyVariableSymbol) {
@@ -2010,39 +2017,49 @@ internal partial class ExpressionBinder {
             // first. Runs before the static-import fallbacks so prior cells'
             // declarations shadow static-import members, mirroring the
             // evaluator scope chain.
-            if SubmissionBinding.TryBindStaticMember(this, syntax, out var submissionMember) {
-                return submissionMember
-            }
-            // Issue #1201 (C# `using static`): an unqualified identifier may
-            // name a `shared` (static) field, property, or method group of a
-            // type brought into scope by a type import (`import Ns.Type`). This
-            // is the value/method-group analog of the call-site resolution in
-            // OverloadResolver and runs only after the name failed to resolve as
-            // a variable or free-function method group.
-            if TryBindImportedStaticMember(syntax, out var importedStaticMember) {
-                return importedStaticMember
-            }
-            // Issue #1582: a bare identifier inside an instance method of a G#
-            // class that derives from a metadata base may name an inherited CLR
-            // instance property/field (e.g. `return Message` in a class deriving
-            // from System.Exception). Unqualified inherited METHODS already
-            // resolve via the method-group path above; this mirrors that for
-            // properties/fields so bare and `this.`-qualified access behave
-            // identically for a metadata base, matching a user-defined base.
-            if TryBindInheritedClrInstanceMemberByBareName(
-                syntax.IdentifierToken.ValueText,
-                out var inheritedClrMember
-            ) {
-                return inheritedClrMember
-            }
-            // Issue #3840: a bare identifier inside a DEFAULT INTERFACE METHOD
-            // body may name the enclosing interface's own instance property.
-            // The implicit-member pseudo-variables are only seeded for a
-            // StructSymbol receiver, so this is the interface analog — bare and
-            // `this.`-qualified access behave identically in a DIM exactly as
-            // they already do in a class body.
-            if TryBindInterfaceInstancePropertyByBareName(syntax, out var interfaceMember) {
-                return interfaceMember
+            // #6229: diagnostics emitted inside shadowable fallback lookups can be removed by a later
+            // local or top-level global.
+            let shadowingPushed = Diagnostics.PushPremiseIf(
+                PrefixBindingContext.CanSimpleNameBeShadowed(syntax),
+                PrefixPremise.LaterOverload
+            )
+            try {
+                if SubmissionBinding.TryBindStaticMember(this, syntax, out var submissionMember) {
+                    return submissionMember
+                }
+                // Issue #1201 (C# `using static`): an unqualified identifier may
+                // name a `shared` (static) field, property, or method group of a
+                // type brought into scope by a type import (`import Ns.Type`). This
+                // is the value/method-group analog of the call-site resolution in
+                // OverloadResolver and runs only after the name failed to resolve as
+                // a variable or free-function method group.
+                if TryBindImportedStaticMember(syntax, out var importedStaticMember) {
+                    return importedStaticMember
+                }
+                // Issue #1582: a bare identifier inside an instance method of a G#
+                // class that derives from a metadata base may name an inherited CLR
+                // instance property/field (e.g. `return Message` in a class deriving
+                // from System.Exception). Unqualified inherited METHODS already
+                // resolve via the method-group path above; this mirrors that for
+                // properties/fields so bare and `this.`-qualified access behave
+                // identically for a metadata base, matching a user-defined base.
+                if TryBindInheritedClrInstanceMemberByBareName(
+                    syntax.IdentifierToken.ValueText,
+                    out var inheritedClrMember
+                ) {
+                    return inheritedClrMember
+                }
+                // Issue #3840: a bare identifier inside a DEFAULT INTERFACE METHOD
+                // body may name the enclosing interface's own instance property.
+                // The implicit-member pseudo-variables are only seeded for a
+                // StructSymbol receiver, so this is the interface analog — bare and
+                // `this.`-qualified access behave identically in a DIM exactly as
+                // they already do in a class body.
+                if TryBindInterfaceInstancePropertyByBareName(syntax, out var interfaceMember) {
+                    return interfaceMember
+                }
+            } finally {
+                Diagnostics.PopPremiseIf(shadowingPushed)
             }
             if binderCtx.InConstructorInitializer && IsConstructorInitializerInstanceMethod(name) {
                 Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(
