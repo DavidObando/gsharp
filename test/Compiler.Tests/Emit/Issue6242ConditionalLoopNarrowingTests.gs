@@ -535,4 +535,152 @@ Console.Write(Read("xy"))`
         IlVerifier.Verify(program)
         Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
     }
+
+    @Fact
+    func Driver_AssignmentResultTypeAndBetterOverload_AllowsOmittedStringOverload_OverObjectOverload() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalBetterOverload6242 {
+    public static class Probe {
+        [Conditional("EXT_6242")]
+        public static void Keep(string? value) {}
+        public static void Keep(object? value) {}
+        [Conditional("EXT_6242")]
+        public static void KeepGeneric<T>(string? value) {}
+        public static void KeepGeneric(string? value) {}
+    }
+}`, "ConditionalBetterOverloadLib6242")
+        let source = `import System
+import System.Diagnostics
+import ConditionalBetterOverload6242
+@Conditional("A")
+func Keep(value string?) {}
+func Keep(value object?) {}
+@Conditional("A")
+func KeepGeneric[T](value string?) {}
+func KeepGeneric(value string?) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    var once = true
+    while once {
+        Keep((s = nil))
+        Probe.Keep((s = nil))
+        KeepGeneric[int32]((s = nil))
+        Probe.KeepGeneric[int32]((s = nil))
+        Console.Write(s.Length)
+        once = false
+    }
+    return s.Length
+}
+Console.Write(Read("xy"))`
+        let program = fixture.Compile(
+            source,
+            "ConditionalLoopBetterOverloadAbsent6242",
+            executable: true,
+            "/r:" + library
+        )
+        IlVerifier.Verify(program, []string{library})
+        Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
+
+        let (codeSource, outputSource) = fixture.TryCompile(
+            source,
+            "ConditionalLoopBetterOverloadSourcePresent6242",
+            executable: true,
+            "/r:" + library,
+            "/define:A"
+        )
+        Assert.NotEqual(0, codeSource)
+        Assert.Contains("GS0158", outputSource)
+
+        let (codeImported, outputImported) = fixture.TryCompile(
+            source,
+            "ConditionalLoopBetterOverloadImportedPresent6242",
+            executable: true,
+            "/r:" + library,
+            "/define:EXT_6242"
+        )
+        Assert.NotEqual(0, codeImported)
+        Assert.Contains("GS0158", outputImported)
+    }
+
+    @Fact
+    func Driver_PrecedingAssignmentAndNullCoalescingArg_StillRejectsWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let priorStmtSource = `import System
+import System.Diagnostics
+@Conditional("A")
+func Keep(tag object?, value string?) {}
+func Keep(tag string, value string?) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    var tag string? = nil
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        tag = "x"
+        Keep(tag, (s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codePrior, outputPrior) = fixture.TryCompile(
+            priorStmtSource,
+            "ConditionalLoopPriorAssign6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codePrior)
+        Assert.Contains("GS0158", outputPrior)
+
+        let priorArgSource = `import System
+import System.Diagnostics
+@Conditional("A")
+func Keep(first string, tag object?, value string?) {}
+func Keep(first string, tag string, value string?) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    var tag string? = nil
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        Keep(tag ??= "x", tag, (s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codeArg, outputArg) = fixture.TryCompile(
+            priorArgSource,
+            "ConditionalLoopPriorArgAssign6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeArg)
+        Assert.Contains("GS0158", outputArg)
+    }
+
+    @Fact
+    func Driver_PrivateInterfaceHelper_WithOmittedExtension_StillRejectsWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `import System
+import System.Diagnostics
+interface IHelper {
+    private func Keep(value string?) {}
+    func Read(input string?) int32 {
+        var s = input
+        if s == nil { return 0 }
+        for var i = 0; i < 2; i++ {
+            Console.Write(s.Length)
+            this.Keep((s = nil))
+        }
+        return 0
+    }
+}
+@Conditional("A")
+func (self IHelper) Keep(value string?) {}
+class Impl : IHelper {}
+Console.Write(Impl().Read("xy"))`
+        let (code, output) = fixture.TryCompile(source, "ConditionalLoopPrivateIfaceHelper6242", executable: true)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0158", output)
+    }
 }

@@ -41,6 +41,7 @@ internal sealed class RegionEffectScanner {
     private var scopes List[ScopeFrame] = List[ScopeFrame]()
     private var enclosingScopes List[ScopeFrame] = List[ScopeFrame]()
     private var enclosingTypeTests List[RegionTypeTest] = List[RegionTypeTest]()
+    private var enclosingWrites List[RegionWrite] = List[RegionWrite]()
     private var enclosingContainsMemberTypeTest bool = false
     private var current RegionEffects = RegionEffects()
     private var closureDepth int32 = 0
@@ -178,6 +179,7 @@ internal sealed class RegionEffectScanner {
         let savedScopes = scopes
         let savedEnclosing = enclosingScopes
         let savedEnclosingTypeTests = enclosingTypeTests
+        let savedEnclosingWrites = enclosingWrites
         let savedEnclosingMemberTypeTest = enclosingContainsMemberTypeTest
         let savedCurrent = current
         let savedClosure = closureDepth
@@ -192,6 +194,12 @@ internal sealed class RegionEffectScanner {
                 nextTypeTests.AddRange(enclosingTypeTests)
                 nextTypeTests.AddRange(savedCurrent.TypeTests)
                 enclosingTypeTests = nextTypeTests
+            }
+            if savedCurrent.Writes.Count > 0 {
+                let nextWrites = List[RegionWrite](enclosingWrites.Count + savedCurrent.Writes.Count)
+                nextWrites.AddRange(enclosingWrites)
+                nextWrites.AddRange(savedCurrent.Writes)
+                enclosingWrites = nextWrites
             }
             enclosingContainsMemberTypeTest = enclosingContainsMemberTypeTest || savedCurrent.ContainsMemberTypeTest
         }
@@ -208,6 +216,7 @@ internal sealed class RegionEffectScanner {
         scopes = savedScopes
         enclosingScopes = savedEnclosing
         enclosingTypeTests = savedEnclosingTypeTests
+        enclosingWrites = savedEnclosingWrites
         enclosingContainsMemberTypeTest = savedEnclosingMemberTypeTest
         current = savedCurrent
         closureDepth = savedClosure
@@ -2569,12 +2578,14 @@ internal sealed class RegionEffectScanner {
     }
 
     private func BuildConditionalEffectsContext() RegionEffects {
-        if enclosingTypeTests.Count == 0 && !enclosingContainsMemberTypeTest {
+        if enclosingTypeTests.Count == 0 && enclosingWrites.Count == 0 && !enclosingContainsMemberTypeTest {
             return current
         }
         let combined = RegionEffects()
         combined.TypeTests.AddRange(enclosingTypeTests)
         combined.TypeTests.AddRange(current.TypeTests)
+        combined.Writes.AddRange(enclosingWrites)
+        combined.Writes.AddRange(current.Writes)
         combined.ContainsMemberTypeTest = enclosingContainsMemberTypeTest || current.ContainsMemberTypeTest
         return combined
     }
