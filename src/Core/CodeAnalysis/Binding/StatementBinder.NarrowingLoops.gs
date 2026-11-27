@@ -17007,11 +17007,12 @@ internal partial class StatementBinder {
 
     // Issue #6242: target-aware omitted-call decision for raw loop-effect scans, sharing
     // KnownAttributes.IsConditionallyElided with binding and flow. Returns true only when
-    // every candidate method that can bind the call is elided at the call's lexical site.
+    // every applicable candidate method that can bind the call is elided at the call's lexical site.
     private func IsElidedConditionalCallInRegion(
         call CallExpressionSyntax,
         receiver ExpressionSyntax?,
-        receiverPath RegionReceiverPath?
+        receiverPath RegionReceiverPath?,
+        effects RegionEffects
     ) bool {
         if call.Callee != nil {
             return false
@@ -17020,14 +17021,103 @@ internal partial class StatementBinder {
         if string.IsNullOrEmpty(name) {
             return false
         }
-        let argCount = call.Arguments.Count
+        let argSpecs = ExtractConditionalCallArgumentSpecs(call)
         if receiver == nil {
-            return IsElidedBareConditionalCall(call, name, argCount)
+            return IsElidedBareConditionalCall(call, name, argSpecs)
         }
-        return IsElidedMemberConditionalCall(call, name, argCount, receiver, receiverPath)
+        return IsElidedMemberConditionalCall(call, name, argSpecs, receiver, receiverPath, effects)
     }
 
-    private func IsElidedBareConditionalCall(call CallExpressionSyntax, name string, argCount int32) bool {
+    private sealed class ConditionalCallArgSpec {
+        init(type TypeSymbol?, refKind RefKind) {
+            Type = type
+            RefKind = refKind
+        }
+
+        prop Type TypeSymbol? {
+            get;
+        }
+
+        prop RefKind RefKind {
+            get;
+        }
+    }
+
+    private func ExtractConditionalCallArgumentSpecs(call CallExpressionSyntax) List[ConditionalCallArgSpec]? {
+        let specs = List[ConditionalCallArgSpec](call.Arguments.Count)
+        for argument in call.Arguments {
+            var current = argument
+            while current is ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized.Expression
+            }
+            if current is NamedArgumentExpressionSyntax {
+                return nil
+            }
+            if current is RefArgumentExpressionSyntax refArg {
+                let kind = switch refArg.RefKindModifier.Text {
+                    case "ref": RefKind.Ref
+                    case "out": RefKind.Out
+                    case "in": RefKind.In
+                    default: RefKind.Ref
+                }
+                specs.Add(ConditionalCallArgSpec(nil, kind))
+                continue
+            }
+            if current is ConditionalRefArgumentExpressionSyntax {
+                specs.Add(ConditionalCallArgSpec(nil, RefKind.Ref))
+                continue
+            }
+            specs.Add(ConditionalCallArgSpec(TryInferConditionalArgumentType(current), RefKind.None))
+        }
+        return specs
+    }
+
+    private func TryInferConditionalArgumentType(expression ExpressionSyntax) TypeSymbol? {
+        var current = expression
+        while current is ParenthesizedExpressionSyntax parenthesized {
+            current = parenthesized.Expression
+        }
+        switch current {
+            case literal is LiteralExpressionSyntax {
+                if literal.LiteralToken.Kind == SyntaxKind.NilKeyword {
+                    return TypeSymbol.Null
+                }
+                if literal.LiteralToken.Kind == SyntaxKind.StringToken {
+                    return TypeSymbol.String
+                }
+                return switch literal.Value {
+                    case _ is bool: TypeSymbol.Bool
+                    case _ is int32: TypeSymbol.Int32
+                    case _ is int64: TypeSymbol.Int64
+                    case _ is float64: TypeSymbol.Float64
+                    case _ is float32: TypeSymbol.Float32
+                    case _ is char: TypeSymbol.Char
+                    default: default(TypeSymbol?)
+                }
+            }
+            case assignment is AssignmentExpressionSyntax {
+                if $scope.TryLookupSymbol(assignment.IdentifierToken.ValueText) is VariableSymbol variable {
+                    return variable.Type
+                }
+                return nil
+            }
+            case name is NameExpressionSyntax {
+                if $scope.TryLookupSymbol(name.IdentifierToken.ValueText) is VariableSymbol variable {
+                    return variable.Type
+                }
+                return nil
+            }
+            default {
+                return nil
+            }
+        }
+    }
+
+    private func IsElidedBareConditionalCall(
+        call CallExpressionSyntax,
+        name string,
+        argSpecs List[ConditionalCallArgSpec]?
+    ) bool {
         let symbol = $scope.TryLookupSymbol(name)
         if symbol is VariableSymbol || symbol is TypeSymbol {
             return false
@@ -17035,6 +17125,7 @@ internal partial class StatementBinder {
         if TryResolveBareFallbackMember(name, out _, out _, out _, out _) {
             return false
         }
+        let argCount = call.Arguments.Count
         var found = false
         let owner = function?.ReceiverType ?? function?.StaticOwnerType ?? function?.LexicalEnclosingType
         if owner != nil {
@@ -17042,14 +17133,14 @@ internal partial class StatementBinder {
                 TypeHasNonMethodMember(owner, name, staticAccess: true) {
                 return false
             }
-            if !CheckOwnerConditionalMethods(owner, name, argCount, call, ref found) {
+            if !CheckOwnerConditionalMethods(owner, name, argCount, argSpecs, call, ref found) {
                 return false
             }
         }
         let scopeFunctions = $scope.TryLookupFunctions(name)
         if !scopeFunctions.IsDefaultOrEmpty {
             for fn in scopeFunctions {
-                if !FunctionArityMatches(fn, argCount, skipFirst: false) {
+                if !FunctionMatchesConditionalCall(fn, argCount, argSpecs, skipFirst: false) {
                     continue
                 }
                 found = true
@@ -17063,7 +17154,7 @@ internal partial class StatementBinder {
                 return false
             }
             for method in importedType.StaticMethods {
-                if method.Name == name && FunctionArityMatches(method, argCount, skipFirst: false) {
+                if method.Name == name && FunctionMatchesConditionalCall(method, argCount, argSpecs, skipFirst: false) {
                     found = true
                     if !KnownAttributes.IsConditionallyElided(method, $scope.ConditionalCompilation, call) {
                         return false
@@ -17078,7 +17169,7 @@ internal partial class StatementBinder {
                     BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy
                 ) {
                     if member is MethodInfo clrMethod {
-                        if ClrMethodArityMatches(clrMethod, argCount, skipFirst: false) {
+                        if ClrMethodMatchesConditionalCall(clrMethod, argCount, argSpecs, skipFirst: false) {
                             found = true
                             if !KnownAttributes.IsConditionallyElided(clrMethod, $scope.ConditionalCompilation, call) {
                                 return false
@@ -17096,17 +17187,30 @@ internal partial class StatementBinder {
     private func IsElidedMemberConditionalCall(
         call CallExpressionSyntax,
         name string,
-        argCount int32,
+        argSpecs List[ConditionalCallArgSpec]?,
         receiver ExpressionSyntax,
-        receiverPath RegionReceiverPath?
+        receiverPath RegionReceiverPath?,
+        effects RegionEffects
     ) bool {
-        let receivers = ResolveConditionalCallReceivers(receiver, receiverPath, out var staticAccess)
+        let receivers = ResolveConditionalCallReceivers(receiver, receiverPath, effects, out var staticAccess)
         if receivers == nil || receivers.Count == 0 {
             return false
         }
+        let argCount = call.Arguments.Count
         var found = false
+        let visited = HashSet[TypeSymbol]()
         for recv in receivers {
-            if !CheckReceiverConditionalMethods(recv, name, staticAccess, argCount, call, ref found) {
+            visited.Clear()
+            if !CheckReceiverConditionalMethods(
+                recv,
+                name,
+                staticAccess,
+                argCount,
+                argSpecs,
+                call,
+                visited,
+                ref found
+            ) {
                 return false
             }
         }
@@ -17116,7 +17220,7 @@ internal partial class StatementBinder {
                     let extFns = $scope.TryLookupExtensionFunctions(recvSym, name)
                     if !extFns.IsDefaultOrEmpty {
                         for extFn in extFns {
-                            if !FunctionArityMatches(extFn, argCount, skipFirst: true) {
+                            if !FunctionMatchesConditionalCall(extFn, argCount, argSpecs, skipFirst: true) {
                                 continue
                             }
                             found = true
@@ -17129,7 +17233,7 @@ internal partial class StatementBinder {
             }
             let importedExts = MemberLookup(binderCtx).CollectImportedExtensionMethods(name)
             for impExt in importedExts {
-                if !ClrMethodArityMatches(impExt, argCount, skipFirst: true) {
+                if !ClrMethodMatchesConditionalCall(impExt, argCount, argSpecs, skipFirst: true) {
                     continue
                 }
                 let extParams = impExt.GetParameters()
@@ -17158,6 +17262,7 @@ internal partial class StatementBinder {
     private func ResolveConditionalCallReceivers(
         receiver ExpressionSyntax,
         receiverPath RegionReceiverPath?,
+        effects RegionEffects,
         out staticAccess bool
     ) List[ReceiverType]? {
         staticAccess = false
@@ -17176,6 +17281,15 @@ internal partial class StatementBinder {
         }
         if receiverPath == nil {
             return nil
+        }
+        if receiverPath.Steps.Length > 0 && effects.ContainsMemberTypeTest {
+            return nil
+        }
+        if receiverPath.RootIsCall && receiverPath.RootName is {} callRoot {
+            if $scope.TryLookupSymbol(callRoot) is VariableSymbol ||
+                TryResolveBareFallbackMember(callRoot, out _, out _, out _, out _) {
+                return nil
+            }
         }
         if receiverPath.RootName is {} rootName && !receiverPath.RootIsCall && receiverPath.RootType == nil {
             let isVariable = TryLookupRegionVariableType(rootName) != nil
@@ -17217,17 +17331,16 @@ internal partial class StatementBinder {
                 }
             }
         }
-        let emptyEffects = RegionEffects()
         if receiverPath.Steps.Length == 0 &&
             receiverPath.RootName is {} singleRoot &&
             !receiverPath.RootIsCall &&
             receiverPath.RootType == nil {
-            return ResolveNamedReceiverTypesForEffects(singleRoot, emptyEffects)
+            return ResolveNamedReceiverTypesForEffects(singleRoot, effects)
         }
         let savedSubst = substituteGenericStepTypes
         try {
             substituteGenericStepTypes = true
-            return ResolveReceiverPath(receiverPath, emptyEffects)
+            return ResolveReceiverPath(receiverPath, effects)
         } finally {
             substituteGenericStepTypes = savedSubst
         }
@@ -17237,25 +17350,32 @@ internal partial class StatementBinder {
         owner TypeSymbol,
         name string,
         argCount int32,
+        argSpecs List[ConditionalCallArgSpec]?,
         call CallExpressionSyntax,
         ref found bool
     ) bool {
+        let visitedInstance = HashSet[TypeSymbol]()
         if !CheckReceiverConditionalMethods(
             ReceiverType(owner, owner.ClrType),
             name,
             staticAccess: false,
             argCount,
+            argSpecs,
             call,
+            visitedInstance,
             ref found
         ) {
             return false
         }
+        let visitedStatic = HashSet[TypeSymbol]()
         return CheckReceiverConditionalMethods(
             ReceiverType(owner, owner.ClrType),
             name,
             staticAccess: true,
             argCount,
+            argSpecs,
             call,
+            visitedStatic,
             ref found
         )
     }
@@ -17265,11 +17385,18 @@ internal partial class StatementBinder {
         name string,
         staticAccess bool,
         argCount int32,
+        argSpecs List[ConditionalCallArgSpec]?,
         call CallExpressionSyntax,
+        visited HashSet[TypeSymbol],
         ref found bool
     ) bool {
-        if receiver.Symbol is {} sym && TypeHasNonMethodMember(sym, name, staticAccess) {
-            return false
+        if receiver.Symbol is {} sym {
+            if !visited.Add(sym) {
+                return true
+            }
+            if TypeHasNonMethodMember(sym, name, staticAccess) {
+                return false
+            }
         }
         switch receiver.Symbol {
             case declared is StructSymbol {
@@ -17280,9 +17407,39 @@ internal partial class StatementBinder {
                         level.Methods
                     }
                     for m in methods {
-                        if m.Name == name && FunctionArityMatches(m, argCount, skipFirst: false) {
+                        if m.Name == name && FunctionMatchesConditionalCall(m, argCount, argSpecs, skipFirst: false) {
                             found = true
                             if !KnownAttributes.IsConditionallyElided(m, $scope.ConditionalCompilation, call) {
+                                return false
+                            }
+                        }
+                    }
+                    if !staticAccess {
+                        for iface in level.Interfaces {
+                            if !CheckReceiverConditionalMethods(
+                                ReceiverType(iface, iface.ClrType),
+                                name,
+                                staticAccess: false,
+                                argCount,
+                                argSpecs,
+                                call,
+                                visited,
+                                ref found
+                            ) {
+                                return false
+                            }
+                        }
+                        for clrIface in level.ImplementedClrInterfaces {
+                            if !CheckReceiverConditionalMethods(
+                                ReceiverType(clrIface, clrIface.ClrType),
+                                name,
+                                staticAccess: false,
+                                argCount,
+                                argSpecs,
+                                call,
+                                visited,
+                                ref found
+                            ) {
                                 return false
                             }
                         }
@@ -17294,7 +17451,9 @@ internal partial class StatementBinder {
                         name,
                         staticAccess,
                         argCount,
+                        argSpecs,
                         call,
+                        visited,
                         ref found
                     ) {
                         return false
@@ -17311,7 +17470,7 @@ internal partial class StatementBinder {
                         level.GetMethods(name)
                     }
                     for m in methods {
-                        if FunctionArityMatches(m, argCount, skipFirst: false) {
+                        if FunctionMatchesConditionalCall(m, argCount, argSpecs, skipFirst: false) {
                             found = true
                             if !KnownAttributes.IsConditionallyElided(m, $scope.ConditionalCompilation, call) {
                                 return false
@@ -17320,6 +17479,57 @@ internal partial class StatementBinder {
                     }
                 }
                 return true
+            }
+            case tp is TypeParameterSymbol {
+                if tp.InterfaceConstraint is {} ifaceConstraint &&
+                    !CheckReceiverConditionalMethods(
+                    ReceiverType(ifaceConstraint, ifaceConstraint.ClrType),
+                    name,
+                    staticAccess,
+                    argCount,
+                    argSpecs,
+                    call,
+                    visited,
+                    ref found
+                ) {
+                    return false
+                }
+                if tp.ClrInterfaceConstraint is {} clrIfaceConstraint &&
+                    !CheckReceiverConditionalMethods(
+                    ReceiverType(clrIfaceConstraint, clrIfaceConstraint.ClrType),
+                    name,
+                    staticAccess,
+                    argCount,
+                    argSpecs,
+                    call,
+                    visited,
+                    ref found
+                ) {
+                    return false
+                }
+                if tp.EffectiveClassConstraint is {} classConstraint &&
+                    !CheckReceiverConditionalMethods(
+                    ReceiverType(classConstraint, classConstraint.ClrType),
+                    name,
+                    staticAccess,
+                    argCount,
+                    argSpecs,
+                    call,
+                    visited,
+                    ref found
+                ) {
+                    return false
+                }
+                return CheckReceiverConditionalMethods(
+                    ReceiverType(TypeSymbol.Object, typeof(object)),
+                    name,
+                    staticAccess,
+                    argCount,
+                    argSpecs,
+                    call,
+                    visited,
+                    ref found
+                )
             }
             default { }
         }
@@ -17339,7 +17549,7 @@ internal partial class StatementBinder {
         )
         for member in reflected.GetMember(name, flags) {
             if member is MethodInfo clrMethod {
-                if ClrMethodArityMatches(clrMethod, argCount, skipFirst: false) {
+                if ClrMethodMatchesConditionalCall(clrMethod, argCount, argSpecs, skipFirst: false) {
                     found = true
                     if !KnownAttributes.IsConditionallyElided(clrMethod, $scope.ConditionalCompilation, call) {
                         return false
@@ -17349,11 +17559,11 @@ internal partial class StatementBinder {
                 return false
             }
         }
-        if reflected.IsInterface && !staticAccess {
+        if !staticAccess {
             for baseIface in reflected.GetInterfaces() {
                 for member in baseIface.GetMember(name, flags) {
                     if member is MethodInfo clrMethod {
-                        if ClrMethodArityMatches(clrMethod, argCount, skipFirst: false) {
+                        if ClrMethodMatchesConditionalCall(clrMethod, argCount, argSpecs, skipFirst: false) {
                             found = true
                             if !KnownAttributes.IsConditionallyElided(clrMethod, $scope.ConditionalCompilation, call) {
                                 return false
@@ -17410,6 +17620,115 @@ internal partial class StatementBinder {
             default { }
         }
         return false
+    }
+
+    private func FunctionMatchesConditionalCall(
+        fn FunctionSymbol,
+        argCount int32,
+        argSpecs List[ConditionalCallArgSpec]?,
+        skipFirst bool
+    ) bool {
+        if !FunctionArityMatches(fn, argCount, skipFirst) {
+            return false
+        }
+        if argSpecs == nil {
+            return true
+        }
+        let start = if skipFirst {
+            1
+        } else {
+            0
+        }
+        for var i = 0; i < argSpecs.Count; i++ {
+            let paramIndex = start + i
+            if paramIndex >= fn.Parameters.Length {
+                return true
+            }
+            let param = fn.Parameters[paramIndex]
+            if param.IsVariadic {
+                return true
+            }
+            let spec = argSpecs[i]
+            if !ConditionalArgRefKindCompatible(spec.RefKind, param.RefKind) {
+                return false
+            }
+            if spec.Type is {} argType && !ConditionalArgTypeCompatible(argType, param.Type) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func ClrMethodMatchesConditionalCall(
+        method MethodInfo,
+        argCount int32,
+        argSpecs List[ConditionalCallArgSpec]?,
+        skipFirst bool
+    ) bool {
+        if !ClrMethodArityMatches(method, argCount, skipFirst) {
+            return false
+        }
+        if argSpecs == nil {
+            return true
+        }
+        let parameters = method.GetParameters()
+        let start = if skipFirst {
+            1
+        } else {
+            0
+        }
+        for var i = 0; i < argSpecs.Count; i++ {
+            let paramIndex = start + i
+            if paramIndex >= parameters.Length {
+                return true
+            }
+            let param = parameters[paramIndex]
+            if ClrOverloadResolution.IsParamsArrayParameter(param) {
+                return true
+            }
+            let spec = argSpecs[i]
+            let paramRefKind = if !param.ParameterType.IsByRef {
+                RefKind.None
+            } else if param.IsOut && !param.IsIn {
+                RefKind.Out
+            } else if param.IsIn && !param.IsOut {
+                RefKind.In
+            } else {
+                RefKind.Ref
+            }
+            if !ConditionalArgRefKindCompatible(spec.RefKind, paramRefKind) {
+                return false
+            }
+            if spec.Type is {} argType &&
+                !param.ParameterType.IsByRef &&
+                !param.ParameterType.ContainsGenericParameters {
+                let paramType = ClrNullability.GetParameterTypeSymbol(param)
+                if !ConditionalArgTypeCompatible(argType, paramType) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    private func ConditionalArgRefKindCompatible(argKind RefKind, paramKind RefKind) bool {
+        if paramKind == RefKind.Ref || paramKind == RefKind.Out {
+            return argKind == paramKind
+        }
+        if argKind == RefKind.Ref || argKind == RefKind.Out {
+            return false
+        }
+        return true
+    }
+
+    private func ConditionalArgTypeCompatible(argType TypeSymbol, paramType TypeSymbol) bool {
+        if TypeSymbol.ContainsTypeParameter(paramType) || TypeSymbol.ContainsTypeParameter(argType) {
+            return true
+        }
+        return Conversion.Classify(argType, paramType).IsImplicit || conversions.HasUserDefinedImplicitConversion(
+            argType,
+            paramType
+        )
     }
 
     private func FunctionArityMatches(fn FunctionSymbol, argCount int32, skipFirst bool) bool {

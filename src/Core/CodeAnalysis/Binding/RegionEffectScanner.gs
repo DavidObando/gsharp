@@ -22,11 +22,15 @@ import System.Linq
 /// in any result: names and call sites are in source order of the walk.
 internal sealed class RegionEffectScanner {
     private let activeCode ConditionalCompilationMap?
-    private let isElidedConditionalCall((CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?) -> bool)?
+    private let isElidedConditionalCall(
+        (CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?, RegionEffects) -> bool
+    )?
 
     internal init(
         activeCode ConditionalCompilationMap? = nil,
-        isElidedConditionalCall((CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?) -> bool)? = nil
+        isElidedConditionalCall(
+            (CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?, RegionEffects) -> bool
+        )? = nil
     ) {
         this.activeCode = activeCode
         this.isElidedConditionalCall = isElidedConditionalCall
@@ -2564,7 +2568,7 @@ internal sealed class RegionEffectScanner {
             !(
             terminalPath?.RootName is {} rootName && !IsDeclared(rootName) && IsDeclaredInRegionOrEnclosing(rootName)
         ) &&
-            isElidedConditionalCall(terminalCall!!, terminalReceiver, terminalPath) {
+            isElidedConditionalCall(terminalCall!!, terminalReceiver, terminalPath, current) {
             return
         }
         // `a.M(args)` is a call. `a.b` and `a.b.M()` read the member `b`: an unknown getter (rule W5). In
@@ -2661,7 +2665,7 @@ internal sealed class RegionEffectScanner {
             call.Callee == nil &&
             isElidedConditionalCall != nil &&
             !IsDeclaredInRegionOrEnclosing(call.Identifier.ValueText) &&
-            isElidedConditionalCall(call, nil, nil) {
+            isElidedConditionalCall(call, nil, nil, current) {
             return
         }
         if Active() {
