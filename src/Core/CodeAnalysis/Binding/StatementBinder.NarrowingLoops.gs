@@ -17030,11 +17030,18 @@ internal partial class StatementBinder {
     }
 
     private sealed class ConditionalCallArgSpec {
-        init(possibleTypes List[TypeSymbol]?, constantValue object?, hasConstant bool, refKind RefKind) {
+        init(
+            possibleTypes List[TypeSymbol]?,
+            constantValue object?,
+            hasConstant bool,
+            refKind RefKind,
+            name string? = nil
+        ) {
             PossibleTypes = possibleTypes
             ConstantValue = constantValue
             HasConstant = hasConstant
             RefKind = refKind
+            Name = name
         }
 
         prop PossibleTypes List[TypeSymbol]? {
@@ -17050,6 +17057,10 @@ internal partial class StatementBinder {
         }
 
         prop RefKind RefKind {
+            get;
+        }
+
+        prop Name string? {
             get;
         }
     }
@@ -17070,8 +17081,13 @@ internal partial class StatementBinder {
             while current is ParenthesizedExpressionSyntax parenthesized {
                 current = parenthesized.Expression
             }
-            if current is NamedArgumentExpressionSyntax {
-                return nil
+            var argName string? = nil
+            if current is NamedArgumentExpressionSyntax named {
+                argName = named.NameToken.ValueText
+                current = named.Expression
+                while current is ParenthesizedExpressionSyntax parenthesized {
+                    current = parenthesized.Expression
+                }
             }
             if current is RefArgumentExpressionSyntax refArg {
                 let kind = switch refArg.RefKindModifier.Text {
@@ -17080,16 +17096,29 @@ internal partial class StatementBinder {
                     case "in": RefKind.In
                     default: RefKind.Ref
                 }
-                specs.Add(ConditionalCallArgSpec(nil, nil, false, kind))
+                specs.Add(ConditionalCallArgSpec(nil, nil, false, kind, argName))
                 CollectWrittenNamesExcluding(current, nil, writtenInPriorArgs)
                 continue
             }
             if current is ConditionalRefArgumentExpressionSyntax {
-                specs.Add(ConditionalCallArgSpec(nil, nil, false, RefKind.Ref))
+                specs.Add(ConditionalCallArgSpec(nil, nil, false, RefKind.Ref, argName))
                 CollectWrittenNamesExcluding(current, nil, writtenInPriorArgs)
                 continue
             }
-            specs.Add(TryInferConditionalArgumentSpec(current, effects, isDeclaredInRegion, writtenInPriorArgs))
+            let inferred = TryInferConditionalArgumentSpec(current, effects, isDeclaredInRegion, writtenInPriorArgs)
+            specs.Add(
+                if argName != nil {
+                    ConditionalCallArgSpec(
+                        inferred.PossibleTypes,
+                        inferred.ConstantValue,
+                        inferred.HasConstant,
+                        inferred.RefKind,
+                        argName
+                    )
+                } else {
+                    inferred
+                }
+            )
             CollectWrittenNamesExcluding(current, nil, writtenInPriorArgs)
         }
         return specs
@@ -17215,7 +17244,13 @@ internal partial class StatementBinder {
         }
         let types = List[TypeSymbol]()
         types.Add(variable.Type)
-        if binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(variable)) is {} narrowed {
+        if variable.Type is NullableTypeSymbol nullable && !types.Contains(nullable.UnderlyingType) {
+            // A loop-local or enclosing `if x != nil` guard can narrow `T?` to `T`.
+            types.Add(nullable.UnderlyingType)
+        }
+        if binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(variable)) is {} narrowed && !types.Contains(
+            narrowed
+        ) {
             types.Add(narrowed)
         }
         for test in effects.TypeTests {
@@ -17529,13 +17564,14 @@ internal partial class StatementBinder {
         argSpecs List[ConditionalCallArgSpec]?,
         call CallExpressionSyntax,
         visited HashSet[TypeSymbol],
-        ref found bool
+        ref found bool,
+        onlyDefaultInterfaceMethods bool = false
     ) bool {
         if receiver.Symbol is {} sym {
             if !visited.Add(sym) {
                 return true
             }
-            if TypeHasNonMethodMember(sym, name, staticAccess) {
+            if !onlyDefaultInterfaceMethods && TypeHasNonMethodMember(sym, name, staticAccess) {
                 return false
             }
         }
@@ -17550,6 +17586,7 @@ internal partial class StatementBinder {
                     }
                     for m in methods {
                         if m.Name == name &&
+                            IsAccessibleSourceConditionalMethod(m, level) &&
                             FunctionMatchesConditionalCall(m, call, argCount, argSpecs, skipFirst: false) {
                             matching.Add(m)
                         }
@@ -17564,7 +17601,8 @@ internal partial class StatementBinder {
                                 argSpecs,
                                 call,
                                 visited,
-                                ref found
+                                ref found,
+                                onlyDefaultInterfaceMethods: true
                             ) {
                                 return false
                             }
@@ -17578,7 +17616,8 @@ internal partial class StatementBinder {
                                 argSpecs,
                                 call,
                                 visited,
-                                ref found
+                                ref found,
+                                onlyDefaultInterfaceMethods: true
                             ) {
                                 return false
                             }
@@ -17617,13 +17656,19 @@ internal partial class StatementBinder {
                         level.GetMethods(name)
                     }
                     for m in methods {
+                        if onlyDefaultInterfaceMethods && m.IsAbstract {
+                            continue
+                        }
                         if FunctionMatchesConditionalCall(m, call, argCount, argSpecs, skipFirst: false) {
                             matching.Add(m)
                         }
                     }
-                    if object.ReferenceEquals(level, function?.ReceiverType) || object.ReferenceEquals(
-                        level,
-                        function?.StaticOwnerType
+                    if !onlyDefaultInterfaceMethods &&
+                        (
+                        object.ReferenceEquals(level, function?.ReceiverType) || object.ReferenceEquals(
+                            level,
+                            function?.StaticOwnerType
+                        )
                     ) {
                         let privateMethods = if staticAccess {
                             level.GetStaticPrivateMethods(name)
@@ -17715,7 +17760,11 @@ internal partial class StatementBinder {
         let matchingClr = List[MethodInfo]()
         for member in reflected.GetMember(name, flags) {
             if member is MethodInfo clrMethod {
-                if ClrMethodMatchesConditionalCall(
+                if onlyDefaultInterfaceMethods && clrMethod.IsAbstract {
+                    continue
+                }
+                if IsAccessibleClrConditionalMethod(clrMethod) &&
+                    ClrMethodMatchesConditionalCall(
                     clrMethod,
                     receiver.Symbol,
                     call,
@@ -17725,14 +17774,20 @@ internal partial class StatementBinder {
                 ) {
                     matchingClr.Add(clrMethod)
                 }
-            } else if member is FieldInfo || member is PropertyInfo || member is EventInfo {
+            } else if !onlyDefaultInterfaceMethods &&
+                (member is FieldInfo || member is PropertyInfo || member is EventInfo) {
                 return false
             }
         }
         if !staticAccess {
+            let receiverIsInterface = reflected.IsInterface
             for baseIface in reflected.GetInterfaces() {
-                for member in baseIface.GetMember(name, flags) {
+                for member in baseIface.GetMember(name, BindingFlags.Public | BindingFlags.Instance) {
                     if member is MethodInfo clrMethod {
+                        // Match MemberLookup.gs:1331-1337: exclude abstract interface methods on concrete receivers.
+                        if (!receiverIsInterface || onlyDefaultInterfaceMethods) && clrMethod.IsAbstract {
+                            continue
+                        }
                         if ClrMethodMatchesConditionalCall(
                             clrMethod,
                             receiver.Symbol,
@@ -17743,7 +17798,9 @@ internal partial class StatementBinder {
                         ) {
                             matchingClr.Add(clrMethod)
                         }
-                    } else if member is FieldInfo || member is PropertyInfo || member is EventInfo {
+                    } else if receiverIsInterface &&
+                        !onlyDefaultInterfaceMethods &&
+                        (member is FieldInfo || member is PropertyInfo || member is EventInfo) {
                         return false
                     }
                 }
@@ -17756,6 +17813,30 @@ internal partial class StatementBinder {
             }
         }
         return true
+    }
+
+    private func IsAccessibleSourceConditionalMethod(method FunctionSymbol, owner StructSymbol) bool {
+        if method.Accessibility != Accessibility.Private {
+            return true
+        }
+        let enclosing = function?.ReceiverType ?? function?.StaticOwnerType ?? function?.LexicalEnclosingType
+        return enclosing != nil && object.ReferenceEquals(enclosing, owner)
+    }
+
+    private func IsAccessibleClrConditionalMethod(method MethodInfo) bool {
+        if method.IsPublic {
+            return true
+        }
+        if method.IsFamily || method.IsFamilyOrAssembly {
+            if (
+                function?.ReceiverType ?? function?.StaticOwnerType ?? function?.LexicalEnclosingType
+            ) is StructSymbol enclosingStruct &&
+                enclosingStruct.GetHierarchy().Last().ImportedBaseType?.ClrType is {} importedBase &&
+                method.DeclaringType is {} declaringType {
+                return declaringType.IsAssignableFrom(importedBase)
+            }
+        }
+        return false
     }
 
     private func TypeHasNonMethodMember(type TypeSymbol, name string, staticAccess bool) bool {
@@ -17802,6 +17883,48 @@ internal partial class StatementBinder {
         return false
     }
 
+    private func TryResolveConditionalSourceParamSlot(
+        fn FunctionSymbol,
+        argIndex int32,
+        argName string?,
+        start int32,
+        out paramIndex int32
+    ) bool {
+        if argName == nil {
+            paramIndex = start + argIndex
+            return paramIndex < fn.Parameters.Length
+        }
+        for var i = start; i < fn.Parameters.Length; i++ {
+            if fn.Parameters[i].Name == argName {
+                paramIndex = i
+                return true
+            }
+        }
+        paramIndex = -1
+        return false
+    }
+
+    private func TryResolveConditionalClrParamSlot(
+        parameters[]ParameterInfo,
+        argIndex int32,
+        argName string?,
+        start int32,
+        out paramIndex int32
+    ) bool {
+        if argName == nil {
+            paramIndex = start + argIndex
+            return paramIndex < parameters.Length
+        }
+        for var i = start; i < parameters.Length; i++ {
+            if parameters[i].Name == argName {
+                paramIndex = i
+                return true
+            }
+        }
+        paramIndex = -1
+        return false
+    }
+
     private func FunctionMatchesConditionalCall(
         fn FunctionSymbol,
         call CallExpressionSyntax,
@@ -17824,16 +17947,22 @@ internal partial class StatementBinder {
         } else {
             0
         }
+        let usedSlots = HashSet[int32]()
         for var i = 0; i < argSpecs.Count; i++ {
-            let paramIndex = start + i
-            if paramIndex >= fn.Parameters.Length {
+            let spec = argSpecs[i]
+            if !TryResolveConditionalSourceParamSlot(fn, i, spec.Name, start, out var paramIndex) {
+                if spec.Name != nil {
+                    return false
+                }
                 return true
+            }
+            if !usedSlots.Add(paramIndex) {
+                return false
             }
             let param = fn.Parameters[paramIndex]
             if param.IsVariadic {
                 return true
             }
-            let spec = argSpecs[i]
             if !ConditionalArgRefKindCompatible(spec.RefKind, param.RefKind) {
                 return false
             }
@@ -17875,16 +18004,22 @@ internal partial class StatementBinder {
         } else {
             0
         }
+        let usedSlots = HashSet[int32]()
         for var i = 0; i < argSpecs.Count; i++ {
-            let paramIndex = start + i
-            if paramIndex >= parameters.Length {
+            let spec = argSpecs[i]
+            if !TryResolveConditionalClrParamSlot(parameters, i, spec.Name, start, out var paramIndex) {
+                if spec.Name != nil {
+                    return false
+                }
                 return true
+            }
+            if !usedSlots.Add(paramIndex) {
+                return false
             }
             let param = parameters[paramIndex]
             if ClrOverloadResolution.IsParamsArrayParameter(param) {
                 return true
             }
-            let spec = argSpecs[i]
             let paramRefKind = if !param.ParameterType.IsByRef {
                 RefKind.None
             } else if param.IsOut && !param.IsIn {
@@ -17928,18 +18063,25 @@ internal partial class StatementBinder {
         return true
     }
 
-    private func TryGetExactSourceParamTypes(fn FunctionSymbol, argCount int32, skipFirst bool) List[TypeSymbol]? {
+    private func TryGetExactSourceParamTypes(
+        fn FunctionSymbol,
+        argSpecs List[ConditionalCallArgSpec],
+        skipFirst bool
+    ) List[TypeSymbol]? {
         let start = if skipFirst {
             1
         } else {
             0
         }
-        if !fn.TypeParameters.IsDefaultOrEmpty || fn.Parameters.Length != start + argCount {
+        if !fn.TypeParameters.IsDefaultOrEmpty || fn.Parameters.Length != start + argSpecs.Count {
             return nil
         }
-        let result = List[TypeSymbol](argCount)
-        for var i = 0; i < argCount; i++ {
-            let param = fn.Parameters[start + i]
+        let result = List[TypeSymbol](argSpecs.Count)
+        for var i = 0; i < argSpecs.Count; i++ {
+            if !TryResolveConditionalSourceParamSlot(fn, i, argSpecs[i].Name, start, out var paramIndex) {
+                return nil
+            }
+            let param = fn.Parameters[paramIndex]
             if param.IsVariadic || param.RefKind != RefKind.None || TypeSymbol.ContainsTypeParameter(param.Type) {
                 return nil
             }
@@ -17951,7 +18093,7 @@ internal partial class StatementBinder {
     private func TryGetExactClrParamTypes(
         method MethodInfo,
         symbolicReceiver TypeSymbol?,
-        argCount int32,
+        argSpecs List[ConditionalCallArgSpec],
         skipFirst bool
     ) List[TypeSymbol]? {
         let start = if skipFirst {
@@ -17960,12 +18102,14 @@ internal partial class StatementBinder {
             0
         }
         let parameters = method.GetParameters()
-        if method.IsGenericMethod || parameters.Length != start + argCount {
+        if method.IsGenericMethod || parameters.Length != start + argSpecs.Count {
             return nil
         }
-        let result = List[TypeSymbol](argCount)
-        for var i = 0; i < argCount; i++ {
-            let paramIndex = start + i
+        let result = List[TypeSymbol](argSpecs.Count)
+        for var i = 0; i < argSpecs.Count; i++ {
+            if !TryResolveConditionalClrParamSlot(parameters, i, argSpecs[i].Name, start, out var paramIndex) {
+                return nil
+            }
             let param = parameters[paramIndex]
             if param.ParameterType.IsByRef ||
                 param.ParameterType.ContainsGenericParameters ||
@@ -17998,7 +18142,7 @@ internal partial class StatementBinder {
         let specs = argSpecs!!
         let paramLists = List[List[TypeSymbol]?](candidates.Count)
         for c in candidates {
-            paramLists.Add(TryGetExactSourceParamTypes(c, specs.Count, skipFirst))
+            paramLists.Add(TryGetExactSourceParamTypes(c, specs, skipFirst))
         }
         let kept = List[FunctionSymbol](candidates.Count)
         for var i = 0; i < candidates.Count; i++ {
@@ -18030,7 +18174,7 @@ internal partial class StatementBinder {
         let specs = argSpecs!!
         let paramLists = List[List[TypeSymbol]?](candidates.Count)
         for c in candidates {
-            paramLists.Add(TryGetExactClrParamTypes(c, symbolicReceiver, specs.Count, skipFirst))
+            paramLists.Add(TryGetExactClrParamTypes(c, symbolicReceiver, specs, skipFirst))
         }
         let kept = List[MethodInfo](candidates.Count)
         for var i = 0; i < candidates.Count; i++ {
@@ -18077,6 +18221,29 @@ internal partial class StatementBinder {
             // Conservatively decline pruning when either candidate requires a non-built-in
             // (user-defined or constant-narrowing) conversion.
             if !Conversion.Classify(argType, b).IsImplicit || !Conversion.Classify(argType, w).IsImplicit {
+                return false
+            }
+            // Shared numeric-target ranking (e.g. signed `int64` over unsigned `uint64` for `uint32`).
+            let numericComparison = ClrOverloadResolution.CompareNumericConversionTargets(
+                b.ClrType,
+                w.ClrType,
+                argType.ClrType
+            )
+            if numericComparison < 0 {
+                anyBetter = true
+                continue
+            }
+            if numericComparison > 0 {
+                return false
+            }
+            // Normal CLR resolution ranks boxing above nullable value-type wrapping
+            // (e.g. `DateTime -> object?` beats `DateTime -> DateTime?`); never let
+            // nullable wrapping dominate a non-wrapping target.
+            let argIsNonNullValue = !NullableLifting.IsAnyValueTypeNullable(argType as NullableTypeSymbol) &&
+                (argType.ClrType?.IsValueType == true || argType is StructSymbol{IsClass: false})
+            let bIsNullableWrap = argIsNonNullValue && NullableLifting.IsAnyValueTypeNullable(b as NullableTypeSymbol)
+            let wIsNullableWrap = argIsNonNullValue && NullableLifting.IsAnyValueTypeNullable(w as NullableTypeSymbol)
+            if bIsNullableWrap && !wIsNullableWrap {
                 return false
             }
             let bToW = Conversion.Classify(b, w).IsImplicit

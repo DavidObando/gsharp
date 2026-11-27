@@ -841,4 +841,149 @@ Console.Write(Read("xy"))`
         IlVerifier.Verify(program, []string{library})
         Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
     }
+
+    @Fact
+    func Driver_NullGuardNarrowingInLoop_RetainsActiveNonNullOverload_AndRejectsWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `import System
+import System.Diagnostics
+@Conditional("A")
+func Keep(tag object?, value string?) {}
+func Keep(tag string, value string?) {}
+func Read(tag string?, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        if tag != nil {
+            Keep(tag, (s = nil))
+        }
+    }
+    return 0
+}
+Console.Write(Read("x", "xy"))`
+        let (code, output) = fixture.TryCompile(source, "ConditionalLoopNullGuardArg6242", executable: true)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0158", output)
+    }
+
+    @Fact
+    func Driver_InaccessiblePrivateConditionalOverload_DoesNotDominatePublicActiveOverload() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalVisibility6242 {
+    public sealed class Probe {
+        [Conditional("EXT_6242")]
+        private void Keep(string? a, string? b) {}
+        public void Keep(object? a, string? b) {}
+    }
+}`, "ConditionalVisibilityLib6242")
+        let source = `import System
+import ConditionalVisibility6242
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let p = Probe()
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        p.Keep("x", (s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (code, output) = fixture.TryCompile(
+            source,
+            "ConditionalLoopVisibility6242",
+            executable: true,
+            "/r:" + library
+        )
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0158", output)
+    }
+
+    @Fact
+    func Driver_NullableWrappingDoesNotDominateBoxing_StillRejectsWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+using System;
+using System.Diagnostics;
+namespace ConditionalBoxVsWrap6242 {
+    public static class Probe {
+        [Conditional("EXT_6242")]
+        public static void Keep(DateTime? d, string? value) {}
+        public static void Keep(object? d, string? value) {}
+    }
+}`, "ConditionalBoxVsWrapLib6242")
+        let source = `import System
+import ConditionalBoxVsWrap6242
+func Read(stamp DateTime, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        Probe.Keep(stamp, (s = nil))
+    }
+    return 0
+}
+Console.Write(Read(DateTime.UnixEpoch, "xy"))`
+        let (code, output) = fixture.TryCompile(
+            source,
+            "ConditionalLoopBoxVsWrap6242",
+            executable: true,
+            "/r:" + library
+        )
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0158", output)
+    }
+
+    @Fact
+    func Driver_NamedArguments_AbstractExplicitInterface_AndNumericSignedRanking_PreserveNarrowing() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalRound5Accept6242 {
+    public interface IKeep {
+        void Keep(string? value);
+    }
+    public sealed class Holder : IKeep {
+        [Conditional("EXT_6242")]
+        public void Keep(object? value) {}
+        void IKeep.Keep(string? value) {}
+    }
+    public static class NumericProbe {
+        [Conditional("EXT_6242")]
+        public static void Keep(string? value, long n) {}
+        public static void Keep(string? value, ulong n) {}
+    }
+}`, "ConditionalRound5AcceptLib6242")
+        let source = `import System
+import System.Diagnostics
+import ConditionalRound5Accept6242
+@Conditional("A")
+func KeepNamed(value string?) {}
+func KeepNamed(value int32) {}
+@Conditional("A")
+func KeepNum(value string?, n int64) {}
+func KeepNum(value string?, n uint64) {}
+func Read(n uint32, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let h = Holder()
+    var once = true
+    while once {
+        KeepNamed(value: (s = nil))
+        h.Keep((s = nil))
+        KeepNum((s = nil), n)
+        NumericProbe.Keep((s = nil), n)
+        Console.Write(s.Length)
+        once = false
+    }
+    return s.Length
+}
+Console.Write(Read(1, "xy"))`
+        let program = fixture.Compile(source, "ConditionalLoopRound5Accept6242", executable: true, "/r:" + library)
+        IlVerifier.Verify(program, []string{library})
+        Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
+    }
 }
