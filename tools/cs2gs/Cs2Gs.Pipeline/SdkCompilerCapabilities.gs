@@ -52,7 +52,7 @@ internal shared class SdkCompilerCapabilities {
         try {
             if packagePath != nil {
                 using let archive = ZipFile.OpenRead(packagePath)
-                let entry = archive.GetEntry("tools/compiler/GSharp.Core.dll")
+                let entry = FindCompilerCoreEntry(archive)
                 if entry == nil {
                     return false
                 }
@@ -62,11 +62,8 @@ internal shared class SdkCompilerCapabilities {
                 stream.Position = 0
                 return HasScopedConditionalSymbols(stream)
             }
-            let packageRoot = SdkCompileRunner.ResolveNugetPackagesRoot()
-            return packageRoot != nil &&
-                HasScopedConditionalSymbolsAtPath(
-                Path.Combine(packageRoot, "gsharp.net.sdk", version, "tools", "compiler", "GSharp.Core.dll")
-            )
+            let installedPath = FindInstalledCompilerCorePath(SdkCompileRunner.ResolveNugetPackagesRoot(), version)
+            return installedPath != nil && HasScopedConditionalSymbolsAtPath(installedPath)
         } catch (IOException) {
             return false
         } catch (UnauthorizedAccessException) {
@@ -74,6 +71,43 @@ internal shared class SdkCompilerCapabilities {
         } catch (InvalidDataException) {
             return false
         }
+    }
+
+    private func FindCompilerCoreEntry(archive ZipArchive) ZipArchiveEntry? {
+        let exact = archive.GetEntry("tools/compiler/GSharp.Core.dll")
+        if exact != nil {
+            return exact
+        }
+        // NuGet pack can write redundant separators such as tools/compiler//GSharp.Core.dll (#6256).
+        for entry in archive.Entries {
+            let segments = entry.FullName.Split([]char{'/', '\\'}, StringSplitOptions.RemoveEmptyEntries)
+            if segments.Length == 3 && string.Equals(segments[0], "tools", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(segments[1], "compiler", StringComparison.OrdinalIgnoreCase) && string.Equals(
+                segments[2],
+                "GSharp.Core.dll",
+                StringComparison.OrdinalIgnoreCase
+            ) {
+                return entry
+            }
+        }
+        return nil
+    }
+
+    private func FindInstalledCompilerCorePath(packageRoot string?, version string) string? {
+        let packageDir = SdkCompileRunner.FindInstalledPackageDirectory(packageRoot, "Gsharp.NET.Sdk")
+        if packageDir == nil {
+            return nil
+        }
+        let lowerVersionDir = Path.Combine(packageDir, version.ToLowerInvariant())
+        if Directory.Exists(lowerVersionDir) {
+            return Path.Combine(lowerVersionDir, "tools", "compiler", "GSharp.Core.dll")
+        }
+        for dir in Directory.EnumerateDirectories(packageDir) {
+            if string.Equals(Path.GetFileName(dir), version, StringComparison.OrdinalIgnoreCase) {
+                return Path.Combine(dir, "tools", "compiler", "GSharp.Core.dll")
+            }
+        }
+        return nil
     }
 
     private func HasScopedConditionalSymbolsAtPath(path string) bool {
