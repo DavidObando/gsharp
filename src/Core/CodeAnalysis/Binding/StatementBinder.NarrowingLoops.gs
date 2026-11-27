@@ -17022,7 +17022,7 @@ internal partial class StatementBinder {
         if string.IsNullOrEmpty(name) {
             return false
         }
-        let argSpecs = ExtractConditionalCallArgumentSpecs(call, effects, isDeclaredInRegion)
+        let argSpecs = ExtractConditionalCallArgumentSpecs(call, receiver, effects, isDeclaredInRegion)
         if receiver == nil {
             return IsElidedBareConditionalCall(call, name, argSpecs)
         }
@@ -17056,11 +17056,15 @@ internal partial class StatementBinder {
 
     private func ExtractConditionalCallArgumentSpecs(
         call CallExpressionSyntax,
+        receiver ExpressionSyntax?,
         effects RegionEffects,
         isDeclaredInRegion Func[string, bool]
     ) List[ConditionalCallArgSpec]? {
         let specs = List[ConditionalCallArgSpec](call.Arguments.Count)
         let writtenInPriorArgs = HashSet[string](StringComparer.Ordinal)
+        if receiver != nil {
+            CollectWrittenNamesExcluding(receiver, call, writtenInPriorArgs)
+        }
         for argument in call.Arguments {
             var current = argument
             while current is ParenthesizedExpressionSyntax parenthesized {
@@ -17077,22 +17081,22 @@ internal partial class StatementBinder {
                     default: RefKind.Ref
                 }
                 specs.Add(ConditionalCallArgSpec(nil, nil, false, kind))
-                CollectWrittenNamesInExpression(current, writtenInPriorArgs)
+                CollectWrittenNamesExcluding(current, nil, writtenInPriorArgs)
                 continue
             }
             if current is ConditionalRefArgumentExpressionSyntax {
                 specs.Add(ConditionalCallArgSpec(nil, nil, false, RefKind.Ref))
-                CollectWrittenNamesInExpression(current, writtenInPriorArgs)
+                CollectWrittenNamesExcluding(current, nil, writtenInPriorArgs)
                 continue
             }
             specs.Add(TryInferConditionalArgumentSpec(current, effects, isDeclaredInRegion, writtenInPriorArgs))
-            CollectWrittenNamesInExpression(current, writtenInPriorArgs)
+            CollectWrittenNamesExcluding(current, nil, writtenInPriorArgs)
         }
         return specs
     }
 
-    private func CollectWrittenNamesInExpression(node SyntaxNode?, written HashSet[string]) {
-        if node == nil {
+    private func CollectWrittenNamesExcluding(node SyntaxNode?, excluded SyntaxNode?, written HashSet[string]) {
+        if node == nil || (excluded != nil && object.ReferenceEquals(node, excluded)) {
             return
         }
         switch node {
@@ -17107,7 +17111,7 @@ internal partial class StatementBinder {
             default { }
         }
         for child in node.GetChildren() {
-            CollectWrittenNamesInExpression(child, written)
+            CollectWrittenNamesExcluding(child, excluded, written)
         }
     }
 
@@ -17296,14 +17300,14 @@ internal partial class StatementBinder {
                     BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy
                 ) {
                     if member is MethodInfo clrMethod {
-                        if ClrMethodMatchesConditionalCall(clrMethod, call, argCount, argSpecs, skipFirst: false) {
+                        if ClrMethodMatchesConditionalCall(clrMethod, nil, call, argCount, argSpecs, skipFirst: false) {
                             matching.Add(clrMethod)
                         }
                     } else if member is FieldInfo || member is PropertyInfo || member is EventInfo {
                         return false
                     }
                 }
-                for clrMethod in FilterDominatedClrOverloads(matching, argSpecs, skipFirst: false) {
+                for clrMethod in FilterDominatedClrOverloads(matching, nil, argSpecs, skipFirst: false) {
                     found = true
                     if !KnownAttributes.IsConditionallyElided(clrMethod, $scope.ConditionalCompilation, call) {
                         return false
@@ -17327,10 +17331,11 @@ internal partial class StatementBinder {
             return false
         }
         let argCount = call.Arguments.Count
-        var found = false
         let visited = HashSet[TypeSymbol]()
+        var importedExts List[MethodInfo]? = nil
         for recv in receivers {
             visited.Clear()
+            var recvFound = false
             if !CheckReceiverConditionalMethods(
                 recv,
                 name,
@@ -17339,60 +17344,56 @@ internal partial class StatementBinder {
                 argSpecs,
                 call,
                 visited,
-                ref found
+                ref recvFound
             ) {
                 return false
             }
-        }
-        if !staticAccess {
-            for recv in receivers {
-                if recv.Symbol is {} recvSym {
-                    let extFns = $scope.TryLookupExtensionFunctions(recvSym, name)
-                    if !extFns.IsDefaultOrEmpty {
-                        let matching = List[FunctionSymbol]()
-                        for extFn in extFns {
-                            if FunctionMatchesConditionalCall(extFn, call, argCount, argSpecs, skipFirst: true) {
-                                matching.Add(extFn)
-                            }
+            if recvFound {
+                continue
+            }
+            if staticAccess {
+                return false
+            }
+            var extFound = false
+            if recv.Symbol is {} recvSym {
+                let extFns = $scope.TryLookupExtensionFunctions(recvSym, name)
+                if !extFns.IsDefaultOrEmpty {
+                    let matching = List[FunctionSymbol]()
+                    for extFn in extFns {
+                        if FunctionMatchesConditionalCall(extFn, call, argCount, argSpecs, skipFirst: true) {
+                            matching.Add(extFn)
                         }
-                        for extFn in FilterDominatedSourceOverloads(matching, argSpecs, skipFirst: true) {
-                            found = true
-                            if !KnownAttributes.IsConditionallyElided(extFn, $scope.ConditionalCompilation, call) {
-                                return false
-                            }
+                    }
+                    for extFn in FilterDominatedSourceOverloads(matching, argSpecs, skipFirst: true) {
+                        extFound = true
+                        if !KnownAttributes.IsConditionallyElided(extFn, $scope.ConditionalCompilation, call) {
+                            return false
                         }
                     }
                 }
             }
-            let importedExts = MemberLookup(binderCtx).CollectImportedExtensionMethods(name)
+            importedExts ??= MemberLookup(binderCtx).CollectImportedExtensionMethods(name)
             let matchingImpExts = List[MethodInfo]()
             for impExt in importedExts {
-                if !ClrMethodMatchesConditionalCall(impExt, call, argCount, argSpecs, skipFirst: true) {
+                if !ClrMethodMatchesConditionalCall(impExt, nil, call, argCount, argSpecs, skipFirst: true) {
                     continue
                 }
                 let extParams = impExt.GetParameters()
-                if extParams.Length == 0 {
-                    continue
-                }
-                var applies = false
-                for recv in receivers {
-                    if ClrExtensionReceiverCanApply(recv.Symbol, extParams[0].ParameterType) {
-                        applies = true
-                        break
-                    }
-                }
-                if applies {
+                if extParams.Length > 0 && ClrExtensionReceiverCanApply(recv.Symbol, extParams[0].ParameterType) {
                     matchingImpExts.Add(impExt)
                 }
             }
-            for impExt in FilterDominatedClrOverloads(matchingImpExts, argSpecs, skipFirst: true) {
-                found = true
+            for impExt in FilterDominatedClrOverloads(matchingImpExts, nil, argSpecs, skipFirst: true) {
+                extFound = true
                 if !KnownAttributes.IsConditionallyElided(impExt, $scope.ConditionalCompilation, call) {
                     return false
                 }
             }
+            if !extFound {
+                return false
+            }
         }
-        return found
+        return true
     }
 
     private func ResolveConditionalCallReceivers(
@@ -17402,7 +17403,11 @@ internal partial class StatementBinder {
         out staticAccess bool
     ) List[ReceiverType]? {
         staticAccess = false
-        var unwrappedReceiver = receiver
+        var unwrappedReceiver = if receiver is AccessorExpressionSyntax accessor {
+            accessor.LeftPart
+        } else {
+            receiver
+        }
         while unwrappedReceiver is ParenthesizedExpressionSyntax parenthesized {
             unwrappedReceiver = parenthesized.Expression
         }
@@ -17710,7 +17715,14 @@ internal partial class StatementBinder {
         let matchingClr = List[MethodInfo]()
         for member in reflected.GetMember(name, flags) {
             if member is MethodInfo clrMethod {
-                if ClrMethodMatchesConditionalCall(clrMethod, call, argCount, argSpecs, skipFirst: false) {
+                if ClrMethodMatchesConditionalCall(
+                    clrMethod,
+                    receiver.Symbol,
+                    call,
+                    argCount,
+                    argSpecs,
+                    skipFirst: false
+                ) {
                     matchingClr.Add(clrMethod)
                 }
             } else if member is FieldInfo || member is PropertyInfo || member is EventInfo {
@@ -17721,7 +17733,14 @@ internal partial class StatementBinder {
             for baseIface in reflected.GetInterfaces() {
                 for member in baseIface.GetMember(name, flags) {
                     if member is MethodInfo clrMethod {
-                        if ClrMethodMatchesConditionalCall(clrMethod, call, argCount, argSpecs, skipFirst: false) {
+                        if ClrMethodMatchesConditionalCall(
+                            clrMethod,
+                            receiver.Symbol,
+                            call,
+                            argCount,
+                            argSpecs,
+                            skipFirst: false
+                        ) {
                             matchingClr.Add(clrMethod)
                         }
                     } else if member is FieldInfo || member is PropertyInfo || member is EventInfo {
@@ -17730,7 +17749,7 @@ internal partial class StatementBinder {
                 }
             }
         }
-        for clrMethod in FilterDominatedClrOverloads(matchingClr, argSpecs, skipFirst: false) {
+        for clrMethod in FilterDominatedClrOverloads(matchingClr, receiver.Symbol, argSpecs, skipFirst: false) {
             found = true
             if !KnownAttributes.IsConditionallyElided(clrMethod, $scope.ConditionalCompilation, call) {
                 return false
@@ -17827,6 +17846,7 @@ internal partial class StatementBinder {
 
     private func ClrMethodMatchesConditionalCall(
         method MethodInfo,
+        symbolicReceiver TypeSymbol?,
         call CallExpressionSyntax,
         argCount int32,
         argSpecs List[ConditionalCallArgSpec]?,
@@ -17878,7 +17898,13 @@ internal partial class StatementBinder {
                 return false
             }
             if !param.ParameterType.IsByRef && !param.ParameterType.ContainsGenericParameters {
-                let paramType = ClrNullability.GetParameterTypeSymbol(param)
+                let paramType = ResolveClrParameterType(
+                    symbolicReceiver,
+                    method,
+                    paramIndex,
+                    param,
+                    ImmutableArray[TypeSymbol?].Empty
+                )
                 if !ConditionalArgTypeCompatible(spec, paramType) {
                     return false
                 }
@@ -17922,7 +17948,12 @@ internal partial class StatementBinder {
         return result
     }
 
-    private func TryGetExactClrParamTypes(method MethodInfo, argCount int32, skipFirst bool) List[TypeSymbol]? {
+    private func TryGetExactClrParamTypes(
+        method MethodInfo,
+        symbolicReceiver TypeSymbol?,
+        argCount int32,
+        skipFirst bool
+    ) List[TypeSymbol]? {
         let start = if skipFirst {
             1
         } else {
@@ -17934,13 +17965,24 @@ internal partial class StatementBinder {
         }
         let result = List[TypeSymbol](argCount)
         for var i = 0; i < argCount; i++ {
-            let param = parameters[start + i]
+            let paramIndex = start + i
+            let param = parameters[paramIndex]
             if param.ParameterType.IsByRef ||
                 param.ParameterType.ContainsGenericParameters ||
                 ClrOverloadResolution.IsParamsArrayParameter(param) {
                 return nil
             }
-            result.Add(ClrNullability.GetParameterTypeSymbol(param))
+            let resolved = ResolveClrParameterType(
+                symbolicReceiver,
+                method,
+                paramIndex,
+                param,
+                ImmutableArray[TypeSymbol?].Empty
+            )
+            if TypeSymbol.ContainsTypeParameter(resolved) {
+                return nil
+            }
+            result.Add(resolved)
         }
         return result
     }
@@ -17978,6 +18020,7 @@ internal partial class StatementBinder {
 
     private func FilterDominatedClrOverloads(
         candidates List[MethodInfo],
+        symbolicReceiver TypeSymbol?,
         argSpecs List[ConditionalCallArgSpec]?,
         skipFirst bool
     ) List[MethodInfo] {
@@ -17987,7 +18030,7 @@ internal partial class StatementBinder {
         let specs = argSpecs!!
         let paramLists = List[List[TypeSymbol]?](candidates.Count)
         for c in candidates {
-            paramLists.Add(TryGetExactClrParamTypes(c, specs.Count, skipFirst))
+            paramLists.Add(TryGetExactClrParamTypes(c, symbolicReceiver, specs.Count, skipFirst))
         }
         let kept = List[MethodInfo](candidates.Count)
         for var i = 0; i < candidates.Count; i++ {
@@ -18022,7 +18065,18 @@ internal partial class StatementBinder {
             }
             let bExact = argType.Equals(b)
             let wExact = argType.Equals(w)
+            // Exact argument-type match takes precedence over parameter-to-parameter conversions
+            // (e.g. `int32` literal `1` prefers `int32` over `uint8` even though `uint8 -> int32`).
+            if bExact && !wExact {
+                anyBetter = true
+                continue
+            }
             if wExact && !bExact {
+                return false
+            }
+            // Conservatively decline pruning when either candidate requires a non-built-in
+            // (user-defined or constant-narrowing) conversion.
+            if !Conversion.Classify(argType, b).IsImplicit || !Conversion.Classify(argType, w).IsImplicit {
                 return false
             }
             let bToW = Conversion.Classify(b, w).IsImplicit
@@ -18030,7 +18084,7 @@ internal partial class StatementBinder {
             if wToB && !bToW {
                 return false
             }
-            if (bExact && !wExact) || (bToW && !wToB) {
+            if bToW && !wToB {
                 anyBetter = true
             }
         }

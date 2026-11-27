@@ -2600,13 +2600,13 @@ internal sealed class RegionEffectScanner {
         let isRightPartOfAccessor = receiver != nil
         if !isRightPartOfAccessor &&
             isElidedConditionalCall != nil &&
-            TryMatchTerminalCall(accessor, out var terminalCall, out var terminalReceiver, out var terminalPath) &&
+            TryMatchTerminalCall(accessor, out var terminalCall, out _, out var terminalPath) &&
             !(
             terminalPath?.RootName is {} rootName && !IsDeclared(rootName) && IsDeclaredInRegionOrEnclosing(rootName)
         ) &&
             isElidedConditionalCall(
             terminalCall!!,
-            terminalReceiver,
+            accessor,
             terminalPath,
             BuildConditionalEffectsContext(),
             IsDeclaredInRegionOrEnclosing

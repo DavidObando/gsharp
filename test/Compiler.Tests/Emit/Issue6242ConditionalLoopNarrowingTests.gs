@@ -95,71 +95,73 @@ Console.Write(Read("xy"))`
         Assert.Contains("GS0158", output)
     }
 
-    @Fact
-    func Driver_OmittedConditionalCall_AcrossLoopForms_ForPostDoWhileForRange() {
+    @Theory
+    @InlineData(
+        "forBody",
+        "for var i = 0; i < 1; i++ {\n        Keep((s = nil))\n        Console.Write(s.Length)\n    }",
+        10,
+        12
+    )
+    @InlineData(
+        "forPost",
+        "var i = 0\n    for ; i < 1; Keep((s = nil)) {\n        Console.Write(s.Length)\n        i = 1\n    }",
+        10,
+        13
+    )
+    @InlineData(
+        "doWhile",
+        "var once = false\n    do {\n        Keep((s = nil))\n        Console.Write(s.Length)\n    } while once",
+        11,
+        13
+    )
+    @InlineData(
+        "forRange",
+        "for _ in []int32{1} {\n        Keep((s = nil))\n        Console.Write(s.Length)\n    }",
+        10,
+        12
+    )
+    func Driver_OmittedConditionalCall_AcrossIsolatedLoopForms(
+        formName string,
+        loopBody string,
+        insideReadLine int32,
+        afterReadLine int32
+    ) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let source = `import System
 import System.Diagnostics
 @Conditional("A")
 func Keep(value string?) {}
-func ReadForBody(input string?) int32 {
+func Read(input string?) int32 {
     var s = input
     if s == nil { return 0 }
-    for var i = 0; i < 1; i++ {
-        Keep((s = nil))
-        Console.Write(s.Length)
-    }
+    ` + loopBody + `
     return s.Length
 }
-func ReadForPost(input string?) int32 {
-    var s = input
-    if s == nil { return 0 }
-    var i = 0
-    for ; i < 1; Keep((s = nil)) {
-        Console.Write(s.Length)
-        i = 1
-    }
-    return s.Length
-}
-func ReadDoWhile(input string?) int32 {
-    var s = input
-    if s == nil { return 0 }
-    var once = false
-    do {
-        Keep((s = nil))
-        Console.Write(s.Length)
-    } while once
-    return s.Length
-}
-func ReadForRange(input string?) int32 {
-    var s = input
-    if s == nil { return 0 }
-    for _ in []int32{1} {
-        Keep((s = nil))
-        Console.Write(s.Length)
-    }
-    return s.Length
-}
-Console.Write(ReadForBody("ab"))
-Console.Write(ReadForPost("cd"))
-Console.Write(ReadDoWhile("ef"))
-Console.Write(ReadForRange("gh"))`
-        let program = fixture.Compile(source, "ConditionalLoopFormsAbsent6242", executable: true)
+Console.Write(Read("xy"))`
+        let program = fixture.Compile(source, "ConditionalLoop_" + formName + "_Absent6242", executable: true)
         IlVerifier.Verify(program)
-        Assert.Equal(Encoding.UTF8.GetBytes("22222222"), fixture.RunBytes(program))
+        Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
 
         let (code, output) = fixture.TryCompile(
             source,
-            "ConditionalLoopFormsPresent6242",
+            "ConditionalLoop_" + formName + "_Present6242",
             executable: true,
             "/define:A"
         )
         Assert.NotEqual(0, code)
+        Assert.Contains("(" + insideReadLine.ToString() + ",", output)
+        Assert.Contains("(" + afterReadLine.ToString() + ",", output)
         Assert.Contains("GS0158", output)
     }
 
-    @Fact
-    func Driver_OmittedImportedConditionalCallInLoop_PreservesLoopNarrowing_AndActiveCallRejects() {
+    @Theory
+    @InlineData("static", "Probe.StaticKeep((s = nil))")
+    @InlineData("instance", "inst.InstanceKeep((s = nil))")
+    @InlineData("extension", "(s = nil).ExtKeep()")
+    func Driver_OmittedImportedConditionalCallInLoop_IsolatedRoutes_PreserveAndRejectAtExactLocations(
+        routeName string,
+        callStatement string
+    ) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let library = fixture.CompileCSharp(`#nullable enable
 using System.Diagnostics;
@@ -176,7 +178,7 @@ namespace ConditionalLoop6242 {
         [Conditional("EXT_6242")]
         public static void ExtKeep(this string? value) {}
     }
-}`, "ConditionalLoopLib6242")
+}`, "ConditionalLoopLib_" + routeName + "_6242")
         let source = `import System
 import ConditionalLoop6242
 func Read(input string?) int32 {
@@ -185,27 +187,32 @@ func Read(input string?) int32 {
     let inst = InstanceProbe()
     var once = true
     while once {
-        Probe.StaticKeep((s = nil))
-        inst.InstanceKeep((s = nil))
-        (s = nil).ExtKeep()
+        ` + callStatement + `
         Console.Write(s.Length)
         once = false
     }
     return s.Length
 }
 Console.Write(Read("xy"))`
-        let program = fixture.Compile(source, "ConditionalLoopImportedAbsent6242", executable: true, "/r:" + library)
+        let program = fixture.Compile(
+            source,
+            "ConditionalLoopImported_" + routeName + "_Absent6242",
+            executable: true,
+            "/r:" + library
+        )
         IlVerifier.Verify(program, []string{library})
         Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
 
         let (code, output) = fixture.TryCompile(
             source,
-            "ConditionalLoopImportedPresent6242",
+            "ConditionalLoopImported_" + routeName + "_Present6242",
             executable: true,
             "/r:" + library,
             "/define:EXT_6242"
         )
         Assert.NotEqual(0, code)
+        Assert.Contains("(10,", output)
+        Assert.Contains("(13,", output)
         Assert.Contains("GS0158", output)
     }
 
@@ -682,5 +689,156 @@ Console.Write(Impl().Read("xy"))`
         let (code, output) = fixture.TryCompile(source, "ConditionalLoopPrivateIfaceHelper6242", executable: true)
         Assert.NotEqual(0, code)
         Assert.Contains("GS0158", output)
+    }
+
+    @Fact
+    func Driver_ReceiverChainWrite_MakesLaterArgumentUncertain_AndRejectsWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `import System
+import System.Diagnostics
+@Conditional("A")
+func (self string?) Keep(tag object?, value string?) {}
+func (self string?) Keep(tag string, value string?) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    var tag string? = nil
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        (tag = "x").Keep(tag, (s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (code, output) = fixture.TryCompile(source, "ConditionalLoopRecvWrite6242", executable: true)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0158", output)
+    }
+
+    @Fact
+    func Driver_ConstructedImportedGenericReceiver_WithSourceTypeArg_StillRejectsActiveInstanceMethod() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalGenericBox6242 {
+    public sealed class Box<T> {
+        public void Keep(T value) {}
+    }
+}`, "ConditionalGenericBoxLib6242")
+        let source = `import System
+import System.Diagnostics
+import ConditionalGenericBox6242
+class Payload {
+    var Value int32 = 1
+}
+@Conditional("A")
+func (self object) Keep(value Payload?) {}
+func Read(input Payload?) int32 {
+    var p = input
+    if p == nil { return 0 }
+    let box = Box[Payload?]()
+    for var i = 0; i < 2; i++ {
+        Console.Write(p.Value)
+        box.Keep((p = nil))
+    }
+    return 0
+}
+Console.Write(Read(Payload()))`
+        let (code, output) = fixture.TryCompile(
+            source,
+            "ConditionalLoopGenericBox6242",
+            executable: true,
+            "/r:" + library
+        )
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0158", output)
+    }
+
+    @Fact
+    func Driver_UserDefinedConversionOverload_DoesNotPruneActiveReferenceConversionOverload() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalConvRank6242 {
+    public class Base {}
+    public class Derived : Base {}
+    public class Source : Base {
+        public static implicit operator Derived(Source s) => new Derived();
+    }
+    public static class Probe {
+        [Conditional("EXT_6242")]
+        public static void Keep(Derived d, string? value) {}
+        public static void Keep(Base b, string? value) {}
+    }
+}`, "ConditionalConvRankLib6242")
+        let source = `import System
+import ConditionalConvRank6242
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let x = Source()
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        Probe.Keep(x, (s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (code, output) = fixture.TryCompile(
+            source,
+            "ConditionalLoopConvRank6242",
+            executable: true,
+            "/r:" + library
+        )
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0158", output)
+    }
+
+    @Fact
+    func Driver_OmittedInstanceMethod_BeatsActiveExtension_AndExactInt32BeatsActiveByte() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`#nullable enable
+using System.Diagnostics;
+namespace ConditionalExactRank6242 {
+    public static class Probe {
+        [Conditional("EXT_6242")]
+        public static void Keep(string? value, int n) {}
+        public static void Keep(string? value, byte n) {}
+    }
+}`, "ConditionalExactRankLib6242")
+        let source = `import System
+import System.Diagnostics
+import ConditionalExactRank6242
+class Holder {
+    @Conditional("A")
+    func Keep(value string?) {}
+}
+func (self Holder) Keep(value string?) {}
+@Conditional("A")
+func KeepNum(value string?, n int32) {}
+func KeepNum(value string?, n uint8) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let h = Holder()
+    var once = true
+    while once {
+        h.Keep((s = nil))
+        KeepNum((s = nil), 1)
+        Probe.Keep((s = nil), 1)
+        Console.Write(s.Length)
+        once = false
+    }
+    return s.Length
+}
+Console.Write(Read("xy"))`
+        let program = fixture.Compile(
+            source,
+            "ConditionalLoopExactAndInstAbsent6242",
+            executable: true,
+            "/r:" + library
+        )
+        IlVerifier.Verify(program, []string{library})
+        Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
     }
 }
