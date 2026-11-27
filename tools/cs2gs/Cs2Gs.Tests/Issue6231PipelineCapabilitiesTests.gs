@@ -123,6 +123,59 @@ class Issue6231PipelineCapabilitiesTests {
         }
     }
 
+    @Fact
+    func SdkCapability_DetectsScopedConditionalSymbolsInRealPackedSdk() {
+        let repoRoot = GsharpTestProjectRunner.TryFindRepoRoot()
+        Assert.False(string.IsNullOrEmpty(repoRoot))
+        let sdk = GsharpTestProjectRunner.ResolveLocalPackage(repoRoot, "Gsharp.NET.Sdk", "Release")
+        if sdk == nil {
+            Assert.Fail("Expected a locally packed Gsharp.NET.Sdk package.")
+            return
+        }
+        Assert.True(SdkCompilerCapabilities.SupportsScopedConditionalSymbolsInPackage(sdk.Version, sdk.NupkgPath))
+        Assert.True(SdkCompilerCapabilities.SupportsScopedConditionalSymbols("Release", sdk.Version))
+    }
+
+    @Theory
+    @InlineData("tools/compiler//GSharp.Core.dll", true)
+    @InlineData("tools/compiler//GSharp.Core.dll", false)
+    @InlineData("tools\\compiler\\GSharp.Core.dll", true)
+    @InlineData("tools\\compiler\\GSharp.Core.dll", false)
+    func SdkCapability_HandlesNonNormalizedArchiveEntryPaths(entryPath string, supported bool) {
+        let root = NewRoot()
+        try {
+            let packagePath = WriteSdkPackage(root, supported, entryPath)
+            Assert.Equal(
+                supported,
+                SdkCompilerCapabilities.SupportsScopedConditionalSymbolsInPackage("0.0.0-issue6256", packagePath)
+            )
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func SdkCapability_MatchesNugetCacheVersionCaseInsensitively(supported bool) {
+        let root = NewRoot()
+        let originalPackagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES")
+        try {
+            let packages = Path.Combine(root, "global-packages")
+            let compilerDirectory = Path.Combine(packages, "gsharp.net.sdk", "0.0.0-issue6256", "tools", "compiler")
+            Directory.CreateDirectory(compilerDirectory)
+            File.WriteAllBytes(Path.Combine(compilerDirectory, "GSharp.Core.dll"), CompilerImage(supported))
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", packages)
+            Assert.Equal(
+                supported,
+                SdkCompilerCapabilities.SupportsScopedConditionalSymbolsInPackage("0.0.0-Issue6256", nil)
+            )
+        } finally {
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", originalPackagesRoot)
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)
@@ -215,16 +268,19 @@ class Issue6231PipelineCapabilitiesTests {
             return Path.Combine(directory, "gsc.dll")
         }
 
-        private func WriteSdkPackage(root string, supported bool) {
+        private func WriteSdkPackage(
+            root string,
+            supported bool,
+            entryPath string = "tools/compiler/GSharp.Core.dll"
+        ) string {
             let packageDir = Path.Combine(root, "out", "bin", "Release", "nupkgs")
             Directory.CreateDirectory(packageDir)
-            using let archive = ZipFile.Open(
-                Path.Combine(packageDir, "Gsharp.NET.Sdk.0.0.0-issue6231.nupkg"),
-                ZipArchiveMode.Create
-            )
-            using let stream = archive.CreateEntry("tools/compiler/GSharp.Core.dll").Open()
+            let packagePath = Path.Combine(packageDir, "Gsharp.NET.Sdk.0.0.0-issue6231.nupkg")
+            using let archive = ZipFile.Open(packagePath, ZipArchiveMode.Create)
+            using let stream = archive.CreateEntry(entryPath).Open()
             let image = CompilerImage(supported)
             stream.Write(image, 0, image.Length)
+            return packagePath
         }
 
         private func CompilerImage(supported bool)[]uint8 {
