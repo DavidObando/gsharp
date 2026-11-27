@@ -4,10 +4,22 @@
 
 package GSharp.Core.CodeAnalysis.Syntax
 
+import System.Collections.Immutable
+
 /// A tuple deconstruction declaration `let (a, b, ...) = expr` or
 /// `var (a, b, ...) = expr`. Each identifier becomes a local bound to the
 /// corresponding tuple element of the right-hand-side initializer.
 partial class TupleDeconstructionStatementSyntax : StatementSyntax {
+    private var declarationAnnotations ImmutableArray[AnnotationSyntax] = ImmutableArray[AnnotationSyntax].Empty
+
+    /// Gets the annotations attached to this declaration.
+    prop Annotations ImmutableArray[AnnotationSyntax] -> declarationAnnotations
+
+    internal func WithAnnotations(annotations ImmutableArray[AnnotationSyntax]) {
+        declarationAnnotations = annotations
+        InvalidateCachedSpan()
+    }
+
     /// Initializes a new instance of the (cref:TupleDeconstructionStatementSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param keyword The `let` or `var` keyword.

@@ -380,9 +380,15 @@ class BoundGlobalScope {
         get {
             return _preprocessorSymbols
         }
+
         internal set {
             _preprocessorSymbols = value
         }
+    }
+
+    internal prop ConditionalCompilation ConditionalCompilationMap? {
+        get;
+        set;
     }
 
     /// Gets the distinct set of friend-assembly names this compilation

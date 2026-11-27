@@ -112,10 +112,11 @@ partial class CSharpToGSharpTranslator {
                     this.context.Report(inner)
                     continue
                 }
-                // Issue #4632: an #if in the snippet stays a translation
-                // error. Downgrading it would keep one arm of the snippet and
-                // drop the other without failing anything.
-                if inner.DiagnosticId == CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId &&
+                // Preserve conditional-translation errors to prevent silent behavior changes.
+                if (
+                    inner.DiagnosticId == CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId ||
+                        inner.DiagnosticId == CSharpToGSharpTranslator.ConditionalSymbolsDiagnosticId
+                ) &&
                     inner.Severity == TranslationSeverity.Unsupported {
                     this.context.Report(
                         TranslationDiagnostic(
@@ -124,7 +125,7 @@ partial class CSharpToGSharpTranslator {
                             expression!!.GetLocation(),
                             TranslationSeverity.Unsupported
                         ){
-                            DiagnosticId = CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId,
+                            DiagnosticId = inner.DiagnosticId,
                             Classification = inner.Classification,
                             Rationale = inner.Rationale
                         }

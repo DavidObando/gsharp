@@ -68,6 +68,9 @@ partial class SemanticModel {
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The bound node, or null.
     func GetBoundNode(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) BoundNode? {
+        if !compilation.IsActive(node) {
+            return nil
+        }
         cancellationToken.ThrowIfCancellationRequested()
         index.Get(cancellationToken)
         if index.Value.BoundBySyntax.TryGetValue(node, out var bound) {
@@ -156,6 +159,9 @@ partial class SemanticModel {
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The declared symbol, or null when the node declares nothing.
     func GetDeclaredSymbol(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) Symbol? {
+        if !compilation.IsActive(node) {
+            return nil
+        }
         cancellationToken.ThrowIfCancellationRequested()
         index.Get(cancellationToken)
         if index.Value.DeclaredBySyntax.TryGetValue(node, out var symbol) {
@@ -220,6 +226,9 @@ partial class SemanticModel {
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The resolution result; (cref:SymbolInfo.Symbol) is null when nothing is referenced.
     func GetSymbolInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) SymbolInfo {
+        if !compilation.IsActive(node) {
+            return SymbolInfo.None
+        }
         cancellationToken.ThrowIfCancellationRequested()
         index.Get(cancellationToken)
         if node is SyntaxToken{Kind: SyntaxKind.IdentifierToken} token {
@@ -392,8 +401,14 @@ partial class SemanticModel {
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The resolution result; (cref:TypeInfo.Type) is null for non-expressions.
     func GetTypeInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) TypeInfo {
+        if !compilation.IsActive(node) {
+            return TypeInfo.None
+        }
         if GetBoundNode(node, cancellationToken) is BoundExpression expression {
             return TypeInfo((CapturedIndexArgument(expression, expectedBlockSyntax: node) ?? expression).Type)
+        }
+        if node is DefinedExpressionSyntax {
+            return TypeInfo(TypeSymbol.Bool)
         }
         // #6217: the name of a member has the type of the member read, and an inner accessor the type of its
         // terminal.
@@ -527,7 +542,7 @@ partial class SemanticModel {
     /// Records the outermost bound node per syntax node (first-win in a
     /// pre-order walk) and harvests local/pattern variable declarations from
     /// symbol-valued bound-node properties.
-    private class IndexingWalker : BoundTreeWalker {
+    private class IndexingWalker : BoundSemanticTreeWalker {
         private let tree SyntaxTree
         private let boundBySyntax Dictionary[SyntaxNode, BoundNode]
         private let declaredBySyntax Dictionary[SyntaxNode, Symbol]

@@ -73,7 +73,7 @@ class BoundImportedCallExpression : BoundCallOperationExpression {
     /// ```
     private var _type TypeSymbol
 
-    override prop Type TypeSymbol -> _type
+    override prop Type TypeSymbol -> GetConditionalCallType(_type)
 
     /// Gets the imported function symbol.
     prop Function ImportedFunctionSymbol {

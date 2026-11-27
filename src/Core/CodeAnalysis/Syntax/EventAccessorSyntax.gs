@@ -4,8 +4,23 @@
 
 package GSharp.Core.CodeAnalysis.Syntax
 
+import System.Collections.Immutable
+
 /// Represents a single `add` or `remove` accessor inside an event body (ADR-0052).
+@SyntaxChildSourceOrder
 partial class EventAccessorSyntax : SyntaxNode {
+    /// Gets the compiler-only accessor annotations.
+    prop Annotations ImmutableArray[AnnotationSyntax] {
+        get;
+        private set;
+    }
+
+    internal func WithAnnotations(annotations ImmutableArray[AnnotationSyntax]) EventAccessorSyntax {
+        Annotations = annotations
+        InvalidateCachedSpan()
+        return this
+    }
+
     /// Initializes a new instance of the (cref:EventAccessorSyntax) class.
     /// @param syntaxTree The parent syntax tree.
     /// @param accessorKeyword The `add` or `remove` identifier token.
@@ -17,6 +32,7 @@ partial class EventAccessorSyntax : SyntaxNode {
         body BlockStatementSyntax?,
         semicolonToken SyntaxToken?
     ) : base(syntaxTree) {
+        Annotations = ImmutableArray[AnnotationSyntax].Empty
         AccessorKeyword = accessorKeyword
         Body = body
         SemicolonToken = semicolonToken

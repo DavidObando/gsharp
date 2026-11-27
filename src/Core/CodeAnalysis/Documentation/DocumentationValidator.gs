@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Documentation
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System
@@ -56,9 +57,21 @@ shared class DocumentationValidator {
         diagnostics DiagnosticBag,
         warnOnMissingDocs bool
     ) {
+        ValidateActive(trees, functions, structs, diagnostics, warnOnMissingDocs, nil)
+    }
+
+    internal func ValidateActive(
+        trees ImmutableArray[SyntaxTree],
+        functions ImmutableArray[FunctionSymbol],
+        structs ImmutableArray[StructSymbol],
+        diagnostics DiagnosticBag,
+        warnOnMissingDocs bool,
+        activeCode ConditionalCompilationMap?
+    ) {
         for tree in trees {
-            ValidateFloatingDocComments(tree, diagnostics)
-            ValidateUnknownTags(tree, diagnostics)
+            let blocks = GetActiveBlocks(tree, activeCode)
+            ValidateFloatingDocComments(tree, blocks, diagnostics)
+            ValidateUnknownTags(blocks, diagnostics)
         }
         ValidateParamMatches(functions, diagnostics)
         if warnOnMissingDocs {
@@ -66,8 +79,38 @@ shared class DocumentationValidator {
         }
     }
 
-    private func ValidateFloatingDocComments(tree SyntaxTree, diagnostics DiagnosticBag) {
+    private func GetActiveBlocks(tree SyntaxTree, activeCode ConditionalCompilationMap?) ImmutableArray[
+        DocumentationAttacher.DocBlock
+    ] {
         let blocks = DocumentationAttacher.GetBlocks(tree)
+        if activeCode == nil || blocks.IsDefaultOrEmpty {
+            return blocks
+        }
+        let result = ImmutableArray.CreateBuilder[DocumentationAttacher.DocBlock]()
+        for block in blocks {
+            if !activeCode.IsActiveAt(tree, block.Location.Span.Start) {
+                continue
+            }
+            var next = block.EndPosition
+            while next < tree.Text.Length && char.IsWhiteSpace(tree.Text[next]) {
+                next++
+            }
+            if next < tree.Text.Length && tree.Text.GetLineIndex(next) == block.LastLine + 1 && !activeCode.IsActiveAt(
+                tree,
+                next
+            ) {
+                continue
+            }
+            result.Add(block)
+        }
+        return result.ToImmutable()
+    }
+
+    private func ValidateFloatingDocComments(
+        tree SyntaxTree,
+        blocks ImmutableArray[DocumentationAttacher.DocBlock],
+        diagnostics DiagnosticBag
+    ) {
         if blocks.IsDefaultOrEmpty {
             return
         }
@@ -101,8 +144,7 @@ shared class DocumentationValidator {
         }
     }
 
-    private func ValidateUnknownTags(tree SyntaxTree, diagnostics DiagnosticBag) {
-        let blocks = DocumentationAttacher.GetBlocks(tree)
+    private func ValidateUnknownTags(blocks ImmutableArray[DocumentationAttacher.DocBlock], diagnostics DiagnosticBag) {
         if blocks.IsDefaultOrEmpty {
             return
         }

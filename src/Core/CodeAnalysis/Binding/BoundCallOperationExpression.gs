@@ -63,6 +63,31 @@ abstract class BoundCallOperationExpression : BoundExpression {
         set;
     }
 
+    /// Gets whether conditional processing omits this call and all its operands.
+    internal prop IsElidedConditionalCall bool {
+        get;
+        set;
+    }
+
+    /// Gets whether binding has finalized this call's lexical conditional decision.
+    internal prop ConditionalElisionChecked bool {
+        get;
+        set;
+    }
+
+    /// Gets discarded receiver-initialization statements for semantic traversal only.
+    internal prop ElidedSourceStatements ImmutableArray[BoundStatement] {
+        get;
+        set;
+    }
+
+    /// Gets the logical void result of an elided call, independent of its suspending ABI.
+    internal func GetConditionalCallType(resultType TypeSymbol) TypeSymbol -> if IsElidedConditionalCall {
+        TypeSymbol.Void
+    } else {
+        resultType
+    }
+
     /// Gets the arguments, in source order.
     abstract prop Arguments ImmutableArray[BoundExpression] {
         get;

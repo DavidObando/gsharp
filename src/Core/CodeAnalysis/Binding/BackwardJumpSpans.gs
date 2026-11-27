@@ -123,7 +123,24 @@ internal sealed class BackwardJumpSpan {
 /// adds kills. A nested function literal has its own labels and is not walked.
 /// The function returns one span for the body, from the lowest statement list
 /// that holds every participant (disjoint spans may be merged, section 11).
-internal shared class BackwardJumpSpans {
+internal sealed class BackwardJumpSpans {
+    private let activeCode ConditionalCompilationMap?
+
+    private init(activeCode ConditionalCompilationMap?) {
+        this.activeCode = activeCode
+    }
+
+    shared {
+        internal func Compute(body SyntaxNode, activeCode ConditionalCompilationMap? = nil) BackwardJumpSpan? ->
+        BackwardJumpSpans(activeCode).ComputeBody(body)
+
+        internal func Compute(
+            owner SyntaxNode,
+            topStatements ImmutableArray[StatementSyntax],
+            activeCode ConditionalCompilationMap? = nil
+        ) BackwardJumpSpan? -> BackwardJumpSpans(activeCode).ComputeStatements(owner, topStatements)
+    }
+
     /// A statement list on the path from the function body to a node, with the index of the
     /// statement that leads to the node.
     private sealed class Step {
@@ -208,11 +225,7 @@ internal shared class BackwardJumpSpans {
 
     /// Computes the span of a function body, or `nil` when the body has no participant backward
     /// `goto`.
-    func Compute(body BlockStatementSyntax) BackwardJumpSpan? -> Compute(cast[SyntaxNode](body))
-
-    /// Computes the span of a function body that is a block statement or a block expression (the body
-    /// of a lambda), or `nil` when the body has no participant backward `goto`.
-    func Compute(body SyntaxNode) BackwardJumpSpan? {
+    private func ComputeBody(body SyntaxNode) BackwardJumpSpan? {
         let labels = List[LabelSite]()
         let gotos = List[GotoSite]()
         let path = List[Step]()
@@ -230,7 +243,7 @@ internal shared class BackwardJumpSpans {
     }
 
     /// Computes the span of a combined top-level statement list across one or more syntax trees.
-    func Compute(owner SyntaxNode, topStatements ImmutableArray[StatementSyntax]) BackwardJumpSpan? {
+    private func ComputeStatements(owner SyntaxNode, topStatements ImmutableArray[StatementSyntax]) BackwardJumpSpan? {
         if topStatements.Length == 0 {
             return nil
         }
@@ -334,6 +347,9 @@ internal shared class BackwardJumpSpans {
 
     // A label does not change what its statement does: `Again: return 0` ends the path.
     private func IsUnconditionalExit(statement SyntaxNode) bool {
+        if activeCode?.IsActive(statement) == false {
+            return false
+        }
         var node = statement
         while node is LabeledStatementSyntax labeled {
             node = labeled.Statement
@@ -349,9 +365,10 @@ internal shared class BackwardJumpSpans {
             }
             case SyntaxKind.BlockStatement {
                 let block = cast[BlockStatementSyntax](node)
-                return block.Statements.Length > 0 &&
+                let statements = activeCode?.Filter(block.Statements) ?? block.Statements
+                return statements.Length > 0 &&
                     !ContainsUserLabel(block) &&
-                    IsUnconditionalExit(block.Statements[block.Statements.Length - 1])
+                    IsUnconditionalExit(statements[statements.Length - 1])
             }
             case SyntaxKind.IfStatement {
                 let ifStatement = cast[IfStatementSyntax](node)
@@ -390,7 +407,7 @@ internal shared class BackwardJumpSpans {
     }
 
     private func ContainsUserLabel(node SyntaxNode) bool {
-        if IsFunctionLike(node) {
+        if activeCode?.IsActive(node) == false || IsFunctionLike(node) {
             return false
         }
         if node is LabeledStatementSyntax labeled && !StatementBinder.IsLabelableLoop(labeled.Statement) {
@@ -409,7 +426,7 @@ internal shared class BackwardJumpSpans {
         inNestedLoopOrSwitch bool = false,
         innerLoopLabels List[string]? = nil
     ) bool {
-        if IsFunctionLike(node) {
+        if activeCode?.IsActive(node) == false || IsFunctionLike(node) {
             return false
         }
         if node is BreakStatementSyntax breakStatement {
@@ -443,7 +460,7 @@ internal shared class BackwardJumpSpans {
         inNestedLoopOrSwitch bool = false,
         innerLoopLabels List[string]? = nil
     ) bool {
-        if IsFunctionLike(node) {
+        if activeCode?.IsActive(node) == false || IsFunctionLike(node) {
             return false
         }
         if node is BreakStatementSyntax breakStatement {
@@ -483,7 +500,8 @@ internal shared class BackwardJumpSpans {
         if statement.FinallyClause == nil {
             return false
         }
-        let statements = statement.FinallyClause.Body.Statements
+        let body = statement.FinallyClause.Body
+        let statements = activeCode?.Filter(body.Statements) ?? body.Statements
         return statements.Length > 0 && IsUnconditionalExit(statements[statements.Length - 1])
     }
 
@@ -500,6 +518,9 @@ internal shared class BackwardJumpSpans {
         var deadHere = dead
         for var i = 0; i < statements.Length; i++ {
             let statement = statements[i]
+            if activeCode?.IsActive(statement) == false {
+                continue
+            }
             if statement is LabeledStatementSyntax labeledStatement && !StatementBinder.IsLabelableLoop(
                 labeledStatement.Statement
             ) {
@@ -528,6 +549,9 @@ internal shared class BackwardJumpSpans {
         gotos List[GotoSite],
         visitCounter List[int32]
     ) {
+        if activeCode?.IsActive(node) == false {
+            return
+        }
         if node is CompilationUnitSyntax unit {
             let topStatements = unit
                 .Members

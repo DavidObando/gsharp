@@ -12,6 +12,45 @@ import System.Linq
 import Xunit
 
 open class SemanticTokensHandlerTests {
+    @Fact
+    func Tokenize_SortsInactiveSharedMembersBySourcePosition() {
+        let content = LanguageServerTestHelpers.Content(
+            "class C {\n" +
+                "    shared {\n" +
+                "        @If(false)\n" +
+                "        func hidden() int32 -> missing\n" +
+                "        @If(false)\n" +
+                "        var field int32 = missing\n" +
+                "    }\n" +
+                "}\n"
+        )
+        let tokens = GetTokens(content)
+        let hidden = FindToken(tokens, 3, 13, 6)
+        Assert.NotNull(hidden)
+        Assert.Equal(TokenTypeIndex("Comment"), hidden!!.TokenType)
+        Assert.True((hidden!!.TokenModifiers & ModifierBit("Inactive")) != 0)
+        let field = FindToken(tokens, 5, 12, 5)
+        Assert.NotNull(field)
+        Assert.Equal(TokenTypeIndex("Comment"), field!!.TokenType)
+        Assert.True((field!!.TokenModifiers & ModifierBit("Inactive")) != 0)
+    }
+
+    @Fact
+    func Tokenize_MarksInactiveCodeWithoutResolvingItsNames() {
+        let content = LanguageServerTestHelpers.Content(
+            "@If(@defined(\"DISABLED\"))\nfunc hidden() int32 -> missing\nfunc visible() int32 -> 1\n"
+        )
+        let tokens = GetTokens(content)
+        let hidden = FindToken(tokens, 1, 5, 6)
+        Assert.NotNull(hidden)
+        Assert.Equal(TokenTypeIndex("Comment"), hidden!!.TokenType)
+        Assert.True((hidden!!.TokenModifiers & ModifierBit("Inactive")) != 0)
+        let visible = FindToken(tokens, 2, 5, 7)
+        Assert.NotNull(visible)
+        Assert.Equal(TokenTypeIndex("Function"), visible!!.TokenType)
+        Assert.Equal(0, visible!!.TokenModifiers & ModifierBit("Inactive"))
+    }
+
     @Theory
     @InlineData(`u8"$name"`, 9)
     @InlineData(`u8"é😀"`, 7)

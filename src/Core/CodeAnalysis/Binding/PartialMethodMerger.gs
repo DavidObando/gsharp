@@ -193,15 +193,27 @@ internal shared class PartialMethodMerger {
     /// @param declaration The (possibly already type-merged) class/struct declaration.
     /// @param diagnostics The bag that receives GS0608-GS0611.
     /// @returns The normalized declaration.
-    func Normalize(declaration StructDeclarationSyntax, diagnostics DiagnosticBag) StructDeclarationSyntax {
+    func Normalize(
+        declaration StructDeclarationSyntax,
+        diagnostics DiagnosticBag,
+        activeCode ConditionalCompilationMap? = nil
+    ) StructDeclarationSyntax {
         let methods = if declaration.Methods.IsDefaultOrEmpty {
             declaration.Methods
         } else {
-            MergeMethodList(declaration.Methods, declaration.IsPartial, diagnostics)
+            MergeMethodList(
+                activeCode?.Filter(declaration.Methods) ?? declaration.Methods,
+                declaration.IsPartial,
+                diagnostics
+            )
         }
         var sharedBlock = declaration.SharedBlock
         if sharedBlock is {} shared && !shared.Methods.IsDefaultOrEmpty {
-            let mergedStatic = MergeMethodList(shared.Methods, declaration.IsPartial, diagnostics)
+            let mergedStatic = MergeMethodList(
+                activeCode?.Filter(shared.Methods) ?? shared.Methods,
+                declaration.IsPartial,
+                diagnostics
+            )
             if !mergedStatic.Equals(shared.Methods) {
                 sharedBlock = SharedBlockSyntax(
                     shared.SyntaxTree,
@@ -216,7 +228,7 @@ internal shared class PartialMethodMerger {
                 ){PartialPartExtents = shared.PartialPartExtents}
             }
         }
-        var nestedTypes = declaration.NestedTypes
+        var nestedTypes = activeCode?.Filter(declaration.NestedTypes) ?? declaration.NestedTypes
         if !nestedTypes.IsDefaultOrEmpty {
             var rebuilt ImmutableArray[MemberSyntax].Builder? = nil
             for var i = 0; i < nestedTypes.Length; i++ {
@@ -224,7 +236,7 @@ internal shared class PartialMethodMerger {
                     rebuilt?.Add(nestedTypes[i])
                     continue
                 }
-                let normalized = Normalize(nested, diagnostics)
+                let normalized = Normalize(nested, diagnostics, activeCode)
                 if rebuilt == nil && !object.ReferenceEquals(normalized, nested) {
                     rebuilt = ImmutableArray.CreateBuilder[MemberSyntax](nestedTypes.Length)
                     rebuilt.AddRange(nestedTypes, i)

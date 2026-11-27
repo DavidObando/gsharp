@@ -21,6 +21,12 @@ import System.Linq
 /// composition and cost). The walk is single threaded and keeps no hash order
 /// in any result: names and call sites are in source order of the walk.
 internal sealed class RegionEffectScanner {
+    private let activeCode ConditionalCompilationMap?
+
+    internal init(activeCode ConditionalCompilationMap? = nil) {
+        this.activeCode = activeCode
+    }
+
     private let topLevelCache Dictionary[SyntaxNode, RegionEffects] = Dictionary[SyntaxNode, RegionEffects]()
     private let nestedCache Dictionary[SyntaxNode, RegionEffects] = Dictionary[SyntaxNode, RegionEffects]()
     private var scopes List[ScopeFrame] = List[ScopeFrame]()
@@ -287,7 +293,7 @@ internal sealed class RegionEffectScanner {
     }
 
     private func VisitNode(node SyntaxNode?) {
-        if node == nil {
+        if node == nil || activeCode?.IsActive(node) == false {
             return
         }
         // The receiver of a member call is valid for the node that follows the dot only.
@@ -1026,7 +1032,7 @@ internal sealed class RegionEffectScanner {
 
     private func VisitBlock(block BlockStatementSyntax) {
         Push()
-        let statements = block.Statements
+        let statements = activeCode?.Filter(block.Statements) ?? block.Statements
         let starts = List[int32]()
         for statement in statements {
             starts.Add(current.Writes.Count)
@@ -1096,8 +1102,12 @@ internal sealed class RegionEffectScanner {
     }
 
     private func EndsInExit(statement StatementSyntax) bool {
+        if activeCode?.IsActive(statement) == false {
+            return false
+        }
         if statement is BlockStatementSyntax block {
-            return block.Statements.Length > 0 && EndsInExit(block.Statements[block.Statements.Length - 1])
+            let statements = activeCode?.Filter(block.Statements) ?? block.Statements
+            return statements.Length > 0 && EndsInExit(statements[statements.Length - 1])
         }
         return statement.Kind == SyntaxKind.BreakStatement ||
             statement.Kind == SyntaxKind.ContinueStatement ||

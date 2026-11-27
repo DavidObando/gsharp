@@ -96,6 +96,9 @@ open class BuildTask : Task, ICancelableTask {
     /// Gets or sets the comma-separated list of diagnostic IDs to suppress (NoWarn MSBuild property).
     prop NoWarn string?
 
+    /// Gets or sets the conditional symbols supplied by the project.
+    prop DefineConstants string?
+
     /// Gets or sets a value indicating whether all warnings should be treated as errors
     /// (TreatWarningsAsErrors MSBuild property).
     prop TreatWarningsAsErrors string?
@@ -288,6 +291,17 @@ open class BuildTask : Task, ICancelableTask {
         }
         if !string.IsNullOrEmpty(this.NoWarn) {
             args.Add("/nowarn:${this.NoWarn}")
+        }
+        if let defineConstants = this.DefineConstants {
+            let symbols = Regex
+                .Split(defineConstants, "[;,\\s]+")
+                .Where((name string) -> name.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy((name string) -> name, StringComparer.Ordinal)
+                .ToArray()
+            if symbols.Length > 0 {
+                args.Add(QuoteIfNeeded("/define:" + string.Join(";", symbols)))
+            }
         }
         if !string.IsNullOrEmpty(this.WarningsAsErrors) {
             args.Add("/warnaserror+:${this.WarningsAsErrors}")

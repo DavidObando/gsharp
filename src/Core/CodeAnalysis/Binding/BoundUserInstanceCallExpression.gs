@@ -101,7 +101,7 @@ class BoundUserInstanceCallExpression : BoundCallOperationExpression {
     @MemberNotNullWhen(true, "ConstrainedReceiverTypeParameter")
     prop IsConstrainedTypeParameterCall bool -> ConstrainedReceiverTypeParameter != nil
 
-    override prop Type TypeSymbol -> returnTypeOverride ?? Method.Type
+    override prop Type TypeSymbol -> GetConditionalCallType(returnTypeOverride ?? Method.Type)
     override prop Kind BoundNodeKind -> BoundNodeKind.UserInstanceCallExpression
 
     /// ```xmldoc

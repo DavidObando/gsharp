@@ -344,6 +344,7 @@ type class GSharp.Core.CodeAnalysis.Analyzers.AnalysisContext : System.Object
   method public Void RegisterSyntaxNodeAction(System.Action`1<GSharp.Core.CodeAnalysis.Analyzers.SyntaxNodeAnalysisContext> action, GSharp.Core.CodeAnalysis.Syntax.SyntaxKind[] syntaxKinds)
   method public Void RegisterSyntaxTreeAction(System.Action`1<GSharp.Core.CodeAnalysis.Analyzers.SyntaxTreeAnalysisContext> action)
 type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
+  method public Boolean IsActive(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode syntax)
   method public Boolean get_ImplicitSystemImport()
   method public Boolean get_IncrementalBodyReuse()
   method public Boolean get_IsLibrary()
@@ -1006,6 +1007,7 @@ type enum GSharp.Core.CodeAnalysis.Syntax.SyntaxKind : Int32
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind DefaultKeyword = 78
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind DeferKeyword = 79
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind DeferStatement = 209
+  field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind DefinedExpression = 285
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind DeinitDeclaration = 257
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind DelegateDeclaration = 258
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind DiscardPattern = 191
@@ -6212,6 +6214,20 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.DeferStatementSyntax : GSharp.
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Expression { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken DeferKeyword { get; }
+type sealed class GSharp.Core.CodeAnalysis.Syntax.DefinedExpressionSyntax : GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax
+  method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> get_Arguments()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_AtToken()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_CloseParenthesis()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_Identifier()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_OpenParenthesis()
+  method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken atToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenthesis, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> arguments, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenthesis)
+  method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
+  property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> Arguments { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken AtToken { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken CloseParenthesis { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken Identifier { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken OpenParenthesis { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.DeinitDeclarationSyntax : GSharp.Core.CodeAnalysis.Syntax.MemberSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax get_Body()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_DeinitKeyword()
@@ -6327,6 +6343,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.EventAccessorSyntax : GSharp.C
   method public GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax get_Body()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_AccessorKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_SemicolonToken()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> get_Annotations()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken accessorKeyword, GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax body, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken semicolonToken)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public Boolean IsAdd { get; }
@@ -6336,6 +6353,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.EventAccessorSyntax : GSharp.C
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken AccessorKeyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken SemicolonToken { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> Annotations { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.EventDeclarationSyntax : GSharp.Core.CodeAnalysis.Syntax.SyntaxNode
   method public Boolean get_HasExplicitInterfaceClause()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_AccessibilityModifier()
@@ -7159,12 +7177,14 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.MultiAssignmentStatementSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> get_Targets()
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> get_Values()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_OperatorToken()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> get_Annotations()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> targets, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken operatorToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> values)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> Targets { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> Values { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken OperatorToken { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> Annotations { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.NameOfExpressionSyntax : GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Argument()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_CloseParenthesis()
@@ -7204,6 +7224,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.NamedDeconstructionStatementSy
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_EqualsToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_Keyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_OpenBraceToken()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> get_Annotations()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken keyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openBraceToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.NamedDeconstructionFieldSyntax> fields, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeBraceToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken equalsToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax initializer)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Initializer { get; }
@@ -7213,6 +7234,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.NamedDeconstructionStatementSy
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken EqualsToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken Keyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken OpenBraceToken { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> Annotations { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.NamedTupleElementSyntax : GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Expression()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ColonToken()
@@ -7334,6 +7356,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.PropertyAccessorSyntax : GShar
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_OpenParenToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ParameterIdentifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_SemicolonToken()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> get_Annotations()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken accessibilityModifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken accessorKeyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken parameterIdentifier, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax body, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken semicolonToken)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public Boolean IsGetter { get; }
@@ -7348,6 +7371,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.PropertyAccessorSyntax : GShar
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken OpenParenToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ParameterIdentifier { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken SemicolonToken { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> Annotations { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax : GSharp.Core.CodeAnalysis.Syntax.SyntaxNode
   method public Boolean get_HasExplicitInterfaceClause()
   method public Boolean get_HasStaticModifier()
@@ -7906,6 +7930,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.TupleDeconstructionStatementSy
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_EqualsToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_Keyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_OpenParenToken()
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> get_Annotations()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken keyword, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken openParenToken, GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken> identifiers, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken closeParenToken, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken equalsToken, GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax initializer)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
   property public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax Initializer { get; }
@@ -7915,6 +7940,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.TupleDeconstructionStatementSy
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken EqualsToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken Keyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken OpenParenToken { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.AnnotationSyntax> Annotations { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.TupleLiteralExpressionSyntax : GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax> get_Elements()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_CloseParenToken()
@@ -8429,6 +8455,8 @@ type static class GSharp.Core.CodeAnalysis.Binding.ExhaustivenessAnalyzer : Syst
 type static class GSharp.Core.CodeAnalysis.Binding.IteratorDetection : System.Object
   method public static Boolean ContainsYield(GSharp.Core.CodeAnalysis.Binding.BoundStatement body)
   method public static Boolean ContainsYield(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode body)
+type static class GSharp.Core.CodeAnalysis.ConditionalSymbols : System.Object
+  method public static Boolean IsValidName(String name)
 type static class GSharp.Core.CodeAnalysis.Diagnostics.DiagnosticLogPaths : System.Object
   method public static String GetDefaultFilePath(String fileName)
 type static class GSharp.Core.CodeAnalysis.Documentation.DocumentationIdProvider : System.Object

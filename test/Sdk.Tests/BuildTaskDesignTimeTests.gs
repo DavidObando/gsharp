@@ -67,6 +67,29 @@ open class BuildTaskDesignTimeTests {
     }
 
     @Fact
+    func DefineConstants_ForwardsSortedCaseSensitiveSymbols() {
+        let task = BuildTask{
+            GsharpCompilerFullPath: "missing-gsc.dll",
+            OutputPath: ".",
+            OutputName: "Symbols",
+            TempOutputPath: ".",
+            TargetFramework: "net10.0",
+            BasePath: ".",
+            OutputType: "Library",
+            ResponseFilePath: "symbols.rsp",
+            Compile: cast[[]ITaskItem]([]TaskItem{TaskItem("Program.gs")}),
+            References: cast[[]ITaskItem](Array.Empty[TaskItem]()),
+            DefineConstants: "TRACE;debug DEBUG,TRACE\tFeature",
+            SkipCompilerExecution: "true",
+            ProvideCommandLineArgs: "true"
+        }
+        Assert.True(task.Execute())
+        let arguments = task.CommandLineArgs.Select((item ITaskItem) -> item.ItemSpec!!).ToArray()
+        Assert.Contains("/define:DEBUG;Feature;TRACE;debug", arguments)
+        Assert.Single(arguments.Where((argument string) -> argument.StartsWith("/define:", StringComparison.Ordinal)))
+    }
+
+    @Fact
     func ResxLogicalName_GetsResourcesSuffix() {
         let resource = TaskItem("Resources.resources")
         resource.SetMetadata("LogicalName", "Demo.Properties.Resources")

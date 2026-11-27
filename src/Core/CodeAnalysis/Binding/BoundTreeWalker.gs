@@ -7,6 +7,11 @@ package GSharp.Core.CodeAnalysis.Binding
 import System
 import System.Collections.Immutable
 
+/// Visits retained active source, including operands that conditional calls do not execute.
+internal abstract class BoundSemanticTreeWalker : BoundTreeWalker {
+    internal override prop VisitElidedConditionalCallOperands bool -> true
+}
+
 /// Abstract bound-tree visitor that, by default, recurses into every child of
 /// every node — mirroring the coverage of (cref:BoundTreeRewriter).
 /// Subclasses override `VisitX` methods to observe nodes of interest;
@@ -20,6 +25,9 @@ import System.Collections.Immutable
 /// without a pre-allocated slot and threw at emit time. Using this default-
 /// recurse walker eliminates the entire class of bug.
 abstract class BoundTreeWalker {
+    /// Semantic walkers inspect active source operands even when execution is elided.
+    internal open prop VisitElidedConditionalCallOperands bool -> false
+
     /// Dispatch on a generic node.
     /// @param node The bound node to visit. Null is a legitimate absent optional child.
     open func Visit(node BoundNode?) {
@@ -112,6 +120,15 @@ abstract class BoundTreeWalker {
     open func VisitExpression(node BoundExpression?) {
         if node == nil {
             return
+        }
+        if node is BoundCallOperationExpression call &&
+            call.IsElidedConditionalCall &&
+            VisitElidedConditionalCallOperands &&
+            !call.ElidedSourceStatements.IsDefaultOrEmpty {
+            // Index original source before synthetic receiver references can claim its syntax.
+            for statement in call.ElidedSourceStatements {
+                VisitStatement(statement)
+            }
         }
         switch node.Kind {
             case BoundNodeKind.ErrorExpression,
@@ -465,6 +482,9 @@ abstract class BoundTreeWalker {
     }
 
     protected open func VisitCallExpression(node BoundCallExpression) {
+        if node.IsElidedConditionalCall && !VisitElidedConditionalCallOperands {
+            return
+        }
         VisitList(node.Arguments)
     }
 
@@ -480,10 +500,16 @@ abstract class BoundTreeWalker {
     }
 
     protected open func VisitImportedCallExpression(node BoundImportedCallExpression) {
+        if node.IsElidedConditionalCall && !VisitElidedConditionalCallOperands {
+            return
+        }
         VisitList(node.Arguments)
     }
 
     protected open func VisitImportedInstanceCallExpression(node BoundImportedInstanceCallExpression) {
+        if node.IsElidedConditionalCall && !VisitElidedConditionalCallOperands {
+            return
+        }
         VisitExpression(node.Receiver)
         VisitList(node.Arguments)
     }
@@ -491,6 +517,9 @@ abstract class BoundTreeWalker {
     /// ADR-0089 / issue #755: visit a constrained static-virtual call.
     /// @param node The bound node.
     protected open func VisitConstrainedStaticCallExpression(node BoundConstrainedStaticCallExpression) {
+        if node.IsElidedConditionalCall && !VisitElidedConditionalCallOperands {
+            return
+        }
         VisitList(node.Arguments)
     }
 
@@ -565,6 +594,9 @@ abstract class BoundTreeWalker {
     }
 
     protected open func VisitUserInstanceCallExpression(node BoundUserInstanceCallExpression) {
+        if node.IsElidedConditionalCall && !VisitElidedConditionalCallOperands {
+            return
+        }
         VisitExpression(node.Receiver)
         VisitList(node.Arguments)
     }
@@ -572,6 +604,9 @@ abstract class BoundTreeWalker {
     /// ADR-0091: visits a (cref:BoundBaseInterfaceCallExpression).
     /// @param node The node being visited.
     protected open func VisitBaseInterfaceCallExpression(node BoundBaseInterfaceCallExpression) {
+        if node.IsElidedConditionalCall && !VisitElidedConditionalCallOperands {
+            return
+        }
         VisitExpression(node.Receiver)
         VisitList(node.Arguments)
     }
@@ -660,6 +695,9 @@ abstract class BoundTreeWalker {
     }
 
     protected open func VisitClrStaticCallExpression(node BoundClrStaticCallExpression) {
+        if node.IsElidedConditionalCall && !VisitElidedConditionalCallOperands {
+            return
+        }
         VisitList(node.Arguments)
     }
 

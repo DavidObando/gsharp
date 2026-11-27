@@ -27,7 +27,7 @@ import System.Collections.Generic
 /// (cref:AccessibilityChecker.ViolatesProtectedReceiverRule), which
 /// reports nothing the class-level check already rejected.
 internal shared class ProtectedReceiverDiagnostics {
-    private class Walker : BoundTreeWalker {
+    private class Walker : BoundSemanticTreeWalker {
         private let diagnostics DiagnosticBag
         private let reported HashSet[(Location TextLocation, Member string)] = HashSet[
             (Location TextLocation, Member string)

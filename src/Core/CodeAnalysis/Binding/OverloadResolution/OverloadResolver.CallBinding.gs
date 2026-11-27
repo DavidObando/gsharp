@@ -3529,9 +3529,8 @@ internal partial class OverloadResolver {
 
     /// Constructs a (cref:BoundCallExpression) for a direct function
     /// call, applying ADR-0047 §6 / issue #176 `[Conditional]` call-site
-    /// elision. When elision applies, the resulting call carries an empty
-    /// argument list (C# semantics: arguments to a conditional method are
-    /// not evaluated when the symbol is undefined) and the
+    /// elision. The call retains its bound arguments for semantic validation;
+    /// when elision applies the
     /// (cref:BoundCallExpression.IsConditionalElided) flag is set so
     /// the emitter and interpreter skip both argument evaluation and the
     /// method invocation. The validation that the function returns
@@ -3539,23 +3538,20 @@ internal partial class OverloadResolver {
     /// can rely on the elided call being a no-op of type `void`.
     /// Argument binding still ran above so wrong-type diagnostics on the
     /// elided arguments are reported normally.
-    private func CreatePossiblyElidedCall(
+    internal func CreatePossiblyElidedCall(
         syntax CallExpressionSyntax,
         function FunctionSymbol,
         arguments ImmutableArray[BoundExpression],
         returnType TypeSymbol?,
         methodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
-    ) BoundExpression {
-        if KnownAttributes.IsConditionallyElided(function.Attributes, Scope.PreprocessorSymbols) {
-            return BoundCallExpression(
-                nil,
-                function,
-                ImmutableArray[BoundExpression].Empty,
-                returnType,
-                isConditionalElided: true
-            ){MethodTypeArguments = methodTypeArguments}
-        }
-        return BoundCallExpression(syntax, function, arguments, returnType){MethodTypeArguments = methodTypeArguments}
+    ) BoundCallExpression {
+        return BoundCallExpression(
+            syntax,
+            function,
+            arguments,
+            returnType,
+            isConditionalElided: KnownAttributes.IsConditionallyElided(function, Scope.ConditionalCompilation, syntax)
+        ){MethodTypeArguments = methodTypeArguments, ConditionalElisionChecked = true}
     }
 
     /// Issue #3760: resolves a user method group against a fully closed input
