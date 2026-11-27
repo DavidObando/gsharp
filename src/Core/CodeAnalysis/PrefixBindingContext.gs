@@ -129,6 +129,12 @@ internal sealed class PrefixCut {
         set;
     }
 
+    /// Gets or sets the conditional-compilation activity map of the prefix compilation (#6229).
+    internal prop ActiveCode ConditionalCompilationMap? {
+        get;
+        set;
+    }
+
     // #6179: the spans of the expressions whose type a later declaration can change. Bodies can bind in
     // parallel, so the lock guards both collections.
     private let provisionalGate object = SystemObject()
@@ -751,13 +757,12 @@ internal shared class PrefixBindingContext {
     /// @param name The function name.
     /// @returns `true` when a package-level function owns the name.
     internal func HasTopLevelFunction(cut PrefixCut, name string) bool {
+        let activeCode = cut.ActiveCode
         for tree in cut.ProvisionalTreeList() {
             for member in tree.Root.Members {
-                if member is FunctionDeclarationSyntax fn && string.Equals(
-                    fn.Identifier.ValueText,
-                    name,
-                    StringComparison.Ordinal
-                ) {
+                if member is FunctionDeclarationSyntax fn &&
+                    (activeCode == nil || activeCode.IsActive(fn)) &&
+                    string.Equals(fn.Identifier.ValueText, name, StringComparison.Ordinal) {
                     return true
                 }
             }
@@ -979,12 +984,23 @@ internal shared class PrefixBindingContext {
         }
         // A report inside a lambda can depend on an enclosing call or contextual assignment target whose
         // signature or receiver uses a provisional expression (#6229). A function literal always declares its
-        // parameter types and returns either its explicit type or void, so its body does not depend on an
-        // enclosing context.
+        // parameter types and returns either its explicit type or void, so an independent body diagnostic does
+        // not inherit an outer lambda's context; whole-literal conversions and captured outer-lambda variables
+        // still follow the outer context.
         for var i = enclosingLambdas.Count - 1; i >= 0; i-- {
             let lambda = enclosingLambdas[i]
             if skipSubtree != nil && object.ReferenceEquals(lambda, skipSubtree) {
                 continue
+            }
+            if lambda is FunctionLiteralExpressionSyntax funcLit {
+                if funcLit.Span.Start == span.Start && funcLit.Span.End == span.End {
+                    continue
+                }
+                if statement is {} stmt &&
+                    StatementCapturesOuterLambdaName(tree, stmt, funcLit, enclosingLambdas, i, skipSubtree, span, cut) {
+                    continue
+                }
+                break
             }
             if lambda is not LambdaExpressionSyntax {
                 continue
@@ -1022,6 +1038,247 @@ internal shared class PrefixBindingContext {
         }
         return false
     }
+
+    private func StatementCapturesOuterLambdaName(
+        tree SyntaxTree,
+        statement SyntaxNode,
+        funcLit FunctionLiteralExpressionSyntax,
+        enclosingLambdas List[SyntaxNode],
+        funcLitIndex int32,
+        skipSubtree SyntaxNode?,
+        report TextSpan,
+        cut PrefixCut
+    ) bool {
+        let outerLambdaNames = HashSet[string](StringComparer.Ordinal)
+        for var j = 0; j < funcLitIndex; j++ {
+            if enclosingLambdas[j] is LambdaExpressionSyntax outerLambda {
+                for param in outerLambda.Parameters {
+                    if param.Identifier is {} id && !id.IsMissing {
+                        outerLambdaNames.Add(id.ValueText)
+                    }
+                }
+                var cursor SyntaxNode = funcLit
+                while tree.GetParent(cursor) is {} parent {
+                    if parent is StatementSyntax && parent is not BlockStatementSyntax {
+                        CollectHeaderNames(
+                            parent,
+                            parent,
+                            false,
+                            outerLambdaNames,
+                            declared: true,
+                            activeCode: cut.ActiveCode
+                        )
+                    }
+                    for sibling in parent.GetChildren() {
+                        if sibling.Span.End <= funcLit.Span.Start && sibling is StatementSyntax {
+                            CollectHeaderNames(
+                                sibling,
+                                sibling,
+                                false,
+                                outerLambdaNames,
+                                declared: true,
+                                activeCode: cut.ActiveCode
+                            )
+                        }
+                    }
+                    if object.ReferenceEquals(parent, outerLambda) {
+                        break
+                    }
+                    cursor = parent
+                }
+            }
+        }
+        if outerLambdaNames.Count == 0 {
+            return false
+        }
+        let ownParams = HashSet[string](StringComparer.Ordinal)
+        for param in funcLit.Parameters {
+            if param.Identifier is {} id && !id.IsMissing {
+                ownParams.Add(id.ValueText)
+            }
+        }
+        return StatementReadsOuterLambdaName(
+            tree,
+            statement,
+            funcLit,
+            outerLambdaNames,
+            ownParams,
+            4,
+            HashSet[object](ReferenceEqualityComparer.Instance),
+            skipSubtree,
+            report,
+            cut
+        )
+    }
+
+    private func StatementReadsOuterLambdaName(
+        tree SyntaxTree,
+        statement SyntaxNode,
+        funcLit FunctionLiteralExpressionSyntax,
+        outerLambdaNames HashSet[string],
+        ownParams HashSet[string],
+        depth int32,
+        visited HashSet[object],
+        skipSubtree SyntaxNode?,
+        report TextSpan?,
+        cut PrefixCut
+    ) bool {
+        if depth < 0 {
+            return true
+        }
+        if !visited.Add(statement) {
+            return false
+        }
+        let reads = HashSet[string](StringComparer.Ordinal)
+        CollectHeaderNames(
+            statement,
+            statement,
+            statement is ExpressionSyntax,
+            reads,
+            declared: false,
+            skipSubtree: skipSubtree,
+            report: report,
+            activeCode: cut.ActiveCode
+        )
+        if reads.Count == 0 {
+            return false
+        }
+        let earlier = List[SyntaxNode]()
+        var cursor SyntaxNode = statement
+        while tree.GetParent(cursor) is {} parent {
+            if object.ReferenceEquals(parent, funcLit) {
+                break
+            }
+            if parent is StatementSyntax && parent is not BlockStatementSyntax {
+                earlier.Add(parent)
+            }
+            for sibling in parent.GetChildren() {
+                if sibling.Span.End <= statement.Span.Start && sibling is StatementSyntax {
+                    earlier.Add(sibling)
+                }
+            }
+            cursor = parent
+        }
+        let localDecls = Dictionary[string, List[SyntaxNode]](StringComparer.Ordinal)
+        for entry in earlier {
+            var candidate = entry
+            while candidate is LabeledStatementSyntax labeled {
+                candidate = labeled.Statement
+            }
+            let declared = HashSet[string](StringComparer.Ordinal)
+            CollectHeaderNames(candidate, candidate, false, declared, declared: true, activeCode: cut.ActiveCode)
+            for name in declared {
+                if !localDecls.TryGetValue(name, out var list) {
+                    list = List[SyntaxNode]()
+                    localDecls[name] = list
+                }
+                list.Add(candidate)
+            }
+        }
+        for name in reads {
+            if ownParams.Contains(name) {
+                continue
+            }
+            if localDecls.TryGetValue(name, out var decls) {
+                for decl in decls {
+                    if StatementReadsOuterLambdaName(
+                        tree,
+                        decl,
+                        funcLit,
+                        outerLambdaNames,
+                        ownParams,
+                        depth - 1,
+                        visited,
+                        nil,
+                        nil,
+                        cut
+                    ) {
+                        return true
+                    }
+                }
+                continue
+            }
+            if outerLambdaNames.Contains(name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Finds the outermost lambda or function literal along the contextual-result path from
+    /// [`root`](paramref) to [`span`](paramref) (#6229).
+    /// @param root The argument expression.
+    /// @param span The diagnostic span.
+    /// @returns The containing lambda or function literal, or `null`.
+    internal func FindContainingContextualLambda(root ExpressionSyntax, span TextSpan) SyntaxNode? {
+        var current SyntaxNode = root
+        while true {
+            if current is LambdaExpressionSyntax || current is FunctionLiteralExpressionSyntax {
+                return current
+            }
+            if TryStepContextualResultChild(current, span) is {} next {
+                current = next
+                continue
+            }
+            return nil
+        }
+        return nil
+    }
+
+    private func TryStepContextualResultChild(current SyntaxNode, span TextSpan) SyntaxNode? {
+        if current is ParenthesizedExpressionSyntax paren && SpanContains(paren.Expression.Span, span) {
+            return paren.Expression
+        }
+        if current is CheckedExpressionSyntax checkedExpr && SpanContains(checkedExpr.Expression.Span, span) {
+            return checkedExpr.Expression
+        }
+        if current is BlockExpressionSyntax block && block.Expression is {} tail && SpanContains(tail.Span, span) {
+            return tail
+        }
+        if current is ConditionalExpressionSyntax cond {
+            if SpanContains(cond.WhenTrue.Span, span) {
+                return cond.WhenTrue
+            }
+            if SpanContains(cond.WhenFalse.Span, span) {
+                return cond.WhenFalse
+            }
+        }
+        if current is IfExpressionSyntax ifExpr {
+            if SpanContains(ifExpr.ThenBlock.Span, span) {
+                return ifExpr.ThenBlock
+            }
+            if ifExpr.ElseExpression is {} elseExpr && SpanContains(elseExpr.Span, span) {
+                return elseExpr
+            }
+        }
+        if current is IfLetExpressionSyntax ifLet {
+            if SpanContains(ifLet.ThenBlock.Span, span) {
+                return ifLet.ThenBlock
+            }
+            if ifLet.ElseExpression is {} elseExpr && SpanContains(elseExpr.Span, span) {
+                return elseExpr
+            }
+        }
+        if current is SwitchExpressionSyntax sw {
+            for arm in sw.Arms {
+                if SpanContains(arm.Result.Span, span) {
+                    return arm.Result
+                }
+            }
+        }
+        if current is BinaryExpressionSyntax binary && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
+            if SpanContains(binary.Left.Span, span) {
+                return binary.Left
+            }
+            if SpanContains(binary.Right.Span, span) {
+                return binary.Right
+            }
+        }
+        return nil
+    }
+
+    private func SpanContains(outer TextSpan, inner TextSpan) bool -> outer.Start <= inner.Start &&
+        inner.End <= outer.End
 
     private func TryStepContextualResultParent(
         tree SyntaxTree,
@@ -1068,6 +1325,11 @@ internal shared class PrefixBindingContext {
         if parent is SwitchExpressionSyntax && current is SwitchExpressionArmSyntax {
             return parent
         }
+        if parent is BinaryExpressionSyntax binary &&
+            binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken &&
+            (object.ReferenceEquals(binary.Left, current) || object.ReferenceEquals(binary.Right, current)) {
+            return parent
+        }
         return nil
     }
 
@@ -1100,6 +1362,14 @@ internal shared class PrefixBindingContext {
                 parent is EventSubscriptionExpressionSyntax eventSub && object.ReferenceEquals(eventSub.Value, current)
             ) {
                 return parent
+            }
+            if parent is PropertyInitializerSyntax propInit && object.ReferenceEquals(propInit.Value, current) &&
+                tree.GetParent(propInit) is ObjectCreationExpressionSyntax objCreation {
+                return objCreation
+            }
+            if parent is FieldInitializerSyntax fieldInit && object.ReferenceEquals(fieldInit.Value, current) &&
+                tree.GetParent(fieldInit) is WithExpressionSyntax withExpr {
+                return withExpr
             }
             return nil
         }

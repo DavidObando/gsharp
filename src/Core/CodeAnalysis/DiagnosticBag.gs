@@ -584,9 +584,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                             break
                         }
                     }
-                    if value is LambdaExpressionSyntax || value is FunctionLiteralExpressionSyntax {
-                        skipSubtree = value
-                    }
+                    skipSubtree = PrefixBindingContext.FindContainingContextualLambda(value, span)
                     let strictFunctionLiteral = HasStrictEnclosingFunctionLiteral(value, span)
                     dependsOnCandidate = !strictFunctionLiteral &&
                         (

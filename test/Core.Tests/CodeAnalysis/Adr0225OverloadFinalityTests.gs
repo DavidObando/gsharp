@@ -4339,6 +4339,324 @@ let int32 = func (i int32) string {
             nestedFixedCallErrors,
             (d ClassifiedDiagnostic) -> Assert.Equal(DiagnosticFinality.Final, d.Finality)
         )
+
+        // 41. Source derived class inheriting a single non-generic CLR base method records a fixed signature
+        // before binding arguments.
+        const derivedClrReceiverSource = `package P
+
+import System
+import ClrApi
+
+class DerivedClr : BaseClrBox {
+}
+
+func CallDerived(d DerivedClr) {
+    let v = int32(1)
+    d.RunExpr(() -> v, () -> {
+        let badDerived int32 = "s"
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let derivedClrCut = derivedClrReceiverSource.IndexOf("/*CUT*/", StringComparison.Ordinal)
+        Assert.True(derivedClrCut >= 0)
+        let derivedClrTree = SyntaxTree.Parse(
+            SourceText.From(derivedClrReceiverSource.Replace("/*CUT*/", string.Empty), "prefix.gs")
+        )
+        let derivedClrKeep = Compilation(clrResolver, derivedClrTree).BindPrefix(
+            derivedClrTree,
+            derivedClrCut,
+            PrefixBindOptions(PrefixRemainder.KeepDeclarations, includeScope: false)
+        )
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            derivedClrKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        // 42. Conditional-arm lambda in an overloaded call excludes its own provisional returns while
+        // preserving the other arm's dependencies.
+        const conditionalOwnLambdaControl = `package P
+
+class Overloaded {
+    shared {
+        func Run(a int32, f () -> int32) {
+        }
+
+        func Run(a int32, f () -> string) {
+        }
+    }
+}
+
+func Use(cond bool) {
+    Overloaded.Run(1, cond ? () -> {
+        if false {
+            return int32(1)
+        }
+        let bad int32 = "s"
+        return 0
+    } : () -> 0)
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let conditionalOwnKeep = BindKeep(conditionalOwnLambdaControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            conditionalOwnKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        const conditionalOtherArmWitness = `package P
+
+class Overloaded {
+    shared {
+        func Run[T](f () -> T) {
+        }
+    }
+}
+
+func Use(cond bool) {
+    Overloaded.Run(cond ? () -> {
+        return "s"
+    } : () -> int32(1))
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+`
+        let conditionalOtherArmComplete = Diagnose(conditionalOtherArmWitness.Replace("/*CUT*/", string.Empty))
+        Assert.True(
+            conditionalOtherArmComplete.Length == 0,
+            string.Join("; ", conditionalOtherArmComplete.Select((d Diagnostic) -> d.ToString()))
+        )
+        let conditionalOtherArmKeep = BindKeep(conditionalOtherArmWitness)
+        Assert.NotEmpty(conditionalOtherArmKeep.Diagnostics)
+        Assert.All(
+            conditionalOtherArmKeep.Diagnostics,
+            (d ClassifiedDiagnostic) -> {
+                Assert.Equal(DiagnosticFinality.FutureDependent, d.Finality)
+                Assert.Equal("later-overload", d.Reason)
+            }
+        )
+
+        // 43. An inactive @If(false) top-level function does not reserve the name against a later global.
+        const inactiveFunctionSource = `package P
+
+import P.Holder
+
+class Holder {
+    shared {
+        private let Secret int32 = 42
+    }
+}
+
+@If(false)
+func Secret() {
+}
+
+func Use() int32 {
+    return Secret
+}
+
+let before = 0
+/*CUT*/
+let Secret int32 = 1
+`
+        AssertWitness(inactiveFunctionSource.Replace("/*CUT*/", string.Empty), "GS0472")
+        AssertFutureDependent(BindKeep(inactiveFunctionSource), "GS0472", "later-overload")
+
+        // 44. A function literal nested inside a lambda passed to a provisional receiver keeps independent
+        // body errors Final while preserving captured-variable and whole-literal conversion dependencies.
+        const nestedFunctionLiteralControl = `package P
+
+class BoxInt {
+    func Run(f (int32) -> void) {
+    }
+}
+
+class BoxStr {
+    func Run(f (string) -> void) {
+    }
+}
+
+func Make(i int32) BoxInt {
+    return BoxInt()
+}
+
+func Use() {
+    Make(int32(1)).Run((x) -> {
+        let f = func () {
+            let bad int32 = "s"
+        }
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+func Make(s string) BoxStr {
+    return BoxStr()
+}
+`
+        let nestedFuncLitKeep = BindKeep(nestedFunctionLiteralControl)
+        Assert.Equal(
+            DiagnosticFinality.Final,
+            nestedFuncLitKeep.Diagnostics.Single((d ClassifiedDiagnostic) -> d.Diagnostic.Id == "GS0155").Finality
+        )
+
+        const nestedFunctionLiteralCaptureWitness = `package P
+
+class BoxInt {
+    func Run(f (int32) -> void) {
+    }
+}
+
+class BoxStr {
+    func Run(f (string) -> void) {
+    }
+}
+
+func Make(i int32) BoxInt {
+    return BoxInt()
+}
+
+func Use() {
+    Make(int32(1)).Run((x) -> {
+        let f = func () {
+            let s string = x
+        }
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+func Make(s string) BoxStr {
+    return BoxStr()
+}
+`
+        AssertWitness(nestedFunctionLiteralCaptureWitness.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(nestedFunctionLiteralCaptureWitness), "GS0155", "later-overload")
+
+        const nestedFunctionLiteralConversionWitness = `package P
+
+class BoxInt {
+    func Run(f () -> () -> int32) {
+    }
+}
+
+class BoxStr {
+    func Run(f () -> () -> string) {
+    }
+}
+
+func Make(i int32) BoxInt {
+    return BoxInt()
+}
+
+func Use() {
+    Make(int32(1)).Run(() -> {
+        return func () string {
+            return ""
+        }
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+func Make(s string) BoxStr {
+    return BoxStr()
+}
+`
+        AssertWitness(nestedFunctionLiteralConversionWitness.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(nestedFunctionLiteralConversionWitness), "GS0155", "later-overload")
+
+        // 45. Contextual lambda inside `??` on the RHS of an indexed assignment inherits the provisional target.
+        const coalesceIndexedAssignLambdaSource = `package P
+
+import System
+
+func Make(i int32) []Action[int32] {
+    return [1]Action[int32]
+}
+
+func Use() {
+    let a = Make(int32(1))
+    a[0] = nil ?? ((x) -> {
+        let s string = x
+    })
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+func Make(s string) []Action[string] {
+    return [1]Action[string]
+}
+`
+        AssertWitness(coalesceIndexedAssignLambdaSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(coalesceIndexedAssignLambdaSource), "GS0155", "later-overload")
+
+        // 46. Contextual lambda inside an object-creation property initializer inherits the provisional target.
+        const objectCreationInitializerLambdaSource = `package P
+
+class BoxInt {
+    prop Handler ((int32) -> void)? {
+        get;
+        set;
+    }
+}
+
+class BoxStr {
+    prop Handler ((string) -> void)? {
+        get;
+        set;
+    }
+}
+
+func Make(i int32) BoxInt {
+    return BoxInt()
+}
+
+func Use() {
+    let b = Make(int32(1)){
+        Handler = (x) -> {
+            let s string = x
+        }
+    }
+}
+
+let before = 0
+/*CUT*/
+let int32 = func (i int32) string {
+    return ""
+}
+func Make(s string) BoxStr {
+    return BoxStr()
+}
+`
+        AssertWitness(objectCreationInitializerLambdaSource.Replace("/*CUT*/", string.Empty), "GS0155")
+        AssertFutureDependent(BindKeep(objectCreationInitializerLambdaSource), "GS0155", "later-overload")
     }
 
     @Fact

@@ -1104,6 +1104,7 @@ open class Compilation {
                 for other in SyntaxTrees {
                     prefixCut.AddTree(other)
                 }
+                prefixCut.ActiveCode = ConditionalCompilation
                 return prefixCut
             }
         }

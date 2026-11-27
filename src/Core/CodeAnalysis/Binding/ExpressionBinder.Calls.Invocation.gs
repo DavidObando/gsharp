@@ -2067,6 +2067,19 @@ internal partial class ExpressionBinder {
                 }
                 if defaultCount == 1 && singleDefault != nil && !singleDefault.IsGeneric {
                     PrefixBindingContext.AddFixedSignatureCall(ce)
+                } else if defaultCount == 0 {
+                    let inheritedBaseClr = GetInheritedClrBaseType(structRecv) ?? typeof(object)
+                    let inheritedCandidates = List[MethodInfo](
+                        MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(inheritedBaseClr, methodName)
+                    )
+                    for protectedCandidate in CollectBaseClrMethodCandidates(inheritedBaseClr, methodName) {
+                        if !MemberLookup.HasSameSignature(inheritedCandidates, protectedCandidate) {
+                            inheritedCandidates.Add(protectedCandidate)
+                        }
+                    }
+                    if inheritedCandidates.Count == 1 && !inheritedCandidates[0].IsGenericMethod {
+                        PrefixBindingContext.AddFixedSignatureCall(ce)
+                    }
                 }
             }
             return
