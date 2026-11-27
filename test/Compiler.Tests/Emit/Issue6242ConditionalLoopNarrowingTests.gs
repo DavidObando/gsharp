@@ -400,4 +400,139 @@ Console.Write(Read("xy"))`
         Assert.NotEqual(0, codeImported)
         Assert.Contains("GS0158", outputImported)
     }
+
+    @Fact
+    func Driver_NestedLoopUnderEnclosingReceiverTypeTest_StillRejectsWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `import System
+import System.Diagnostics
+class ActiveProbe {
+    func Keep(value string?) {}
+}
+@Conditional("A")
+func (self object) Keep(value string?) {}
+func Read(probe object, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        if probe is ActiveProbe {
+            var once = true
+            while once {
+                probe.Keep((s = nil))
+                once = false
+            }
+        }
+    }
+    return 0
+}
+Console.Write(Read(ActiveProbe(), "xy"))`
+        let (code, output) = fixture.TryCompile(source, "ConditionalLoopNestedTypeTest6242", executable: true)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0158", output)
+    }
+
+    @Fact
+    func Driver_BodyLocalShadowedAndSmartCastArgument_OverloadSelection_StillRejectsWithGS0158() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let shadowedSource = `import System
+import System.Diagnostics
+@Conditional("A")
+func Keep(tag string, value string?) {}
+func Keep(tag int32, value string?) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let tag = "x"
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        let tag = 1
+        Keep(tag, (s = nil))
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codeShadow, outputShadow) = fixture.TryCompile(
+            shadowedSource,
+            "ConditionalLoopShadowedArg6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeShadow)
+        Assert.Contains("GS0158", outputShadow)
+
+        let smartCastSource = `import System
+import System.Diagnostics
+@Conditional("A")
+func Keep(tag object, value string?) {}
+func Keep(tag int32, value string?) {}
+func Read(tag object, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        if tag is int32 {
+            Keep(tag, (s = nil))
+        }
+    }
+    return 0
+}
+Console.Write(Read(1, "xy"))`
+        let (codeSmart, outputSmart) = fixture.TryCompile(
+            smartCastSource,
+            "ConditionalLoopSmartCastArg6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeSmart)
+        Assert.Contains("GS0158", outputSmart)
+    }
+
+    @Fact
+    func Driver_ConstantNarrowingOverloads_PreservesActiveRejection_AndAllowsOmittedByteOverload() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let activeSource = `import System
+import System.Diagnostics
+class Probe {
+    func Keep(value string?, b uint8) {}
+}
+@Conditional("A")
+func (self Probe) Keep(value string?, b object) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    let probe = Probe()
+    for var i = 0; i < 2; i++ {
+        Console.Write(s.Length)
+        probe.Keep((s = nil), 1)
+    }
+    return 0
+}
+Console.Write(Read("xy"))`
+        let (codeActive, outputActive) = fixture.TryCompile(
+            activeSource,
+            "ConditionalLoopConstNarrowActive6242",
+            executable: true
+        )
+        Assert.NotEqual(0, codeActive)
+        Assert.Contains("GS0158", outputActive)
+
+        let omittedSource = `import System
+import System.Diagnostics
+@Conditional("A")
+func Keep(value string?, b uint8) {}
+func Read(input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    var once = true
+    while once {
+        Keep((s = nil), 1)
+        Console.Write(s.Length)
+        once = false
+    }
+    return s.Length
+}
+Console.Write(Read("xy"))`
+        let program = fixture.Compile(omittedSource, "ConditionalLoopConstNarrowOmitted6242", executable: true)
+        IlVerifier.Verify(program)
+        Assert.Equal(Encoding.UTF8.GetBytes("22"), fixture.RunBytes(program))
+    }
 }

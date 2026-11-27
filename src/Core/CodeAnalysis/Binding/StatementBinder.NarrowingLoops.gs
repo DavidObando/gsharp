@@ -17012,7 +17012,8 @@ internal partial class StatementBinder {
         call CallExpressionSyntax,
         receiver ExpressionSyntax?,
         receiverPath RegionReceiverPath?,
-        effects RegionEffects
+        effects RegionEffects,
+        isDeclaredInRegion Func[string, bool]
     ) bool {
         if call.Callee != nil {
             return false
@@ -17021,7 +17022,7 @@ internal partial class StatementBinder {
         if string.IsNullOrEmpty(name) {
             return false
         }
-        let argSpecs = ExtractConditionalCallArgumentSpecs(call)
+        let argSpecs = ExtractConditionalCallArgumentSpecs(call, effects, isDeclaredInRegion)
         if receiver == nil {
             return IsElidedBareConditionalCall(call, name, argSpecs)
         }
@@ -17029,12 +17030,22 @@ internal partial class StatementBinder {
     }
 
     private sealed class ConditionalCallArgSpec {
-        init(type TypeSymbol?, refKind RefKind) {
-            Type = type
+        init(possibleTypes List[TypeSymbol]?, constantValue object?, hasConstant bool, refKind RefKind) {
+            PossibleTypes = possibleTypes
+            ConstantValue = constantValue
+            HasConstant = hasConstant
             RefKind = refKind
         }
 
-        prop Type TypeSymbol? {
+        prop PossibleTypes List[TypeSymbol]? {
+            get;
+        }
+
+        prop ConstantValue object? {
+            get;
+        }
+
+        prop HasConstant bool {
             get;
         }
 
@@ -17043,7 +17054,11 @@ internal partial class StatementBinder {
         }
     }
 
-    private func ExtractConditionalCallArgumentSpecs(call CallExpressionSyntax) List[ConditionalCallArgSpec]? {
+    private func ExtractConditionalCallArgumentSpecs(
+        call CallExpressionSyntax,
+        effects RegionEffects,
+        isDeclaredInRegion Func[string, bool]
+    ) List[ConditionalCallArgSpec]? {
         let specs = List[ConditionalCallArgSpec](call.Arguments.Count)
         for argument in call.Arguments {
             var current = argument
@@ -17060,19 +17075,23 @@ internal partial class StatementBinder {
                     case "in": RefKind.In
                     default: RefKind.Ref
                 }
-                specs.Add(ConditionalCallArgSpec(nil, kind))
+                specs.Add(ConditionalCallArgSpec(nil, nil, false, kind))
                 continue
             }
             if current is ConditionalRefArgumentExpressionSyntax {
-                specs.Add(ConditionalCallArgSpec(nil, RefKind.Ref))
+                specs.Add(ConditionalCallArgSpec(nil, nil, false, RefKind.Ref))
                 continue
             }
-            specs.Add(ConditionalCallArgSpec(TryInferConditionalArgumentType(current), RefKind.None))
+            specs.Add(TryInferConditionalArgumentSpec(current, effects, isDeclaredInRegion))
         }
         return specs
     }
 
-    private func TryInferConditionalArgumentType(expression ExpressionSyntax) TypeSymbol? {
+    private func TryInferConditionalArgumentSpec(
+        expression ExpressionSyntax,
+        effects RegionEffects,
+        isDeclaredInRegion Func[string, bool]
+    ) ConditionalCallArgSpec {
         var current = expression
         while current is ParenthesizedExpressionSyntax parenthesized {
             current = parenthesized.Expression
@@ -17080,12 +17099,16 @@ internal partial class StatementBinder {
         switch current {
             case literal is LiteralExpressionSyntax {
                 if literal.LiteralToken.Kind == SyntaxKind.NilKeyword {
-                    return TypeSymbol.Null
+                    let list = List[TypeSymbol](1)
+                    list.Add(TypeSymbol.Null)
+                    return ConditionalCallArgSpec(list, nil, false, RefKind.None)
                 }
                 if literal.LiteralToken.Kind == SyntaxKind.StringToken {
-                    return TypeSymbol.String
+                    let list = List[TypeSymbol](1)
+                    list.Add(TypeSymbol.String)
+                    return ConditionalCallArgSpec(list, literal.Value, literal.Value != nil, RefKind.None)
                 }
-                return switch literal.Value {
+                let literalType = switch literal.Value {
                     case _ is bool: TypeSymbol.Bool
                     case _ is int32: TypeSymbol.Int32
                     case _ is int64: TypeSymbol.Int64
@@ -17094,23 +17117,57 @@ internal partial class StatementBinder {
                     case _ is char: TypeSymbol.Char
                     default: default(TypeSymbol?)
                 }
+                if literalType == nil {
+                    return ConditionalCallArgSpec(nil, literal.Value, literal.Value != nil, RefKind.None)
+                }
+                let list = List[TypeSymbol](1)
+                list.Add(literalType)
+                return ConditionalCallArgSpec(list, literal.Value, literal.Value != nil, RefKind.None)
             }
             case assignment is AssignmentExpressionSyntax {
-                if $scope.TryLookupSymbol(assignment.IdentifierToken.ValueText) is VariableSymbol variable {
-                    return variable.Type
+                let varName = assignment.IdentifierToken.ValueText
+                if isDeclaredInRegion(varName) {
+                    return ConditionalCallArgSpec(nil, nil, false, RefKind.None)
                 }
-                return nil
+                return InferConditionalVariableArgumentSpec(varName, effects)
             }
             case name is NameExpressionSyntax {
-                if $scope.TryLookupSymbol(name.IdentifierToken.ValueText) is VariableSymbol variable {
-                    return variable.Type
+                let varName = name.IdentifierToken.ValueText
+                if isDeclaredInRegion(varName) {
+                    return ConditionalCallArgSpec(nil, nil, false, RefKind.None)
                 }
-                return nil
+                return InferConditionalVariableArgumentSpec(varName, effects)
             }
             default {
-                return nil
+                return ConditionalCallArgSpec(nil, nil, false, RefKind.None)
             }
         }
+    }
+
+    private func InferConditionalVariableArgumentSpec(varName string, effects RegionEffects) ConditionalCallArgSpec {
+        if $scope.TryLookupSymbol(varName) is not VariableSymbol variable {
+            return ConditionalCallArgSpec(nil, nil, false, RefKind.None)
+        }
+        let types = List[TypeSymbol]()
+        types.Add(variable.Type)
+        if binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(variable)) is {} narrowed {
+            types.Add(narrowed)
+        }
+        for test in effects.TypeTests {
+            if test.Name == varName {
+                if TestedTypeWithArguments(test, out var testsConstant) is {} tested {
+                    types.Add(tested)
+                } else if !testsConstant {
+                    return ConditionalCallArgSpec(nil, nil, false, RefKind.None)
+                }
+            }
+        }
+        let constantValue = switch variable {
+            case local is LocalVariableSymbol: local.ConstantValue
+            case global is GlobalVariableSymbol: global.ConstantValue
+            default: default(object?)
+        }
+        return ConditionalCallArgSpec(types, constantValue, constantValue != nil, RefKind.None)
     }
 
     private func IsElidedBareConditionalCall(
@@ -17652,7 +17709,7 @@ internal partial class StatementBinder {
             if !ConditionalArgRefKindCompatible(spec.RefKind, param.RefKind) {
                 return false
             }
-            if spec.Type is {} argType && !ConditionalArgTypeCompatible(argType, param.Type) {
+            if !ConditionalArgTypeCompatible(spec, param.Type) {
                 return false
             }
         }
@@ -17699,11 +17756,9 @@ internal partial class StatementBinder {
             if !ConditionalArgRefKindCompatible(spec.RefKind, paramRefKind) {
                 return false
             }
-            if spec.Type is {} argType &&
-                !param.ParameterType.IsByRef &&
-                !param.ParameterType.ContainsGenericParameters {
+            if !param.ParameterType.IsByRef && !param.ParameterType.ContainsGenericParameters {
                 let paramType = ClrNullability.GetParameterTypeSymbol(param)
-                if !ConditionalArgTypeCompatible(argType, paramType) {
+                if !ConditionalArgTypeCompatible(spec, paramType) {
                     return false
                 }
             }
@@ -17721,14 +17776,31 @@ internal partial class StatementBinder {
         return true
     }
 
-    private func ConditionalArgTypeCompatible(argType TypeSymbol, paramType TypeSymbol) bool {
-        if TypeSymbol.ContainsTypeParameter(paramType) || TypeSymbol.ContainsTypeParameter(argType) {
+    private func ConditionalArgTypeCompatible(spec ConditionalCallArgSpec, paramType TypeSymbol) bool {
+        if TypeSymbol.ContainsTypeParameter(paramType) {
             return true
         }
-        return Conversion.Classify(argType, paramType).IsImplicit || conversions.HasUserDefinedImplicitConversion(
-            argType,
-            paramType
-        )
+        if spec.HasConstant && spec.ConstantValue is {} constantValue {
+            let synthetic = BoundLiteralExpression(nil, constantValue)
+            if ExpressionBinder.IsImplicitConstantNarrowingArgument(synthetic, paramType) {
+                return true
+            }
+        }
+        if spec.PossibleTypes is not{} possibleTypes {
+            return true
+        }
+        for argType in possibleTypes {
+            if TypeSymbol.ContainsTypeParameter(argType) {
+                return true
+            }
+            if Conversion.Classify(argType, paramType).IsImplicit || conversions.HasUserDefinedImplicitConversion(
+                argType,
+                paramType
+            ) {
+                return true
+            }
+        }
+        return false
     }
 
     private func FunctionArityMatches(fn FunctionSymbol, argCount int32, skipFirst bool) bool {

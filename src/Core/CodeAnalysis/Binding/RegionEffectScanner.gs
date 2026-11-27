@@ -23,13 +23,13 @@ import System.Linq
 internal sealed class RegionEffectScanner {
     private let activeCode ConditionalCompilationMap?
     private let isElidedConditionalCall(
-        (CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?, RegionEffects) -> bool
+        (CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?, RegionEffects, Func[string, bool]) -> bool
     )?
 
     internal init(
         activeCode ConditionalCompilationMap? = nil,
         isElidedConditionalCall(
-            (CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?, RegionEffects) -> bool
+            (CallExpressionSyntax, ExpressionSyntax?, RegionReceiverPath?, RegionEffects, Func[string, bool]) -> bool
         )? = nil
     ) {
         this.activeCode = activeCode
@@ -40,6 +40,8 @@ internal sealed class RegionEffectScanner {
     private let nestedCache Dictionary[SyntaxNode, RegionEffects] = Dictionary[SyntaxNode, RegionEffects]()
     private var scopes List[ScopeFrame] = List[ScopeFrame]()
     private var enclosingScopes List[ScopeFrame] = List[ScopeFrame]()
+    private var enclosingTypeTests List[RegionTypeTest] = List[RegionTypeTest]()
+    private var enclosingContainsMemberTypeTest bool = false
     private var current RegionEffects = RegionEffects()
     private var closureDepth int32 = 0
     // The names that a pattern or a binding declared anywhere in the region so far. A pattern variable
@@ -125,9 +127,10 @@ internal sealed class RegionEffectScanner {
             return cached
         }
         // A loop with no part that runs once has the same region at the top level and nested.
+        // When conditional-call elision is active, rescan at the loop's own entry scope so
+        // nested scans cannot leak outer-scope elision decisions into top-level summaries.
         let sameWhenNested = !HasPartsThatRunOnce(node)
-        if sameWhenNested && nestedCache.TryGetValue(node, out var nested) &&
-            (isElidedConditionalCall == nil || nested.Calls.Count == 0) {
+        if sameWhenNested && isElidedConditionalCall == nil && nestedCache.TryGetValue(node, out var nested) {
             topLevelCache.Add(node, nested)
             return nested
         }
@@ -174,6 +177,8 @@ internal sealed class RegionEffectScanner {
     private func ScanFresh(node SyntaxNode, topLevel bool, iterationRunsUserCode bool = true) RegionEffects {
         let savedScopes = scopes
         let savedEnclosing = enclosingScopes
+        let savedEnclosingTypeTests = enclosingTypeTests
+        let savedEnclosingMemberTypeTest = enclosingContainsMemberTypeTest
         let savedCurrent = current
         let savedClosure = closureDepth
         let savedPatterns = patternNames
@@ -182,6 +187,13 @@ internal sealed class RegionEffectScanner {
             nextEnclosing.AddRange(enclosingScopes)
             nextEnclosing.AddRange(savedScopes)
             enclosingScopes = nextEnclosing
+            if savedCurrent.TypeTests.Count > 0 {
+                let nextTypeTests = List[RegionTypeTest](enclosingTypeTests.Count + savedCurrent.TypeTests.Count)
+                nextTypeTests.AddRange(enclosingTypeTests)
+                nextTypeTests.AddRange(savedCurrent.TypeTests)
+                enclosingTypeTests = nextTypeTests
+            }
+            enclosingContainsMemberTypeTest = enclosingContainsMemberTypeTest || savedCurrent.ContainsMemberTypeTest
         }
         scopes = List[ScopeFrame]()
         scopes.Add(ScopeFrame())
@@ -195,6 +207,8 @@ internal sealed class RegionEffectScanner {
         let result = current
         scopes = savedScopes
         enclosingScopes = savedEnclosing
+        enclosingTypeTests = savedEnclosingTypeTests
+        enclosingContainsMemberTypeTest = savedEnclosingMemberTypeTest
         current = savedCurrent
         closureDepth = savedClosure
         patternNames = savedPatterns
@@ -2554,6 +2568,17 @@ internal sealed class RegionEffectScanner {
         }
     }
 
+    private func BuildConditionalEffectsContext() RegionEffects {
+        if enclosingTypeTests.Count == 0 && !enclosingContainsMemberTypeTest {
+            return current
+        }
+        let combined = RegionEffects()
+        combined.TypeTests.AddRange(enclosingTypeTests)
+        combined.TypeTests.AddRange(current.TypeTests)
+        combined.ContainsMemberTypeTest = enclosingContainsMemberTypeTest || current.ContainsMemberTypeTest
+        return combined
+    }
+
     // [`receiver`](paramref) is the part before the dot that this accessor follows, or `nil` at the start of a chain.
     private func VisitAccessor(
         accessor AccessorExpressionSyntax,
@@ -2568,7 +2593,13 @@ internal sealed class RegionEffectScanner {
             !(
             terminalPath?.RootName is {} rootName && !IsDeclared(rootName) && IsDeclaredInRegionOrEnclosing(rootName)
         ) &&
-            isElidedConditionalCall(terminalCall!!, terminalReceiver, terminalPath, current) {
+            isElidedConditionalCall(
+            terminalCall!!,
+            terminalReceiver,
+            terminalPath,
+            BuildConditionalEffectsContext(),
+            IsDeclaredInRegionOrEnclosing
+        ) {
             return
         }
         // `a.M(args)` is a call. `a.b` and `a.b.M()` read the member `b`: an unknown getter (rule W5). In
@@ -2665,7 +2696,7 @@ internal sealed class RegionEffectScanner {
             call.Callee == nil &&
             isElidedConditionalCall != nil &&
             !IsDeclaredInRegionOrEnclosing(call.Identifier.ValueText) &&
-            isElidedConditionalCall(call, nil, nil, current) {
+            isElidedConditionalCall(call, nil, nil, BuildConditionalEffectsContext(), IsDeclaredInRegionOrEnclosing) {
             return
         }
         if Active() {
