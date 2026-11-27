@@ -16357,6 +16357,10 @@ partial class CSharpToGSharpTranslator {
                 List[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]
             ]
             private let stringGuards Dictionary[string, List[InvocationExpressionSyntax]]
+            private let exitingNullGuards Dictionary[
+                string,
+                List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]
+            ]
 
             init(
                 jumps List[
@@ -16370,6 +16374,7 @@ partial class CSharpToGSharpTranslator {
                 patterns Dictionary[string, List[IsPatternExpressionSyntax]],
                 binaryTests Dictionary[string, List[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]],
                 stringGuards Dictionary[string, List[InvocationExpressionSyntax]],
+                exitingNullGuards Dictionary[string, List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]],
                 loopLabelCandidates IReadOnlyList[Microsoft.CodeAnalysis.SyntaxNode]
             ) {
                 this.Jumps = jumps
@@ -16378,6 +16383,7 @@ partial class CSharpToGSharpTranslator {
                 this.patterns = patterns
                 this.binaryTests = binaryTests
                 this.stringGuards = stringGuards
+                this.exitingNullGuards = exitingNullGuards
                 this.LoopLabelCandidates = loopLabelCandidates
             }
 
@@ -16404,6 +16410,16 @@ partial class CSharpToGSharpTranslator {
                     cast[IReadOnlyList[InvocationExpressionSyntax]](candidates)
                 } else {
                     Array.Empty[InvocationExpressionSyntax]()
+                }
+            }
+
+            public func ExitingNullGuardsFor(symbol ISymbol?) IReadOnlyList[
+                Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+            ] {
+                return if symbol != nil && this.exitingNullGuards.TryGetValue(symbol.Name, out var candidates) {
+                    cast[IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]](candidates)
+                } else {
+                    Array.Empty[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
                 }
             }
         }
@@ -16622,6 +16638,9 @@ partial class CSharpToGSharpTranslator {
                 StringComparer.Ordinal
             )
             let stringGuards = Dictionary[string, List[InvocationExpressionSyntax]](StringComparer.Ordinal)
+            let exitingNullGuards = Dictionary[string, List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]](
+                StringComparer.Ordinal
+            )
             let loopLabelCandidates = List[Microsoft.CodeAnalysis.SyntaxNode]()
             for node in $scope.DescendantNodesAndSelf(
                 (child Microsoft.CodeAnalysis.SyntaxNode) -> object.ReferenceEquals(child, $scope) ||
@@ -16648,8 +16667,16 @@ partial class CSharpToGSharpTranslator {
                     }
                     candidates.Add(pattern)
                     CompilationMeasurements.Count("translation.scope_guard_candidates")
+                    if IsExitingIfConditionGuard(pattern) {
+                        if !exitingNullGuards.TryGetValue(name, out var exiting) {
+                            exiting = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                            exitingNullGuards.Add(name, exiting)
+                        }
+                        exiting.Add(pattern)
+                    }
                 }
                 if node is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary {
+                    let isExitingGuard = IsExitingIfConditionGuard(binary)
                     for var operandIndex = 0; operandIndex < 2; operandIndex++ {
                         let operand = if operandIndex == 0 {
                             binary.Left
@@ -16666,6 +16693,15 @@ partial class CSharpToGSharpTranslator {
                         if candidates.Count == 0 || !object.ReferenceEquals(candidates[candidates.Count - 1], binary) {
                             candidates.Add(binary)
                             CompilationMeasurements.Count("translation.scope_guard_candidates")
+                        }
+                        if isExitingGuard {
+                            if !exitingNullGuards.TryGetValue(name, out var exiting) {
+                                exiting = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                                exitingNullGuards.Add(name, exiting)
+                            }
+                            if exiting.Count == 0 || !object.ReferenceEquals(exiting[exiting.Count - 1], binary) {
+                                exiting.Add(binary)
+                            }
                         }
                     }
                 }
@@ -16726,11 +16762,25 @@ partial class CSharpToGSharpTranslator {
                 patterns,
                 binaryTests,
                 stringGuards,
+                exitingNullGuards,
                 loopLabelCandidates
             )
             this.scopeGotoIndex[key] = entry
             CompilationMeasurements.Count("translation.scope_guard_indexes")
             return entry
+        }
+
+        private func IsExitingIfConditionGuard(node Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) bool {
+            var current Microsoft.CodeAnalysis.SyntaxNode = node
+            while current.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized
+            }
+            return current.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax conditional &&
+                object.ReferenceEquals(conditional.Condition, current) &&
+                (
+                AlwaysExitsViaReturnOrThrow(conditional.Statement) ||
+                    (conditional.Else != nil && AlwaysExitsViaReturnOrThrow(conditional.Else!!.Statement))
+            )
         }
 
         private func GetStatementSteps(

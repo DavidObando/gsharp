@@ -385,6 +385,47 @@ open class Issue5633ConditionalLocalQueryTests {
     }
 
     @Fact
+    func RepeatedNullableParameterGuards_AssignmentNarrowingProbesScaleWithSourceSize() {
+        let visits = System.Collections.Generic.List[int64]()
+        let probes = System.Collections.Generic.List[int64]()
+        for links in[]int32{16, 64, 128, 256} {
+            let body = StringBuilder()
+            for var i = 0; i < links; i++ {
+                body.AppendLine("if (p != null) { _ = p.ToString(); }")
+            }
+            let printed = this.TranslateWithinBound(
+                "#nullable enable\nnamespace Demo { public static class P { public static int Run(object? p) {\n" +
+                    body.ToString() + "return 0; } } }",
+                enabled: true,
+                measureWork: true
+            )
+            Assert.DoesNotContain("p!!", printed, StringComparison.Ordinal)
+            TranslationTestValidation.AssertBinds(printed)
+            if links == 16 {
+                continue
+            }
+            let statementVisits = this.translationWork["assignment_narrowing_statement_visits"]
+            let sourceProbes = this.translationWork["assignment_narrowing_source_probes"]
+            visits.Add(statementVisits)
+            probes.Add(sourceProbes)
+            this.output.WriteLine(
+                "$links repeated guards: $statementVisits statement visits; $sourceProbes source probes; " +
+                    "${this.translationAllocatedBytes} allocated bytes"
+            )
+        }
+        Assert.True(
+            visits[1] <= visits[0] * 3 && visits[2] <= visits[1] * 3,
+            "Repeated guards on the same nullable parameter must not rescan earlier statements quadratically: " +
+                "${visits[0]} -> ${visits[1]} -> ${visits[2]}."
+        )
+        Assert.True(
+            probes[1] <= probes[0] * 3 && probes[2] <= probes[1] * 3,
+            "Repeated guards on the same nullable parameter must not probe source lists superlinearly: " +
+                "${probes[0]} -> ${probes[1]} -> ${probes[2]}."
+        )
+    }
+
+    @Fact
     func AssignmentNarrowingAfterUnrelatedGuardedLocals_PreservesProof() {
         let body = StringBuilder()
         for var i = 0; i < 64; i++ {
@@ -1129,7 +1170,8 @@ namespace Demo
                         "scope_write_candidates",
                         "scope_guard_indexes",
                         "scope_guard_candidates",
-                        "assignment_narrowing_statement_visits"
+                        "assignment_narrowing_statement_visits",
+                        "assignment_narrowing_source_probes"
                     } {
                         this.translationWork[counter] = measurements.GetCounter("translation." + counter)
                     }

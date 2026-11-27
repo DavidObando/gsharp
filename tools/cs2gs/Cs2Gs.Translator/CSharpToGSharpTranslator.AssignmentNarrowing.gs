@@ -86,10 +86,12 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             let writeIndex = this.GetScopeWriteIndex($scope)
             let gotoIndex = this.GetScopeGotoIndex($scope)
+            let includeContinueGuards = effectiveTarget is ContinueStatementSyntax
             if !TryGetEarliestAssignmentNarrowingSourceStart(
                 symbol,
                 writeIndex,
                 gotoIndex,
+                includeContinueGuards,
                 out var earliestSourceStart
             ) {
                 return false
@@ -118,57 +120,81 @@ partial class CSharpToGSharpTranslator {
             symbol ISymbol,
             writeIndex ScopeWriteIndex,
             gotoIndex ScopeGotoIndex,
+            includeContinueGuards bool,
             out earliestStart int32
         ) bool {
             earliestStart = int32.MaxValue
             var found = false
-            if writeIndex.Writes.TryGetValue(symbol, out var writes) {
-                for write in writes {
-                    if write is AssignmentExpressionSyntax && write.SpanStart < earliestStart {
-                        earliestStart = write.SpanStart
-                        found = true
-                    }
-                }
+            let assignments = writeIndex.AssignmentsFor(symbol)
+            if assignments.Count > 0 {
+                CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
+                earliestStart = System.Math.Min(earliestStart, assignments[0].SpanStart)
+                found = true
             }
-            for binary in gotoIndex.BinaryTestsFor(symbol) {
-                if binary.SpanStart < earliestStart {
-                    earliestStart = binary.SpanStart
+            let exitingGuards = gotoIndex.ExitingNullGuardsFor(symbol)
+            if exitingGuards.Count > 0 {
+                CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
+                earliestStart = System.Math.Min(earliestStart, exitingGuards[0].SpanStart)
+                found = true
+            }
+            if includeContinueGuards {
+                let binaryTests = gotoIndex.BinaryTestsFor(symbol)
+                if binaryTests.Count > 0 {
+                    CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
+                    earliestStart = System.Math.Min(earliestStart, binaryTests[0].SpanStart)
                     found = true
                 }
-            }
-            for pattern in gotoIndex.PatternsFor(symbol) {
-                if pattern.SpanStart < earliestStart {
-                    earliestStart = pattern.SpanStart
+                let patterns = gotoIndex.PatternsFor(symbol)
+                if patterns.Count > 0 {
+                    CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
+                    earliestStart = System.Math.Min(earliestStart, patterns[0].SpanStart)
                     found = true
                 }
             }
             return found
         }
 
+        private func SpanContainsNodeInSortedList(
+            nodes IReadOnlyList[SyntaxNode],
+            span Microsoft.CodeAnalysis.Text.TextSpan
+        ) bool {
+            if nodes.Count == 0 {
+                return false
+            }
+            var low = 0
+            var high = nodes.Count
+            while low < high {
+                CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
+                let mid = low + (high - low) / 2
+                if nodes[mid].SpanStart < span.Start {
+                    low = mid + 1
+                } else {
+                    high = mid
+                }
+            }
+            if low < nodes.Count {
+                CompilationMeasurements.Count("translation.assignment_narrowing_source_probes")
+                return span.Contains(nodes[low].Span)
+            }
+            return false
+        }
+
         private func SpanContainsAssignmentNarrowingSource(
             span Microsoft.CodeAnalysis.Text.TextSpan,
             symbol ISymbol,
             writeIndex ScopeWriteIndex,
-            gotoIndex ScopeGotoIndex
+            gotoIndex ScopeGotoIndex,
+            includeContinueGuards bool
         ) bool {
-            if writeIndex.Writes.TryGetValue(symbol, out var writes) {
-                for write in writes {
-                    if write is AssignmentExpressionSyntax && span.Contains(write.Span) {
-                        return true
-                    }
-                }
+            if SpanContainsNodeInSortedList(writeIndex.AssignmentsFor(symbol), span) ||
+                SpanContainsNodeInSortedList(gotoIndex.ExitingNullGuardsFor(symbol), span) {
+                return true
             }
-            for binary in gotoIndex.BinaryTestsFor(symbol) {
-                if span.Contains(binary.Span) {
-                    return true
-                }
-            }
-            for pattern in gotoIndex.PatternsFor(symbol) {
-                if span.Contains(pattern.Span) {
-                    return true
-                }
-            }
-            return false
+            return includeContinueGuards &&
+                (
+                SpanContainsNodeInSortedList(gotoIndex.BinaryTestsFor(symbol), span) ||
+                    SpanContainsNodeInSortedList(gotoIndex.PatternsFor(symbol), span)
+            )
         }
 
         private func FindFirstStatementIndexAtOrAfter(
@@ -198,7 +224,8 @@ partial class CSharpToGSharpTranslator {
             requireRuntimeNonNullProof bool,
             writeIndex ScopeWriteIndex?,
             gotoIndex ScopeGotoIndex?,
-            earliestSourceStart int32
+            earliestSourceStart int32,
+            includeContinueGuards bool
         ) SyntaxNode? {
             var proof = inherited
             let start = if proof == nil && writeIndex != nil && gotoIndex != nil {
@@ -214,7 +241,13 @@ partial class CSharpToGSharpTranslator {
                 if proof == nil &&
                     writeIndex != nil &&
                     gotoIndex != nil &&
-                    !SpanContainsAssignmentNarrowingSource(statement.Span, symbol, writeIndex, gotoIndex) {
+                    !SpanContainsAssignmentNarrowingSource(
+                    statement.Span,
+                    symbol,
+                    writeIndex,
+                    gotoIndex,
+                    includeContinueGuards
+                ) {
                     continue
                 }
                 proof = this.GetGSharpAssignmentNarrowingProof(
@@ -241,6 +274,7 @@ partial class CSharpToGSharpTranslator {
             earliestSourceStart int32 = 0
         ) SyntaxNode? {
             var proof = inherited
+            let includeContinueGuards = effectiveTarget is ContinueStatementSyntax
             let steps = this.GetStatementSteps(effectiveTarget, $scope)
             if $scope is StatementSyntax root && root is not BlockSyntax {
                 steps.Insert(0, ($scope, root))
@@ -262,7 +296,8 @@ partial class CSharpToGSharpTranslator {
                                 requireRuntimeNonNullProof,
                                 writeIndex,
                                 gotoIndex,
-                                earliestSourceStart
+                                earliestSourceStart,
+                                includeContinueGuards
                             )
                         }
                         case section is SwitchSectionSyntax {
@@ -276,7 +311,8 @@ partial class CSharpToGSharpTranslator {
                                 requireRuntimeNonNullProof,
                                 writeIndex,
                                 gotoIndex,
-                                earliestSourceStart
+                                earliestSourceStart,
+                                includeContinueGuards
                             )
                         }
                         case unit is CompilationUnitSyntax {
@@ -292,7 +328,8 @@ partial class CSharpToGSharpTranslator {
                                     statement.Span,
                                     symbol,
                                     writeIndex,
-                                    gotoIndex
+                                    gotoIndex,
+                                    includeContinueGuards
                                 ) {
                                     continue
                                 }
