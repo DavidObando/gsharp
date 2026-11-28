@@ -23,6 +23,7 @@ import System.Threading
 import TuiColor = SharpTui.Color
 import Xunit
 
+@Collection("ConsoleIo")
 open class SharpTuiReplTests {
     @Theory
     @InlineData(nil, true, ReplUiKind.SharpTui)
@@ -439,6 +440,9 @@ open class SharpTuiReplTests {
                     let _ = engine.Completions("v", 0, 1)
                     let _ = engine.Hover("v3", 0, 1)
                     let _ = engine.Snapshot()
+                    for cell in engine.Cells {
+                        let _ = cell.Index
+                    }
                 }
             }
         )
@@ -455,6 +459,155 @@ open class SharpTuiReplTests {
         let finalAnalysis = engine.AnalyzeEditor("v3 + 1")
         Assert.Empty(finalAnalysis.Diagnostics)
         Assert.Contains(engine.Completions("v", 0, 1), (item CompletionItem) -> item.Label == "v3")
+    }
+
+    @Fact
+    func ThrowingToStringInCellValueRendersFormatErrorWithoutCrashing() {
+        using let engine = EmittedSessionEngine()
+        let _ = engine.Evaluate(
+            "class Boom { override func ToString() string { throw System.InvalidOperationException(\"kaboom\") } }"
+        )
+        let _ = engine.Evaluate("let b = Boom()\nb")
+        let (_, driver) = Create(engine, 100, 26)
+
+        driver.Draw()
+        Assert.Contains("Format error: kaboom", driver.FrameText(), StringComparison.Ordinal)
+        // Snapshot also survives a throwing ToString without dropping other symbols.
+        let state = engine.Snapshot()
+        Assert.Contains(state.Variables, (v ReplSymbol) -> v.Name == "b" && v.Value == "<error>")
+    }
+
+    @Fact
+    func HoverFallbackDoesNotResolveMemberNameAsGlobal() {
+        using let engine = EmittedSessionEngine()
+        let _ = engine.Evaluate("import System.Text\nlet answer = 123\nlet sb = StringBuilder()")
+
+        Assert.Null(engine.Hover("sb.answer", 0, 5))
+        Assert.Contains("answer", engine.Hover("answer", 0, 3) ?? string.Empty, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func NoColorEnablesMonoPaletteAndAsciiTranscriptFallback() {
+        let previousNoColor = Environment.GetEnvironmentVariable("NO_COLOR")
+        let previousReader = Environment.GetEnvironmentVariable("GSI_SCREEN_READER")
+        try {
+            Environment.SetEnvironmentVariable("NO_COLOR", "1")
+            Environment.SetEnvironmentVariable("GSI_SCREEN_READER", nil)
+            ReplTheme.Reset()
+            using let engine = EmittedSessionEngine()
+            let _ = engine.Evaluate("1+2")
+            let (_, driver) = Create(engine, 80, 24)
+            driver.Draw()
+
+            Assert.Equal("mono", ReplTheme.Current.Name)
+            Assert.Contains("- [1] >", driver.FrameText(), StringComparison.Ordinal)
+        } finally {
+            Environment.SetEnvironmentVariable("NO_COLOR", previousNoColor)
+            Environment.SetEnvironmentVariable("GSI_SCREEN_READER", previousReader)
+            ReplTheme.Reset()
+        }
+    }
+
+    @Fact
+    func EvaluationCompletionRefreshesLiveEditorAnalysis() {
+        using let engine = EmittedSessionEngine()
+        let (root, driver) = Create(engine, 100, 26)
+        root.Editor.Text = "import System.Threading\nThread.Sleep(250)\nlet lateVal = 99"
+        let _ = SendKey(driver, Key.Enter)
+        Assert.True(root.IsBusy)
+
+        // Type an expression referencing lateVal while the defining cell is still running.
+        Type(driver, "lateVal + 1")
+        Tick(driver)
+        Tick(driver)
+        Tick(driver)
+        Assert.Contains(
+            root.Editor.StyleSource!!.ItemAt(0).Runs,
+            (run TextRun) -> (int32(run.Style.Attributes) & int32(TextAttributes.Underline)) != 0
+        )
+
+        PumpUntilIdle(root, driver)
+        Assert.DoesNotContain(
+            root.Editor.StyleSource!!.ItemAt(0).Runs,
+            (run TextRun) -> (int32(run.Style.Attributes) & int32(TextAttributes.Underline)) != 0
+        )
+    }
+
+    @Fact
+    func DismissPaneSupportsKeyboardPaging() {
+        let lines = Enumerable.Range(1, 40).Select((i int32) -> "line $i")
+        let pane = DismissPane(string.Join("\n", lines), () -> { }, ReplTheme.Current)
+        let driver = TestDriver(pane, 40, 8)
+        driver.Draw()
+        Assert.Equal(0, pane.Content.FirstVisibleLine)
+
+        let _ = SendKey(driver, Key.PageDown)
+        driver.Draw()
+        Assert.True(pane.Content.FirstVisibleLine > 0)
+
+        let _ = SendKey(driver, Key.PageUp)
+        driver.Draw()
+        Assert.Equal(0, pane.Content.FirstVisibleLine)
+    }
+
+    @Fact
+    func EscapeInStandardInputOverlayCancelsWorkerSoCellDoesNotCommit() {
+        using let engine = EmittedSessionEngine()
+        let (root, driver) = Create(engine, 100, 30)
+
+        Type(driver, "let _ = Console.ReadLine()\n42")
+        let _ = SendKey(driver, Key.Enter)
+        let deadline = DateTime.UtcNow.AddSeconds(5.0)
+        var frame = string.Empty
+        while !frame.Contains("standard input", StringComparison.Ordinal) && DateTime.UtcNow < deadline {
+            Thread.Sleep(5)
+            driver.Pump()
+            driver.Draw()
+            frame = driver.FrameText()
+        }
+        Assert.Contains("standard input", frame, StringComparison.Ordinal)
+
+        let _ = SendKey(driver, Key.Escape)
+        PumpUntilIdle(root, driver)
+        Assert.Empty(engine.Cells)
+    }
+
+    @Fact
+    func CompletionAndHoverDoNotFormatRuntimeValuesAndEscapeReservedNames() {
+        using let engine = EmittedSessionEngine()
+        let _ = engine.Evaluate(
+            "class Spy { shared { var Calls int32 = 0 }\noverride func ToString() string { Calls += 1\nreturn \"spy\" } }\nlet spy = Spy()\nlet $$var = 42"
+        )
+        let before = engine.Evaluate("Spy.Calls").Value
+        Assert.Equal(0, before)
+
+        let items = engine.Completions("va", 0, 2)
+        let hover = engine.Hover("spy", 0, 2)
+        Assert.Contains(items, (item CompletionItem) -> item.Label == "$$var")
+        Assert.NotNull(hover)
+        // Neither completion nor hover invoked Spy.ToString().
+        Assert.Equal(0, engine.Evaluate("Spy.Calls").Value)
+    }
+
+    @Fact
+    func EscapedMemberCompletionsMatchAndReplaceWithoutDuplicatingDollar() {
+        using let engine = EmittedSessionEngine()
+        let _ = engine.Evaluate("class Bag { func $$defer() int32 { return 1 } }\nlet b = Bag()")
+        let (root, driver) = Create(engine, 100, 26)
+
+        // Unescaped prefix `b.de` + Tab expands to `b.$defer`.
+        Type(driver, "b.de")
+        let _ = SendKey(driver, Key.Tab)
+        Assert.Equal("b.$$defer", root.Editor.Text)
+
+        // Escaped prefix `b.$de` + Ctrl+Space + Enter replaces to `b.$defer` (not `b.$$defer`).
+        root.Editor.Text = "b.$$de"
+        root.Editor.Caret = TextPosition{LineIndex: 0, GraphemeIndex: 5}
+        let _ = Control(driver, " ")
+        driver.Draw()
+        Assert.Contains("$$defer", driver.FrameText(), StringComparison.Ordinal)
+        let _ = SendKey(driver, Key.Enter)
+        Assert.Equal("b.$$defer", root.Editor.Text)
     }
 
     @Fact

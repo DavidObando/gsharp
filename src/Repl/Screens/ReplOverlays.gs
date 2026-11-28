@@ -266,23 +266,53 @@ public open class CompletionPane : Column {
 
 public open class DismissPane : Column {
     private let dismiss Action
+    private let content TextBlock
 
     public init(text string, dismiss Action, palette ReplPalette) {
         GrowWeight = 1
         this.dismiss = dismiss
-        Children.Add(
-            TextBlock{
-                Text: text,
-                Wrapping: TextWrapping.Word,
-                GrowWeight: 1,
-                Style: Style{Foreground: palette.Text, Background: palette.Raised}
-            }
-        )
+        content = TextBlock{
+            Text: text,
+            Wrapping: TextWrapping.Word,
+            GrowWeight: 1,
+            Style: Style{Foreground: palette.Text, Background: palette.Raised}
+        }
+        Children.Add(content)
     }
 
+    internal prop Content TextBlock -> content
+
     protected override func Accept(ev UiEvent) EventResult {
-        if ev.Phase != KeyPhase.Release && ev.Key == Key.Escape {
+        if ev.Phase == KeyPhase.Release {
+            return EventResult.Continue
+        }
+        if ev.Key == Key.Escape {
             dismiss()
+            return EventResult.Handled
+        }
+        let page = Math.Max(1, content.ContentBounds.HeightRows - 1)
+        if ev.Key == Key.PageUp {
+            content.ScrollToLine(Math.Max(0, content.FirstVisibleLine - page))
+            return EventResult.Handled
+        }
+        if ev.Key == Key.PageDown {
+            content.ScrollToLine(content.FirstVisibleLine + page)
+            return EventResult.Handled
+        }
+        if ev.Key == Key.Up {
+            content.ScrollToLine(Math.Max(0, content.FirstVisibleLine - 1))
+            return EventResult.Handled
+        }
+        if ev.Key == Key.Down {
+            content.ScrollToLine(content.FirstVisibleLine + 1)
+            return EventResult.Handled
+        }
+        if ev.Key == Key.Home {
+            content.ScrollToLine(0)
+            return EventResult.Handled
+        }
+        if ev.Key == Key.End {
+            content.ScrollToLine(Int32.MaxValue)
             return EventResult.Handled
         }
         return EventResult.Continue
@@ -307,11 +337,13 @@ public class InputRequest {
 public open class InputPane : Column {
     private let input TextInput
     private let request InputRequest
+    private let cancel Action
     private let dismiss Action
 
-    public init(request InputRequest, dismiss Action, palette ReplPalette) {
+    public init(request InputRequest, cancel Action, dismiss Action, palette ReplPalette) {
         GrowWeight = 1
         this.request = request
+        this.cancel = cancel
         this.dismiss = dismiss
         input = TextInput{Placeholder: "standard input", GrowWeight: 1}
         Children.Add(Label{Text: "The running cell requested one line of input."})
@@ -326,6 +358,7 @@ public open class InputPane : Column {
             return EventResult.Continue
         }
         if ev.Key == Key.Escape {
+            cancel()
             request.Complete(nil)
             dismiss()
             return EventResult.Handled

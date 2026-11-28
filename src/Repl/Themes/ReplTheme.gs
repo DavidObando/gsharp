@@ -120,7 +120,7 @@ public class ReplTheme {
         public prop Available IReadOnlyList[ReplPalette] -> palettes
 
         public func ConfigureFromEnvironment() {
-            if Environment.GetEnvironmentVariable("NO_COLOR") != nil
+            if !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR"))
             || Environment.GetEnvironmentVariable("GSI_SCREEN_READER") == "1" {
                 Use("mono")
             }

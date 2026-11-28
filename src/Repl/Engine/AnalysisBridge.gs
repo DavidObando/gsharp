@@ -56,8 +56,7 @@ shared class AnalysisBridge {
     }
 
     func Hover(text string, line int32, col int32, state ReplState? = nil) string? -> Safe(
-        () -> HoverComputer.ComputeHover(Build(text), Position(line, col))?.Contents?.MarkupContent?.Value ??
-            SessionHover(text, line, col, state),
+        () -> ComputeHover(Build(text), nil, line, col, state),
         nil
     )
 
@@ -67,15 +66,20 @@ shared class AnalysisBridge {
         line int32,
         col int32,
         state ReplState
-    ) string? -> Safe(
-        () -> HoverComputer
-            .ComputeHover(content, Position(line, col), compilation: compilation)
-            ?.Contents
-            ?.MarkupContent
-            ?.Value ??
-            SessionHover(content.SyntaxTree.Text.ToString(), line, col, state),
-        nil
-    )
+    ) string? -> Safe(() -> ComputeHover(content, compilation, line, col, state), nil)
+
+    private func ComputeHover(
+        content DocumentContent,
+        compilation Compilation?,
+        line int32,
+        col int32,
+        state ReplState?
+    ) string? -> HoverComputer
+        .ComputeHover(content, Position(line, col), compilation: compilation)
+        ?.Contents
+        ?.MarkupContent
+        ?.Value ??
+        SessionHover(content, line, col, state)
 
     func Analyze(text string) EditorAnalysis -> Safe(() -> AnalyzeCore(text), EditorAnalysis.Empty)
 
@@ -266,34 +270,43 @@ shared class AnalysisBridge {
         kind CompletionItemKind
     ) {
         for symbol in symbols {
-            if !seen.Add(symbol.Name) {
+            let written = if SyntaxFacts.IsReservedIdentifier(symbol.Name) {
+                "$$" + symbol.Name
+            } else {
+                symbol.Name
+            }
+            if !seen.Add(written) {
                 continue
             }
-            items.Add(CompletionItem{Label: symbol.Name, Detail: symbol.Display, Kind: kind})
+            items.Add(CompletionItem{Label: written, Detail: symbol.Display, Kind: kind})
         }
     }
 
-    private func SessionHover(text string, line int32, col int32, state ReplState?) string? {
+    private func SessionHover(content DocumentContent, line int32, col int32, state ReplState?) string? {
         if state == nil || state.IsEmpty {
             return nil
         }
-        let sourceLines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n')
-        if line < 0 || line >= sourceLines.Length || col < 0 || col > sourceLines[line].Length {
+        let offset = SemanticLookup.ToOffset(content, Position(line, col))
+        var token SyntaxToken? = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
+        if (token == nil || token.Kind != SyntaxKind.IdentifierToken) && offset > 0 {
+            let previous = SemanticLookup.FindTokenAt(content.SyntaxTree, offset - 1)
+            if previous != nil && previous.Kind == SyntaxKind.IdentifierToken && previous.Span.End == offset {
+                token = previous
+            }
+        }
+        if token == nil || token.Kind != SyntaxKind.IdentifierToken {
             return nil
         }
-        let sourceLine = sourceLines[line]
-        var start = col
-        while start > 0 && IsIdentifierCharacter(sourceLine[start - 1]) {
-            start -= 1
-        }
-        var end = col
-        while end < sourceLine.Length && IsIdentifierCharacter(sourceLine[end]) {
-            end += 1
-        }
-        if start == end {
+        if token.Parent is not NameExpressionSyntax nameExpr {
             return nil
         }
-        let name = sourceLine.Substring(start, end - start)
+        if nameExpr.Parent is AccessorExpressionSyntax accessor && object.ReferenceEquals(
+            accessor.RightPart,
+            nameExpr
+        ) {
+            return nil
+        }
+        let name = token.ValueText
         return AllSymbols(state).FirstOrDefault(
             (symbol ReplSymbol) -> string.Equals(symbol.Name, name, StringComparison.Ordinal)
         )
@@ -305,8 +318,6 @@ shared class AnalysisBridge {
         .Concat(state.Functions)
         .Concat(state.Variables)
         .Concat(state.Types)
-
-    private func IsIdentifierCharacter(value char) bool -> char.IsLetterOrDigit(value) || value == '_'
 
     private func Safe[T](f() -> T, fallback T) T {
         try {

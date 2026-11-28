@@ -59,6 +59,16 @@ public open class ReplApp : Column {
     private var inputRequest InputRequest?
     private var inputInterrupt Bind?
     private var requestedUi ReplUiKind?
+    private var lastLayoutWidth int32
+    private var lastLayoutHeight int32
+    private var lastEditorHeight int32
+    private var lastCompletionCol int32
+    private var lastCompletionRow int32
+    private var lastCompletionVisible bool
+    private var lastGhostCol int32
+    private var lastGhostRow int32
+    private var lastGhostVisible bool
+    private var lastGhostText string
 
     public init(engine ISessionEngine) {
         this.engine = engine
@@ -76,6 +86,16 @@ public open class ReplApp : Column {
         inputRequest = nil
         inputInterrupt = nil
         requestedUi = nil
+        lastLayoutWidth = -1
+        lastLayoutHeight = -1
+        lastEditorHeight = 7
+        lastCompletionCol = -1
+        lastCompletionRow = -1
+        lastCompletionVisible = false
+        lastGhostCol = -1
+        lastGhostRow = -1
+        lastGhostVisible = false
+        lastGhostText = ""
         completionItems = List[CompletionItem]()
         completionPane = nil
         palettePane = nil
@@ -89,7 +109,8 @@ public open class ReplApp : Column {
         transcriptSource = TranscriptSource(engine, palette)
         transcriptSource.ShowTree = engine.CaptureSyntaxTree
         transcriptSource.ShowIl = engine.CaptureIntermediateLanguage
-        transcriptSource.Ascii = Environment.GetEnvironmentVariable("GSI_SCREEN_READER") == "1"
+        transcriptSource.Ascii = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR"))
+        || Environment.GetEnvironmentVariable("GSI_SCREEN_READER") == "1"
         transcript = VirtualListView{
             Source: transcriptSource,
             GrowWeight: 1,
@@ -254,6 +275,12 @@ public open class ReplApp : Column {
         RemoveInputInterrupt()
     }
 
+    protected override func PrepareLayout() {
+        if Bounds.WidthCells > 0 && Bounds.HeightRows > 0 {
+            let _ = SyncGeometry(Bounds)
+        }
+    }
+
     protected override func Render(screen Screen, bounds CellRect, style Style) {
         let tabChange = tabs.ConsumeSelectionChange()
         if tabChange != nil && tabs.SelectedIndex != activeTab {
@@ -263,7 +290,7 @@ public open class ReplApp : Column {
         if !SameTitles(tabs.Titles, desired) {
             tabs.Titles = desired
         }
-        editorBox.Height = CellLength.Cells(bounds.HeightRows < 22 ? 5 : 7)
+        let geometryChanged = SyncGeometry(bounds)
         let errors = ErrorCount()
         UpdateFocusChrome()
         header.LeftText = " gsharp"
@@ -273,8 +300,29 @@ public open class ReplApp : Column {
         footer.LeftRuns = FooterLeftRuns(errors)
         footer.CenterText = ""
         footer.RightText = FooterHints() + " "
-        FitOverlays(bounds)
-        PositionCompletion(bounds)
+        if geometryChanged {
+            application?.RequestDraw()
+        }
+    }
+
+    private func SyncGeometry(bounds CellRect) bool {
+        var changed = false
+        let targetEditorHeight = bounds.HeightRows < 22 ? 5 : 7
+        if targetEditorHeight != lastEditorHeight {
+            editorBox.Height = CellLength.Cells(targetEditorHeight)
+            lastEditorHeight = targetEditorHeight
+            changed = true
+        }
+        if bounds.WidthCells != lastLayoutWidth || bounds.HeightRows != lastLayoutHeight {
+            FitOverlays(bounds)
+            lastLayoutWidth = bounds.WidthCells
+            lastLayoutHeight = bounds.HeightRows
+            changed = true
+        }
+        if PositionCompletion(bounds) {
+            changed = true
+        }
+        return changed
     }
 
     protected override func Accept(ev UiEvent) EventResult {
@@ -527,6 +575,9 @@ public open class ReplApp : Column {
         message = cell.HasError ? "cell " + cell.Index.ToString() + " failed" : "cell " + cell.Index.ToString() +
             " complete"
         RebuildSessionViews()
+        if editor.Text != "" || pendingAnalysis != nil {
+            AnalyzeNow(editor.Text)
+        }
         transcript.FollowTail = true
         transcript.Refresh()
         Focus(editor)
@@ -635,9 +686,11 @@ public open class ReplApp : Column {
             return
         }
         let at = CaretCharacter()
+        let (prefix, hasDollar) = CurrentPrefixInfo()
         completionItems = MatchingCompletions(
             engine.Completions(editor.Text, editor.Caret.LineIndex, at),
-            CurrentPrefix()
+            prefix,
+            hasDollar
         )
         if completionItems.Count == 0 {
             message = "no completions"
@@ -674,26 +727,42 @@ public open class ReplApp : Column {
             return
         }
         let at = CaretCharacter()
-        let items = MatchingCompletions(engine.Completions(editor.Text, editor.Caret.LineIndex, at), CurrentPrefix())
+        let (prefix, hasDollar) = CurrentPrefixInfo()
+        let items = MatchingCompletions(engine.Completions(editor.Text, editor.Caret.LineIndex, at), prefix, hasDollar)
         if items.Count == 0 {
             message = "no completions"
             return
         }
-        let prefix = CurrentPrefix()
-        var common = items[0].Label ?? ""
+        if items.Count == 1 {
+            let single = items[0].Label ?? ""
+            if single != "" {
+                ReplacePrefix(single)
+                message = "completion expanded"
+                return
+            }
+        }
+        let firstLabel = items[0].Label ?? ""
+        var allEscaped = firstLabel.StartsWith("$$", StringComparison.Ordinal)
+        var common = UnescapedName(firstLabel)
         var i = 1
         while i < items.Count {
             let label = items[i].Label ?? ""
+            if !label.StartsWith("$$", StringComparison.Ordinal) {
+                allEscaped = false
+            }
+            let normalized = UnescapedName(label)
             var length = 0
-            let limit = Math.Min(common.Length, label.Length)
-            while length < limit && Char.ToUpperInvariant(common[length]) == Char.ToUpperInvariant(label[length]) {
+            let limit = Math.Min(common.Length, normalized.Length)
+            while length < limit
+            && Char.ToUpperInvariant(common[length]) == Char.ToUpperInvariant(normalized[length]) {
                 length = length + 1
             }
             common = common.Substring(0, length)
             i = i + 1
         }
         if common.Length > prefix.Length && common.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) {
-            ReplacePrefix(common)
+            let expanded = allEscaped ? "$$" + common : common
+            ReplacePrefix(expanded)
             message = "completion expanded"
             return
         }
@@ -701,15 +770,27 @@ public open class ReplApp : Column {
         ShowCompletionPane()
     }
 
-    private func MatchingCompletions(items IReadOnlyList[CompletionItem], prefix string) IReadOnlyList[CompletionItem] {
-        if prefix == "" {
+    private func MatchingCompletions(items IReadOnlyList[CompletionItem], prefix string, hasDollar bool) IReadOnlyList[
+        CompletionItem
+    ] {
+        if prefix == "" && !hasDollar {
             return items
         }
         let matches = List[CompletionItem]()
         for item in items {
             let label = item.Label ?? ""
-            if label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) {
-                matches.Add(item)
+            if hasDollar {
+                let escaped = "$$" + prefix
+                if label.StartsWith(escaped, StringComparison.OrdinalIgnoreCase) {
+                    matches.Add(item)
+                } else if prefix != "" && label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) {
+                    matches.Add(item)
+                }
+            } else {
+                if label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                || UnescapedName(label).StartsWith(prefix, StringComparison.OrdinalIgnoreCase) {
+                    matches.Add(item)
+                }
             }
         }
         return matches
@@ -731,7 +812,7 @@ public open class ReplApp : Column {
         completionOverlay.Height = CellLength.Cells(Math.Min(9, completionItems.Count + 2))
         completionOverlay.IsVisible = true
         Focus(pane)
-        PositionCompletion(Bounds)
+        let _ = PositionCompletion(Bounds)
     }
 
     private func ReplacePrefix(replacement string) {
@@ -742,7 +823,10 @@ public open class ReplApp : Column {
         }
         let line = lines[lineIndex]
         let at = CaretCharacter()
-        let start = PrefixStart(line, at)
+        var start = PrefixStart(line, at)
+        if replacement.StartsWith("$$", StringComparison.Ordinal) && start > 0 && line[start - 1] == char(36) {
+            start = start - 1
+        }
         lines[lineIndex] = line.Substring(0, start) + replacement + line.Substring(at)
         editor.Text = String.Join("\n", lines)
         editor.Caret = TextPosition{
@@ -777,6 +861,11 @@ public open class ReplApp : Column {
         || edit.StartCharacter > lines[edit.StartLine].Length || edit.EndCharacter > lines[edit.EndLine].Length {
             return
         }
+        var startCharacter = edit.StartCharacter
+        if edit.NewText.StartsWith("$$", StringComparison.Ordinal) && startCharacter > 0
+        && lines[edit.StartLine][startCharacter - 1] == char(36) {
+            startCharacter = startCharacter - 1
+        }
         let replacementLines = EditorLineSource.TextLines(edit.NewText)
         let rebuilt = List[string]()
         var i = 0
@@ -784,7 +873,7 @@ public open class ReplApp : Column {
             rebuilt.Add(lines[i])
             i = i + 1
         }
-        let before = lines[edit.StartLine].Substring(0, edit.StartCharacter)
+        let before = lines[edit.StartLine].Substring(0, startCharacter)
         let after = lines[edit.EndLine].Substring(edit.EndCharacter)
         if replacementLines.Count == 1 {
             rebuilt.Add(before + replacementLines[0] + after)
@@ -811,14 +900,29 @@ public open class ReplApp : Column {
         message = "completion accepted"
     }
 
-    private func PositionCompletion(bounds CellRect) {
+    private func PositionCompletion(bounds CellRect) bool {
+        var changed = false
         if !completionOverlay.IsVisible {
-            ghost.IsVisible = false
-            return
+            if lastCompletionVisible {
+                lastCompletionVisible = false
+                changed = true
+            }
+            if ghost.IsVisible || lastGhostVisible {
+                ghost.IsVisible = false
+                lastGhostVisible = false
+                lastGhostText = ""
+                changed = true
+            }
+            return changed
         }
         guard let point = editor.CaretScreenPosition, let pane = completionPane else {
-            ghost.IsVisible = false
-            return
+            if ghost.IsVisible || lastGhostVisible {
+                ghost.IsVisible = false
+                lastGhostVisible = false
+                lastGhostText = ""
+                changed = true
+            }
+            return changed
         }
         var column = point.Column
         var row = point.Row + 1
@@ -830,23 +934,51 @@ public open class ReplApp : Column {
         if row + height > bounds.HeightRows {
             row = Math.Max(0, point.Row - height)
         }
-        completionOverlay.Placement = Placement.At(CellPoint{Column: column, Row: row})
+        if !lastCompletionVisible || column != lastCompletionCol || row != lastCompletionRow {
+            completionOverlay.Placement = Placement.At(CellPoint{Column: column, Row: row})
+            lastCompletionCol = column
+            lastCompletionRow = row
+            lastCompletionVisible = true
+            changed = true
+        }
         let selected = pane.SelectedIndex
         if selected < 0 || selected >= completionItems.Count {
-            ghost.IsVisible = false
-            return
+            if ghost.IsVisible || lastGhostVisible {
+                ghost.IsVisible = false
+                lastGhostVisible = false
+                lastGhostText = ""
+                changed = true
+            }
+            return changed
         }
-        let prefix = CurrentPrefix()
+        let (prefix, hasDollar) = CurrentPrefixInfo()
         let label = completionItems[selected].Label ?? ""
-        if prefix == "" || !label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
-            label.Length <= prefix.Length {
-            ghost.IsVisible = false
-            return
+        let matchedName = hasDollar ? label : UnescapedName(label)
+        let typed = hasDollar ? "$$" + prefix : prefix
+        if typed == "" || !matchedName.StartsWith(typed, StringComparison.OrdinalIgnoreCase)
+        || matchedName.Length <= typed.Length {
+            if ghost.IsVisible || lastGhostVisible {
+                ghost.IsVisible = false
+                lastGhostVisible = false
+                lastGhostText = ""
+                changed = true
+            }
+            return changed
         }
-        ghost.Text = label.Substring(prefix.Length)
-        ghost.Width = CellLength.Cells(Math.Max(1, CellText.MeasureWidth(ghost.Text)))
-        ghost.Placement = Placement.At(point)
-        ghost.IsVisible = true
+        let nextGhostText = matchedName.Substring(typed.Length)
+        if !lastGhostVisible || nextGhostText != lastGhostText || point.Column != lastGhostCol
+        || point.Row != lastGhostRow {
+            ghost.Text = nextGhostText
+            ghost.Width = CellLength.Cells(Math.Max(1, CellText.MeasureWidth(nextGhostText)))
+            ghost.Placement = Placement.At(point)
+            ghost.IsVisible = true
+            lastGhostText = nextGhostText
+            lastGhostCol = point.Column
+            lastGhostRow = point.Row
+            lastGhostVisible = true
+            changed = true
+        }
+        return changed
     }
 
     private func OpenHover() {
@@ -1040,10 +1172,17 @@ public open class ReplApp : Column {
                 }
             )
         }
-        let pane = InputPane(request, () -> CloseInput(), ReplTheme.Current)
+        let pane = InputPane(request, () -> CancelWorkerFromInput(), () -> CloseInput(), ReplTheme.Current)
         inputOverlay.Content = Box{GrowWeight: 1, ShowBorder: true, Title: "standard input", Children: {pane}}
         inputOverlay.IsVisible = true
         Focus(pane.Input)
+    }
+
+    private func CancelWorkerFromInput() {
+        if let running = worker {
+            running.Cancel()
+        }
+        message = "cancelling input and evaluation"
     }
 
     private func ReadInput() string? {
@@ -1315,17 +1454,21 @@ public open class ReplApp : Column {
         return count
     }
 
-    private func CurrentPrefix() string {
+    private func CurrentPrefixInfo()(string, bool) {
         let lines = EditorLineSource.TextLines(editor.Text)
         let lineIndex = editor.Caret.LineIndex
         if lineIndex < 0 || lineIndex >= lines.Count {
-            return ""
+            return ("", false)
         }
         let line = lines[lineIndex]
         let at = CaretCharacter()
         let start = PrefixStart(line, at)
-        return line.Substring(start, at - start)
+        let hasDollar = start > 0 && line[start - 1] == char(36)
+        return (line.Substring(start, at - start), hasDollar)
     }
+
+    private func UnescapedName(text string) string -> text.StartsWith("$$", StringComparison.Ordinal)
+    ? text.Substring(1) : text
 
     private func PrefixStart(line string, at int32) int32 {
         var start = at

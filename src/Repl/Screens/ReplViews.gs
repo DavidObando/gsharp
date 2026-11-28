@@ -328,7 +328,11 @@ public class TranscriptSource : VirtualListSource {
         AddOutput(result, cell.Output, palette.Muted)
         AddOutput(result, cell.StandardError, palette.Error)
         if !cell.HasError && cell.Value != nil {
-            AddLine(result, "     = " + ReplValueFormatter.Format(cell.Value), palette.Good)
+            try {
+                AddLine(result, "     = " + ReplValueFormatter.Format(cell.Value), palette.Good)
+            } catch (error Exception) {
+                AddLine(result, "     " + (ascii ? "! " : "╰─ ") + "Format error: " + error.Message, palette.Error)
+            }
         }
         if showTree {
             AddLine(result, "     syntax tree", palette.Accent)

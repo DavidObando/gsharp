@@ -35,6 +35,7 @@ import System.Threading.Tasks
 /// against the last good chain.
 class EmittedSessionEngine : ISessionEngine, IDisposable {
     private let cells List[Cell] = List[Cell]()
+    private var cellSnapshot ImmutableArray[Cell] = ImmutableArray[Cell].Empty
     private let sessionGate object = Object()
     private let submissions List[SubmissionState] = List[SubmissionState]()
     private let discardedResolvers List[ReferenceResolver] = List[ReferenceResolver]()
@@ -60,7 +61,13 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    prop Cells IReadOnlyList[Cell] -> cells
+    prop Cells IReadOnlyList[Cell] {
+        get {
+            lock sessionGate {
+                return cellSnapshot
+            }
+        }
+    }
 
     /// ```xmldoc
     /// <inheritdoc />
@@ -138,7 +145,13 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
             let content = AnalysisBridge.Build(text)
             let snapshot = CaptureChainSnapshot()
             let compilation = CreateAnalysisCompilation(content.SyntaxTree, snapshot)
-            return AnalysisBridge.Completions(content, compilation, line, col, SnapshotFrom(snapshot.Submissions))
+            return AnalysisBridge.Completions(
+                content,
+                compilation,
+                line,
+                col,
+                SnapshotFrom(snapshot.Submissions, includeValues: false)
+            )
         } catch {
             return Array.Empty[CompletionItem]()
         }
@@ -152,7 +165,13 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
             let content = AnalysisBridge.Build(text)
             let snapshot = CaptureChainSnapshot()
             let compilation = CreateAnalysisCompilation(content.SyntaxTree, snapshot)
-            return AnalysisBridge.Hover(content, compilation, line, col, SnapshotFrom(snapshot.Submissions))
+            return AnalysisBridge.Hover(
+                content,
+                compilation,
+                line,
+                col,
+                SnapshotFrom(snapshot.Submissions, includeValues: false)
+            )
         } catch {
             return nil
         }
@@ -161,9 +180,9 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    func Snapshot() ReplState -> SnapshotFrom(CaptureChainSnapshot().Submissions)
+    func Snapshot() ReplState -> SnapshotFrom(CaptureChainSnapshot().Submissions, includeValues: true)
 
-    private func SnapshotFrom(snapshotSubmissions ImmutableArray[SubmissionState]) ReplState {
+    private func SnapshotFrom(snapshotSubmissions ImmutableArray[SubmissionState], includeValues bool) ReplState {
         if snapshotSubmissions.IsDefaultOrEmpty {
             return ReplState.Empty
         }
@@ -203,19 +222,27 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                         !seenVars.Add(v.Name) {
                         continue
                     }
-                    let value object? = host.ReadStaticField(
-                        submission.RuntimeAssembly,
-                        submission.PackageName + "." + SubmissionImports.ProgramTypeName,
-                        v.Name
-                    )
-                    // ADR-0157: display-side pretty rendering for the
-                    // sidebar values column, same contract as the echo.
+                    var formattedValue = string.Empty
+                    if includeValues {
+                        try {
+                            let value object? = host.ReadStaticField(
+                                submission.RuntimeAssembly,
+                                submission.PackageName + "." + SubmissionImports.ProgramTypeName,
+                                v.Name
+                            )
+                            // ADR-0157: display-side pretty rendering for the
+                            // sidebar values column, same contract as the echo.
+                            formattedValue = Truncate(ReplValueFormatter.Format(value), 20)
+                        } catch {
+                            formattedValue = "<error>"
+                        }
+                    }
                     let kind = if v.IsReadOnly {
                         "let"
                     } else {
                         "var"
                     }
-                    vars.Add(Describe(kind, v, submission, Truncate(ReplValueFormatter.Format(value), 20)))
+                    vars.Add(Describe(kind, v, submission, formattedValue))
                 }
                 for s in scope_.Structs {
                     if seenTypes.Add(s.Name) {
@@ -257,9 +284,10 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
         ReleaseCompilations()
         lock sessionGate {
             sessionImports.Clear()
+            cells.Clear()
+            cellSnapshot = ImmutableArray[Cell].Empty
             sessionGeneration += 1
         }
-        cells.Clear()
     }
 
     /// ```xmldoc
@@ -352,7 +380,10 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
 
     private func EvaluateCore(source SourceText, cancellationToken CancellationToken) Cell {
         let text = source.ToString()
-        let index = cells.Count + 1
+        var index = 0
+        lock sessionGate {
+            index = cells.Count + 1
+        }
         let originalOut = Console.Out
         let originalError = Console.Error
         let originalIn = Console.In
@@ -400,7 +431,10 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                 Console.SetIn(originalIn)
             }
         }
-        cells.Add(cell)
+        lock sessionGate {
+            cells.Add(cell)
+            cellSnapshot = cells.ToImmutableArray()
+        }
         return cell
     }
 

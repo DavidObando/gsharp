@@ -212,8 +212,10 @@ def run_sharptui_and_live_switch():
         session.pump(0.1)
         if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
             raise RuntimeError(f"gsi exited with status {status}")
-        if ALT_ON not in session.output or ALT_OFF not in session.output:
-            raise RuntimeError("gsi did not enter and restore the alternate screen")
+        last_on = session.output.rfind(ALT_ON)
+        last_off = session.output.rfind(ALT_OFF)
+        if last_on < 0 or last_off < last_on:
+            raise RuntimeError("gsi did not restore the alternate screen on final exit")
     finally:
         session.close()
 
