@@ -20,7 +20,7 @@ import System.Text.RegularExpressions
 /// diagnostics, formatting, and syntax-tree dumps for editor text.
 shared class AnalysisBridge {
     func Completions(text string, line int32, col int32, state ReplState? = nil) IReadOnlyList[CompletionItem] -> Safe(
-        () -> AddSessionCompletions(CompletionComputer.ComputeCompletions(Build(text), Position(line, col)), state),
+        () -> ComputeCompletions(Build(text), nil, line, col, state),
         Array.Empty[CompletionItem]()
     )
 
@@ -31,12 +31,29 @@ shared class AnalysisBridge {
         col int32,
         state ReplState
     ) IReadOnlyList[CompletionItem] -> Safe(
-        () -> AddSessionCompletions(
-            CompletionComputer.ComputeCompletions(content, Position(line, col), compilation: compilation),
-            state
-        ),
+        () -> ComputeCompletions(content, compilation, line, col, state),
         Array.Empty[CompletionItem]()
     )
+
+    private func ComputeCompletions(
+        content DocumentContent,
+        compilation Compilation?,
+        line int32,
+        col int32,
+        state ReplState?
+    ) IReadOnlyList[CompletionItem] {
+        let baseline = CompletionComputer.ComputeCompletionsWithContext(
+            content,
+            Position(line, col),
+            out var isUnqualified,
+            compilation: compilation
+        )
+        return if isUnqualified {
+            AddSessionCompletions(baseline, state)
+        } else {
+            baseline
+        }
+    }
 
     func Hover(text string, line int32, col int32, state ReplState? = nil) string? -> Safe(
         () -> HoverComputer.ComputeHover(Build(text), Position(line, col))?.Contents?.MarkupContent?.Value ??
@@ -161,7 +178,12 @@ shared class AnalysisBridge {
     }
 
     internal func AnalyzeTokens(text string) EditorAnalysis -> Safe(
-        () -> EditorAnalysis(Tokenize(Build(text)), Array.Empty[EditorDiagnostic]()),
+        () -> EditorAnalysis(Tokenize(Build(text), nil), Array.Empty[EditorDiagnostic]()),
+        EditorAnalysis.Empty
+    )
+
+    internal func AnalyzeTokens(content DocumentContent, compilation Compilation?) EditorAnalysis -> Safe(
+        () -> EditorAnalysis(Tokenize(content, compilation), Array.Empty[EditorDiagnostic]()),
         EditorAnalysis.Empty
     )
 
@@ -172,12 +194,15 @@ shared class AnalysisBridge {
             lines.Add(i)
             i = text.IndexOf('\n', i + 1)
         }
-        return DocumentContent(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(text), lines)
+        return DocumentContent(
+            GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(SourceText.From(text, string.Empty)),
+            lines
+        )
     }
 
     private func AnalyzeCore(text string) EditorAnalysis {
         let result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: false)
-        let tokens = Tokenize(result.Content)
+        let tokens = Tokenize(result.Content, nil)
         let diagnostics = result
             .Diagnostics
             .Select(
@@ -195,10 +220,10 @@ shared class AnalysisBridge {
         return EditorAnalysis(tokens, diagnostics)
     }
 
-    private func Tokenize(content DocumentContent) IReadOnlyList[EditorToken] {
+    private func Tokenize(content DocumentContent, compilation Compilation?) IReadOnlyList[EditorToken] {
         let document = SemanticTokensDocument(SemanticTokensHandler.Legend)
         let builder = document.Create()
-        SemanticTokensComputer.Tokenize(builder, content)
+        SemanticTokensComputer.Tokenize(builder, content, compilation: compilation)
         builder.Commit()
         let data = document.GetSemanticTokens().Data
         let tokens = List[EditorToken](data.Length / 5)

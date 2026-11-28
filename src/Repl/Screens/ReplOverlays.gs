@@ -43,6 +43,7 @@ public open class PalettePane : Column {
     public prop Input TextInput -> input
 
     public func CompleteSelection() {
+        SyncFilter()
         if list.SelectedIndex < 0 || list.SelectedIndex >= list.Items.Count {
             return
         }

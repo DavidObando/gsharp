@@ -65,18 +65,21 @@ shared class SemanticTokensComputer {
     func Tokenize(
         builder SemanticTokensBuilder,
         content DocumentContent,
-        ct CancellationToken = default(CancellationToken)
+        ct CancellationToken = default(CancellationToken),
+        compilation Compilation? = nil
     ) {
         let tree = content.SyntaxTree
         let text = tree.Text
         // Build semantic model if possible for symbol classification
-        var compilation Compilation? = nil
+        var resolvedCompilation Compilation? = compilation
         var declarationPositions HashSet[int32]? = nil
         let inactiveSpans = List[TextSpan]()
         try {
-            compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(tree)
+            resolvedCompilation = resolvedCompilation ?? content.Project?.GetCompilation() ?? ServerCompilation.Create(
+                tree
+            )
             declarationPositions = BuildDeclarationPositions(tree)
-            CollectInactiveSpans(tree.Root, compilation, inactiveSpans, ct)
+            CollectInactiveSpans(tree.Root, resolvedCompilation, inactiveSpans, ct)
         } catch {
             // Fall back to syntax-only classification
 
@@ -109,19 +112,27 @@ shared class SemanticTokensComputer {
             // Interpolated string literals are decomposed: literal text is classified as String,
             // while the hole expressions are tokenized as real code (identifiers, numbers).
             if token.Kind == SyntaxKind.InterpolatedStringToken {
-                EmitInterpolatedStringTokens(builder, tree, text, token.Span, compilation, declarationPositions, ct)
+                EmitInterpolatedStringTokens(
+                    builder,
+                    tree,
+                    text,
+                    token.Span,
+                    resolvedCompilation,
+                    declarationPositions,
+                    ct
+                )
                 continue
             }
             // For identifiers, resolve using the token from the parsed tree at the same position
             // (ParseTokens creates tokens in a different tree that won't resolve in the compilation)
             var resolveToken SyntaxToken? = token
-            if token.Kind == SyntaxKind.IdentifierToken && compilation != nil {
+            if token.Kind == SyntaxKind.IdentifierToken && resolvedCompilation != nil {
                 resolveToken = SemanticLookup.FindTokenAt(tree, token.Span.Start)
                 if resolveToken == nil || resolveToken.Kind != SyntaxKind.IdentifierToken {
                     continue
                 }
             }
-            let classification = ClassifyToken(resolveToken!!, compilation, declarationPositions, ct)
+            let classification = ClassifyToken(resolveToken!!, resolvedCompilation, declarationPositions, ct)
             if classification == nil {
                 continue
             }

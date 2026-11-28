@@ -35,6 +35,7 @@ import System.Threading.Tasks
 /// against the last good chain.
 class EmittedSessionEngine : ISessionEngine, IDisposable {
     private let cells List[Cell] = List[Cell]()
+    private let sessionGate object = Object()
     private let submissions List[SubmissionState] = List[SubmissionState]()
     private let discardedResolvers List[ReferenceResolver] = List[ReferenceResolver]()
     private let sessionImports List[ImportSymbol] = List[ImportSymbol]()
@@ -42,7 +43,8 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
     private let host InteractiveSessionHost
     private let submissionsDirectory string
     private var analysisResolver ReferenceResolver? = nil
-    private var analysisSubmissionCount int32 = -1
+    private var analysisGeneration int64 = -1
+    private var sessionGeneration int64 = 0
     private var submissionCounter int32
 
     /// Initializes a new instance of the (cref:EmittedSessionEngine) class.
@@ -112,17 +114,19 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
         if text.Length == 0 {
             return EditorAnalysis.Empty
         }
-        let baseline = AnalysisBridge.AnalyzeTokens(text)
         try {
-            let tree = SyntaxTree.Parse(SourceText.From(text, string.Empty))
-            let compilation = CreateAnalysisCompilation(tree)
-            let diagnostics = tree
+            let content = AnalysisBridge.Build(text)
+            let snapshot = CaptureChainSnapshot()
+            let compilation = CreateAnalysisCompilation(content.SyntaxTree, snapshot)
+            let baseline = AnalysisBridge.AnalyzeTokens(content, compilation)
+            let diagnostics = content
+                .SyntaxTree
                 .Diagnostics
                 .Concat(compilation.GlobalScope.Diagnostics)
                 .Concat(compilation.BoundProgram.Diagnostics)
-            return AnalysisBridge.WithDiagnostics(baseline, diagnostics, tree.Text)
+            return AnalysisBridge.WithDiagnostics(baseline, diagnostics, content.SyntaxTree.Text)
         } catch {
-            return baseline
+            return AnalysisBridge.AnalyzeTokens(text)
         }
     }
 
@@ -130,23 +134,37 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
     /// <inheritdoc />
     /// ```
     func Completions(text string, line int32, col int32) IReadOnlyList[CompletionItem] {
-        let content = AnalysisBridge.Build(text)
-        return AnalysisBridge.Completions(content, CreateAnalysisCompilation(content.SyntaxTree), line, col, Snapshot())
+        try {
+            let content = AnalysisBridge.Build(text)
+            let snapshot = CaptureChainSnapshot()
+            let compilation = CreateAnalysisCompilation(content.SyntaxTree, snapshot)
+            return AnalysisBridge.Completions(content, compilation, line, col, SnapshotFrom(snapshot.Submissions))
+        } catch {
+            return Array.Empty[CompletionItem]()
+        }
     }
 
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
     func Hover(text string, line int32, col int32) string? {
-        let content = AnalysisBridge.Build(text)
-        return AnalysisBridge.Hover(content, CreateAnalysisCompilation(content.SyntaxTree), line, col, Snapshot())
+        try {
+            let content = AnalysisBridge.Build(text)
+            let snapshot = CaptureChainSnapshot()
+            let compilation = CreateAnalysisCompilation(content.SyntaxTree, snapshot)
+            return AnalysisBridge.Hover(content, compilation, line, col, SnapshotFrom(snapshot.Submissions))
+        } catch {
+            return nil
+        }
     }
 
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    func Snapshot() ReplState {
-        if submissions.Count == 0 {
+    func Snapshot() ReplState -> SnapshotFrom(CaptureChainSnapshot().Submissions)
+
+    private func SnapshotFrom(snapshotSubmissions ImmutableArray[SubmissionState]) ReplState {
+        if snapshotSubmissions.IsDefaultOrEmpty {
             return ReplState.Empty
         }
         try {
@@ -160,7 +178,7 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
             let seenTypes = HashSet[string](StringComparer.Ordinal)
             // Walk submissions newest-to-oldest so redeclarations show their
             // latest form, mirroring the evaluator engine's scope-chain walk.
-            for submission in submissions {
+            for submission in snapshotSubmissions {
                 let scope_ = submission.GlobalScope
                 for import_ in scope_.Imports {
                     if seenImports.Add(import_.Name) {
@@ -237,7 +255,10 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
     func Reset() {
         host.Reset()
         ReleaseCompilations()
-        sessionImports.Clear()
+        lock sessionGate {
+            sessionImports.Clear()
+            sessionGeneration += 1
+        }
         cells.Clear()
     }
 
@@ -268,34 +289,63 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
         return ReplSymbol(kind, symbol.Name, detail, value, display)
     }
 
-    private func GetAnalysisResolver() ReferenceResolver {
-        if analysisResolver != nil && analysisSubmissionCount == submissions.Count {
-            return analysisResolver!!
+    private func CaptureChainSnapshot() SessionChainSnapshot {
+        lock sessionGate {
+            return SessionChainSnapshot(
+                sessionGeneration,
+                submissions.ToImmutableArray(),
+                sessionImports.ToImmutableArray()
+            )
         }
-        if analysisResolver != nil {
-            discardedResolvers.Add(analysisResolver!!)
+    }
+
+    private func GetAnalysisResolver(snapshot SessionChainSnapshot) ReferenceResolver {
+        lock sessionGate {
+            if analysisResolver != nil && analysisGeneration == snapshot.Generation {
+                return analysisResolver!!
+            }
         }
-        let paths = submissions.Select((s SubmissionState) -> s.DllPath).Concat(userReferences).ToArray()
+        let paths = snapshot.Submissions.Select((s SubmissionState) -> s.DllPath).Concat(userReferences).ToArray()
         let runtimeDirectory = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
-        analysisResolver = if paths.Length > 0 {
+        let created = if paths.Length > 0 {
             ReferenceResolver.WithReferences(ReferenceResolver.ResolveDriverReferencePaths(paths, runtimeDirectory))
         } else {
             ReferenceResolver.DefaultInHost(runtimeDirectory)
         }
-        analysisSubmissionCount = submissions.Count
-        return analysisResolver!!
+        lock sessionGate {
+            if analysisResolver != nil && analysisGeneration == snapshot.Generation {
+                discardedResolvers.Add(created)
+                return analysisResolver!!
+            }
+            if sessionGeneration == snapshot.Generation {
+                if analysisResolver != nil {
+                    discardedResolvers.Add(analysisResolver!!)
+                }
+                analysisResolver = created
+                analysisGeneration = snapshot.Generation
+                return created
+            }
+            // A newer submission or reset published while creating this resolver:
+            // keep it alive until session end for this snapshot's compilation without
+            // overwriting the cache for a different generation.
+            discardedResolvers.Add(created)
+            return created
+        }
     }
 
-    private func CreateAnalysisCompilation(tree SyntaxTree) Compilation -> Compilation(GetAnalysisResolver(), tree){
+    private func CreateAnalysisCompilation(tree SyntaxTree, snapshot SessionChainSnapshot) Compilation -> Compilation(
+        GetAnalysisResolver(snapshot),
+        tree
+    ){
         Submission = SubmissionBindingOptions{
             Imports: SubmissionImports.Create(
-                submissions.Select(
-                    (s SubmissionState) -> SubmissionReference(s.AssemblyName, s.PackageName, s.GlobalScope)
-                )
+                snapshot
+                    .Submissions
+                    .Select((s SubmissionState) -> SubmissionReference(s.AssemblyName, s.PackageName, s.GlobalScope))
                     .ToImmutableArray()
             ),
             DefaultPackageName: "gsi$$analysis",
-            ReplayImports: sessionImports.ToImmutableArray(),
+            ReplayImports: snapshot.Imports,
             CaptureTrailingExpression: false
         }
     }
@@ -375,12 +425,17 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
         } else {
             string.Empty
         }
+        let chainSnapshot = CaptureChainSnapshot()
         // ADR-0174 D1: a later cell's resolver is rebuilt from the prior
         // submissions, so it must re-append the bundled driver references
         // (Gsharp.Extensions, Gsharp.Runtime.Channels) the first cell got from
         // ReferenceResolver.Default(); otherwise a channel constructed in cell
         // one cannot be sent on in cell two ("Chan`1 ... not provided").
-        let referencePaths = submissions.Select((s SubmissionState) -> s.DllPath).Concat(userReferences).ToArray()
+        let referencePaths = chainSnapshot
+            .Submissions
+            .Select((s SubmissionState) -> s.DllPath)
+            .Concat(userReferences)
+            .ToArray()
         // ADR-0223 D4: keep the bundled runtime order of gsi (Program.SdkToolsDirectory).
         let runtimeDirectory = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
         let resolver = if referencePaths.Length > 0 {
@@ -396,13 +451,15 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
             let compilation = Compilation(resolver, tree){
                 Submission = SubmissionBindingOptions{
                     Imports: SubmissionImports.Create(
-                        submissions.Select(
+                        chainSnapshot
+                            .Submissions
+                            .Select(
                             (s SubmissionState) -> SubmissionReference(s.AssemblyName, s.PackageName, s.GlobalScope)
                         )
                             .ToImmutableArray()
                     ),
                     DefaultPackageName: packageName,
-                    ReplayImports: sessionImports.ToImmutableArray()
+                    ReplayImports: chainSnapshot.Imports
                 }
             }
             using let peStream = MemoryStream()
@@ -479,28 +536,28 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
             // this (possibly long-running) submission finished, discard the result
             // instead of committing it to the transcript or the chain.
             cancellationToken.ThrowIfCancellationRequested()
-            submissions.Insert(
-                0,
-                SubmissionState(
-                    compilation,
-                    compilation.GlobalScope,
-                    assemblyName,
-                    emittedPackageName,
-                    dllPath,
-                    runResult.Assembly
-                )
-            )
-            ownershipTransferred = true
-            for import_ in compilation.GlobalScope.Imports {
-                if !sessionImports.Any(
-                    (i ImportSymbol) -> string.Equals(i.Name, import_.Name, StringComparison.Ordinal) && string.Equals(
-                        i.Target,
-                        import_.Target,
-                        StringComparison.Ordinal
+            lock sessionGate {
+                submissions.Insert(
+                    0,
+                    SubmissionState(
+                        compilation,
+                        compilation.GlobalScope,
+                        assemblyName,
+                        emittedPackageName,
+                        dllPath,
+                        runResult.Assembly
                     )
-                ) {
-                    sessionImports.Add(ImportSymbol(import_.Name, import_.Target, declaration: nil))
+                )
+                ownershipTransferred = true
+                for import_ in compilation.GlobalScope.Imports {
+                    if !sessionImports.Any(
+                        (i ImportSymbol) -> string.Equals(i.Name, import_.Name, StringComparison.Ordinal) &&
+                            string.Equals(i.Target, import_.Target, StringComparison.Ordinal)
+                    ) {
+                        sessionImports.Add(ImportSymbol(import_.Name, import_.Target, declaration: nil))
+                    }
                 }
+                sessionGeneration += 1
             }
             return Cell(
                 index,
@@ -521,27 +578,43 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                 // Disposing a resolver clears process-wide symbol caches. Keep
                 // failed/cancelled resolvers until this session ends so a live
                 // prior submission never observes a mid-chain cache reset.
-                discardedResolvers.Add(resolver)
+                lock sessionGate {
+                    discardedResolvers.Add(resolver)
+                }
             }
         }
     }
 
     private func ReleaseCompilations() {
-        if analysisResolver != nil {
-            analysisResolver!!.Dispose()
+        var oldResolver ReferenceResolver? = nil
+        var oldSubmissions[]SubmissionState = Array.Empty[SubmissionState]()
+        var oldDiscarded[]ReferenceResolver = Array.Empty[ReferenceResolver]()
+        lock sessionGate {
+            oldResolver = analysisResolver
             analysisResolver = nil
-            analysisSubmissionCount = -1
+            analysisGeneration = -1
+            oldSubmissions = submissions.ToArray()
+            submissions.Clear()
+            oldDiscarded = discardedResolvers.ToArray()
+            discardedResolvers.Clear()
         }
-        for submission in submissions {
+        if oldResolver != nil {
+            oldResolver.Dispose()
+        }
+        for submission in oldSubmissions {
             TryDeleteFile(submission.DllPath)
             submission.Compilation.References?.Dispose()
         }
-        submissions.Clear()
-        for resolver in discardedResolvers {
+        for resolver in oldDiscarded {
             resolver.Dispose()
         }
-        discardedResolvers.Clear()
     }
+
+    private data class SessionChainSnapshot(
+        Generation int64,
+        Submissions ImmutableArray[SubmissionState],
+        Imports ImmutableArray[ImportSymbol]
+    ) : IEquatable[SessionChainSnapshot] { }
 
     private data class SubmissionState(
         Compilation Compilation,

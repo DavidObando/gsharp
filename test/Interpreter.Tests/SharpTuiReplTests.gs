@@ -332,6 +332,132 @@ open class SharpTuiReplTests {
     }
 
     @Fact
+    func MemberAndInitializerCompletionsDoNotAppendGlobalSessionSymbols() {
+        using let engine = EmittedSessionEngine()
+        let _ = engine.Evaluate(
+            "import System.Text\nlet answer = 123\nlet sb = StringBuilder()\nclass Thing { prop Count int32\ninit() { } }"
+        )
+
+        let memberItems = engine.Completions("sb.", 0, 3)
+        Assert.Contains(memberItems, (item CompletionItem) -> item.Label == "Length")
+        Assert.DoesNotContain(memberItems, (item CompletionItem) -> item.Label == "answer")
+        Assert.DoesNotContain(memberItems, (item CompletionItem) -> item.Label == "Thing")
+
+        let initItems = engine.Completions("let t = Thing() {  }", 0, 18)
+        Assert.Contains(initItems, (item CompletionItem) -> item.Label == "Count")
+        Assert.DoesNotContain(initItems, (item CompletionItem) -> item.Label == "answer")
+
+        let unqualified = engine.Completions("ans", 0, 3)
+        Assert.Contains(unqualified, (item CompletionItem) -> item.Label == "answer")
+    }
+
+    @Fact
+    func LiveEditorSemanticTokensHighlightPriorSessionSymbols() {
+        ReplTheme.Reset()
+        using let engine = EmittedSessionEngine()
+        let _ = engine.Evaluate("let answer = 123")
+
+        let analysis = engine.AnalyzeEditor("answer + 1")
+        Assert.Empty(analysis.Diagnostics)
+        Assert.Contains(
+            analysis.Tokens,
+            (token EditorToken) -> token.Line == 0 && token.StartCharacter == 0 && token.Length == 6
+        )
+
+        let line = EditorLineSource("answer + 1", analysis, ReplTheme.Current).ItemAt(0)
+        Assert.Contains(
+            line.Runs,
+            (run TextRun) -> run.Text == "answer" && run.Style.Foreground.Equals(ReplTheme.Current.VariableColor)
+        )
+    }
+
+    @Fact
+    func StandardInputOverlayStaysModalAgainstOtherOverlaysAndTabSwitches() {
+        using let engine = EmittedSessionEngine()
+        let (root, driver) = Create(engine, 100, 30)
+
+        Type(driver, "Console.ReadLine()")
+        let _ = SendKey(driver, Key.Enter)
+        let deadline = DateTime.UtcNow.AddSeconds(5.0)
+        var frame = string.Empty
+        while !frame.Contains("standard input", StringComparison.Ordinal) && DateTime.UtcNow < deadline {
+            Thread.Sleep(5)
+            driver.Pump()
+            driver.Draw()
+            frame = driver.FrameText()
+        }
+        Assert.Contains("standard input", frame, StringComparison.Ordinal)
+
+        // Attempt to open other overlays and switch tabs while stdin is waiting.
+        let _ = Control(driver, "p")
+        let _ = Control(driver, "l")
+        let _ = SendKey(driver, Key.F1)
+        let _ = Control(driver, "2")
+        let _ = SendKey(driver, Key.Tab)
+        driver.Draw()
+        frame = driver.FrameText()
+        Assert.Contains("standard input", frame, StringComparison.Ordinal)
+        Assert.DoesNotContain("command palette", frame, StringComparison.Ordinal)
+        Assert.DoesNotContain("captured output", frame, StringComparison.Ordinal)
+        Assert.Equal(0, root.ActiveTab)
+
+        Type(driver, "ok")
+        let _ = SendKey(driver, Key.Enter)
+        PumpUntilIdle(root, driver)
+        Assert.Equal("ok", Assert.Single(engine.Cells).Value)
+    }
+
+    @Fact
+    func PaletteTabBeforeLayoutCompletesFilteredCommandNotReset() {
+        using let engine = EmittedSessionEngine()
+        let (root, driver) = Create(engine, 100, 26)
+        let _ = engine.Evaluate("let keep = 7")
+
+        let _ = Control(driver, "p")
+        Type(driver, "ui")
+        // Deliberately press Tab before driver.Draw() triggers PrepareLayout().
+        let _ = SendKey(driver, Key.Tab)
+        let result = SendKey(driver, Key.Enter)
+
+        Assert.Equal(EventResult.Exit, result)
+        Assert.Equal(ReplUiKind.Spectre, root.RequestedUi)
+        Assert.Single(engine.Cells)
+    }
+
+    @Fact
+    func ConcurrentAnalysisDuringEvaluationKeepsCacheConsistent() {
+        using let engine = EmittedSessionEngine()
+        using let cts = CancellationTokenSource()
+        let reader = System
+            .Threading
+            .Tasks
+            .Task
+            .Run(
+            () -> {
+                while !cts.IsCancellationRequested {
+                    let _ = engine.AnalyzeEditor("v3 + 1")
+                    let _ = engine.Completions("v", 0, 1)
+                    let _ = engine.Hover("v3", 0, 1)
+                    let _ = engine.Snapshot()
+                }
+            }
+        )
+        try {
+            for var i = 0; i < 4; i++ {
+                let cell = engine.Evaluate("let v$i = $i")
+                Assert.False(cell.HasError)
+            }
+        } finally {
+            cts.Cancel()
+            reader.GetAwaiter().GetResult()
+        }
+
+        let finalAnalysis = engine.AnalyzeEditor("v3 + 1")
+        Assert.Empty(finalAnalysis.Diagnostics)
+        Assert.Contains(engine.Completions("v", 0, 1), (item CompletionItem) -> item.Label == "v3")
+    }
+
+    @Fact
     func FormatCommandUsesCanonicalFormatter() {
         let formatted = AnalysisBridge.Format("func   F( x  int32 )   int32  { return  x+1 }")
         Assert.Contains("func F(x int32) int32", formatted, StringComparison.Ordinal)

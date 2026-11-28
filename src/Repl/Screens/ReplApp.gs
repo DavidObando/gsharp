@@ -289,6 +289,10 @@ public open class ReplApp : Column {
             return worker != nil || analyzed ? EventResult.Handled : EventResult.Continue
         }
         if worker != nil && ev.Key == Key.Escape {
+            if let pending = inputRequest {
+                pending.Complete(nil)
+                CloseInput()
+            }
             if let running = worker {
                 running.Cancel()
             }
@@ -300,6 +304,10 @@ public open class ReplApp : Column {
         }
         if IsCtrl(ev, "q") {
             return EventResult.Exit
+        }
+        // Keep the standard-input prompt modal while a running cell is blocked on Console.ReadLine().
+        if inputRequest != nil {
+            return EventResult.Handled
         }
         if IsCtrl(ev, "p") {
             OpenPalette()
@@ -439,7 +447,7 @@ public open class ReplApp : Column {
     }
 
     private func Activate(index int32, focusContent bool) {
-        if index < 0 || index > 5 {
+        if inputRequest != nil || index < 0 || index > 5 {
             return
         }
         activeTab = index
@@ -639,6 +647,9 @@ public open class ReplApp : Column {
     }
 
     private func CompleteWithTab() {
+        if inputRequest != nil {
+            return
+        }
         if completionOverlay.IsVisible {
             if let pane = completionPane {
                 pane.AcceptSelected()
@@ -878,6 +889,9 @@ public open class ReplApp : Column {
     }
 
     private func OpenTextOverlay(overlay TuiOverlay, title string, text string) {
+        if inputRequest != nil {
+            return
+        }
         CloseAllOverlays()
         let pane = DismissPane(text, () -> CloseOverlay(overlay), ReplTheme.Current)
         overlay.Content = Box{GrowWeight: 1, ShowBorder: true, ShowScrollbar: true, Title: title, Children: {pane}}
@@ -886,6 +900,9 @@ public open class ReplApp : Column {
     }
 
     private func OpenPalette() {
+        if inputRequest != nil {
+            return
+        }
         CloseAllOverlays()
         let pane = PalettePane(
             PaletteVerbs(),
@@ -900,6 +917,9 @@ public open class ReplApp : Column {
     }
 
     private func OpenSearch() {
+        if inputRequest != nil {
+            return
+        }
         CloseAllOverlays()
         let pane = SearchPane(
             engine,
@@ -1009,8 +1029,8 @@ public open class ReplApp : Column {
     }
 
     private func OpenInput(request InputRequest) {
-        inputRequest = request
         CloseAllOverlays()
+        inputRequest = request
         if let app = application {
             inputInterrupt = app.Keys.Add(
                 KeyGesture.Ctrl("c"),
@@ -1065,6 +1085,9 @@ public open class ReplApp : Column {
 
     private func CloseAllOverlays() {
         for overlay in overlays {
+            if inputRequest != nil && Object.ReferenceEquals(overlay, inputOverlay) {
+                continue
+            }
             overlay.IsVisible = false
         }
         completionPane = nil

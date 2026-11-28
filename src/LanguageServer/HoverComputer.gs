@@ -1278,6 +1278,14 @@ shared class CompletionComputer {
         position Position,
         ct CancellationToken = default(CancellationToken),
         compilation Compilation? = nil
+    ) IReadOnlyList[CompletionItem] -> ComputeCompletionsWithContext(content, position, out _, ct, compilation)
+
+    func ComputeCompletionsWithContext(
+        content DocumentContent,
+        position Position,
+        out isUnqualified bool,
+        ct CancellationToken = default(CancellationToken),
+        compilation Compilation? = nil
     ) IReadOnlyList[CompletionItem] {
         let compilation = compilation ?? content.Project?.GetCompilation() ?? ServerCompilation.Create(
             content.SyntaxTree
@@ -1291,6 +1299,7 @@ shared class CompletionComputer {
         let replacementRange = ComputeReplacementRange(content, offset)
         let memberItems IReadOnlyList[CompletionItem]? = TryComputeMemberCompletions(content, compilation, offset)
         if memberItems != nil {
+            isUnqualified = false
             return ApplyReplacementRange(memberItems, replacementRange)
         }
         let initializerItems IReadOnlyList[CompletionItem]? = TryComputeObjectInitializerCompletions(
@@ -1299,8 +1308,10 @@ shared class CompletionComputer {
             offset
         )
         if initializerItems != nil {
+            isUnqualified = false
             return ApplyReplacementRange(initializerItems, replacementRange)
         }
+        isUnqualified = true
         let items = List[CompletionItem]()
         let seen = HashSet[string](StringComparer.Ordinal)
         // Issue #713: in a type-clause position, surface the `async func(...) R`
