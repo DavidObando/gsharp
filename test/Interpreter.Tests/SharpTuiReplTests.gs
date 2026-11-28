@@ -186,7 +186,7 @@ open class SharpTuiReplTests {
 
         // Launch Spectre UI on the same engine and verify the cell and symbol survive,
         // then request switching back to SharpTUI.
-        using let spectreScreen = ReplScreen(engine)
+        using let spectreScreen = ReplScreen(engine, () -> true)
         let console = AnsiConsole.Create(AnsiConsoleSettings{Out: AnsiConsoleOutput(StringWriter())})
         let shell = AppShell(console, List[ITabScreen]{spectreScreen})
         spectreScreen.OnActivated(shell)
@@ -608,6 +608,85 @@ open class SharpTuiReplTests {
         Assert.Contains("$$defer", driver.FrameText(), StringComparison.Ordinal)
         let _ = SendKey(driver, Key.Enter)
         Assert.Equal("b.$$defer", root.Editor.Text)
+    }
+
+    @Fact
+    func SpectreRefusesSwitchToSharpTuiWhenOutputIsRedirected() {
+        using let engine = EmittedSessionEngine()
+        using let screen = ReplScreen(engine, () -> false)
+        let console = AnsiConsole.Create(AnsiConsoleSettings{Out: AnsiConsoleOutput(StringWriter())})
+        let shell = AppShell(console, List[ITabScreen]{screen})
+        screen.OnActivated(shell)
+
+        let _ = shell.Dispatch(ConsoleKeyInfo(':', ConsoleKey.NoName, false, false, false))
+        for ch in "ui sharptui" {
+            let _ = shell.Dispatch(ConsoleKeyInfo(ch, ConsoleKey.NoName, false, false, false))
+        }
+        let _ = shell.Dispatch(ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false))
+
+        Assert.Null(shell.RequestedUi)
+    }
+
+    @Fact
+    func OverlayKeepsTicksRunningAndHandlesGlobalCtrlCAndCtrlQ() {
+        using let engine = EmittedSessionEngine()
+        let (root, driver) = Create(engine, 100, 26)
+
+        // Start a busy evaluation and open the command palette overlay.
+        root.Editor.Text = "import System.Threading\nThread.Sleep(500)\n1"
+        let _ = SendKey(driver, Key.Enter)
+        Assert.True(root.IsBusy)
+
+        let _ = Control(driver, "p")
+        driver.Draw()
+        let frame1 = driver.FrameText()
+        Assert.Contains("command palette", frame1, StringComparison.Ordinal)
+
+        // Ticks must still advance the busy scanner while the palette overlay is open.
+        Tick(driver)
+        driver.Draw()
+        Assert.NotEqual(frame1, driver.FrameText())
+
+        // Ctrl+C from the palette cancels the running evaluation.
+        Assert.Equal(EventResult.Handled, Control(driver, "c"))
+        driver.Draw()
+        Assert.Contains("cancelling", driver.FrameText(), StringComparison.Ordinal)
+
+        // Ctrl+Q from the palette returns EventResult.Exit.
+        Assert.Equal(EventResult.Exit, Control(driver, "q"))
+        PumpUntilIdle(root, driver)
+    }
+
+    @Fact
+    func AcceptingAsyncTypeClauseSnippetReplacesTypedAsyncPrefix() {
+        using let engine = EmittedSessionEngine()
+        let (root, driver) = Create(engine, 100, 26)
+
+        root.Editor.Text = "func foo(p async ) { }"
+        root.Editor.Caret = TextPosition{LineIndex: 0, GraphemeIndex: 17}
+        let _ = Control(driver, " ")
+        driver.Draw()
+        Assert.Contains("async (...) -> R", driver.FrameText(), StringComparison.Ordinal)
+
+        // Accept the first snippet (`async (...) -> R`).
+        let _ = SendKey(driver, Key.Enter)
+        Assert.Equal("func foo(p async (T) -> R) { }", root.Editor.Text)
+    }
+
+    @Fact
+    func MultilineStringValueSplitsIntoSeparateTranscriptRows() {
+        using let engine = EmittedSessionEngine()
+        let _ = engine.Evaluate("\"lineA\\nlineB\"")
+        let source = TranscriptSource(engine, ReplTheme.Current)
+
+        // Cell has 1 input line + 2 logical output lines ("lineA and lineB") + 1 trailing spacer = 4 rows.
+        Assert.True(source.HeightAt(0, 80) >= 4)
+
+        let (_, driver) = Create(engine, 80, 24)
+        driver.Draw()
+        let frame = driver.FrameText()
+        Assert.Contains("lineA", frame, StringComparison.Ordinal)
+        Assert.Contains("lineB", frame, StringComparison.Ordinal)
     }
 
     @Fact

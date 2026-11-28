@@ -414,7 +414,9 @@ public class TranscriptSource : VirtualListSource {
     }
 
     private func AddLine(lines List[List[TextRun]], text string, color Color) {
-        lines.Add(List[TextRun]{TextRun(text, Style{Foreground: color})})
+        for logical in EditorLineSource.TextLines(text) {
+            lines.Add(List[TextRun]{TextRun(logical, Style{Foreground: color})})
+        }
     }
 
     private func WriteRuns(screen Screen, clip CellRect, row int32, runs List[TextRun], inherited Style) {

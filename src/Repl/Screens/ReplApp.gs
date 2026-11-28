@@ -57,7 +57,6 @@ public open class ReplApp : Column {
     private var message string
     private var lastInterrupt int64
     private var inputRequest InputRequest?
-    private var inputInterrupt Bind?
     private var requestedUi ReplUiKind?
     private var lastLayoutWidth int32
     private var lastLayoutHeight int32
@@ -84,7 +83,6 @@ public open class ReplApp : Column {
         lastInterrupt = -1
         worker = nil
         inputRequest = nil
-        inputInterrupt = nil
         requestedUi = nil
         lastLayoutWidth = -1
         lastLayoutHeight = -1
@@ -272,7 +270,6 @@ public open class ReplApp : Column {
             pending.Complete(nil)
         }
         inputRequest = nil
-        RemoveInputInterrupt()
     }
 
     protected override func PrepareLayout() {
@@ -330,11 +327,7 @@ public open class ReplApp : Column {
             return EventResult.Continue
         }
         if ev.Kind == UiEventKind.Tick {
-            let analyzed = PumpAnalysis()
-            if worker != nil {
-                busyFrame = busyFrame + 1
-            }
-            return worker != nil || analyzed ? EventResult.Handled : EventResult.Continue
+            return HandleTick()
         }
         if worker != nil && ev.Key == Key.Escape {
             if let pending = inputRequest {
@@ -417,16 +410,24 @@ public open class ReplApp : Column {
         return EventResult.Continue
     }
 
+    private func HandleTick() EventResult {
+        let analyzed = PumpAnalysis()
+        if worker != nil {
+            busyFrame = busyFrame + 1
+        }
+        return worker != nil || analyzed ? EventResult.Handled : EventResult.Continue
+    }
+
     private func MakeOverlay(title string, width int32, height int32) TuiOverlay {
         let palette = ReplTheme.Current
-        return TuiOverlay{
-            IsVisible: false,
-            DimBackground: true,
-            Width: CellLength.Cells(width),
-            Height: CellLength.Cells(height),
-            Placement: Placement.Centered,
-            Style: Style{Foreground: palette.Text, Background: palette.Raised},
-            Content: Box{
+        return ReplOverlay(() -> HandleTick(), () -> Interrupt()){
+            IsVisible = false,
+            DimBackground = true,
+            Width = CellLength.Cells(width),
+            Height = CellLength.Cells(height),
+            Placement = Placement.Centered,
+            Style = Style{Foreground: palette.Text, Background: palette.Raised},
+            Content = Box{
                 ShowBorder: true,
                 Title: title,
                 GrowWeight: 1,
@@ -855,7 +856,7 @@ public open class ReplApp : Column {
         }
         let line = lines[lineIndex]
         let at = CaretCharacter()
-        let edit = AnalysisBridge.CompletionEdit(completionItems[index], lineIndex, at, PrefixStart(line, at))
+        let edit = AnalysisBridge.CompletionEdit(completionItems[index], lineIndex, at, PrefixStart(line, at), line)
         if edit.StartLine < 0 || edit.StartLine >= lines.Count || edit.EndLine < edit.StartLine
         || edit.EndLine >= lines.Count || edit.StartCharacter < 0 || edit.EndCharacter < 0
         || edit.StartCharacter > lines[edit.StartLine].Length || edit.EndCharacter > lines[edit.EndLine].Length {
@@ -1163,15 +1164,6 @@ public open class ReplApp : Column {
     private func OpenInput(request InputRequest) {
         CloseAllOverlays()
         inputRequest = request
-        if let app = application {
-            inputInterrupt = app.Keys.Add(
-                KeyGesture.Ctrl("c"),
-                BindingPhase.BeforeWidgets,
-                () -> {
-                    Interrupt()
-                }
-            )
-        }
         let pane = InputPane(request, () -> CancelWorkerFromInput(), () -> CloseInput(), ReplTheme.Current)
         inputOverlay.Content = Box{GrowWeight: 1, ShowBorder: true, Title: "standard input", Children: {pane}}
         inputOverlay.IsVisible = true
@@ -1198,15 +1190,7 @@ public open class ReplApp : Column {
     private func CloseInput() {
         inputOverlay.IsVisible = false
         inputRequest = nil
-        RemoveInputInterrupt()
         Focus(editor)
-    }
-
-    private func RemoveInputInterrupt() {
-        if let binding = inputInterrupt, let app = application {
-            app.Keys.Bindings.Remove(binding)
-        }
-        inputInterrupt = nil
     }
 
     private func CloseOverlay(overlay TuiOverlay) {

@@ -128,7 +128,13 @@ shared class AnalysisBridge {
         }
     }
 
-    func CompletionEdit(item CompletionItem, line int32, character int32, fallbackStart int32) EditorCompletionEdit {
+    func CompletionEdit(
+        item CompletionItem,
+        line int32,
+        character int32,
+        fallbackStart int32,
+        lineText string? = nil
+    ) EditorCompletionEdit {
         var startLine = line
         var startCharacter = fallbackStart
         var endLine = line
@@ -146,7 +152,29 @@ shared class AnalysisBridge {
             text = Regex.Replace(text, "\\$\\{\\d+\\}", string.Empty)
             text = Regex.Replace(text, "\\$\\d+", string.Empty)
         }
+        if item.TextEdit == nil && lineText != nil && text.Contains(' ') {
+            startCharacter = MultiWordPrefixStart(lineText, character, startCharacter, text)
+        }
         return EditorCompletionEdit(startLine, startCharacter, endLine, endCharacter, text)
+    }
+
+    private func MultiWordPrefixStart(lineText string, caret int32, fallbackStart int32, replacement string) int32 {
+        let limit = Math.Min(caret, lineText.Length)
+        let maxLen = Math.Min(limit, replacement.Length)
+        for var len = maxLen; len > 0; len-- {
+            let candidateStart = limit - len
+            if candidateStart > 0 {
+                let prev = lineText[candidateStart - 1]
+                if char.IsLetterOrDigit(prev) || prev == '_' {
+                    continue
+                }
+            }
+            let slice = lineText.Substring(candidateStart, len)
+            if replacement.StartsWith(slice, StringComparison.OrdinalIgnoreCase) {
+                return candidateStart
+            }
+        }
+        return fallbackStart
     }
 
     internal func WithDiagnostics(

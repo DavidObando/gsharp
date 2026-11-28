@@ -7,6 +7,37 @@ import SharpTui
 import System
 import System.Collections.Generic
 import System.Threading
+import TuiOverlay = SharpTui.Overlay
+
+/// Overlay subclass that keeps timer ticks and global Ctrl+C / Ctrl+Q gestures
+/// active while a modal overlay owns SharpTUI's input scope.
+internal open class ReplOverlay : TuiOverlay {
+    private let onTick Func[EventResult]
+    private let onInterrupt Func[EventResult]
+
+    internal init(onTick Func[EventResult], onInterrupt Func[EventResult]) {
+        this.onTick = onTick
+        this.onInterrupt = onInterrupt
+    }
+
+    protected override func Accept(ev UiEvent) EventResult {
+        if ev.Kind == UiEventKind.Tick {
+            return onTick()
+        }
+        if ev.Phase == KeyPhase.Release {
+            return EventResult.Continue
+        }
+        if ev.Key == Key.Character && (int32(ev.Modifiers) & int32(KeyModifiers.Ctrl)) != 0 {
+            if ev.Text.Equals("q", StringComparison.OrdinalIgnoreCase) {
+                return EventResult.Exit
+            }
+            if ev.Text.Equals("c", StringComparison.OrdinalIgnoreCase) {
+                return onInterrupt()
+            }
+        }
+        return EventResult.Continue
+    }
+}
 
 public class PaletteVerb {
     public let Command string
