@@ -22,14 +22,27 @@ import System.Linq
 /// in any result: names and call sites are in source order of the walk.
 internal sealed class RegionEffectScanner {
     private let activeCode ConditionalCompilationMap?
+    private let isElidedConditionalCall((ExpressionSyntax, RegionEffects, Func[string, bool], bool) -> bool)?
 
-    internal init(activeCode ConditionalCompilationMap? = nil) {
+    internal init(
+        activeCode ConditionalCompilationMap? = nil,
+        isElidedConditionalCall((ExpressionSyntax, RegionEffects, Func[string, bool], bool) -> bool)? = nil
+    ) {
         this.activeCode = activeCode
+        this.isElidedConditionalCall = isElidedConditionalCall
     }
 
     private let topLevelCache Dictionary[SyntaxNode, RegionEffects] = Dictionary[SyntaxNode, RegionEffects]()
     private let nestedCache Dictionary[SyntaxNode, RegionEffects] = Dictionary[SyntaxNode, RegionEffects]()
     private var scopes List[ScopeFrame] = List[ScopeFrame]()
+    private var enclosingScopes List[ScopeFrame] = List[ScopeFrame]()
+    private var enclosingTypeTests List[RegionTypeTest] = List[RegionTypeTest]()
+    private var enclosingWrites List[RegionWrite] = List[RegionWrite]()
+    private var enclosingNilCompareNames HashSet[string] = HashSet[string](StringComparer.Ordinal)
+    private var enclosingNilComparePaths List[RegionReceiverPath?] = List[RegionReceiverPath?]()
+    private var enclosingContainsMemberTypeTest bool = false
+    private var enclosingHasConditionCall bool = false
+    private var currentHasConditionCall bool = false
     private var current RegionEffects = RegionEffects()
     private var closureDepth int32 = 0
     // The names that a pattern or a binding declared anywhere in the region so far. A pattern variable
@@ -115,15 +128,17 @@ internal sealed class RegionEffectScanner {
             return cached
         }
         // A loop with no part that runs once has the same region at the top level and nested.
+        // When conditional-call elision is active, rescan at the loop's own entry scope so
+        // nested scans cannot leak outer-scope elision decisions into top-level summaries.
         let sameWhenNested = !HasPartsThatRunOnce(node)
-        if sameWhenNested && nestedCache.TryGetValue(node, out var nested) {
+        if sameWhenNested && isElidedConditionalCall == nil && nestedCache.TryGetValue(node, out var nested) {
             topLevelCache.Add(node, nested)
             return nested
         }
         let result = ScanFresh(node, true, iterationRunsUserCode)
         topLevelCache.Add(node, result)
         if sameWhenNested {
-            nestedCache.Add(node, result)
+            nestedCache[node] = result
         }
         return result
     }
@@ -162,12 +177,56 @@ internal sealed class RegionEffectScanner {
 
     private func ScanFresh(node SyntaxNode, topLevel bool, iterationRunsUserCode bool = true) RegionEffects {
         let savedScopes = scopes
+        let savedEnclosing = enclosingScopes
+        let savedEnclosingTypeTests = enclosingTypeTests
+        let savedEnclosingWrites = enclosingWrites
+        let savedEnclosingNilCompares = enclosingNilCompareNames
+        let savedEnclosingNilComparePaths = enclosingNilComparePaths
+        let savedEnclosingMemberTypeTest = enclosingContainsMemberTypeTest
+        let savedEnclosingHasConditionCall = enclosingHasConditionCall
+        let savedCurrentHasConditionCall = currentHasConditionCall
         let savedCurrent = current
         let savedClosure = closureDepth
         let savedPatterns = patternNames
+        if !topLevel {
+            let nextEnclosing = List[ScopeFrame](enclosingScopes.Count + savedScopes.Count)
+            nextEnclosing.AddRange(enclosingScopes)
+            nextEnclosing.AddRange(savedScopes)
+            enclosingScopes = nextEnclosing
+            if savedCurrent.TypeTests.Count > 0 {
+                let nextTypeTests = List[RegionTypeTest](enclosingTypeTests.Count + savedCurrent.TypeTests.Count)
+                nextTypeTests.AddRange(enclosingTypeTests)
+                nextTypeTests.AddRange(savedCurrent.TypeTests)
+                enclosingTypeTests = nextTypeTests
+            }
+            if savedCurrent.Writes.Count > 0 {
+                let nextWrites = List[RegionWrite](enclosingWrites.Count + savedCurrent.Writes.Count)
+                nextWrites.AddRange(enclosingWrites)
+                nextWrites.AddRange(savedCurrent.Writes)
+                enclosingWrites = nextWrites
+            }
+            if savedCurrent.NilCompareOperandNames.Count > 0 {
+                let nextNilCompares = HashSet[string](enclosingNilCompareNames, StringComparer.Ordinal)
+                for n in savedCurrent.NilCompareOperandNames {
+                    nextNilCompares.Add(n)
+                }
+                enclosingNilCompareNames = nextNilCompares
+            }
+            if savedCurrent.NilCompareOperandPaths.Count > 0 {
+                let nextNilPaths = List[RegionReceiverPath?](
+                    enclosingNilComparePaths.Count + savedCurrent.NilCompareOperandPaths.Count
+                )
+                nextNilPaths.AddRange(enclosingNilComparePaths)
+                nextNilPaths.AddRange(savedCurrent.NilCompareOperandPaths)
+                enclosingNilComparePaths = nextNilPaths
+            }
+            enclosingContainsMemberTypeTest = enclosingContainsMemberTypeTest || savedCurrent.ContainsMemberTypeTest
+            enclosingHasConditionCall = enclosingHasConditionCall || savedCurrentHasConditionCall
+        }
         scopes = List[ScopeFrame]()
         scopes.Add(ScopeFrame())
         current = RegionEffects()
+        currentHasConditionCall = false
         closureDepth = 0
         patternNames = HashSet[string]()
         let before = NodesVisited
@@ -176,6 +235,14 @@ internal sealed class RegionEffectScanner {
         Regions++
         let result = current
         scopes = savedScopes
+        enclosingScopes = savedEnclosing
+        enclosingTypeTests = savedEnclosingTypeTests
+        enclosingWrites = savedEnclosingWrites
+        enclosingNilCompareNames = savedEnclosingNilCompares
+        enclosingNilComparePaths = savedEnclosingNilComparePaths
+        enclosingContainsMemberTypeTest = savedEnclosingMemberTypeTest
+        enclosingHasConditionCall = savedEnclosingHasConditionCall
+        currentHasConditionCall = savedCurrentHasConditionCall
         current = savedCurrent
         closureDepth = savedClosure
         patternNames = savedPatterns
@@ -238,6 +305,58 @@ internal sealed class RegionEffectScanner {
             if scopes[i].Names.Contains(name) {
                 return true
             }
+        }
+        return false
+    }
+
+    private func IsDeclaredInRegionOrEnclosing(name string) bool {
+        if IsDeclared(name) {
+            return true
+        }
+        for var i = enclosingScopes.Count - 1; i >= 0; i-- {
+            if enclosingScopes[i].Names.Contains(name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func BuildConditionalEffectsContext() RegionEffects {
+        if enclosingTypeTests.Count == 0 &&
+            enclosingWrites.Count == 0 &&
+            enclosingNilCompareNames.Count == 0 &&
+            enclosingNilComparePaths.Count == 0 &&
+            !enclosingContainsMemberTypeTest {
+            return current
+        }
+        let combined = RegionEffects()
+        combined.TypeTests.AddRange(enclosingTypeTests)
+        combined.TypeTests.AddRange(current.TypeTests)
+        combined.Writes.AddRange(enclosingWrites)
+        combined.Writes.AddRange(current.Writes)
+        for n in enclosingNilCompareNames {
+            combined.NilCompareOperandNames.Add(n)
+        }
+        for n in current.NilCompareOperandNames {
+            combined.NilCompareOperandNames.Add(n)
+        }
+        combined.NilCompareOperandPaths.AddRange(enclosingNilComparePaths)
+        combined.NilCompareOperandPaths.AddRange(current.NilCompareOperandPaths)
+        combined.ContainsMemberTypeTest = enclosingContainsMemberTypeTest || current.ContainsMemberTypeTest
+        return combined
+    }
+
+    private func IsCandidateConditionalCallExpression(expression ExpressionSyntax?) bool {
+        let unwrapped = UnwrapParentheses(expression)
+        if unwrapped is CallExpressionSyntax{Callee: nil} {
+            return true
+        }
+        if unwrapped is AccessorExpressionSyntax accessor {
+            var current = accessor
+            while current.RightPart is AccessorExpressionSyntax nested {
+                current = nested
+            }
+            return current.RightPart is CallExpressionSyntax{Callee: nil}
         }
         return false
     }
@@ -334,6 +453,34 @@ internal sealed class RegionEffectScanner {
             default { }
         }
         switch kind {
+            case SyntaxKind.ExpressionStatement {
+                let expr = cast[ExpressionStatementSyntax](node).Expression
+                if isElidedConditionalCall != nil &&
+                    IsCandidateConditionalCallExpression(expr) &&
+                    isElidedConditionalCall(
+                    expr,
+                    BuildConditionalEffectsContext(),
+                    IsDeclaredInRegionOrEnclosing,
+                    enclosingHasConditionCall || currentHasConditionCall
+                ) {
+                    return
+                }
+                Visit(expr)
+            }
+            case SyntaxKind.DeferStatement {
+                let expr = cast[DeferStatementSyntax](node).Expression
+                if isElidedConditionalCall != nil &&
+                    IsCandidateConditionalCallExpression(expr) &&
+                    isElidedConditionalCall(
+                    expr,
+                    BuildConditionalEffectsContext(),
+                    IsDeclaredInRegionOrEnclosing,
+                    enclosingHasConditionCall || currentHasConditionCall
+                ) {
+                    return
+                }
+                Visit(expr)
+            }
             case SyntaxKind.NameOfExpression { }
             case SyntaxKind.ReturnStatement {
                 let returnStatement = cast[ReturnStatementSyntax](node)
@@ -1578,7 +1725,11 @@ internal sealed class RegionEffectScanner {
         if condition != nil && Active() && !IsBooleanByForm(condition) {
             RecordConversion(condition, RootPath("bool"))
         }
+        let callsBefore = current.Calls.Count
         Visit(condition)
+        if current.Calls.Count > callsBefore {
+            currentHasConditionCall = true
+        }
     }
 
     // A literal `true` or `false`, an `is` test, a comparison, `!`, `&&` or `||`: the binder converts none of

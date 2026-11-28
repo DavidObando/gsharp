@@ -23,7 +23,7 @@ internal partial class StatementBinder {
 
     private func GetRegionScanner() RegionEffectScanner {
         if regionScanner == nil {
-            regionScanner = RegionEffectScanner($scope.ConditionalCompilation)
+            regionScanner = RegionEffectScanner($scope.ConditionalCompilation, IsElidedConditionalCallInRegion)
         }
         return regionScanner!!
     }
@@ -17003,5 +17003,337 @@ internal partial class StatementBinder {
             }
         } catch (ex NotSupportedException) { }
         return nil
+    }
+
+    private var inConditionalCallProbe bool = false
+
+    // Issue #6242: target-aware omitted-call decision for raw loop-effect scans,
+    // delegating directly to the binder's own expression binding and conditional-call
+    // elision decision rather than duplicating lookup, accessibility, or overload rules.
+    private func IsElidedConditionalCallInRegion(
+        callExpression ExpressionSyntax,
+        effects RegionEffects,
+        isDeclaredInRegion Func[string, bool],
+        hasConditionCall bool
+    ) bool {
+        if inConditionalCallProbe || effects.ContainsMemberTypeTest {
+            return false
+        }
+        let matchingNarrowedPaths = HashSet[AccessPath]()
+        if HasLoopSensitiveOperand(
+            callExpression,
+            effects,
+            isDeclaredInRegion,
+            hasConditionCall,
+            matchingNarrowedPaths,
+            isTopLevelCall: true
+        ) {
+            return false
+        }
+        // Exhaustively cover selective entry-narrowing invalidation across all distinct
+        // AccessPath facts (including member paths, inherited CLR members, and implicit members):
+        // 0 matching facts -> 1 state; 1 matching fact -> 2 states (entry & cleared);
+        // 2+ distinct facts -> conservatively decline elision rather than risking mixed states.
+        if matchingNarrowedPaths.Count > 1 {
+            return false
+        }
+        if !TryProbeElidedConditionalCall(callExpression, clearNarrowings: false) {
+            return false
+        }
+        if matchingNarrowedPaths.Count == 1 && !TryProbeElidedConditionalCall(callExpression, clearNarrowings: true) {
+            return false
+        }
+        return true
+    }
+
+    private func CollectMatchingActiveNarrowingPaths(name string, matchingPaths HashSet[AccessPath]) {
+        let lookedUp = $scope.TryLookupSymbol(name) as VariableSymbol
+        for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
+            for path in binderCtx.NarrowedVariables[i].Keys {
+                if (lookedUp != nil && SameRoot(path.Root, lookedUp)) ||
+                    path.Root.Name == name ||
+                    (!path.Members.IsDefaultOrEmpty && path.Members.Any((m PathMember) -> m.Name == name)) {
+                    matchingPaths.Add(path)
+                }
+            }
+        }
+    }
+
+    private func HasLoopSensitiveOperand(
+        node SyntaxNode?,
+        effects RegionEffects,
+        isDeclaredInRegion Func[string, bool],
+        hasConditionCall bool,
+        matchingNarrowedPaths HashSet[AccessPath],
+        isAccessorRight bool = false,
+        isTopLevelCall bool = false
+    ) bool {
+        if node == nil {
+            return false
+        }
+        switch node {
+            case _ is LabeledStatementSyntax, _ is GotoStatementSyntax {
+                // Avoid leaking function-wide label/goto registrations from speculative probes.
+                return true
+            }
+            case parenthesized is ParenthesizedExpressionSyntax {
+                return HasLoopSensitiveOperand(
+                    parenthesized.Expression,
+                    effects,
+                    isDeclaredInRegion,
+                    hasConditionCall,
+                    matchingNarrowedPaths,
+                    isAccessorRight,
+                    isTopLevelCall
+                )
+            }
+            case accessor is AccessorExpressionSyntax {
+                // Any member access in an argument or nested receiver is sensitive when the loop
+                // or an enclosing region contains a member/element nil guard (`holder.Tag != nil`)
+                // or a predicate-contract call guard (`if !string.IsNullOrEmpty(holder.Tag)`).
+                if !isTopLevelCall && (effects.NilCompareOperandPaths.Count > 0 || hasConditionCall) {
+                    return true
+                }
+                if !isAccessorRight {
+                    if HasLoopSensitiveOperand(
+                        accessor.LeftPart,
+                        effects,
+                        isDeclaredInRegion,
+                        hasConditionCall,
+                        matchingNarrowedPaths,
+                        isAccessorRight: false
+                    ) {
+                        return true
+                    }
+                } else {
+                    switch accessor.LeftPart {
+                        case leftCall is CallExpressionSyntax {
+                            if leftCall.Callee != nil &&
+                                HasLoopSensitiveOperand(
+                                leftCall.Callee,
+                                effects,
+                                isDeclaredInRegion,
+                                hasConditionCall,
+                                matchingNarrowedPaths
+                            ) {
+                                return true
+                            }
+                            for arg in leftCall.Arguments {
+                                if HasLoopSensitiveOperand(
+                                    arg,
+                                    effects,
+                                    isDeclaredInRegion,
+                                    hasConditionCall,
+                                    matchingNarrowedPaths
+                                ) {
+                                    return true
+                                }
+                            }
+                        }
+                        case leftIndex is IndexExpressionSyntax {
+                            if effects.NilCompareOperandPaths.Count > 0 || hasConditionCall {
+                                return true
+                            }
+                            if HasLoopSensitiveOperand(
+                                leftIndex.Target,
+                                effects,
+                                isDeclaredInRegion,
+                                hasConditionCall,
+                                matchingNarrowedPaths,
+                                isAccessorRight: true
+                            ) {
+                                return true
+                            }
+                            for idx in leftIndex.Indices {
+                                if HasLoopSensitiveOperand(
+                                    idx,
+                                    effects,
+                                    isDeclaredInRegion,
+                                    hasConditionCall,
+                                    matchingNarrowedPaths
+                                ) {
+                                    return true
+                                }
+                            }
+                        }
+                        case _ is NameExpressionSyntax { }
+                        default {
+                            if HasLoopSensitiveOperand(
+                                accessor.LeftPart,
+                                effects,
+                                isDeclaredInRegion,
+                                hasConditionCall,
+                                matchingNarrowedPaths
+                            ) {
+                                return true
+                            }
+                        }
+                    }
+                }
+                return HasLoopSensitiveOperand(
+                    accessor.RightPart,
+                    effects,
+                    isDeclaredInRegion,
+                    hasConditionCall,
+                    matchingNarrowedPaths,
+                    isAccessorRight: true,
+                    isTopLevelCall: isTopLevelCall
+                )
+            }
+            case _ is IndexExpressionSyntax {
+                if effects.NilCompareOperandPaths.Count > 0 || hasConditionCall {
+                    return true
+                }
+                for child in node.GetChildren() {
+                    if HasLoopSensitiveOperand(
+                        child,
+                        effects,
+                        isDeclaredInRegion,
+                        hasConditionCall,
+                        matchingNarrowedPaths
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            }
+            case call is CallExpressionSyntax {
+                if !isAccessorRight && call.Callee == nil && isDeclaredInRegion(call.Identifier.ValueText) {
+                    return true
+                }
+                if call.Callee != nil &&
+                    HasLoopSensitiveOperand(
+                    call.Callee,
+                    effects,
+                    isDeclaredInRegion,
+                    hasConditionCall,
+                    matchingNarrowedPaths
+                ) {
+                    return true
+                }
+                for arg in call.Arguments {
+                    if HasLoopSensitiveOperand(
+                        arg,
+                        effects,
+                        isDeclaredInRegion,
+                        hasConditionCall,
+                        matchingNarrowedPaths
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            }
+            case named is NamedArgumentExpressionSyntax {
+                return HasLoopSensitiveOperand(
+                    named.Expression,
+                    effects,
+                    isDeclaredInRegion,
+                    hasConditionCall,
+                    matchingNarrowedPaths
+                )
+            }
+            case assign is AssignmentExpressionSyntax {
+                if isDeclaredInRegion(assign.IdentifierToken.ValueText) {
+                    return true
+                }
+                return HasLoopSensitiveOperand(
+                    assign.Expression,
+                    effects,
+                    isDeclaredInRegion,
+                    hasConditionCall,
+                    matchingNarrowedPaths
+                )
+            }
+            case name is NameExpressionSyntax {
+                if isAccessorRight {
+                    return false
+                }
+                let text = name.IdentifierToken.ValueText
+                if isDeclaredInRegion(text) {
+                    return true
+                }
+                // A condition call (e.g. `if !string.IsNullOrEmpty(tag)`) can narrow a non-type
+                // variable/member read via `[NotNullWhen]` / `[MemberNotNullWhen]`.
+                if hasConditionCall && ResolveTypeName(text) == nil {
+                    return true
+                }
+                for test in effects.TypeTests {
+                    if test.Name == text {
+                        return true
+                    }
+                }
+                for write in effects.Writes {
+                    if write.Name == text {
+                        return true
+                    }
+                }
+                if effects.NilCompareOperandNames.Contains(text) {
+                    return true
+                }
+                CollectMatchingActiveNarrowingPaths(text, matchingNarrowedPaths)
+                return false
+            }
+            default {
+                for child in node.GetChildren() {
+                    if HasLoopSensitiveOperand(
+                        child,
+                        effects,
+                        isDeclaredInRegion,
+                        hasConditionCall,
+                        matchingNarrowedPaths
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            }
+        }
+    }
+
+    private func TryProbeElidedConditionalCall(callExpression ExpressionSyntax, clearNarrowings bool) bool {
+        let diagMark = Diagnostics.Count
+        let savedFrames = CaptureNarrowingFramesSnapshot()
+        let savedAliases = CaptureExternalCallableAliases()
+        let savedNonNullByRef = CaptureNonNullByRefVariables()
+        let savedLabelCounter = binderCtx.LabelCounter
+        let savedNullCaptureCounter = binderCtx.NullConditionalCaptureCounter
+        let savedSyntheticCounter = binderCtx.SyntheticLocalCounter
+        let savedDeferArgCounter = binderCtx.DeferArgumentCounter
+        let savedGoArgCounter = binderCtx.GoArgumentCounter
+        let savedOutDiscardCounter = binderCtx.OutDiscardCounter
+        $scope = BoundScope($scope)
+        inConditionalCallProbe = true
+        try {
+            using let _ = CallCandidateRecorder.Enter(false)
+            using let _ = PrefixBindingContext.Enter(nil)
+            if clearNarrowings {
+                for var i = 0; i < binderCtx.NarrowedVariables.Count; i++ {
+                    binderCtx.NarrowedVariables[i].Clear()
+                }
+            }
+            let bound = bindExpression(callExpression, true)
+            if Diagnostics.Count > diagMark && Diagnostics.Skip(diagMark).Any(
+                (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error
+            ) {
+                return false
+            }
+            return bound is BoundCallOperationExpression{IsElidedConditionalCall: true}
+        } finally {
+            inConditionalCallProbe = false
+            $scope = $scope.Pop()
+            Diagnostics.TruncateTo(diagMark)
+            RestoreNarrowingFramesSnapshot(savedFrames)
+            RestoreExternalCallableAliases(savedAliases)
+            RestoreNonNullByRefVariables(savedNonNullByRef)
+            SyncExpressionCallableAliasesNow()
+            RemoveBranchyArgumentEntriesInSubtree(callExpression)
+            binderCtx.LabelCounter = savedLabelCounter
+            binderCtx.NullConditionalCaptureCounter = savedNullCaptureCounter
+            binderCtx.SyntheticLocalCounter = savedSyntheticCounter
+            binderCtx.DeferArgumentCounter = savedDeferArgCounter
+            binderCtx.GoArgumentCounter = savedGoArgCounter
+            binderCtx.OutDiscardCounter = savedOutDiscardCounter
+        }
     }
 }

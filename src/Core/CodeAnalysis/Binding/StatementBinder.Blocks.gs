@@ -1220,10 +1220,12 @@ internal partial class StatementBinder {
         OperandEffects BoundBlockStatement?
     ) {
         let expression = bindExpression(syntax.Expression, true)
-        if expression is BoundErrorExpression {
-            return (ImmutableArray[BoundStatement].Empty, nil, BoundExpressionStatement(nil, expression), nil)
+        let prelude = ImmutableArray.CreateBuilder[BoundStatement]()
+        let callExpression = UnwrapNormalizedCallBlock(expression, prelude)
+        if callExpression is BoundErrorExpression {
+            return (ImmutableArray[BoundStatement].Empty, nil, BoundExpressionStatement(nil, callExpression), nil)
         }
-        if !IsDeferableCall(expression) {
+        if !IsDeferableCall(callExpression) {
             Diagnostics.ReportDeferOperandIsNotACall(syntax.Expression.Location)
             return (
                 ImmutableArray[BoundStatement].Empty,
@@ -1239,7 +1241,7 @@ internal partial class StatementBinder {
         // argument would spill the address into an ordinary (non-ref) local —
         // not supported by the emitter and not a meaningful by-ref capture.
         // Reject rather than silently mis-defer.
-        if HasByRefArgument(expression) {
+        if HasByRefArgument(callExpression) {
             Diagnostics.ReportDeferOperandHasByRefArgument(syntax.Expression.Location)
             return (
                 ImmutableArray[BoundStatement].Empty,
@@ -1250,7 +1252,13 @@ internal partial class StatementBinder {
         }
         let prefix = ImmutableArray.CreateBuilder[BoundStatement]()
         let operands = ImmutableArray.CreateBuilder[BoundStatement]()
-        let capturedCall = CaptureDeferArguments(expression, prefix, operands)
+        if callExpression is not BoundCallOperationExpression{IsElidedConditionalCall: true} {
+            for statement in prelude {
+                prefix.Add(statement)
+                operands.Add(statement)
+            }
+        }
+        let capturedCall = CaptureDeferArguments(callExpression, prefix, operands)
         // ADR-0208: only source operands run now, not the method body or synthetic location-capture helpers.
         return (prefix.ToImmutable(), capturedCall, nil, BoundBlockStatement(syntax, operands.ToImmutable()))
     }
@@ -3185,6 +3193,21 @@ internal partial class StatementBinder {
                 }
             }
             return false
+        }
+
+        private func UnwrapNormalizedCallBlock(
+            expression BoundExpression,
+            prelude ImmutableArray[BoundStatement].Builder
+        ) BoundExpression {
+            // Issue #6252: native-slice receiver normalization wraps a call in a synthetic
+            // BoundBlockExpression tagged with the CallExpressionSyntax. Non-call blocks
+            // (BlockExpressionSyntax, RangeExpressionSyntax, etc.) remain untouched and fail IsDeferableCall.
+            var current = expression
+            while current is BoundBlockExpression{Syntax: CallExpressionSyntax} block {
+                prelude.AddRange(block.Statements)
+                current = block.Expression
+            }
+            return current
         }
 
         private func IsDeferableCall(expression BoundExpression) bool -> expression is BoundCallExpression ||
