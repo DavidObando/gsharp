@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Symbols.Display
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import GSharp.LanguageServer.Protocol
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -34,12 +35,17 @@ import System.Threading.Tasks
 /// against the last good chain.
 class EmittedSessionEngine : ISessionEngine, IDisposable {
     private let cells List[Cell] = List[Cell]()
+    private var cellSnapshot ImmutableArray[Cell] = ImmutableArray[Cell].Empty
+    private let sessionGate object = Object()
     private let submissions List[SubmissionState] = List[SubmissionState]()
     private let discardedResolvers List[ReferenceResolver] = List[ReferenceResolver]()
     private let sessionImports List[ImportSymbol] = List[ImportSymbol]()
     private let userReferences IReadOnlyList[string]
     private let host InteractiveSessionHost
     private let submissionsDirectory string
+    private var analysisResolver ReferenceResolver? = nil
+    private var analysisGeneration int64 = -1
+    private var sessionGeneration int64 = 0
     private var submissionCounter int32
 
     /// Initializes a new instance of the (cref:EmittedSessionEngine) class.
@@ -55,7 +61,13 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    prop Cells IReadOnlyList[Cell] -> cells
+    prop Cells IReadOnlyList[Cell] {
+        get {
+            lock sessionGate {
+                return cellSnapshot
+            }
+        }
+    }
 
     /// ```xmldoc
     /// <inheritdoc />
@@ -70,6 +82,16 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    prop CaptureSyntaxTree bool
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    prop CaptureIntermediateLanguage bool
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
     func Evaluate(text string) Cell -> Evaluate(SourceText.From(text))
 
     /// ```xmldoc
@@ -80,15 +102,88 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    func EvaluateAsync(text string, cancellationToken CancellationToken) Task[Cell] -> Task.Run[Cell](
-        () -> EvaluateCore(SourceText.From(text), cancellationToken)
+    func EvaluateAsync(text string, cancellationToken CancellationToken) Task[Cell] -> EvaluateAsync(
+        SourceText.From(text),
+        cancellationToken
     )
 
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    func Snapshot() ReplState {
-        if submissions.Count == 0 {
+    func EvaluateAsync(source SourceText, cancellationToken CancellationToken) Task[Cell] -> Task.Run[Cell](
+        () -> EvaluateCore(source, cancellationToken)
+    )
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    func AnalyzeEditor(text string) EditorAnalysis {
+        if text.Length == 0 {
+            return EditorAnalysis.Empty
+        }
+        try {
+            let content = AnalysisBridge.Build(text)
+            let snapshot = CaptureChainSnapshot()
+            let compilation = CreateAnalysisCompilation(content.SyntaxTree, snapshot)
+            let baseline = AnalysisBridge.AnalyzeTokens(content, compilation)
+            let diagnostics = content
+                .SyntaxTree
+                .Diagnostics
+                .Concat(compilation.GlobalScope.Diagnostics)
+                .Concat(compilation.BoundProgram.Diagnostics)
+            return AnalysisBridge.WithDiagnostics(baseline, diagnostics, content.SyntaxTree.Text)
+        } catch {
+            return AnalysisBridge.AnalyzeTokens(text)
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    func Completions(text string, line int32, col int32) IReadOnlyList[CompletionItem] {
+        try {
+            let content = AnalysisBridge.Build(text)
+            let snapshot = CaptureChainSnapshot()
+            let compilation = CreateAnalysisCompilation(content.SyntaxTree, snapshot)
+            return AnalysisBridge.Completions(
+                content,
+                compilation,
+                line,
+                col,
+                SnapshotFrom(snapshot.Submissions, includeValues: false)
+            )
+        } catch {
+            return Array.Empty[CompletionItem]()
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    func Hover(text string, line int32, col int32) string? {
+        try {
+            let content = AnalysisBridge.Build(text)
+            let snapshot = CaptureChainSnapshot()
+            let compilation = CreateAnalysisCompilation(content.SyntaxTree, snapshot)
+            return AnalysisBridge.Hover(
+                content,
+                compilation,
+                line,
+                col,
+                SnapshotFrom(snapshot.Submissions, includeValues: false)
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    func Snapshot() ReplState -> SnapshotFrom(CaptureChainSnapshot().Submissions, includeValues: true)
+
+    private func SnapshotFrom(snapshotSubmissions ImmutableArray[SubmissionState], includeValues bool) ReplState {
+        if snapshotSubmissions.IsDefaultOrEmpty {
             return ReplState.Empty
         }
         try {
@@ -102,11 +197,11 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
             let seenTypes = HashSet[string](StringComparer.Ordinal)
             // Walk submissions newest-to-oldest so redeclarations show their
             // latest form, mirroring the evaluator engine's scope-chain walk.
-            for submission in submissions {
+            for submission in snapshotSubmissions {
                 let scope_ = submission.GlobalScope
                 for import_ in scope_.Imports {
                     if seenImports.Add(import_.Name) {
-                        imports.Add(ReplSymbol(Display(import_, submission)))
+                        imports.Add(Describe("import", import_, submission))
                     }
                 }
                 for fn in scope_.Functions {
@@ -116,7 +211,7 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                         !seenFunctions.Add(fn.Name) {
                         continue
                     }
-                    functions.Add(ReplSymbol(Display(fn, submission)))
+                    functions.Add(Describe("func", fn, submission))
                 }
                 for v in scope_.Variables {
                     if v is not GlobalVariableSymbol gv || gv.RequiresEntryPointLocalStorage || string.Equals(
@@ -127,37 +222,51 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                         !seenVars.Add(v.Name) {
                         continue
                     }
-                    var display = Display(v, submission)
-                    let value object? = host.ReadStaticField(
-                        submission.RuntimeAssembly,
-                        submission.PackageName + "." + SubmissionImports.ProgramTypeName,
-                        v.Name
-                    )
-                    if value != nil {
-                        // ADR-0157: display-side pretty rendering for the
-                        // sidebar values column, same contract as the echo.
-                        display += " = ${Truncate(ReplValueFormatter.Format(value), 20)}"
+                    var formattedValue = string.Empty
+                    if includeValues {
+                        try {
+                            let value object? = host.ReadStaticField(
+                                submission.RuntimeAssembly,
+                                submission.PackageName + "." + SubmissionImports.ProgramTypeName,
+                                v.Name
+                            )
+                            // ADR-0157: display-side pretty rendering for the
+                            // sidebar values column, same contract as the echo.
+                            formattedValue = Truncate(ReplValueFormatter.Format(value), 20)
+                        } catch {
+                            formattedValue = "<error>"
+                        }
                     }
-                    vars.Add(ReplSymbol(display))
+                    let kind = if v.IsReadOnly {
+                        "let"
+                    } else {
+                        "var"
+                    }
+                    vars.Add(Describe(kind, v, submission, formattedValue))
                 }
                 for s in scope_.Structs {
                     if seenTypes.Add(s.Name) {
-                        types.Add(ReplSymbol(Display(s, submission)))
+                        let kind = if s.IsClass {
+                            "class"
+                        } else {
+                            "struct"
+                        }
+                        types.Add(Describe(kind, s, submission))
                     }
                 }
                 for i in scope_.Interfaces {
                     if seenTypes.Add(i.Name) {
-                        types.Add(ReplSymbol(Display(i, submission)))
+                        types.Add(Describe("interface", i, submission))
                     }
                 }
                 for e in scope_.Enums {
                     if seenTypes.Add(e.Name) {
-                        types.Add(ReplSymbol(Display(e, submission)))
+                        types.Add(Describe("enum", e, submission))
                     }
                 }
                 for d in scope_.Delegates {
                     if seenTypes.Add(d.Name) {
-                        types.Add(ReplSymbol(Display(d, submission)))
+                        types.Add(Describe("delegate", d, submission))
                     }
                 }
             }
@@ -173,8 +282,12 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
     func Reset() {
         host.Reset()
         ReleaseCompilations()
-        sessionImports.Clear()
-        cells.Clear()
+        lock sessionGate {
+            sessionImports.Clear()
+            cells.Clear()
+            cellSnapshot = ImmutableArray[Cell].Empty
+            sessionGeneration += 1
+        }
     }
 
     /// ```xmldoc
@@ -194,9 +307,83 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
         submission.Compilation
     )
 
+    private func Describe(kind string, symbol Symbol, submission SubmissionState, value string = "") ReplSymbol {
+        let detail = Display(symbol, submission)
+        let display = if value.Length == 0 {
+            detail
+        } else {
+            detail + " = " + value
+        }
+        return ReplSymbol(kind, symbol.Name, detail, value, display)
+    }
+
+    private func CaptureChainSnapshot() SessionChainSnapshot {
+        lock sessionGate {
+            return SessionChainSnapshot(
+                sessionGeneration,
+                submissions.ToImmutableArray(),
+                sessionImports.ToImmutableArray()
+            )
+        }
+    }
+
+    private func GetAnalysisResolver(snapshot SessionChainSnapshot) ReferenceResolver {
+        lock sessionGate {
+            if analysisResolver != nil && analysisGeneration == snapshot.Generation {
+                return analysisResolver!!
+            }
+        }
+        let paths = snapshot.Submissions.Select((s SubmissionState) -> s.DllPath).Concat(userReferences).ToArray()
+        let runtimeDirectory = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
+        let created = if paths.Length > 0 {
+            ReferenceResolver.WithReferences(ReferenceResolver.ResolveDriverReferencePaths(paths, runtimeDirectory))
+        } else {
+            ReferenceResolver.DefaultInHost(runtimeDirectory)
+        }
+        lock sessionGate {
+            if analysisResolver != nil && analysisGeneration == snapshot.Generation {
+                discardedResolvers.Add(created)
+                return analysisResolver!!
+            }
+            if sessionGeneration == snapshot.Generation {
+                if analysisResolver != nil {
+                    discardedResolvers.Add(analysisResolver!!)
+                }
+                analysisResolver = created
+                analysisGeneration = snapshot.Generation
+                return created
+            }
+            // A newer submission or reset published while creating this resolver:
+            // keep it alive until session end for this snapshot's compilation without
+            // overwriting the cache for a different generation.
+            discardedResolvers.Add(created)
+            return created
+        }
+    }
+
+    private func CreateAnalysisCompilation(tree SyntaxTree, snapshot SessionChainSnapshot) Compilation -> Compilation(
+        GetAnalysisResolver(snapshot),
+        tree
+    ){
+        Submission = SubmissionBindingOptions{
+            Imports: SubmissionImports.Create(
+                snapshot
+                    .Submissions
+                    .Select((s SubmissionState) -> SubmissionReference(s.AssemblyName, s.PackageName, s.GlobalScope))
+                    .ToImmutableArray()
+            ),
+            DefaultPackageName: "gsi$$analysis",
+            ReplayImports: snapshot.Imports,
+            CaptureTrailingExpression: false
+        }
+    }
+
     private func EvaluateCore(source SourceText, cancellationToken CancellationToken) Cell {
         let text = source.ToString()
-        let index = cells.Count + 1
+        var index = 0
+        lock sessionGate {
+            index = cells.Count + 1
+        }
         let originalOut = Console.Out
         let originalError = Console.Error
         let originalIn = Console.In
@@ -244,7 +431,10 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                 Console.SetIn(originalIn)
             }
         }
-        cells.Add(cell)
+        lock sessionGate {
+            cells.Add(cell)
+            cellSnapshot = cells.ToImmutableArray()
+        }
         return cell
     }
 
@@ -264,12 +454,22 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
         let packageName = "gsi" + n.ToString()
         let text = source.ToString()
         let tree = SyntaxTree.Parse(source)
+        let syntaxTree = if CaptureSyntaxTree {
+            AnalysisBridge.FormatSyntaxTree(tree.Root)
+        } else {
+            string.Empty
+        }
+        let chainSnapshot = CaptureChainSnapshot()
         // ADR-0174 D1: a later cell's resolver is rebuilt from the prior
         // submissions, so it must re-append the bundled driver references
         // (Gsharp.Extensions, Gsharp.Runtime.Channels) the first cell got from
         // ReferenceResolver.Default(); otherwise a channel constructed in cell
         // one cannot be sent on in cell two ("Chan`1 ... not provided").
-        let referencePaths = submissions.Select((s SubmissionState) -> s.DllPath).Concat(userReferences).ToArray()
+        let referencePaths = chainSnapshot
+            .Submissions
+            .Select((s SubmissionState) -> s.DllPath)
+            .Concat(userReferences)
+            .ToArray()
         // ADR-0223 D4: keep the bundled runtime order of gsi (Program.SdkToolsDirectory).
         let runtimeDirectory = Environment.GetEnvironmentVariable("GSHARP_SDK_TOOLS_DIR")
         let resolver = if referencePaths.Length > 0 {
@@ -285,13 +485,15 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
             let compilation = Compilation(resolver, tree){
                 Submission = SubmissionBindingOptions{
                     Imports: SubmissionImports.Create(
-                        submissions.Select(
+                        chainSnapshot
+                            .Submissions
+                            .Select(
                             (s SubmissionState) -> SubmissionReference(s.AssemblyName, s.PackageName, s.GlobalScope)
                         )
                             .ToImmutableArray()
                     ),
                     DefaultPackageName: packageName,
-                    ReplayImports: sessionImports.ToImmutableArray()
+                    ReplayImports: chainSnapshot.Imports
                 }
             }
             using let peStream = MemoryStream()
@@ -307,12 +509,18 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                     emitResult.Diagnostics,
                     true,
                     stdout?.ToString() ?? string.Empty,
-                    stderr?.ToString() ?? string.Empty
+                    stderr?.ToString() ?? string.Empty,
+                    syntaxTree
                 )
             }
             // Flush the PE to the session directory before running: future
             // submissions' reference resolvers read it from disk.
             let peImage = peStream.ToArray()
+            let intermediateLanguage = if CaptureIntermediateLanguage {
+                IlDump.Create(peImage)
+            } else {
+                string.Empty
+            }
             dllPath = Path.Combine(submissionsDirectory, assemblyName + ".dll")
             File.WriteAllBytes(dllPath, peImage)
             // A cell that declares its own `package X` emits its members (and the
@@ -347,7 +555,9 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                     emitResult.Diagnostics.Add(diag),
                     true,
                     stdout?.ToString() ?? string.Empty,
-                    stderr?.ToString() ?? string.Empty
+                    stderr?.ToString() ?? string.Empty,
+                    syntaxTree,
+                    intermediateLanguage
                 )
             }
             let value = host.ReadStaticField(
@@ -360,28 +570,28 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
             // this (possibly long-running) submission finished, discard the result
             // instead of committing it to the transcript or the chain.
             cancellationToken.ThrowIfCancellationRequested()
-            submissions.Insert(
-                0,
-                SubmissionState(
-                    compilation,
-                    compilation.GlobalScope,
-                    assemblyName,
-                    emittedPackageName,
-                    dllPath,
-                    runResult.Assembly
-                )
-            )
-            ownershipTransferred = true
-            for import_ in compilation.GlobalScope.Imports {
-                if !sessionImports.Any(
-                    (i ImportSymbol) -> string.Equals(i.Name, import_.Name, StringComparison.Ordinal) && string.Equals(
-                        i.Target,
-                        import_.Target,
-                        StringComparison.Ordinal
+            lock sessionGate {
+                submissions.Insert(
+                    0,
+                    SubmissionState(
+                        compilation,
+                        compilation.GlobalScope,
+                        assemblyName,
+                        emittedPackageName,
+                        dllPath,
+                        runResult.Assembly
                     )
-                ) {
-                    sessionImports.Add(ImportSymbol(import_.Name, import_.Target, declaration: nil))
+                )
+                ownershipTransferred = true
+                for import_ in compilation.GlobalScope.Imports {
+                    if !sessionImports.Any(
+                        (i ImportSymbol) -> string.Equals(i.Name, import_.Name, StringComparison.Ordinal) &&
+                            string.Equals(i.Target, import_.Target, StringComparison.Ordinal)
+                    ) {
+                        sessionImports.Add(ImportSymbol(import_.Name, import_.Target, declaration: nil))
+                    }
                 }
+                sessionGeneration += 1
             }
             return Cell(
                 index,
@@ -390,7 +600,9 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                 emitResult.Diagnostics,
                 false,
                 stdout?.ToString() ?? string.Empty,
-                stderr?.ToString() ?? string.Empty
+                stderr?.ToString() ?? string.Empty,
+                syntaxTree,
+                intermediateLanguage
             )
         } finally {
             if !ownershipTransferred {
@@ -400,22 +612,43 @@ class EmittedSessionEngine : ISessionEngine, IDisposable {
                 // Disposing a resolver clears process-wide symbol caches. Keep
                 // failed/cancelled resolvers until this session ends so a live
                 // prior submission never observes a mid-chain cache reset.
-                discardedResolvers.Add(resolver)
+                lock sessionGate {
+                    discardedResolvers.Add(resolver)
+                }
             }
         }
     }
 
     private func ReleaseCompilations() {
-        for submission in submissions {
+        var oldResolver ReferenceResolver? = nil
+        var oldSubmissions[]SubmissionState = Array.Empty[SubmissionState]()
+        var oldDiscarded[]ReferenceResolver = Array.Empty[ReferenceResolver]()
+        lock sessionGate {
+            oldResolver = analysisResolver
+            analysisResolver = nil
+            analysisGeneration = -1
+            oldSubmissions = submissions.ToArray()
+            submissions.Clear()
+            oldDiscarded = discardedResolvers.ToArray()
+            discardedResolvers.Clear()
+        }
+        if oldResolver != nil {
+            oldResolver.Dispose()
+        }
+        for submission in oldSubmissions {
             TryDeleteFile(submission.DllPath)
             submission.Compilation.References?.Dispose()
         }
-        submissions.Clear()
-        for resolver in discardedResolvers {
+        for resolver in oldDiscarded {
             resolver.Dispose()
         }
-        discardedResolvers.Clear()
     }
+
+    private data class SessionChainSnapshot(
+        Generation int64,
+        Submissions ImmutableArray[SubmissionState],
+        Imports ImmutableArray[ImportSymbol]
+    ) : IEquatable[SessionChainSnapshot] { }
 
     private data class SubmissionState(
         Compilation Compilation,

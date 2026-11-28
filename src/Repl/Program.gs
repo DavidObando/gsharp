@@ -27,14 +27,23 @@ shared class Program {
                 Console.Error.WriteLine(UnknownEngineMessage(envChoice))
                 return 1
             }
-            return RunInteractive(List[string]())
+            let envUi = UiChoiceFromEnvironment()
+            if !TryParseUiChoice(envUi, out var defaultUi) {
+                Console.Error.WriteLine(UnknownUiMessage(envUi))
+                return 1
+            }
+            return RunInteractive(List[string](), defaultUi)
         }
         switch args[0] {
             case "--help", "-h", "/?" {
-                Console.WriteLine("Usage: gsi [file.gs] [/r:<assembly> ...] [--engine <name>] [--help] [--version]")
+                Console.WriteLine(
+                    "Usage: gsi [file.gs] [/r:<assembly> ...] [--ui <name>] [--engine <name>] [--help] [--version]"
+                )
                 Console.WriteLine("  file.gs                Run the given G# script and exit.")
                 Console.WriteLine("  /r:<file>              Reference an assembly (repeatable).")
                 Console.WriteLine("  /reference:<file>      Alias for /r: (also -r: and --reference:).")
+                Console.WriteLine("  --ui <name>            Interactive UI: 'sharptui' (default) or 'spectre'")
+                Console.WriteLine("                         (also via GSI_UI). Switch live with :ui.")
                 Console.WriteLine("  --engine <name>        Interactive engine: 'emit' (the default and only")
                 Console.WriteLine("                         engine; also via GSI_ENGINE). The legacy 'evaluator'")
                 Console.WriteLine("                         engine has been removed.")
@@ -51,6 +60,7 @@ shared class Program {
         let references = List[string]()
         var scriptPath string? = nil
         var engineChoice string? = nil
+        var uiChoice string? = nil
         for var i = 0; i < args.Length; i++ {
             let arg = args[i]
             if TryParseReferenceSwitch(arg, out var referencePath) {
@@ -65,6 +75,14 @@ shared class Program {
                 engineChoice = arg.Substring("--engine=".Length)
                 continue
             }
+            if arg == "--ui" && i + 1 < args.Length {
+                uiChoice = args[(i += 1)]
+                continue
+            }
+            if arg.StartsWith("--ui=", StringComparison.Ordinal) {
+                uiChoice = arg.Substring("--ui=".Length)
+                continue
+            }
             if scriptPath == nil && arg.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) {
                 scriptPath = arg
                 continue
@@ -77,18 +95,62 @@ shared class Program {
             Console.Error.WriteLine(UnknownEngineMessage(engineChoice))
             return 1
         }
+        uiChoice ??= UiChoiceFromEnvironment()
+        if !TryParseUiChoice(uiChoice, out var selectedUi) {
+            Console.Error.WriteLine(UnknownUiMessage(uiChoice))
+            return 1
+        }
         if !ReferenceResolver.TryValidateDriverReferencePaths(references, out var referenceError) {
             Console.Error.WriteLine(referenceError)
             return 1
         }
         if scriptPath == nil {
-            return RunInteractive(references)
+            return RunInteractive(references, selectedUi)
         }
         if !File.Exists(scriptPath) {
             Console.Error.WriteLine("File not found: $scriptPath")
             return 1
         }
         return RunScript(scriptPath, references)
+    }
+
+    /// Parses an interactive UI choice (`sharptui` default, or `spectre`).
+    /// @param uiChoice The normalized UI choice, or `null` for the default.
+    /// @param ui Receives the resolved UI backend when valid.
+    /// @returns `true` when the choice is valid.
+    internal func TryParseUiChoice(uiChoice string?, out ui ReplUiKind) bool {
+        if string.IsNullOrEmpty(uiChoice) {
+            ui = ReplUiKind.SharpTui
+            return true
+        }
+        let normalized = uiChoice.Trim().ToLowerInvariant()
+        if normalized == "sharptui" {
+            ui = ReplUiKind.SharpTui
+            return true
+        }
+        if normalized == "spectre" {
+            ui = ReplUiKind.Spectre
+            return true
+        }
+        ui = ReplUiKind.SharpTui
+        return false
+    }
+
+    /// Builds the error line for an unknown UI choice, listing only valid values.
+    /// @param uiChoice The rejected UI choice.
+    /// @returns The error message.
+    internal func UnknownUiMessage(
+        uiChoice string?
+    ) string -> "Unknown UI '$uiChoice'. Expected 'sharptui' or 'spectre'."
+
+    /// Reads the `GSI_UI` environment variable as a normalized UI choice.
+    /// @returns The lower-cased UI name, or `null` when unset or empty.
+    internal func UiChoiceFromEnvironment() string? -> if Environment.GetEnvironmentVariable("GSI_UI") is {
+        Length: > 0
+    } env {
+        env.ToLowerInvariant()
+    } else {
+        default(string?)
     }
 
     /// Decides whether an engine choice names a known interactive engine.
@@ -124,13 +186,13 @@ shared class Program {
     /// Starts the interactive TUI on the emitted submission-chaining
     /// (cref:Engine.EmittedSessionEngine) (ADR-0156; the only
     /// interactive engine since Phase 3c deleted the tree-walking evaluator).
-    private func RunInteractive(references List[string]) int32 {
-        if Console.IsInputRedirected {
+    private func RunInteractive(references List[string], uiKind ReplUiKind) int32 {
+        if Console.IsInputRedirected || (uiKind == ReplUiKind.SharpTui && Console.IsOutputRedirected) {
             Console.Error.WriteLine("gsi requires an interactive terminal")
             return 1
         }
         let effectiveReferences = ReferenceResolver.ResolveDriverReferencePaths(references, SdkToolsDirectory())
-        return ReplHost.Run(EmittedSessionEngine(effectiveReferences))
+        return ReplHost.Run(EmittedSessionEngine(effectiveReferences), uiKind)
     }
 
     /// ADR-0156 Phase 1: script execution compiles with the real emitter into

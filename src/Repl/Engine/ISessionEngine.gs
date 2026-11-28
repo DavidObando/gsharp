@@ -35,6 +35,18 @@ interface ISessionEngine {
         set;
     }
 
+    /// Gets or sets whether each evaluated cell records its syntax tree dump.
+    prop CaptureSyntaxTree bool {
+        get;
+        set;
+    }
+
+    /// Gets or sets whether each evaluated cell records its emitted IL dump.
+    prop CaptureIntermediateLanguage bool {
+        get;
+        set;
+    }
+
     /// Evaluates a submission, appends a cell, and returns it. Never throws.
     /// @param text The submission source.
     /// @returns The evaluated cell.
@@ -53,6 +65,32 @@ interface ISessionEngine {
     /// @param cancellationToken Best-effort cancellation token.
     /// @returns The evaluated cell.
     func EvaluateAsync(text string, cancellationToken CancellationToken) Task[Cell];
+
+    /// Evaluates a source document on a background thread while preserving its
+    /// original source bytes.
+    /// @param source The loaded source document.
+    /// @param cancellationToken Best-effort cancellation token.
+    /// @returns The evaluated cell.
+    func EvaluateAsync(source SourceText, cancellationToken CancellationToken) Task[Cell];
+
+    /// Analyzes live editor text against the current session chain.
+    /// @param text The editor source.
+    /// @returns Semantic tokens and diagnostics for the editor.
+    func AnalyzeEditor(text string) EditorAnalysis;
+
+    /// Computes completions for live editor text against the current session chain.
+    /// @param text The editor source.
+    /// @param line The zero-based caret line.
+    /// @param col The zero-based caret character offset.
+    /// @returns Matching completion items.
+    func Completions(text string, line int32, col int32) IReadOnlyList[GSharp.LanguageServer.Protocol.CompletionItem];
+
+    /// Computes hover text for live editor text against the current session chain.
+    /// @param text The editor source.
+    /// @param line The zero-based caret line.
+    /// @param col The zero-based caret character offset.
+    /// @returns Hover markup text, or `nil` when no symbol is found.
+    func Hover(text string, line int32, col int32) string?;
 
     /// Builds a snapshot of the accumulated session state for the REPL sidebar.
     /// @returns The snapshot; (cref:ReplState.Empty) when nothing has been evaluated.

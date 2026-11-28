@@ -18,11 +18,15 @@ data class Cell(
     Diagnostics ImmutableArray[GSharp.Core.CodeAnalysis.Diagnostic],
     HasError bool,
     Output string = "",
-    StandardError string = ""
+    StandardError string = "",
+    SyntaxTree string = "",
+    IntermediateLanguage string = ""
 ) : IEquatable[Cell] { }
 
-/// A single entry in the REPL state sidebar, rendered via the shared `SymbolDisplay` service.
-data class ReplSymbol(Display string) : IEquatable[ReplSymbol] { }
+/// A structured entry in the accumulated REPL session state.
+data class ReplSymbol(Kind string, Name string, Detail string, Value string, Display string) : IEquatable[
+    ReplSymbol
+] { }
 
 /// Snapshot of the accumulated REPL session: imports, functions, variables, and user types.
 data class ReplState(

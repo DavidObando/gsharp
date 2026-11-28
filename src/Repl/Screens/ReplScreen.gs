@@ -25,6 +25,7 @@ import System.Threading.Tasks
 /// OpenCode-style single conversation view: scrolling transcript plus a pinned input box.
 class ReplScreen : ITabScreen, IDisposable {
     private let engine ISessionEngine
+    private let canSwitchToSharpTui() -> bool
     private let editor MultilineEditor = MultilineEditor()
     private let scroll ScrollState = ScrollState()
     private var navigator IAppShellNavigator?
@@ -37,8 +38,10 @@ class ReplScreen : ITabScreen, IDisposable {
     private var evalFrame int32
     private var cancelRequested bool
 
-    init(engine ISessionEngine) {
+    init(engine ISessionEngine, canSwitchToSharpTui(() -> bool)? = nil) {
         this.engine = engine
+        this.canSwitchToSharpTui = canSwitchToSharpTui ??
+            (() -> !Console.IsInputRedirected && !Console.IsOutputRedirected)
         engine.CaptureConsole = true
         engine.InputProvider = InlinePrompt.ReadLine
     }
@@ -182,7 +185,7 @@ class ReplScreen : ITabScreen, IDisposable {
         }
         // Ctrl+K, or F1, toggles hover; F1 works where the terminal eats Ctrl+K.
         if key.Key == ConsoleKey.F1 || (key.Key == ConsoleKey.K && (key.Modifiers & ConsoleModifiers.Control) != 0) {
-            hover = AnalysisBridge.Hover(editor.Text, editor.Line, editor.Col) ?? "No symbol information."
+            hover = engine.Hover(editor.Text, editor.Line, editor.Col) ?? "No symbol information."
             return true
         }
         if (key.KeyChar == '/' || key.KeyChar == ':') && editor.IsEmpty {
@@ -469,7 +472,7 @@ class ReplScreen : ITabScreen, IDisposable {
     }
 
     private func ShowCompletions() {
-        completions = AnalysisBridge
+        completions = engine
             .Completions(editor.Text, editor.Line, editor.Col)
             .OrderBy((c CompletionItem) -> c.SortText ?? c.Label, StringComparer.Ordinal)
             .ToList()
@@ -528,6 +531,26 @@ class ReplScreen : ITabScreen, IDisposable {
                     navigator?.ShowToast("File not found: $arg")
                 }
             }
+            case "ui" {
+                if pendingEval != nil {
+                    navigator?.ShowToast("Cancel the running evaluation before switching UI.")
+                    return
+                }
+                let target = arg.ToLowerInvariant()
+                if string.IsNullOrEmpty(target) || target == "sharptui" {
+                    if !canSwitchToSharpTui() {
+                        navigator?.ShowToast(
+                            "SharpTUI requires an interactive terminal (stdin and stdout must not be redirected)."
+                        )
+                        return
+                    }
+                    navigator?.RequestSwitchUi(ReplUiKind.SharpTui)
+                } else if target == "spectre" {
+                    navigator?.ShowToast("Already using Spectre UI.")
+                } else {
+                    navigator?.ShowToast("Unknown UI '$arg'. Expected 'sharptui' or 'spectre'.")
+                }
+            }
             case "exit", "quit" {
                 navigator?.RequestExit()
             }
@@ -581,6 +604,7 @@ internal shared class Palette {
         ("reset", "clear session state"),
         ("clear", "clear the editor"),
         ("theme", "switch theme: ${string.Join("|", Theme.AvailableNames())}"),
+        ("ui", "switch UI: sharptui|spectre"),
         ("load", "run a .gs file into session"),
         ("exit", "quit the REPL")
     }

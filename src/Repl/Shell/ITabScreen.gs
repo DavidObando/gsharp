@@ -4,6 +4,7 @@
 
 package GSharp.Repl.Shell
 
+import GSharp.Repl
 import Spectre.Console.Rendering
 import System
 import System.Collections.Generic
@@ -53,6 +54,8 @@ interface IAppShellNavigator {
     func ShowToast(message string);
 
     func RequestExit();
+
+    func RequestSwitchUi(ui ReplUiKind);
 }
 
 /// A modal overlay; receives keys until complete.
