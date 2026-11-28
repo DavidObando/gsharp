@@ -14,6 +14,15 @@
         "resolved": "3.11.13-beta",
         "contentHash": "eQjDhod5E9dpL/UJ65c53VO2Cp1bXMzNRmrVwWt7ryAHltxotThkBDp8VdLjkJtMBnRrc6237vxKAbSpUcChMg=="
       },
+      "SharpTui.Framework": {
+        "type": "Direct",
+        "requested": "[0.1.1, )",
+        "resolved": "0.1.1",
+        "contentHash": "E4FEhcbZXH95dsI4JBeXENeHVY9H9XroOR5k4Z3SJEQ8yhXBomCRFeryz94byk5mdgxaJnXBPKmav7x7UJVstQ==",
+        "dependencies": {
+          "Yoga.Net": "3.2.3"
+        }
+      },
       "Spectre.Console": {
         "type": "Direct",
         "requested": "[0.55.2, )",
@@ -99,6 +108,11 @@
         "type": "Transitive",
         "resolved": "9.0.0",
         "contentHash": "nGdCUVhEQ9/CWYqgaibYEDwIJjokgIinQhCnpmtZfSXdMS6ysLZ8p9xvcJ8VPx6Xpv5OsLIUrho4B9FN+VV/tw=="
+      },
+      "Yoga.Net": {
+        "type": "Transitive",
+        "resolved": "3.2.3",
+        "contentHash": "g7maV1ZBC+kpeExf37jErIMTe559NmAhs/GUSO016mG90vdPQFFLV/ZyOR9+kYk5Zc9TL82QUAP6RJ0olTCYIg=="
       },
       "GSharp.Core": {
         "type": "Project",

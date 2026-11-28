@@ -38,11 +38,13 @@
 
   <ItemGroup>
     <PackageReference Include="@(SpectreConsolePackageReference)" />
+    <PackageReference Include="@(SharpTuiPackageReference)" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="@(GsharpCore-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <ProjectReference Include="@(GsharpLanguageServer-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
+    <ProjectReference Include="../Formatting/GSharp.Formatting/GSharp.Formatting.gsproj" />
     <ProjectReference Include="..\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="../Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj" />
     <ProjectReference Include="../Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" />

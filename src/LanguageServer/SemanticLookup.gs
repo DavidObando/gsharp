@@ -305,11 +305,18 @@ shared class SemanticLookup {
                     return typeParamFallback
                 }
             }
-            return if this.globals.TryGetValue(token.Text, out var global) {
-                global
-            } else {
-                ResolvePrimitiveOrImportedType(token.Text)
+            if this.globals.TryGetValue(token.Text, out var global) {
+                return global
             }
+            if this.compilation.GlobalScope.SubmissionImports is {} submissions && submissions.TryFindGlobalVariable(
+                this.compilation.References ?? ReferenceResolver.Default(),
+                token.Text,
+                out _,
+                out var variable
+            ) {
+                return variable
+            }
+            return ResolvePrimitiveOrImportedType(token.Text)
         }
 
         private func ResolveEnclosingTypeParameter(token SyntaxToken) Symbol? {

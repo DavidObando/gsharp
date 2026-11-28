@@ -4,6 +4,7 @@
 
 package GSharp.Repl.Shell
 
+import GSharp.Repl
 import GSharp.Repl.Tokens
 import GSharp.Repl.Widgets
 import Spectre.Console
@@ -31,6 +32,7 @@ class AppShell : IAppShellNavigator {
     private var activeModal IModal?
     private var toast string?
     private var exitRequested bool
+    private var requestedUi ReplUiKind? = nil
 
     init(console IAnsiConsole, tabs IReadOnlyList[ITabScreen]) {
         this.console = console ?? throw ArgumentNullException("console")
@@ -43,6 +45,8 @@ class AppShell : IAppShellNavigator {
     }
 
     prop ActiveTab int32 -> activeTab
+
+    prop RequestedUi ReplUiKind? -> requestedUi
 
     func SwitchToTab(numberKey char) {
         for var i = 0; i < tabs.Count; i++ {
@@ -61,6 +65,11 @@ class AppShell : IAppShellNavigator {
     func ShowToast(message string) -> toast = message ?? string.Empty
 
     func RequestExit() -> exitRequested = true
+
+    func RequestSwitchUi(ui ReplUiKind) {
+        requestedUi = ui
+        exitRequested = true
+    }
 
     func Run(inputReader IInputReader) int32 {
         ArgumentNullException.ThrowIfNull(inputReader, paramName: "inputReader")

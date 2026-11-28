@@ -32,9 +32,12 @@ shared class HoverComputer {
     func ComputeHover(
         content DocumentContent,
         position Position,
-        ct CancellationToken = default(CancellationToken)
+        ct CancellationToken = default(CancellationToken),
+        compilation Compilation? = nil
     ) Hover? {
-        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
+        let compilation = compilation ?? content.Project?.GetCompilation() ?? ServerCompilation.Create(
+            content.SyntaxTree
+        )
         let offset = SemanticLookup.ToOffset(content, position)
         let token SyntaxToken? = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
         if token == nil {
@@ -1273,9 +1276,12 @@ shared class CompletionComputer {
     func ComputeCompletions(
         content DocumentContent,
         position Position,
-        ct CancellationToken = default(CancellationToken)
+        ct CancellationToken = default(CancellationToken),
+        compilation Compilation? = nil
     ) IReadOnlyList[CompletionItem] {
-        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
+        let compilation = compilation ?? content.Project?.GetCompilation() ?? ServerCompilation.Create(
+            content.SyntaxTree
+        )
         let offset = SemanticLookup.ToOffset(content, position)
         // Issue #917: completion-as-you-type. When the caret sits in (or immediately
         // after) a partial identifier — e.g. `prin<caret>` or `x.To<caret>` — compute

@@ -10,8 +10,10 @@ description: "Explore G# interactively or run a script with the gsi REPL and fil
 `gsi` is G#'s interactive REPL and single-file script runner. It ships as
 the [`Gsharp.Repl`](https://www.nuget.org/packages/Gsharp.Repl/) .NET
 global tool and is the fastest way to try the language without creating a
-project. It is a full-screen, keyboard-first TUI built on
-Spectre.Console that reuses the same `Core` compilation engine and
+project. It is a full-screen, keyboard-first TUI that defaults to the
+retained **SharpTUI** interface and also preserves the classic
+**Spectre.Console** interface so you can switch back and forth at startup
+or mid-session. Both modes reuse the same `Core` compilation engine and
 `LanguageServer` analysis as the compiler, so the prompt behaves like a
 small editor (live syntax colors, completion, hover, and diagnostics)
 rather than a plain line reader.
@@ -34,10 +36,12 @@ dotnet tool uninstall --global Gsharp.Repl
 ## Command-line usage
 
 ```text
-Usage: gsi [file.gs] [/r:<assembly> ...] [--engine <name>] [--help] [--version]
+Usage: gsi [file.gs] [/r:<assembly> ...] [--ui <name>] [--engine <name>] [--help] [--version]
   file.gs                Run the given G# script and exit.
   /r:<file>              Reference an assembly (repeatable).
   /reference:<file>      Alias for /r: (also -r: and --reference:).
+  --ui <name>            Interactive UI: 'sharptui' (default) or 'spectre'
+                         (also via GSI_UI). Switch live with :ui.
   --engine <name>        Interactive engine: 'emit' (the default and only
                          engine; also via GSI_ENGINE). The legacy 'evaluator'
                          engine has been removed.
@@ -65,20 +69,32 @@ up definitions incrementally:
 = 12
 ```
 
-The REPL is organised into keyboard-selectable tabs — **REPL**,
-**History**, **Variables**, **Diagnostics**, **Help**, and **Settings** —
-and includes a command palette (open it with `:`) for session commands:
+The default SharpTUI interface is organised into six keyboard-selectable
+tabs — **REPL**, **History**, **Variables**, **Diagnostics**, **Help**,
+and **Settings** (`Ctrl+1` through `Ctrl+6`, or `1` through `6` outside
+the editor) — with session search (`/` when the editor is empty), editor
+formatting (`Shift+Alt+F`), completion (`Ctrl+Space` or `Tab`), hover
+(`Ctrl+K` or `F1`), and a command palette (`Ctrl+P`, or `:` when the
+editor is empty):
 
 | Command | Effect |
 | --- | --- |
 | `reset` | Clear all accumulated session state and start fresh. |
 | `clear` | Clear the current editor input. |
+| `show tree` | Toggle parse-tree dumps in the transcript (SharpTUI). |
+| `show il` | Toggle emitted IL dumps in the transcript (SharpTUI). |
 | `theme [name]` | Switch the color theme, or cycle themes when no name is given. |
+| `ui [sharptui\|spectre]` | Switch between the SharpTUI and Spectre.Console interfaces while keeping session state. |
 | `load <file.gs>` | Evaluate a `.gs` file into the current session. |
 | `exit` / `quit` | Leave the REPL. |
 
-`gsi` needs an interactive terminal; if its input is redirected it exits
-with a message instead of starting the UI.
+Start directly in the classic Spectre.Console interface with
+`gsi --ui spectre` (or `GSI_UI=spectre`), or toggle between modes at any
+time with `:ui`.
+
+`gsi` needs an interactive terminal; if its input is redirected (or its
+output is redirected in SharpTUI mode) it exits with a message instead
+of starting the UI.
 
 ### Run a script and exit
 
